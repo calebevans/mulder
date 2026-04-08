@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -58,6 +59,14 @@ def init_server(
     import litellm
 
     litellm.suppress_debug_info = True
+
+    if api_key is None:
+        api_key = (
+            os.environ.get("MULDER_API_KEY")
+            or os.environ.get("GEMINI_API_KEY")
+            or os.environ.get("ANTHROPIC_API_KEY")
+            or os.environ.get("OPENAI_API_KEY")
+        )
 
     logger.info("Opening case database for '%s' ...", case_id)
     db = CaseDB.open(case_id, db_dir)
