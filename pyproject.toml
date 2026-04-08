@@ -1,0 +1,50 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "killjoy"
+version = "0.1.0"
+description = "Custom MCP server for SANS SIFT Workstation forensic investigations"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [
+    { name = "Caleb Evans" },
+]
+dependencies = [
+    "mcp>=1.0",
+    "cordon>=1.0",
+    "sqlite-vec>=0.1",
+    "sentence-transformers>=2.2",
+    "litellm>=1.0",
+    "detect-secrets>=1.4",
+    "pydantic>=2.0",
+    "click>=8.0",
+    "jinja2>=3.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "mypy",
+    "ruff",
+    "pre-commit",
+]
+
+[project.scripts]
+killjoy = "killjoy.cli:cli"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/killjoy"]
+
+[tool.ruff]
+src = ["src"]
+line-length = 99
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
