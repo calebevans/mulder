@@ -100,3 +100,4 @@ import mulder.server.tools_core as _tools_core  # noqa: E402, F401
 import mulder.server.tools_eztools as _tools_eztools  # noqa: E402, F401
 import mulder.server.tools_findings as _tools_findings  # noqa: E402, F401
 import mulder.server.tools_tsk as _tools_tsk  # noqa: E402, F401
+import mulder.server.tools_yara as _tools_yara  # noqa: E402, F401
