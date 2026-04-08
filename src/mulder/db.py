@@ -382,7 +382,11 @@ class CaseDB:
         if row is None:
             raise RuntimeError("No case metadata found in database")
 
-        raw_emb = row.get("embedding_config", "{}")
+        raw_emb = (
+            row["embedding_config"]
+            if "embedding_config" in row.keys()  # noqa: SIM118
+            else "{}"
+        )
         emb_cfg = EmbeddingConfig.model_validate_json(raw_emb) if raw_emb else EmbeddingConfig()
 
         return CaseMetadataRow(

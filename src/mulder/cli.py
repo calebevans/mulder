@@ -229,10 +229,10 @@ def serve(case_id: str, db_dir: str, transport: str, api_key: str | None) -> Non
     db_dir_path = Path(db_dir).expanduser()
     audit_path = db_dir_path / f"{case_id}.audit.jsonl"
 
-    click.echo(f"Initialising MCP server for case '{case_id}' ...")
+    click.echo(f"Initialising MCP server for case '{case_id}' ...", err=True)
     init_server(case_id, db_dir_path, audit_path, api_key=api_key)
 
-    click.echo(f"Starting MCP server (transport={transport}) ...")
+    click.echo(f"Starting MCP server (transport={transport}) ...", err=True)
     mcp_server.run(transport=transport)
 
 
