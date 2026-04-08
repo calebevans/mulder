@@ -71,3 +71,4 @@ def init_server(case_id: str, db_dir: Path, audit_path: Path) -> None:
 
 import killjoy.server.tools_composite as _tools_composite  # noqa: E402, F401
 import killjoy.server.tools_core as _tools_core  # noqa: E402, F401
+import killjoy.server.tools_findings as _tools_findings  # noqa: E402, F401

@@ -456,5 +456,9 @@ class CaseDB:
         return row["case_id"]
 
     @property
+    def db_path(self) -> Path:
+        return self._db_path
+
+    @property
     def conn(self) -> sqlite3.Connection:
         return self._conn
