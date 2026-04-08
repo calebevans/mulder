@@ -69,4 +69,5 @@ def init_server(case_id: str, db_dir: Path, audit_path: Path) -> None:
     logger.info("Server context ready for case '%s'", case_id)
 
 
+import killjoy.server.tools_composite as _tools_composite  # noqa: E402, F401
 import killjoy.server.tools_core as _tools_core  # noqa: E402, F401

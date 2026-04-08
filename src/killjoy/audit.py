@@ -83,6 +83,7 @@ class AuditLog:
         output_hash: str,
         cordon_ratio: float | None = None,
         duration_ms: float = 0,
+        sub_calls: list[str] | None = None,
     ) -> None:
         entry = {
             "type": "tool_call",
@@ -94,6 +95,8 @@ class AuditLog:
             "duration_ms": duration_ms,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
+        if sub_calls is not None:
+            entry["sub_calls"] = sub_calls
         self._append(entry)
 
     def has_tool_call(self, tool_call_id: str) -> bool:
