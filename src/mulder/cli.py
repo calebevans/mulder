@@ -42,7 +42,9 @@ def run_ingestion(
 
     emb_cfg = embedding_config or EmbeddingConfig()
     emb_cfg.embedding_dim = embedder.embedding_dim
-    click.echo(f"  Backend: {emb_cfg.backend}, model: {emb_cfg.model_name}, dim: {emb_cfg.embedding_dim}")
+    click.echo(
+        f"  Backend: {emb_cfg.backend}, model: {emb_cfg.model_name}, dim: {emb_cfg.embedding_dim}"
+    )
 
     click.echo(f"Creating case database for '{case_id}' ...")
     db = CaseDB.create(case_id, str(evidence_path), db_dir, embedding_config=emb_cfg)
@@ -198,7 +200,7 @@ def ingest(
     "--api-key",
     default=None,
     envvar="MULDER_API_KEY",
-    help="API key for remote embeddings (if the case was ingested with --embedding-backend remote).",
+    help="API key for remote embeddings (if case was ingested with --embedding-backend remote).",
 )
 def serve(case_id: str, db_dir: str, transport: str, api_key: str | None) -> None:
     """Start the Mulder MCP server for a case."""
@@ -239,7 +241,7 @@ def serve(case_id: str, db_dir: str, transport: str, api_key: str | None) -> Non
     "--api-key",
     default=None,
     envvar="MULDER_API_KEY",
-    help="API key for remote embeddings (if the case was ingested with --embedding-backend remote).",
+    help="API key for remote embeddings (if case was ingested with --embedding-backend remote).",
 )
 def investigate(
     case_id: str, db_dir: str, model: str, max_iterations: int, api_key: str | None
@@ -255,9 +257,13 @@ def investigate(
     db_dir_path = Path(db_dir).expanduser()
 
     serve_args = [
-        "-m", "mulder.cli", "serve",
-        "--case-id", case_id,
-        "--db-dir", str(db_dir_path),
+        "-m",
+        "mulder.cli",
+        "serve",
+        "--case-id",
+        case_id,
+        "--db-dir",
+        str(db_dir_path),
     ]
     if api_key:
         serve_args.extend(["--api-key", api_key])

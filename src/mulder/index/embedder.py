@@ -174,7 +174,9 @@ class Embedder:
 
         line_pairs = ((i + 1, line) for i, line in enumerate(lines))
         segment_config = AnalysisConfig(window_size=window_size)
-        windows = list(self._segmenter.segment(line_pairs, segment_config))
+        windows = [
+            w for w in self._segmenter.segment(line_pairs, segment_config) if w.content.strip()
+        ]
 
         if not windows:
             return []
@@ -185,13 +187,15 @@ class Embedder:
         for text_window, emb in embedded:
             emb_bytes = np.asarray(emb, dtype=np.float32).tobytes()
             event_time = _parse_timestamp(text_window.content)
-            results.append((
-                text_window.content,
-                text_window.start_line,
-                text_window.end_line,
-                emb_bytes,
-                event_time,
-            ))
+            results.append(
+                (
+                    text_window.content,
+                    text_window.start_line,
+                    text_window.end_line,
+                    emb_bytes,
+                    event_time,
+                )
+            )
 
         return results
 

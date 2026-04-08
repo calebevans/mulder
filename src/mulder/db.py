@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS findings (
 );
 """
 
+
 def _vec_table_ddl(dim: int = 384) -> str:
     return (
         f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_windows USING vec0 ("
@@ -381,7 +382,7 @@ class CaseDB:
         if row is None:
             raise RuntimeError("No case metadata found in database")
 
-        raw_emb = row["embedding_config"] if "embedding_config" in row.keys() else "{}"
+        raw_emb = row.get("embedding_config", "{}")
         emb_cfg = EmbeddingConfig.model_validate_json(raw_emb) if raw_emb else EmbeddingConfig()
 
         return CaseMetadataRow(

@@ -60,7 +60,9 @@ def init_server(
     emb_cfg = meta.embedding_config
     logger.info(
         "Embedding config: backend=%s, model=%s, dim=%d",
-        emb_cfg.backend, emb_cfg.model_name, emb_cfg.embedding_dim,
+        emb_cfg.backend,
+        emb_cfg.model_name,
+        emb_cfg.embedding_dim,
     )
 
     logger.info("Loading embedding model ...")
