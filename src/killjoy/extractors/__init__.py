@@ -7,6 +7,7 @@ from killjoy.extractors.base import (
     default_registry,
 )
 from killjoy.extractors.classifier import ClassifiedEvidence, EvidenceClassifier
+from killjoy.extractors.volatility import VolatilityExtractor
 
 __all__ = [
     "ClassifiedEvidence",
@@ -14,5 +15,6 @@ __all__ = [
     "ExtractionResult",
     "Extractor",
     "ExtractorRegistry",
+    "VolatilityExtractor",
     "default_registry",
 ]

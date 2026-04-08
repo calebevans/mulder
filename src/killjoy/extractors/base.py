@@ -68,8 +68,11 @@ class ExtractorRegistry:
 def default_registry() -> ExtractorRegistry:
     """Return a registry with all known extractors.
 
-    Concrete extractors (Volatility, Plaso, disk, logs) are registered here
-    once Pieces 3/4 are implemented.  Until then this returns an empty
-    registry so the ingestion pipeline runs without error.
+    Concrete extractors are imported lazily so the module stays importable
+    even when the underlying forensic tools are not installed.
     """
-    return ExtractorRegistry()
+    from killjoy.extractors.volatility import VolatilityExtractor
+
+    registry = ExtractorRegistry()
+    registry.register(VolatilityExtractor())
+    return registry
