@@ -18,6 +18,7 @@ from mulder.extractors.base import ExtractionResult
 logger = logging.getLogger(__name__)
 
 _MEMORY_DUMP_EXTS = frozenset({".mem", ".raw", ".vmem", ".dmp", ".001"})
+_NON_MEMORY_EXTS = frozenset({".e01", ".dd", ".img", ".evtx", ".log", ".txt"})
 _MEMORY_DUMP_MIN_BYTES = 100 * 1024 * 1024  # 100 MB
 
 _PLUGIN_TIMEOUT_SECONDS = 300
@@ -117,9 +118,12 @@ class VolatilityExtractor:
         return self._vol_cmd
 
     def can_handle(self, path: Path) -> bool:
-        """Return True for memory dump files (.mem, .raw, .vmem, .dmp) or large binaries."""
-        if path.suffix.lower() in _MEMORY_DUMP_EXTS:
+        """Return True for memory dump files (.mem, .raw, .vmem, .dmp, .001)."""
+        ext = path.suffix.lower()
+        if ext in _MEMORY_DUMP_EXTS:
             return True
+        if ext in _NON_MEMORY_EXTS:
+            return False
         try:
             return path.is_file() and path.stat().st_size > _MEMORY_DUMP_MIN_BYTES
         except OSError:
