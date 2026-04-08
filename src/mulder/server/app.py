@@ -53,6 +53,12 @@ def init_server(
     """
     global _ctx  # noqa: PLW0603
 
+    # litellm prints "Give Feedback" and debug info to stdout, which
+    # corrupts the MCP stdio JSON-RPC channel. Suppress it.
+    import litellm
+
+    litellm.suppress_debug_info = True
+
     logger.info("Opening case database for '%s' ...", case_id)
     db = CaseDB.open(case_id, db_dir)
 
