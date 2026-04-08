@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import fnmatch
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -14,6 +15,72 @@ _EVTX_EXTS = {".evtx"}
 _LOG_FILE_EXTS = {".log", ".txt"}
 _LOG_DIR_NAMES = {"logs", "log"}
 
+_SKIP_FILENAMES: set[str] = {
+    "readme",
+    "readme.txt",
+    "readme.md",
+    "license",
+    "license.txt",
+    "contributing.md",
+    "changelog",
+    "changelog.txt",
+    "changelog.md",
+    "makefile",
+    "dockerfile",
+    "requirements.txt",
+    ".gitignore",
+    ".gitattributes",
+}
+
+_SKIP_EXTENSIONS: set[str] = {
+    ".md",
+    ".rst",
+    ".html",
+    ".htm",
+    ".css",
+    ".js",
+    ".json",
+    ".xml",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".cfg",
+    ".ini",
+    ".py",
+    ".sh",
+    ".bat",
+    ".ps1",
+    ".rb",
+    ".pl",
+    ".c",
+    ".h",
+    ".cpp",
+    ".java",
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".xls",
+    ".xlsx",
+    ".ppt",
+    ".pptx",
+    ".zip",
+    ".gz",
+    ".tar",
+    ".bz2",
+    ".7z",
+    ".rar",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".svg",
+    ".bmp",
+    ".mp3",
+    ".mp4",
+    ".avi",
+    ".wav",
+}
+
 
 @dataclass
 class ClassifiedEvidence:
@@ -23,6 +90,13 @@ class ClassifiedEvidence:
     artifact_type: str
 
 
+@dataclass
+class ClassifierConfig:
+    """Controls what the classifier includes and excludes."""
+
+    exclude_patterns: list[str] = field(default_factory=list)
+
+
 class EvidenceClassifier:
     """Walks an evidence directory and classifies files by type.
 
@@ -30,6 +104,9 @@ class EvidenceClassifier:
     names.  The actual decision of whether an extractor can handle a file is
     made by ``Extractor.can_handle`` at extraction time.
     """
+
+    def __init__(self, config: ClassifierConfig | None = None) -> None:
+        self._config = config or ClassifierConfig()
 
     def classify(self, evidence_root: Path) -> list[ClassifiedEvidence]:
         evidence_root = Path(evidence_root).resolve()
@@ -46,9 +123,19 @@ class EvidenceClassifier:
         for item in sorted(evidence_root.rglob("*")):
             if _is_hidden(item):
                 continue
+            if self._is_excluded(item, evidence_root):
+                continue
             self._process_item(item, results, seen_log_dirs)
 
         return results
+
+    def _is_excluded(self, item: Path, evidence_root: Path) -> bool:
+        """Check user-supplied --exclude glob patterns."""
+        rel = str(item.relative_to(evidence_root))
+        return any(
+            fnmatch.fnmatch(rel, pat) or fnmatch.fnmatch(item.name, pat)
+            for pat in self._config.exclude_patterns
+        )
 
     def _process_item(
         self,
@@ -73,6 +160,10 @@ class EvidenceClassifier:
 
     def _classify_file(self, path: Path) -> ClassifiedEvidence | None:
         ext = path.suffix.lower()
+        name = path.name.lower()
+
+        if name in _SKIP_FILENAMES or ext in _SKIP_EXTENSIONS:
+            return None
 
         if ext in _MEMORY_DUMP_EXTS:
             return ClassifiedEvidence(path=path, artifact_type="memory_dump")

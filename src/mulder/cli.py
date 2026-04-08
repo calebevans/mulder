@@ -12,6 +12,7 @@ import click
 from mulder import __version__
 from mulder.db import CaseDB
 from mulder.extractors import EvidenceClassifier, default_registry
+from mulder.extractors.classifier import ClassifierConfig
 from mulder.index import Embedder
 from mulder.models import EmbeddingConfig, WindowRow
 
@@ -33,6 +34,7 @@ def run_ingestion(
     db_dir: Path,
     embedding_config: EmbeddingConfig | None = None,
     api_key: str | None = None,
+    exclude_patterns: tuple[str, ...] = (),
 ) -> None:
     """Full ingestion pipeline: classify -> extract -> window -> embed -> store."""
     t_start = time.monotonic()
@@ -49,7 +51,8 @@ def run_ingestion(
     click.echo(f"Creating case database for '{case_id}' ...")
     db = CaseDB.create(case_id, str(evidence_path), db_dir, embedding_config=emb_cfg)
 
-    classifier = EvidenceClassifier()
+    clf_config = ClassifierConfig(exclude_patterns=list(exclude_patterns))
+    classifier = EvidenceClassifier(clf_config)
     registry = default_registry()
 
     click.echo(f"Scanning evidence at {evidence_path} ...")
@@ -160,6 +163,11 @@ def cli() -> None:
     help="Embedding batch size (windows per API call). Larger = faster for remote backends.",
 )
 @click.option(
+    "--exclude",
+    multiple=True,
+    help="Glob pattern(s) to exclude. Repeatable. Example: --exclude 'results/*'",
+)
+@click.option(
     "--api-key",
     default=None,
     envvar="MULDER_API_KEY",
@@ -172,6 +180,7 @@ def ingest(
     embedding_backend: str,
     embedding_model: str,
     batch_size: int,
+    exclude: tuple[str, ...],
     api_key: str | None,
 ) -> None:
     """Ingest evidence into a per-case semantic index.
@@ -187,6 +196,7 @@ def ingest(
         db_dir=Path(db_dir).expanduser(),
         embedding_config=emb_cfg,
         api_key=api_key,
+        exclude_patterns=exclude,
     )
 
 
