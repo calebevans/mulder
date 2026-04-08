@@ -42,7 +42,7 @@ def _parse_evtx_file(evtx_path: Path) -> tuple[str, str]:
     Each record is formatted as: ``timestamp | EventID | Channel | xml_one_line``
     """
     try:
-        from Evtx.Evtx import FileHeader
+        from Evtx.Evtx import Evtx
     except ImportError:
         logger.warning("python-evtx not installed -- skipping %s", evtx_path)
         return "", ""
@@ -51,9 +51,8 @@ def _parse_evtx_file(evtx_path: Path) -> tuple[str, str]:
     lines: list[str] = []
 
     try:
-        with open(evtx_path, "rb") as fh:
-            header = FileHeader(fh)
-            for record in header.records():
+        with Evtx(str(evtx_path)) as evtx:
+            for record in evtx.records():
                 try:
                     xml_str = record.xml()
                     timestamp = str(record.timestamp())
