@@ -184,6 +184,10 @@ class Investigator:
                 self._log_error(f"LLM call failed: {exc}")
                 break
 
+            if not response.choices:
+                self._log_error("LLM returned empty choices (context may be too large)")
+                break
+
             assistant_msg = response.choices[0].message
             messages.append(assistant_msg.model_dump(exclude_none=True))
 
