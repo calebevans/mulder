@@ -78,11 +78,13 @@ def default_registry() -> ExtractorRegistry:
     from mulder.extractors.disk import DiskImageExtractor
     from mulder.extractors.logs import LogFileExtractor
     from mulder.extractors.plaso import PlasoExtractor
+    from mulder.extractors.sleuthkit import SleuthKitExtractor
     from mulder.extractors.volatility import VolatilityExtractor
 
     registry = ExtractorRegistry()
     registry.register(VolatilityExtractor())
     registry.register(PlasoExtractor())
+    registry.register(SleuthKitExtractor())
     registry.register(DiskImageExtractor())
     registry.register(LogFileExtractor())
     return registry

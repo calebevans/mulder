@@ -98,3 +98,4 @@ def init_server(
 import mulder.server.tools_composite as _tools_composite  # noqa: E402, F401
 import mulder.server.tools_core as _tools_core  # noqa: E402, F401
 import mulder.server.tools_findings as _tools_findings  # noqa: E402, F401
+import mulder.server.tools_tsk as _tools_tsk  # noqa: E402, F401
