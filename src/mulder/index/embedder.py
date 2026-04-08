@@ -121,6 +121,7 @@ class Embedder:
             backend=self._config.backend,
             model_name=self._config.model_name,
             api_key=api_key,
+            batch_size=self._config.batch_size,
         )
         logger.info(
             "Creating cordon vectorizer: backend=%s, model=%s",

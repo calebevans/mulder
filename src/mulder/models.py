@@ -18,6 +18,7 @@ class EmbeddingConfig(BaseModel):
     backend: Literal["sentence-transformers", "remote"] = "sentence-transformers"
     model_name: str = "all-MiniLM-L6-v2"
     embedding_dim: int = 384
+    batch_size: int = 32
 
 
 class WindowRow(BaseModel):

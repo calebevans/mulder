@@ -154,6 +154,12 @@ def cli() -> None:
     help="Embedding model name. For remote: use litellm format (e.g. gemini/text-embedding-004).",
 )
 @click.option(
+    "--batch-size",
+    default=100,
+    show_default=True,
+    help="Embedding batch size (windows per API call). Larger = faster for remote backends.",
+)
+@click.option(
     "--api-key",
     default=None,
     envvar="MULDER_API_KEY",
@@ -165,13 +171,16 @@ def ingest(
     db_dir: str,
     embedding_backend: str,
     embedding_model: str,
+    batch_size: int,
     api_key: str | None,
 ) -> None:
     """Ingest evidence into a per-case semantic index.
 
     EVIDENCE_PATH is the root directory (or file) containing forensic artifacts.
     """
-    emb_cfg = EmbeddingConfig(backend=embedding_backend, model_name=embedding_model)
+    emb_cfg = EmbeddingConfig(
+        backend=embedding_backend, model_name=embedding_model, batch_size=batch_size
+    )
     run_ingestion(
         evidence_path=Path(evidence_path).expanduser().resolve(),
         case_id=case_id,
