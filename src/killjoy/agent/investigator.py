@@ -118,30 +118,30 @@ class Investigator:
         t_start = time.monotonic()
         stats = _LoopStats()
 
-        async with stdio_client(server_params) as (read_stream, write_stream):
-            async with ClientSession(read_stream, write_stream) as session:
-                await session.initialize()
+        async with (
+            stdio_client(server_params) as (read_stream, write_stream),
+            ClientSession(read_stream, write_stream) as session,
+        ):
+            await session.initialize()
 
-                tool_list_result = await session.list_tools()
-                tools_for_llm = self._convert_tools(tool_list_result.tools)
+            tool_list_result = await session.list_tools()
+            tools_for_llm = self._convert_tools(tool_list_result.tools)
 
-                self._log_info(
-                    _bold(f"Connected to MCP server -- {len(tools_for_llm)} tools available")
-                )
+            self._log_info(
+                _bold(f"Connected to MCP server -- {len(tools_for_llm)} tools available")
+            )
 
-                messages: list[dict[str, Any]] = [
-                    {
-                        "role": "system",
-                        "content": SYSTEM_PROMPT.format(max_iterations=self._max_iterations),
-                    },
-                    {"role": "user", "content": INVESTIGATION_STRATEGY},
-                ]
+            messages: list[dict[str, Any]] = [
+                {
+                    "role": "system",
+                    "content": SYSTEM_PROMPT.format(max_iterations=self._max_iterations),
+                },
+                {"role": "user", "content": INVESTIGATION_STRATEGY},
+            ]
 
-                stats.iteration = await self._agent_loop(
-                    session, messages, tools_for_llm, stats
-                )
+            stats.iteration = await self._agent_loop(session, messages, tools_for_llm, stats)
 
-                await self._finalize(session)
+            await self._finalize(session)
 
         elapsed = time.monotonic() - t_start
         result = InvestigationResult(
@@ -169,9 +169,9 @@ class Investigator:
         iteration = 0
         while iteration < self._max_iterations:
             iteration += 1
-            self._log_info(_bold(f"\n{'='*60}"))
+            self._log_info(_bold(f"\n{'=' * 60}"))
             self._log_info(_bold(f"Iteration {iteration}/{self._max_iterations}"))
-            self._log_info(_bold(f"{'='*60}"))
+            self._log_info(_bold(f"{'=' * 60}"))
 
             try:
                 response = await litellm.acompletion(
@@ -344,9 +344,9 @@ class Investigator:
         print(f"{_red('[ERROR]')} {msg}", file=sys.stderr)
 
     def _print_summary(self, result: InvestigationResult) -> None:
-        print(f"\n{_bold('='*60)}", file=sys.stderr)
+        print(f"\n{_bold('=' * 60)}", file=sys.stderr)
         print(_bold("Investigation Summary"), file=sys.stderr)
-        print(f"{_bold('='*60)}", file=sys.stderr)
+        print(f"{_bold('=' * 60)}", file=sys.stderr)
         print(f"  Case:            {result.case_id}", file=sys.stderr)
         print(f"  Iterations:      {result.iterations}", file=sys.stderr)
         print(f"  Tool calls:      {result.total_tool_calls}", file=sys.stderr)
@@ -354,4 +354,4 @@ class Investigator:
         print(f"    Confirmed:     {result.findings_confirmed}", file=sys.stderr)
         print(f"    Inference:     {result.findings_inference}", file=sys.stderr)
         print(f"  Elapsed:         {result.elapsed_seconds:.1f}s", file=sys.stderr)
-        print(f"{_bold('='*60)}\n", file=sys.stderr)
+        print(f"{_bold('=' * 60)}\n", file=sys.stderr)
