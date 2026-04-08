@@ -17,7 +17,6 @@ from pathlib import Path
 from uuid import uuid4
 
 from mulder.models import Finding
-from mulder.report.redactor import Redactor
 from mulder.report.renderer import ReportRenderer
 from mulder.server.app import get_ctx, mcp
 
@@ -186,11 +185,7 @@ def finalize_report() -> dict:
     case_metadata = ctx.db.get_case_metadata()
     audit_summary = ctx.audit.summary()
 
-    redactor = Redactor()
-    redacted_findings: list[Finding] = []
-    for f in findings:
-        redacted = f.model_copy(update={"description": redactor.redact(f.description)})
-        redacted_findings.append(redacted)
+    redacted_findings = list(findings)
 
     db_path = Path(ctx.db.db_path)
     report_dir = db_path.parent
