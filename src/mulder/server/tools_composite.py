@@ -71,9 +71,15 @@ _LATERAL_PORTS: set[int] = {445, 3389, 5985, 5986, 135}
 _CORRELATION_WINDOW_SECONDS = 30
 
 _SRC_NETSCAN = "volatility.netscan"
+_SRC_PSSCAN = "volatility.psscan"
+_SRC_PSLIST = "volatility.pslist"
+_SRC_ENVARS = "volatility.envars"
+_SRC_PRIVS = "volatility.privs"
 _SRC_PLASO = "plaso.timeline"
 _SRC_EVTX_SECURITY = "evtx.security"
 _SRC_EVTX_SYSTEM = "evtx.system"
+
+_DANGEROUS_PRIVILEGES: set[str] = {"sedebugprivilege", "setcbprivilege"}
 
 # PID extraction: matches a column of digits that looks like a PID
 # in Volatility tab-separated output (typically 2nd or 3rd column).
@@ -247,6 +253,51 @@ def _build_pid_metadata(
     return parent_map, pid_names
 
 
+def _check_hidden_process(
+    pid: int,
+    pslist_pids: dict[int, list[WindowRow]] | None,
+    psscan_pids: dict[int, list[WindowRow]] | None,
+    reasons: list[str],
+    source_windows: list[dict],
+) -> None:
+    """Flag PID if present in psscan but missing from pslist (unlinked/hidden)."""
+    if psscan_pids is None or pslist_pids is None:
+        return
+    if pid in psscan_pids and pid not in pslist_pids:
+        reasons.append("hidden_process")
+        source_windows.extend(w.model_dump() for w in psscan_pids[pid])
+
+
+def _check_dangerous_privileges(
+    pid: int,
+    privs_pids: dict[int, list[WindowRow]] | None,
+    reasons: list[str],
+    source_windows: list[dict],
+) -> None:
+    """Flag PID holding SeDebugPrivilege or SeTcbPrivilege."""
+    if privs_pids is None or pid not in privs_pids:
+        return
+    priv_text = " ".join(w.raw_text.lower() for w in privs_pids[pid])
+    if any(priv in priv_text for priv in _DANGEROUS_PRIVILEGES):
+        reasons.append("dangerous_privilege")
+        source_windows.extend(w.model_dump() for w in privs_pids[pid])
+
+
+def _check_suspicious_environment(
+    pid: int,
+    envars_pids: dict[int, list[WindowRow]] | None,
+    reasons: list[str],
+    source_windows: list[dict],
+) -> None:
+    """Flag PID with anomalous environment variables (e.g. overridden COMSPEC)."""
+    if envars_pids is None or pid not in envars_pids:
+        return
+    env_text = " ".join(w.raw_text.lower() for w in envars_pids[pid])
+    if "comspec" in env_text or ("temp" in env_text and "\\appdata\\" not in env_text):
+        reasons.append("suspicious_environment")
+        source_windows.extend(w.model_dump() for w in envars_pids[pid])
+
+
 def _analyze_pid(
     pid: int,
     *,
@@ -256,6 +307,10 @@ def _analyze_pid(
     cmdline_pids: dict[int, list[WindowRow]],
     netscan_pids: dict[int, list[WindowRow]],
     pstree_pids: dict[int, list[WindowRow]],
+    pslist_pids: dict[int, list[WindowRow]] | None = None,
+    psscan_pids: dict[int, list[WindowRow]] | None = None,
+    privs_pids: dict[int, list[WindowRow]] | None = None,
+    envars_pids: dict[int, list[WindowRow]] | None = None,
 ) -> dict | None:
     """Evaluate a single PID for suspicion indicators. Returns None if benign."""
     reasons: list[str] = []
@@ -264,6 +319,8 @@ def _analyze_pid(
     name = pid_names.get(pid, "unknown")
     parent_pid = parent_map.get(pid)
     parent_name = pid_names.get(parent_pid, "unknown") if parent_pid else "unknown"
+
+    _check_hidden_process(pid, pslist_pids, psscan_pids, reasons, source_windows)
 
     if pid in malfind_pids:
         reasons.append("malfind_injection")
@@ -287,6 +344,9 @@ def _analyze_pid(
 
     if parent_name.lower() in _SUSPICIOUS_PARENTS and name.lower() in _SUSPICIOUS_CHILDREN:
         reasons.append("suspicious_parent")
+
+    _check_dangerous_privileges(pid, privs_pids, reasons, source_windows)
+    _check_suspicious_environment(pid, envars_pids, reasons, source_windows)
 
     if pid in pstree_pids:
         source_windows.extend(w.model_dump() for w in pstree_pids[pid])
@@ -326,10 +386,9 @@ def find_suspicious_processes() -> dict:
     """Identify suspicious processes by cross-referencing memory forensics artifacts.
 
     Joins data from Volatility malfind (code injection), cmdline (command
-    arguments), netscan (network connections), and pstree (parent-child
-    relationships).  Flags processes exhibiting indicators like code
-    injection, encoded PowerShell, LOLBin usage, or unexpected parents
-    with external network connections.  Read-only.
+    arguments), netscan (network connections), pstree (parent-child
+    relationships), psscan (hidden process detection), privs (privilege
+    escalation), and envars (environment anomalies).  Read-only.
     """
     ctx = get_ctx()
     composite_id = _make_tool_call_id()
@@ -348,12 +407,37 @@ def find_suspicious_processes() -> dict:
     pstree_wins, tc4 = _query_source("volatility.pstree", "find_suspicious_processes")
     sub_call_ids.append(tc4)
 
+    pslist_wins: list[WindowRow] = []
+    psscan_wins: list[WindowRow] = []
+    if _source_exists(_SRC_PSSCAN):
+        psscan_wins, tc_ps = _query_source(_SRC_PSSCAN, "find_suspicious_processes")
+        sub_call_ids.append(tc_ps)
+        pslist_wins, tc_pl = _query_source(_SRC_PSLIST, "find_suspicious_processes")
+        sub_call_ids.append(tc_pl)
+
+    privs_wins: list[WindowRow] = []
+    if _source_exists(_SRC_PRIVS):
+        privs_wins, tc_priv = _query_source(_SRC_PRIVS, "find_suspicious_processes")
+        sub_call_ids.append(tc_priv)
+
+    envars_wins: list[WindowRow] = []
+    if _source_exists(_SRC_ENVARS):
+        envars_wins, tc_env = _query_source(_SRC_ENVARS, "find_suspicious_processes")
+        sub_call_ids.append(tc_env)
+
     malfind_pids = _extract_pids_from_windows(malfind_wins)
     cmdline_pids = _extract_pids_from_windows(cmdline_wins)
     netscan_pids = _extract_pids_from_windows(netscan_wins)
     pstree_pids = _extract_pids_from_windows(pstree_wins)
 
+    pslist_pids = _extract_pids_from_windows(pslist_wins) if pslist_wins else None
+    psscan_pids = _extract_pids_from_windows(psscan_wins) if psscan_wins else None
+    privs_pids = _extract_pids_from_windows(privs_wins) if privs_wins else None
+    envars_pids = _extract_pids_from_windows(envars_wins) if envars_wins else None
+
     all_pids = set(malfind_pids) | set(cmdline_pids) | set(netscan_pids) | set(pstree_pids)
+    if psscan_pids:
+        all_pids |= set(psscan_pids)
     parent_map, pid_names = _build_pid_metadata(pstree_wins, cmdline_wins)
 
     suspicious: list[dict] = []
@@ -366,6 +450,10 @@ def find_suspicious_processes() -> dict:
             cmdline_pids=cmdline_pids,
             netscan_pids=netscan_pids,
             pstree_pids=pstree_pids,
+            pslist_pids=pslist_pids,
+            psscan_pids=psscan_pids,
+            privs_pids=privs_pids,
+            envars_pids=envars_pids,
         )
         if entry is not None:
             suspicious.append(entry)

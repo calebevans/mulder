@@ -21,6 +21,7 @@ _MEMORY_DUMP_EXTS = frozenset({".mem", ".raw", ".vmem", ".dmp"})
 _MEMORY_DUMP_MIN_BYTES = 100 * 1024 * 1024  # 100 MB
 
 _PLUGIN_TIMEOUT_SECONDS = 300
+_OS_DETECT_TIMEOUT_SECONDS = 60
 _MAX_WORKERS = 4
 
 
@@ -75,6 +76,35 @@ class VolatilityExtractor:
         "windows.dlllist.DllList",
         "windows.svcscan.SvcScan",
         "windows.handles.Handles",
+        # Process analysis
+        "windows.psscan.PsScan",
+        "windows.envars.Envars",
+        "windows.privs.Privs",
+        "windows.getsids.GetSIDs",
+        # Network
+        "windows.netstat.NetStat",
+        # Registry from memory
+        "windows.registry.hivelist.HiveList",
+        "windows.registry.userassist.UserAssist",
+        # Files and modules
+        "windows.filescan.FileScan",
+        "windows.modules.Modules",
+        "windows.modscan.ModScan",
+        # Injection analysis
+        "windows.vadinfo.VadInfo",
+    ]
+
+    LINUX_PLUGINS: list[str] = [
+        "linux.pslist.PsList",
+        "linux.pstree.PsTree",
+        "linux.bash.Bash",
+        "linux.check_modules.Check_modules",
+        "linux.lsmod.Lsmod",
+        "linux.sockstat.Sockstat",
+        "linux.lsof.Lsof",
+        "linux.elfs.Elfs",
+        "linux.tty_check.tty_check",
+        "linux.proc.Maps",
     ]
 
     def __init__(self) -> None:
@@ -95,15 +125,46 @@ class VolatilityExtractor:
         except OSError:
             return False
 
+    def _detect_os(self, vol_cmd: list[str], dump_path: Path) -> str:
+        """Probe the memory dump to determine its OS type.
+
+        Tries ``windows.info.Info`` first; falls back to ``linux.bash.Bash``.
+        Returns ``"windows"`` or ``"linux"``.  Defaults to ``"windows"`` if
+        neither probe succeeds.
+        """
+        for plugin, os_name in (
+            ("windows.info.Info", "windows"),
+            ("linux.bash.Bash", "linux"),
+        ):
+            try:
+                proc = subprocess.run(
+                    [*vol_cmd, "-f", str(dump_path), plugin],
+                    capture_output=True,
+                    text=True,
+                    timeout=_OS_DETECT_TIMEOUT_SECONDS,
+                    check=False,
+                )
+                if proc.returncode == 0 and proc.stdout.strip():
+                    logger.info("Detected %s memory dump: %s", os_name, dump_path)
+                    return os_name
+            except (subprocess.TimeoutExpired, OSError):
+                continue
+
+        logger.warning("Could not detect OS for %s, defaulting to windows", dump_path)
+        return "windows"
+
     def extract(self, path: Path, case_id: str) -> list[ExtractionResult]:
         """Run all plugins against *path* and return one result per successful plugin."""
         vol_cmd = self._vol_command()
+        detected_os = self._detect_os(vol_cmd, path)
+        plugins = self.PLUGINS if detected_os == "windows" else self.LINUX_PLUGINS
+        logger.info("Running %d %s plugins against %s", len(plugins), detected_os, path)
+
         results: list[ExtractionResult] = []
 
         with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as pool:
             futures = {
-                pool.submit(self._run_plugin, vol_cmd, path, plugin): plugin
-                for plugin in self.PLUGINS
+                pool.submit(self._run_plugin, vol_cmd, path, plugin): plugin for plugin in plugins
             }
             for future in as_completed(futures):
                 plugin = futures[future]

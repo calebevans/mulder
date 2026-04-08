@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 from uuid import uuid4
 
@@ -39,6 +40,52 @@ def _serialize_scored(scored: list) -> list[dict]:
         }
         for s in scored
     ]
+
+
+_SRC_PSLIST = "volatility.pslist"
+_SRC_PSTREE = "volatility.pstree"
+_SRC_PSSCAN = "volatility.psscan"
+_SRC_ENVARS = "volatility.envars"
+_SRC_PRIVS = "volatility.privs"
+_SRC_MODULES = "volatility.modules"
+_SRC_MODSCAN = "volatility.modscan"
+_SRC_USERASSIST = "volatility.userassist"
+_SRC_FILESCAN = "volatility.filescan"
+
+_PID_RE = re.compile(r"(?:^|\t)(\d{1,6})(?:\t|$)", re.MULTILINE)
+
+_MODULE_NAME_RE = re.compile(r"^([^\t]+\.sys)", re.MULTILINE | re.IGNORECASE)
+
+
+def _extract_pid(text: str) -> int | None:
+    """Parse the first PID value from a Volatility output line."""
+    m = _PID_RE.search(text)
+    if m:
+        val = int(m.group(1))
+        if val > 0:
+            return val
+    return None
+
+
+def _extract_pids_from_windows(windows: list) -> dict[int, list]:
+    """Group windows by the PID found in their text."""
+    pid_map: dict[int, list] = {}
+    for w in windows:
+        pid = _extract_pid(w.raw_text)
+        if pid is not None:
+            pid_map.setdefault(pid, []).append(w)
+    return pid_map
+
+
+def _extract_module_names(windows: list) -> dict[str, list]:
+    """Group windows by the kernel module name found in their text."""
+    mod_map: dict[str, list] = {}
+    for w in windows:
+        m = _MODULE_NAME_RE.search(w.raw_text)
+        if m:
+            name = m.group(1).strip().lower()
+            mod_map.setdefault(name, []).append(w)
+    return mod_map
 
 
 # ------------------------------------------------------------------
@@ -288,7 +335,7 @@ def list_processes_from_memory() -> dict:
     tc_id = _make_tool_call_id()
     t0 = time.monotonic()
 
-    windows = ctx.db.get_windows_by_source("volatility.pslist")
+    windows = ctx.db.get_windows_by_source(_SRC_PSLIST)
     results = _serialize_windows(windows)
 
     elapsed = (time.monotonic() - t0) * 1000
@@ -302,7 +349,7 @@ def list_processes_from_memory() -> dict:
     return {
         "tool_call_id": tc_id,
         "results": results,
-        "source": "volatility.pslist",
+        "source": _SRC_PSLIST,
         "result_count": len(results),
         "reduced": False,
         "reduction_ratio": None,
@@ -326,7 +373,7 @@ def get_process_tree() -> dict:
     tc_id = _make_tool_call_id()
     t0 = time.monotonic()
 
-    windows = ctx.db.get_windows_by_source("volatility.pstree")
+    windows = ctx.db.get_windows_by_source(_SRC_PSTREE)
     results = _serialize_windows(windows)
 
     elapsed = (time.monotonic() - t0) * 1000
@@ -340,7 +387,7 @@ def get_process_tree() -> dict:
     return {
         "tool_call_id": tc_id,
         "results": results,
-        "source": "volatility.pstree",
+        "source": _SRC_PSTREE,
         "result_count": len(results),
         "reduced": False,
         "reduction_ratio": None,
@@ -535,6 +582,261 @@ def get_amcache() -> dict:
         "tool_call_id": tc_id,
         "results": results,
         "source": "registry.system",
+        "result_count": len(results),
+        "reduced": False,
+        "reduction_ratio": None,
+    }
+
+
+# ------------------------------------------------------------------
+# Tool: scan_hidden_processes
+# ------------------------------------------------------------------
+
+
+@mcp.tool()
+def scan_hidden_processes() -> dict:
+    """Detect hidden processes by comparing psscan (pool-tag scan) against pslist (linked list).
+
+    PIDs present in psscan but absent from pslist may be hidden or unlinked
+    by a rootkit.  Returns the discrepancy set with supporting evidence
+    windows from psscan.  Read-only.
+    """
+    ctx = get_ctx()
+    tc_id = _make_tool_call_id()
+    t0 = time.monotonic()
+
+    psscan_wins = ctx.db.get_windows_by_source(_SRC_PSSCAN)
+    pslist_wins = ctx.db.get_windows_by_source(_SRC_PSLIST)
+
+    psscan_pids = _extract_pids_from_windows(psscan_wins)
+    pslist_pids = _extract_pids_from_windows(pslist_wins)
+
+    hidden_pids = set(psscan_pids) - set(pslist_pids)
+    results = [
+        {
+            "pid": pid,
+            "source": _SRC_PSSCAN,
+            "evidence_windows": _serialize_windows(psscan_pids[pid]),
+        }
+        for pid in sorted(hidden_pids)
+    ]
+
+    elapsed = (time.monotonic() - t0) * 1000
+    ctx.audit.log_tool_call(
+        tool_call_id=tc_id,
+        tool_name="scan_hidden_processes",
+        params={},
+        output_hash=_hash_output(results),
+        duration_ms=elapsed,
+    )
+    return {
+        "tool_call_id": tc_id,
+        "results": results,
+        "source": _SRC_PSSCAN,
+        "result_count": len(results),
+        "reduced": False,
+        "reduction_ratio": None,
+    }
+
+
+# ------------------------------------------------------------------
+# Tool: get_process_environment
+# ------------------------------------------------------------------
+
+
+@mcp.tool()
+def get_process_environment(pid: int) -> dict:
+    """Return environment variables for a specific process from memory.
+
+    Filters Volatility envars output by *pid*.  Useful for detecting
+    injected environment variables or suspicious PATH modifications.
+    Read-only.
+    """
+    ctx = get_ctx()
+    tc_id = _make_tool_call_id()
+    t0 = time.monotonic()
+
+    all_wins = ctx.db.get_windows_by_source(_SRC_ENVARS)
+    matching = [w for w in all_wins if _extract_pid(w.raw_text) == pid]
+    results = _serialize_windows(matching)
+
+    elapsed = (time.monotonic() - t0) * 1000
+    ctx.audit.log_tool_call(
+        tool_call_id=tc_id,
+        tool_name="get_process_environment",
+        params={"pid": pid},
+        output_hash=_hash_output(results),
+        duration_ms=elapsed,
+    )
+    return {
+        "tool_call_id": tc_id,
+        "results": results,
+        "source": _SRC_ENVARS,
+        "result_count": len(results),
+        "reduced": False,
+        "reduction_ratio": None,
+    }
+
+
+# ------------------------------------------------------------------
+# Tool: get_process_privileges
+# ------------------------------------------------------------------
+
+
+@mcp.tool()
+def get_process_privileges(pid: int) -> dict:
+    """Return token privileges for a specific process from memory.
+
+    Filters Volatility privs output by *pid*.  SeDebugPrivilege or
+    SeTcbPrivilege on unexpected processes is a strong indicator of
+    privilege escalation.  Read-only.
+    """
+    ctx = get_ctx()
+    tc_id = _make_tool_call_id()
+    t0 = time.monotonic()
+
+    all_wins = ctx.db.get_windows_by_source(_SRC_PRIVS)
+    matching = [w for w in all_wins if _extract_pid(w.raw_text) == pid]
+    results = _serialize_windows(matching)
+
+    elapsed = (time.monotonic() - t0) * 1000
+    ctx.audit.log_tool_call(
+        tool_call_id=tc_id,
+        tool_name="get_process_privileges",
+        params={"pid": pid},
+        output_hash=_hash_output(results),
+        duration_ms=elapsed,
+    )
+    return {
+        "tool_call_id": tc_id,
+        "results": results,
+        "source": _SRC_PRIVS,
+        "result_count": len(results),
+        "reduced": False,
+        "reduction_ratio": None,
+    }
+
+
+# ------------------------------------------------------------------
+# Tool: scan_kernel_modules
+# ------------------------------------------------------------------
+
+
+@mcp.tool()
+def scan_kernel_modules() -> dict:
+    """Detect hidden kernel modules by comparing modscan (pool-tag) against modules (linked list).
+
+    Modules present in modscan but absent from the linked list may have
+    been unlinked by a rootkit.  Returns the discrepancy set with
+    supporting evidence windows.  Read-only.
+    """
+    ctx = get_ctx()
+    tc_id = _make_tool_call_id()
+    t0 = time.monotonic()
+
+    modules_wins = ctx.db.get_windows_by_source(_SRC_MODULES)
+    modscan_wins = ctx.db.get_windows_by_source(_SRC_MODSCAN)
+
+    linked_mods = _extract_module_names(modules_wins)
+    scanned_mods = _extract_module_names(modscan_wins)
+
+    hidden_names = set(scanned_mods) - set(linked_mods)
+    results = [
+        {
+            "module_name": name,
+            "source": _SRC_MODSCAN,
+            "evidence_windows": _serialize_windows(scanned_mods[name]),
+        }
+        for name in sorted(hidden_names)
+    ]
+
+    elapsed = (time.monotonic() - t0) * 1000
+    ctx.audit.log_tool_call(
+        tool_call_id=tc_id,
+        tool_name="scan_kernel_modules",
+        params={},
+        output_hash=_hash_output(results),
+        duration_ms=elapsed,
+    )
+    return {
+        "tool_call_id": tc_id,
+        "results": results,
+        "source": _SRC_MODSCAN,
+        "result_count": len(results),
+        "reduced": False,
+        "reduction_ratio": None,
+    }
+
+
+# ------------------------------------------------------------------
+# Tool: get_userassist
+# ------------------------------------------------------------------
+
+
+@mcp.tool()
+def get_userassist() -> dict:
+    """Return UserAssist registry entries extracted from memory.
+
+    UserAssist tracks GUI program execution with run counts and
+    timestamps.  Useful for building an execution timeline.  Read-only.
+    """
+    ctx = get_ctx()
+    tc_id = _make_tool_call_id()
+    t0 = time.monotonic()
+
+    windows = ctx.db.get_windows_by_source(_SRC_USERASSIST)
+    results = _serialize_windows(windows)
+
+    elapsed = (time.monotonic() - t0) * 1000
+    ctx.audit.log_tool_call(
+        tool_call_id=tc_id,
+        tool_name="get_userassist",
+        params={},
+        output_hash=_hash_output(results),
+        duration_ms=elapsed,
+    )
+    return {
+        "tool_call_id": tc_id,
+        "results": results,
+        "source": _SRC_USERASSIST,
+        "result_count": len(results),
+        "reduced": False,
+        "reduction_ratio": None,
+    }
+
+
+# ------------------------------------------------------------------
+# Tool: scan_files_in_memory
+# ------------------------------------------------------------------
+
+
+@mcp.tool()
+def scan_files_in_memory() -> dict:
+    """Return all file objects cached in the memory dump (Volatility filescan).
+
+    Lists every file object found via pool-tag scanning.  Useful for
+    identifying files that were open or recently accessed at the time
+    of capture.  Read-only.
+    """
+    ctx = get_ctx()
+    tc_id = _make_tool_call_id()
+    t0 = time.monotonic()
+
+    windows = ctx.db.get_windows_by_source(_SRC_FILESCAN)
+    results = _serialize_windows(windows)
+
+    elapsed = (time.monotonic() - t0) * 1000
+    ctx.audit.log_tool_call(
+        tool_call_id=tc_id,
+        tool_name="scan_files_in_memory",
+        params={},
+        output_hash=_hash_output(results),
+        duration_ms=elapsed,
+    )
+    return {
+        "tool_call_id": tc_id,
+        "results": results,
+        "source": _SRC_FILESCAN,
         "result_count": len(results),
         "reduced": False,
         "reduction_ratio": None,
