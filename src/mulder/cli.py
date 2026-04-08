@@ -13,7 +13,7 @@ from mulder import __version__
 from mulder.db import CaseDB
 from mulder.extractors import EvidenceClassifier, default_registry
 from mulder.index import Embedder
-from mulder.models import WindowRow
+from mulder.models import EmbeddingConfig, WindowRow
 
 logger = logging.getLogger(__name__)
 
@@ -27,18 +27,28 @@ def _sha256_file(path: Path) -> str:
     return f"sha256:{h.hexdigest()}"
 
 
-def run_ingestion(evidence_path: Path, case_id: str, db_dir: Path) -> None:
+def run_ingestion(
+    evidence_path: Path,
+    case_id: str,
+    db_dir: Path,
+    embedding_config: EmbeddingConfig | None = None,
+    api_key: str | None = None,
+) -> None:
     """Full ingestion pipeline: classify -> extract -> window -> embed -> store."""
     t_start = time.monotonic()
 
+    click.echo("Loading embedding model ...")
+    embedder = Embedder(config=embedding_config, api_key=api_key)
+
+    emb_cfg = embedding_config or EmbeddingConfig()
+    emb_cfg.embedding_dim = embedder.embedding_dim
+    click.echo(f"  Backend: {emb_cfg.backend}, model: {emb_cfg.model_name}, dim: {emb_cfg.embedding_dim}")
+
     click.echo(f"Creating case database for '{case_id}' ...")
-    db = CaseDB.create(case_id, str(evidence_path), db_dir)
+    db = CaseDB.create(case_id, str(evidence_path), db_dir, embedding_config=emb_cfg)
 
     classifier = EvidenceClassifier()
     registry = default_registry()
-
-    click.echo("Loading embedding model ...")
-    embedder = Embedder()
 
     click.echo(f"Scanning evidence at {evidence_path} ...")
     classified = classifier.classify(evidence_path)
@@ -128,15 +138,44 @@ def cli() -> None:
     show_default=True,
     help="Directory to store per-case databases.",
 )
-def ingest(evidence_path: str, case_id: str, db_dir: str) -> None:
+@click.option(
+    "--embedding-backend",
+    default="sentence-transformers",
+    show_default=True,
+    type=click.Choice(["sentence-transformers", "remote"]),
+    help="Embedding backend. Use 'remote' for API-based models (Gemini, OpenAI, etc.).",
+)
+@click.option(
+    "--embedding-model",
+    default="all-MiniLM-L6-v2",
+    show_default=True,
+    help="Embedding model name. For remote: use litellm format (e.g. gemini/text-embedding-004).",
+)
+@click.option(
+    "--api-key",
+    default=None,
+    envvar="MULDER_API_KEY",
+    help="API key for remote embeddings. Falls back to provider env vars (GEMINI_API_KEY, etc.).",
+)
+def ingest(
+    evidence_path: str,
+    case_id: str,
+    db_dir: str,
+    embedding_backend: str,
+    embedding_model: str,
+    api_key: str | None,
+) -> None:
     """Ingest evidence into a per-case semantic index.
 
     EVIDENCE_PATH is the root directory (or file) containing forensic artifacts.
     """
+    emb_cfg = EmbeddingConfig(backend=embedding_backend, model_name=embedding_model)
     run_ingestion(
         evidence_path=Path(evidence_path).expanduser().resolve(),
         case_id=case_id,
         db_dir=Path(db_dir).expanduser(),
+        embedding_config=emb_cfg,
+        api_key=api_key,
     )
 
 
@@ -155,7 +194,13 @@ def ingest(evidence_path: str, case_id: str, db_dir: str) -> None:
     type=click.Choice(["stdio", "streamable-http"]),
     help="MCP transport to use.",
 )
-def serve(case_id: str, db_dir: str, transport: str) -> None:
+@click.option(
+    "--api-key",
+    default=None,
+    envvar="MULDER_API_KEY",
+    help="API key for remote embeddings (if the case was ingested with --embedding-backend remote).",
+)
+def serve(case_id: str, db_dir: str, transport: str, api_key: str | None) -> None:
     """Start the Mulder MCP server for a case."""
     from mulder.server.app import init_server
     from mulder.server.app import mcp as mcp_server
@@ -164,7 +209,7 @@ def serve(case_id: str, db_dir: str, transport: str) -> None:
     audit_path = db_dir_path / f"{case_id}.audit.jsonl"
 
     click.echo(f"Initialising MCP server for case '{case_id}' ...")
-    init_server(case_id, db_dir_path, audit_path)
+    init_server(case_id, db_dir_path, audit_path, api_key=api_key)
 
     click.echo(f"Starting MCP server (transport={transport}) ...")
     mcp_server.run(transport=transport)
@@ -190,7 +235,15 @@ def serve(case_id: str, db_dir: str, transport: str) -> None:
     show_default=True,
     help="Maximum agent iterations.",
 )
-def investigate(case_id: str, db_dir: str, model: str, max_iterations: int) -> None:
+@click.option(
+    "--api-key",
+    default=None,
+    envvar="MULDER_API_KEY",
+    help="API key for remote embeddings (if the case was ingested with --embedding-backend remote).",
+)
+def investigate(
+    case_id: str, db_dir: str, model: str, max_iterations: int, api_key: str | None
+) -> None:
     """Run an autonomous IR investigation against a case."""
     import asyncio
     import sys
@@ -201,9 +254,17 @@ def investigate(case_id: str, db_dir: str, model: str, max_iterations: int) -> N
 
     db_dir_path = Path(db_dir).expanduser()
 
+    serve_args = [
+        "-m", "mulder.cli", "serve",
+        "--case-id", case_id,
+        "--db-dir", str(db_dir_path),
+    ]
+    if api_key:
+        serve_args.extend(["--api-key", api_key])
+
     server_params = StdioServerParameters(
         command=sys.executable,
-        args=["-m", "mulder.cli", "serve", "--case-id", case_id, "--db-dir", str(db_dir_path)],
+        args=serve_args,
     )
 
     investigator = Investigator(

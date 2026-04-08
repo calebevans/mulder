@@ -9,14 +9,15 @@ from pathlib import Path
 
 import sqlite_vec
 
-from mulder.models import CaseMetadataRow, Finding, SourceRow, WindowRow
+from mulder.models import CaseMetadataRow, EmbeddingConfig, Finding, SourceRow, WindowRow
 
 _SCHEMA_DDL = """\
 CREATE TABLE IF NOT EXISTS case_metadata (
     case_id            TEXT PRIMARY KEY,
     ingested_at        TEXT NOT NULL,
     evidence_root      TEXT NOT NULL,
-    extractor_versions TEXT NOT NULL
+    extractor_versions TEXT NOT NULL,
+    embedding_config   TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE TABLE IF NOT EXISTS sources (
@@ -55,12 +56,13 @@ CREATE TABLE IF NOT EXISTS findings (
 );
 """
 
-_VEC_TABLE_DDL = """\
-CREATE VIRTUAL TABLE IF NOT EXISTS vec_windows USING vec0 (
-    window_id   INTEGER PRIMARY KEY,
-    embedding   float[384]
-);
-"""
+def _vec_table_ddl(dim: int = 384) -> str:
+    return (
+        f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_windows USING vec0 ("
+        f"    window_id   INTEGER PRIMARY KEY,"
+        f"    embedding   float[{dim}]"
+        f");"
+    )
 
 
 class CaseDB:
@@ -82,21 +84,24 @@ class CaseDB:
         case_id: str,
         evidence_root: str,
         db_dir: Path,
+        embedding_config: EmbeddingConfig | None = None,
     ) -> CaseDB:
+        emb_cfg = embedding_config or EmbeddingConfig()
         db_dir = Path(db_dir).expanduser()
         db_dir.mkdir(parents=True, exist_ok=True)
         db_path = db_dir / f"{case_id}.db"
 
         db = cls(db_path)
         db._conn.executescript(_SCHEMA_DDL)
-        db._conn.execute(_VEC_TABLE_DDL)
+        db._conn.execute(_vec_table_ddl(emb_cfg.embedding_dim))
         db._conn.commit()
 
         now = datetime.now(timezone.utc).isoformat()
         db._conn.execute(
-            "INSERT INTO case_metadata (case_id, ingested_at, evidence_root, extractor_versions)"
-            " VALUES (?, ?, ?, ?)",
-            (case_id, now, evidence_root, json.dumps({})),
+            "INSERT INTO case_metadata"
+            " (case_id, ingested_at, evidence_root, extractor_versions, embedding_config)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (case_id, now, evidence_root, json.dumps({}), emb_cfg.model_dump_json()),
         )
         db._conn.commit()
         return db
@@ -375,11 +380,16 @@ class CaseDB:
         row = self._conn.execute("SELECT * FROM case_metadata LIMIT 1").fetchone()
         if row is None:
             raise RuntimeError("No case metadata found in database")
+
+        raw_emb = row["embedding_config"] if "embedding_config" in row.keys() else "{}"
+        emb_cfg = EmbeddingConfig.model_validate_json(raw_emb) if raw_emb else EmbeddingConfig()
+
         return CaseMetadataRow(
             case_id=row["case_id"],
             ingested_at=row["ingested_at"],
             evidence_root=row["evidence_root"],
             extractor_versions=json.loads(row["extractor_versions"]),
+            embedding_config=emb_cfg,
         )
 
     # ------------------------------------------------------------------

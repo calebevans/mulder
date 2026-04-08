@@ -7,6 +7,19 @@ from typing import Literal
 from pydantic import BaseModel, model_validator
 
 
+class EmbeddingConfig(BaseModel):
+    """Persisted embedding backend configuration for a case.
+
+    Stored in case_metadata so that serve/investigate use the same
+    model that was used during ingestion.  The api_key is intentionally
+    excluded -- it must come from the environment or CLI flags.
+    """
+
+    backend: Literal["sentence-transformers", "remote"] = "sentence-transformers"
+    model_name: str = "all-MiniLM-L6-v2"
+    embedding_dim: int = 384
+
+
 class WindowRow(BaseModel):
     window_id: int
     source_id: int
@@ -31,6 +44,7 @@ class CaseMetadataRow(BaseModel):
     ingested_at: str
     evidence_root: str
     extractor_versions: dict[str, str]
+    embedding_config: EmbeddingConfig = EmbeddingConfig()
 
 
 class Finding(BaseModel):

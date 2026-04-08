@@ -13,7 +13,6 @@ from mulder.index.embedder import Embedder
 from mulder.models import WindowRow
 
 _ANOMALY_K = 10
-_EMBEDDING_DIM = 384
 
 
 class ScoredWindow(BaseModel):
@@ -154,6 +153,12 @@ class QueryEngine:
 
         Returns ``(window_id, anomaly_score)`` pairs.  Higher score
         means the window is further from its neighbors (more anomalous).
+
+        Note: ``cordon.analysis.scorer.DensityAnomalyScorer`` implements
+        the same algorithm with GPU acceleration (PyTorch + batched
+        matrix multiply).  This numpy-only version operates on stored DB
+        embeddings where constructing the ``TextWindow`` wrappers Cordon
+        requires would add unnecessary overhead.
         """
         raw = self._db.get_embeddings_by_source(source_name, time_start, time_end)
         if not raw:

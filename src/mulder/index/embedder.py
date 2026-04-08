@@ -1,12 +1,28 @@
-"""Text windowing and sentence-transformers embedding for sqlite-vec storage."""
+"""Text windowing and embedding for sqlite-vec storage.
+
+Delegates windowing to ``cordon.segmentation.windower`` and embedding to
+``cordon.embedding.create_vectorizer`` so that backend dispatch (sentence-
+transformers, remote/litellm, llama.cpp), GPU auto-detection, L2
+normalisation, and truncation warnings are handled by Cordon.
+
+Mulder adds forensic-specific timestamp parsing on top.
+"""
 
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime
 
 import numpy as np
-from sentence_transformers import SentenceTransformer
+from cordon import AnalysisConfig
+from cordon.core.types import TextWindow
+from cordon.embedding import create_vectorizer
+from cordon.segmentation.windower import SlidingWindowSegmenter
+
+from mulder.models import EmbeddingConfig
+
+logger = logging.getLogger(__name__)
 
 _ISO_RE = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}")
 
@@ -86,12 +102,60 @@ def _parse_timestamp(text: str) -> str | None:
 class Embedder:
     """Windows text and produces embeddings for sqlite-vec storage.
 
-    Loads a sentence-transformers model once and reuses it for all
-    embedding operations.  Device is auto-detected (CUDA > MPS > CPU).
+    Windowing is handled by Cordon's ``SlidingWindowSegmenter`` and
+    embedding by the vectorizer returned from ``cordon.embedding.create_vectorizer``,
+    which dispatches to sentence-transformers, remote/litellm, or llama.cpp
+    based on the backend field in *config*.
     """
 
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2") -> None:
-        self._model = SentenceTransformer(model_name)
+    def __init__(
+        self,
+        config: EmbeddingConfig | None = None,
+        api_key: str | None = None,
+    ) -> None:
+        self._config = config or EmbeddingConfig()
+        self._dim: int | None = None
+        self._segmenter = SlidingWindowSegmenter()
+
+        cordon_config = AnalysisConfig(
+            backend=self._config.backend,
+            model_name=self._config.model_name,
+            api_key=api_key,
+        )
+        logger.info(
+            "Creating cordon vectorizer: backend=%s, model=%s",
+            self._config.backend,
+            self._config.model_name,
+        )
+        self._vectorizer = create_vectorizer(cordon_config)
+
+    @property
+    def embedding_dim(self) -> int:
+        """Return the embedding vector dimensionality.
+
+        For local models this is known immediately via the underlying
+        SentenceTransformer; for remote models a single probe embedding
+        is issued on first access.
+        """
+        if self._dim is not None:
+            return self._dim
+
+        if hasattr(self._vectorizer, "model"):
+            dim = self._vectorizer.model.get_sentence_embedding_dimension()
+            if dim is not None:
+                self._dim = dim
+                return self._dim
+
+        probe = TextWindow(content="dimension probe", start_line=1, end_line=1, window_id=0)
+        for _, emb in self._vectorizer.embed_windows([probe]):
+            self._dim = int(emb.shape[0])
+            return self._dim
+
+        raise RuntimeError("Vectorizer produced no embedding for dimension probe")
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def window_and_embed(
         self,
@@ -108,37 +172,32 @@ class Embedder:
         if not lines:
             return []
 
-        windows: list[tuple[str, int, int]] = []
-        for i in range(0, len(lines), window_size):
-            chunk = lines[i : i + window_size]
-            raw = "\n".join(chunk)
-            line_start = i + 1
-            line_end = i + len(chunk)
-            windows.append((raw, line_start, line_end))
+        line_pairs = ((i + 1, line) for i, line in enumerate(lines))
+        segment_config = AnalysisConfig(window_size=window_size)
+        windows = list(self._segmenter.segment(line_pairs, segment_config))
 
         if not windows:
             return []
 
-        texts = [w[0] for w in windows]
-        embeddings = self._model.encode(
-            texts,
-            normalize_embeddings=True,
-            show_progress_bar=False,
-        )
+        embedded = list(self._vectorizer.embed_windows(windows))
 
         results: list[tuple[str, int, int, bytes, str | None]] = []
-        for (raw, line_start, line_end), emb in zip(windows, embeddings, strict=False):
+        for text_window, emb in embedded:
             emb_bytes = np.asarray(emb, dtype=np.float32).tobytes()
-            event_time = _parse_timestamp(raw)
-            results.append((raw, line_start, line_end, emb_bytes, event_time))
+            event_time = _parse_timestamp(text_window.content)
+            results.append((
+                text_window.content,
+                text_window.start_line,
+                text_window.end_line,
+                emb_bytes,
+                event_time,
+            ))
 
         return results
 
     def embed_query(self, query_text: str) -> bytes:
         """Embed a single query string for k-NN search."""
-        emb = self._model.encode(
-            [query_text],
-            normalize_embeddings=True,
-            show_progress_bar=False,
-        )
-        return np.asarray(emb[0], dtype=np.float32).tobytes()
+        window = TextWindow(content=query_text, start_line=1, end_line=1, window_id=0)
+        for _, emb in self._vectorizer.embed_windows([window]):
+            return np.asarray(emb, dtype=np.float32).tobytes()
+        raise RuntimeError("Vectorizer produced no embedding for query")

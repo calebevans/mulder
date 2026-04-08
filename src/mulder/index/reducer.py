@@ -40,7 +40,9 @@ _BLOCK_TAG_RE = re.compile(
 class ReducerConfig(BaseModel):
     """Configuration for Cordon-backed output reduction."""
 
+    backend: str = "sentence-transformers"
     model_name: str = "all-MiniLM-L6-v2"
+    api_key: str | None = None
     k_neighbors: int = 10
     min_lines_for_reduction: int = 50
 
@@ -109,11 +111,16 @@ class OutputReducer:
                 tmp_path = Path(tmp.name)
                 tmp.write(text)
 
-            cordon_config = AnalysisConfig(
-                anomaly_percentile=target_percentile,
-                model_name=self._config.model_name,
-                k_neighbors=self._config.k_neighbors,
-            )
+            cordon_kwargs: dict = {
+                "anomaly_percentile": target_percentile,
+                "model_name": self._config.model_name,
+                "k_neighbors": self._config.k_neighbors,
+            }
+            if self._config.backend == "remote":
+                cordon_kwargs["backend"] = "remote"
+                if self._config.api_key:
+                    cordon_kwargs["api_key"] = self._config.api_key
+            cordon_config = AnalysisConfig(**cordon_kwargs)
             analyzer = SemanticLogAnalyzer(cordon_config)
             result = analyzer.analyze_file_detailed(tmp_path)
 

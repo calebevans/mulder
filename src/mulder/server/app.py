@@ -13,7 +13,7 @@ from mulder.db import CaseDB
 from mulder.index.correlator import Correlator
 from mulder.index.embedder import Embedder
 from mulder.index.query import QueryEngine
-from mulder.index.reducer import OutputReducer
+from mulder.index.reducer import OutputReducer, ReducerConfig
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,12 @@ def get_ctx() -> ServerContext:
     return _ctx
 
 
-def init_server(case_id: str, db_dir: Path, audit_path: Path) -> None:
+def init_server(
+    case_id: str,
+    db_dir: Path,
+    audit_path: Path,
+    api_key: str | None = None,
+) -> None:
     """Initialise all components and store them in the module-level context.
 
     Called by ``cli.py`` before ``mcp.run()``.
@@ -51,12 +56,25 @@ def init_server(case_id: str, db_dir: Path, audit_path: Path) -> None:
     logger.info("Opening case database for '%s' ...", case_id)
     db = CaseDB.open(case_id, db_dir)
 
+    meta = db.get_case_metadata()
+    emb_cfg = meta.embedding_config
+    logger.info(
+        "Embedding config: backend=%s, model=%s, dim=%d",
+        emb_cfg.backend, emb_cfg.model_name, emb_cfg.embedding_dim,
+    )
+
     logger.info("Loading embedding model ...")
-    embedder = Embedder()
+    embedder = Embedder(config=emb_cfg, api_key=api_key)
 
     query_engine = QueryEngine(db, embedder)
     correlator = Correlator(query_engine, db)
-    reducer = OutputReducer()
+
+    reducer_config = ReducerConfig(
+        backend=emb_cfg.backend,
+        model_name=emb_cfg.model_name,
+        api_key=api_key,
+    )
+    reducer = OutputReducer(reducer_config)
     audit = AuditLog(audit_path)
 
     _ctx = ServerContext(
