@@ -104,6 +104,11 @@ def _hash_output(output: object) -> str:
     )
 
 
+def _source_exists(source_name: str) -> bool:
+    ctx = get_ctx()
+    return any(s.source_name == source_name for s in ctx.db.get_sources())
+
+
 def _query_source(
     source_name: str,
     tool_name: str,
@@ -132,19 +137,25 @@ def _semantic_sub_query(
     source_name: str | None = None,
     k: int = 20,
 ) -> tuple[list[WindowRow], str]:
-    """Run a semantic search as a logged sub-call, return (windows, tool_call_id)."""
+    """Run a semantic search as a logged sub-call, return (windows, tool_call_id).
+
+    Falls back to searching all sources when the requested source doesn't
+    exist in the case database.
+    """
     ctx = get_ctx()
     tc_id = _make_tool_call_id()
     t0 = time.monotonic()
 
-    scored = ctx.query_engine.semantic_search(query, k=k, source_name=source_name)
+    effective_source = source_name if source_name and _source_exists(source_name) else None
+    scored = ctx.query_engine.semantic_search(query, k=k, source_name=effective_source)
     windows = [s.window for s in scored]
 
+    actual_label = effective_source or "all"
     elapsed = (time.monotonic() - t0) * 1000
     ctx.audit.log_tool_call(
         tool_call_id=tc_id,
-        tool_name=f"{tool_name}._search({source_name or 'all'})",
-        params={"query": query, "source": source_name, "k": k},
+        tool_name=f"{tool_name}._search({actual_label})",
+        params={"query": query, "source": effective_source, "k": k},
         output_hash=_hash_output({"count": len(windows)}),
         duration_ms=elapsed,
     )
