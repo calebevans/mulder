@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "killjoy"
+name = "mulder"
 version = "0.1.0"
 description = "Custom MCP server for SANS SIFT Workstation forensic investigations"
 requires-python = ">=3.10"
@@ -33,10 +33,10 @@ dev = [
 ]
 
 [project.scripts]
-killjoy = "killjoy.cli:cli"
+mulder = "mulder.cli:cli"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/killjoy"]
+packages = ["src/mulder"]
 
 [tool.ruff]
 src = ["src"]

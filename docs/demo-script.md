@@ -1,4 +1,4 @@
-# Killjoy Demo Video Script
+# Mulder Demo Video Script
 
 Target length: 5 minutes.
 
@@ -10,7 +10,7 @@ Target length: 5 minutes.
 
 **Narration:**
 
-> Killjoy is a custom MCP server for forensic investigations on the SANS SIFT Workstation. It ingests evidence once, builds a semantic index, and then lets an autonomous AI agent investigate through typed, read-only tools. The agent cannot modify evidence because the API surface does not contain destructive operations.
+> Mulder is a custom MCP server for forensic investigations on the SANS SIFT Workstation. It ingests evidence once, builds a semantic index, and then lets an autonomous AI agent investigate through typed, read-only tools. The agent cannot modify evidence because the API surface does not contain destructive operations.
 
 **Key points to hit:**
 - Custom MCP Server architecture (hackathon approach #2)
@@ -21,10 +21,10 @@ Target length: 5 minutes.
 
 ## 0:30 -- 1:30 | Ingestion
 
-**On screen:** Terminal running `killjoy ingest`.
+**On screen:** Terminal running `mulder ingest`.
 
 ```bash
-killjoy ingest /cases/sample-case/ --case-id demo
+mulder ingest /cases/sample-case/ --case-id demo
 ```
 
 **Show:**
@@ -35,16 +35,16 @@ killjoy ingest /cases/sample-case/ --case-id demo
 
 **Narration:**
 
-> Killjoy scans the evidence directory, classifies each file, and runs the appropriate extractor. Memory dumps go through Volatility 3, disk images through Plaso, event logs through our EVTX parser. Every piece of extracted text is split into windows, embedded with all-MiniLM-L6-v2, and stored in a per-case sqlite-vec database.
+> Mulder scans the evidence directory, classifies each file, and runs the appropriate extractor. Memory dumps go through Volatility 3, disk images through Plaso, event logs through our EVTX parser. Every piece of extracted text is split into windows, embedded with all-MiniLM-L6-v2, and stored in a per-case sqlite-vec database.
 
 ---
 
 ## 1:30 -- 4:00 | Autonomous Investigation
 
-**On screen:** Terminal running `killjoy investigate`.
+**On screen:** Terminal running `mulder investigate`.
 
 ```bash
-killjoy investigate --case-id demo --model claude-sonnet-4-20250514
+mulder investigate --case-id demo --model claude-sonnet-4-20250514
 ```
 
 **Show the real-time terminal output:**
@@ -62,7 +62,7 @@ killjoy investigate --case-id demo --model claude-sonnet-4-20250514
 
 **Narration:**
 
-> The agent follows a structured investigation strategy. It starts broad with composite tools, then cross-verifies every finding using correlate_across_sources. Watch here -- the agent found a suspicious process via malfind, but when it checked the event logs, there was no corroborating evidence. Instead of reporting a false positive, it demoted the finding to "inference" and noted the missing corroboration. This self-correction loop is what separates Killjoy from a simple prompt-and-pray approach.
+> The agent follows a structured investigation strategy. It starts broad with composite tools, then cross-verifies every finding using correlate_across_sources. Watch here -- the agent found a suspicious process via malfind, but when it checked the event logs, there was no corroborating evidence. Instead of reporting a false positive, it demoted the finding to "inference" and noted the missing corroboration. This self-correction loop is what separates Mulder from a simple prompt-and-pray approach.
 
 ---
 
@@ -101,6 +101,6 @@ killjoy investigate --case-id demo --model claude-sonnet-4-20250514
 
 - Record on the SIFT Workstation (or Docker container) for authenticity
 - Use a dark terminal theme with large font for readability
-- Color-coded agent output (THINK/TOOL/RESULT/FINDING/VERIFY prefixes) is built into `killjoy investigate --verbose`
+- Color-coded agent output (THINK/TOOL/RESULT/FINDING/VERIFY prefixes) is built into `mulder investigate --verbose`
 - Keep the mouse cursor visible when clicking through the report for the audit trail walkthrough
 - Target 720p or 1080p resolution

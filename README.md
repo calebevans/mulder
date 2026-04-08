@@ -1,6 +1,6 @@
-# Killjoy
+# Mulder
 
-Custom MCP server for the SANS SIFT Workstation. Killjoy ingests a forensic case once, builds a per-case semantic index of every log-like artifact extracted from the evidence, and then lets an autonomous AI agent query that index through typed, read-only forensic functions.
+Custom MCP server for the SANS SIFT Workstation. Mulder ingests a forensic case once, builds a per-case semantic index of every log-like artifact extracted from the evidence, and then lets an autonomous AI agent query that index through typed, read-only forensic functions.
 
 Submission target: **FIND EVIL!** hackathon (SANS, Apr 15 -- Jun 15 2026).
 
@@ -11,26 +11,26 @@ Submission target: **FIND EVIL!** hackathon (SANS, Apr 15 -- Jun 15 2026).
 ### Option 1: Docker (recommended)
 
 ```bash
-docker build -t killjoy .
-docker run -v /path/to/evidence:/cases killjoy ingest /cases --case-id demo
-docker run -v /path/to/evidence:/cases killjoy investigate --case-id demo
+docker build -t mulder .
+docker run -v /path/to/evidence:/cases mulder ingest /cases --case-id demo
+docker run -v /path/to/evidence:/cases mulder investigate --case-id demo
 ```
 
 ### Option 2: Direct Install on SIFT Workstation
 
 ```bash
 pip install -e .
-killjoy ingest /cases/sample-case/ --case-id demo
-killjoy investigate --case-id demo --model claude-sonnet-4-20250514
+mulder ingest /cases/sample-case/ --case-id demo
+mulder investigate --case-id demo --model claude-sonnet-4-20250514
 ```
 
-The investigation produces a Markdown report at `~/.killjoy/cases/demo.report.md` and a JSONL audit trail at `~/.killjoy/cases/demo.audit.jsonl`. Every finding in the report links back to specific tool calls, which link back to the original evidence files with SHA-256 hashes.
+The investigation produces a Markdown report at `~/.mulder/cases/demo.report.md` and a JSONL audit trail at `~/.mulder/cases/demo.audit.jsonl`. Every finding in the report links back to specific tool calls, which link back to the original evidence files with SHA-256 hashes.
 
 ---
 
 ## What It Does
 
-Killjoy replaces the "run Volatility, grep logs, copy-paste into report" manual DFIR workflow with an autonomous agent that:
+Mulder replaces the "run Volatility, grep logs, copy-paste into report" manual DFIR workflow with an autonomous agent that:
 
 1. **Ingests** memory dumps, disk images, event logs, and text logs through specialized extractors.
 2. **Indexes** all extracted text into a per-case sqlite-vec semantic database with windowed embeddings.
@@ -113,20 +113,20 @@ uv pip install -e ".[dev]"
 
 ## Usage
 
-Killjoy has a three-command UX:
+Mulder has a three-command UX:
 
 ### 1. Ingest evidence
 
 ```bash
-killjoy ingest /path/to/evidence/ --case-id my-case
+mulder ingest /path/to/evidence/ --case-id my-case
 ```
 
-Scans the evidence directory, classifies files by type, runs the appropriate extractors (Volatility, Plaso, EVTX parser, log reader), and builds a semantic index in `~/.killjoy/cases/my-case.db`.
+Scans the evidence directory, classifies files by type, runs the appropriate extractors (Volatility, Plaso, EVTX parser, log reader), and builds a semantic index in `~/.mulder/cases/my-case.db`.
 
 ### 2. Investigate autonomously
 
 ```bash
-killjoy investigate --case-id my-case --model claude-sonnet-4-20250514
+mulder investigate --case-id my-case --model claude-sonnet-4-20250514
 ```
 
 Spawns the MCP server internally and runs a thin LLM agent that:
@@ -139,11 +139,11 @@ Spawns the MCP server internally and runs a thin LLM agent that:
 ### 3. Serve for external MCP clients (optional)
 
 ```bash
-killjoy serve --case-id my-case --transport stdio
-killjoy serve --case-id my-case --transport streamable-http
+mulder serve --case-id my-case --transport stdio
+mulder serve --case-id my-case --transport streamable-http
 ```
 
-Exposes the Killjoy tool surface to any MCP-compatible client (e.g. Claude Code, custom agents).
+Exposes the Mulder tool surface to any MCP-compatible client (e.g. Claude Code, custom agents).
 
 ---
 
@@ -190,7 +190,7 @@ When `correlate_across_sources` returns conflicting information, the agent re-qu
 ## Project Structure
 
 ```
-src/killjoy/
+src/mulder/
   __init__.py
   cli.py                        # Click CLI (ingest, serve, investigate)
   db.py                         # Per-case sqlite-vec database lifecycle

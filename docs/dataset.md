@@ -1,4 +1,4 @@
-# Killjoy -- Dataset Documentation
+# Mulder -- Dataset Documentation
 
 ## Dataset Used
 
@@ -32,7 +32,7 @@
 
 ## Expected Findings (Ground Truth)
 
-These are the known-bad indicators documented in the dataset's answer key. Killjoy's findings will be compared against this list for the accuracy report.
+These are the known-bad indicators documented in the dataset's answer key. Mulder's findings will be compared against this list for the accuracy report.
 
 | # | Finding | Severity | Expected Sources |
 |---|---------|----------|-----------------|
@@ -47,7 +47,7 @@ These are the known-bad indicators documented in the dataset's answer key. Killj
 ## Ingestion Notes
 
 ```bash
-killjoy ingest /path/to/dataset/ --case-id dataset-name
+mulder ingest /path/to/dataset/ --case-id dataset-name
 ```
 
 **Expected extraction results:**

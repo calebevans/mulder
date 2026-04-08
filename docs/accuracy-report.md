@@ -1,9 +1,9 @@
-# Killjoy -- Accuracy Report
+# Mulder -- Accuracy Report
 
 ## Section 1: False Positive Rate vs. Ground Truth
 
 **Methodology:**
-- Run `killjoy investigate` against a dataset with known ground truth findings.
+- Run `mulder investigate` against a dataset with known ground truth findings.
 - Compare submitted findings against the ground truth.
 - Classify each finding as true positive (TP), false positive (FP), or missed (FN).
 

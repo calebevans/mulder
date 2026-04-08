@@ -1,8 +1,8 @@
-# Killjoy -- Devpost Writeup
+# Mulder -- Devpost Writeup
 
 ## What It Does
 
-Killjoy is a custom MCP server that turns the SANS SIFT Workstation into an autonomous forensic investigation platform. It ingests a forensic case (memory dumps, disk images, event logs, text logs), builds a per-case semantic index, and then lets an AI agent investigate through typed, read-only MCP tools.
+Mulder is a custom MCP server that turns the SANS SIFT Workstation into an autonomous forensic investigation platform. It ingests a forensic case (memory dumps, disk images, event logs, text logs), builds a per-case semantic index, and then lets an AI agent investigate through typed, read-only MCP tools.
 
 The agent follows a structured investigation strategy: broad sweeps with composite tools (suspicious processes, persistence mechanisms, lateral movement), cross-verification across multiple artifact types, and self-correction when evidence conflicts. Every finding must pass Pydantic validation that rejects submissions missing evidence references or citing non-existent tool calls.
 

@@ -36,4 +36,4 @@ WORKDIR /app
 
 RUN pip install --no-cache-dir -e ".[dev]"
 
-ENTRYPOINT ["killjoy"]
+ENTRYPOINT ["mulder"]

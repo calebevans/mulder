@@ -1,0 +1,29 @@
+# Mulder Investigation Report: {{ case_id }}
+
+Generated: {{ timestamp }}
+Evidence root: {{ evidence_root }}
+
+## Executive Summary
+
+{{ finding_count }} finding(s) ({{ confirmed_count }} confirmed, {{ inference_count }} inference(s))
+
+## Findings
+{% for finding in findings %}
+
+### {{ finding.severity | upper }}: {{ finding.title }}
+
+**Confidence:** {{ finding.confidence }}
+{% if finding.event_time_start or finding.event_time_end -%}
+**Time range:** {{ finding.event_time_start or "N/A" }} -- {{ finding.event_time_end or "N/A" }}
+{% endif -%}
+**Sources:** {{ finding.sources | join(", ") }}
+
+{{ finding.description }}
+
+**Evidence references:** {{ finding.evidence_refs | join(", ") }}
+{% endfor %}
+
+## Audit Trail Summary
+
+Total tool calls: {{ total_tool_calls }}
+Audit log: {{ audit_log_path }}
