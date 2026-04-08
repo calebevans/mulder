@@ -341,6 +341,24 @@ class CaseDB:
         ]
 
     # ------------------------------------------------------------------
+    # Extractor metadata (Piece 2)
+    # ------------------------------------------------------------------
+
+    def update_extractor_versions(self, versions: dict[str, str]) -> None:
+        case_id = self._get_case_id()
+        self._conn.execute(
+            "UPDATE case_metadata SET extractor_versions = ? WHERE case_id = ?",
+            (json.dumps(versions), case_id),
+        )
+        self._conn.commit()
+
+    def get_max_window_id(self) -> int:
+        row = self._conn.execute(
+            "SELECT COALESCE(MAX(window_id), 0) AS max_id FROM windows"
+        ).fetchone()
+        return row["max_id"]
+
+    # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
