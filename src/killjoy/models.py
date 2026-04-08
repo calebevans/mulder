@@ -51,3 +51,47 @@ class Finding(BaseModel):
         if not self.evidence_refs:
             raise ValueError("evidence_refs must contain at least one tool_call_id")
         return self
+
+
+# ------------------------------------------------------------------
+# Audit trail models (Piece 11)
+# ------------------------------------------------------------------
+
+
+class ToolCallEntry(BaseModel):
+    """A single tool invocation recorded in the audit log."""
+
+    tool_call_id: str
+    tool_name: str
+    params: dict
+    output_hash: str
+    timestamp: str
+    duration_ms: float
+
+
+class SourceProvenance(BaseModel):
+    """Original evidence file backing one or more tool calls."""
+
+    source_name: str
+    source_path: str
+    source_hash: str
+    extractor: str
+
+
+class ProvenanceChain(BaseModel):
+    """Full trace from a finding back to the original evidence files."""
+
+    finding_id: str
+    tool_calls: list[ToolCallEntry]
+    sources: list[SourceProvenance]
+
+
+class AuditSummary(BaseModel):
+    """Aggregate statistics over an entire audit log."""
+
+    total_tool_calls: int
+    total_findings: int
+    tool_call_counts: dict[str, int]
+    total_duration_ms: float
+    first_timestamp: str
+    last_timestamp: str

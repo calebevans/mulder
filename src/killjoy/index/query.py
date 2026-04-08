@@ -66,9 +66,7 @@ class QueryEngine:
     ) -> list[ScoredWindow]:
         """Embed *query* and return the closest *k* windows."""
         query_emb = self._embedder.embed_query(query)
-        results = self._db.knn_query_scored(
-            query_emb, k, source_name, time_start, time_end
-        )
+        results = self._db.knn_query_scored(query_emb, k, source_name, time_start, time_end)
         return [
             ScoredWindow(
                 window=win,
