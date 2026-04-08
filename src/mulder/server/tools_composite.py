@@ -22,6 +22,9 @@ from mulder.server.app import get_ctx, mcp
 # Constants
 # ------------------------------------------------------------------
 
+_EXE_POWERSHELL = "powershell.exe"
+_EXE_CMD = "cmd.exe"
+
 _LOLBINS: set[str] = {
     "certutil.exe",
     "mshta.exe",
@@ -31,8 +34,8 @@ _LOLBINS: set[str] = {
     "msbuild.exe",
     "cscript.exe",
     "wscript.exe",
-    "powershell.exe",
-    "cmd.exe",
+    _EXE_POWERSHELL,
+    _EXE_CMD,
     "bitsadmin.exe",
     "msiexec.exe",
     "installutil.exe",
@@ -75,11 +78,106 @@ _SRC_PSSCAN = "volatility.psscan"
 _SRC_PSLIST = "volatility.pslist"
 _SRC_ENVARS = "volatility.envars"
 _SRC_PRIVS = "volatility.privs"
+_SRC_CMDLINE = "volatility.cmdline"
+_SRC_PSTREE = "volatility.pstree"
+_SRC_DLLLIST = "volatility.dlllist"
+_SRC_MODULES = "volatility.modules"
+_SRC_MODSCAN = "volatility.modscan"
 _SRC_PLASO = "plaso.timeline"
 _SRC_EVTX_SECURITY = "evtx.security"
 _SRC_EVTX_SYSTEM = "evtx.system"
+_SRC_EZ_SHIMCACHE = "ez.shimcache"
+_SRC_EZ_AMCACHE = "ez.amcache"
+_SRC_EZ_PREFETCH = "ez.prefetch"
+_SRC_EZ_EVTX_SECURITY = "ez.evtx.security"
+_SRC_EZ_SRUM = "ez.srum"
+_SRC_EZ_USNJRNL = "ez.usnjrnl"
+_SRC_EZ_MFT = "ez.mft"
+_SRC_EZ_JUMPLISTS = "ez.jumplists"
+_SRC_EZ_LNKFILES = "ez.lnkfiles"
+_SRC_TSK_FILELIST = "tsk.filelist"
+_SRC_BULK_URL = "bulk.url"
+_SRC_BULK_EMAIL = "bulk.email"
+_SRC_BULK_DOMAIN = "bulk.domain"
 
 _DANGEROUS_PRIVILEGES: set[str] = {"sedebugprivilege", "setcbprivilege"}
+
+_UNUSUAL_DLL_PATHS: tuple[str, ...] = (
+    "\\temp\\",
+    "\\tmp\\",
+    "\\appdata\\local\\temp\\",
+    "\\users\\public\\",
+    "\\programdata\\",
+    "\\downloads\\",
+    "\\desktop\\",
+    "\\recycle",
+)
+
+_PERSISTENCE_EXECUTABLES: set[str] = {
+    "schtasks.exe",
+    "reg.exe",
+    "sc.exe",
+    "at.exe",
+    "wmic.exe",
+    "msiexec.exe",
+    _EXE_POWERSHELL,
+    _EXE_CMD,
+    "bitsadmin.exe",
+}
+
+_STARTUP_PATH_PATTERNS: tuple[str, ...] = (
+    "\\startup\\",
+    "\\start menu\\programs\\startup\\",
+    "\\appdata\\roaming\\microsoft\\windows\\start menu\\programs\\startup\\",
+)
+
+_EXFIL_SERVICES: tuple[str, ...] = (
+    "mega.nz",
+    "pastebin.com",
+    "paste.ee",
+    "dropbox.com",
+    "drive.google.com",
+    "docs.google.com",
+    "wetransfer.com",
+    "sendspace.com",
+    "mediafire.com",
+    "anonfiles.com",
+    "file.io",
+    "transfer.sh",
+    "gofile.io",
+    "catbox.moe",
+    "temp.sh",
+    "discord.com/api/webhooks",
+    "telegram.org",
+    "api.telegram.org",
+)
+
+_SECURITY_PROCESSES: set[str] = {
+    "msmpeng.exe",
+    "msseces.exe",
+    "savservice.exe",
+    "ccsvchst.exe",
+    "avp.exe",
+    "avgnt.exe",
+    "bdagent.exe",
+    "ekrn.exe",
+    "mbam.exe",
+    "mbamservice.exe",
+    "sfc.exe",
+    "windefend",
+    "sense.exe",
+    "mpcmdrun.exe",
+    "nissrv.exe",
+    "carbonblack",
+    "cbdefense",
+    "crowdstrike",
+    "csfalconservice.exe",
+    "taniumclient.exe",
+    "sentinelagent.exe",
+    "cyoptics.exe",
+}
+
+_MODULE_NAME_RE = re.compile(r"^([^\t]+\.sys)", re.MULTILINE | re.IGNORECASE)
 
 # PID extraction: matches a column of digits that looks like a PID
 # in Volatility tab-separated output (typically 2nd or 3rd column).
@@ -224,8 +322,8 @@ _SUSPICIOUS_PARENTS: set[str] = {
     "winlogon.exe",
 }
 _SUSPICIOUS_CHILDREN: set[str] = {
-    "cmd.exe",
-    "powershell.exe",
+    _EXE_CMD,
+    _EXE_POWERSHELL,
     "wscript.exe",
     "cscript.exe",
     "mshta.exe",
@@ -298,6 +396,23 @@ def _check_suspicious_environment(
         source_windows.extend(w.model_dump() for w in envars_pids[pid])
 
 
+def _check_dll_anomalies(
+    pid: int,
+    dlllist_pids: dict[int, list[WindowRow]] | None,
+    reasons: list[str],
+    source_windows: list[dict],
+) -> None:
+    """Flag PID loading DLLs from unusual filesystem locations."""
+    if dlllist_pids is None or pid not in dlllist_pids:
+        return
+    for w in dlllist_pids[pid]:
+        path_lower = w.raw_text.lower()
+        if any(pat in path_lower for pat in _UNUSUAL_DLL_PATHS):
+            reasons.append("unusual_dll_path")
+            source_windows.extend(w.model_dump() for w in dlllist_pids[pid])
+            return
+
+
 def _analyze_pid(
     pid: int,
     *,
@@ -311,6 +426,7 @@ def _analyze_pid(
     psscan_pids: dict[int, list[WindowRow]] | None = None,
     privs_pids: dict[int, list[WindowRow]] | None = None,
     envars_pids: dict[int, list[WindowRow]] | None = None,
+    dlllist_pids: dict[int, list[WindowRow]] | None = None,
 ) -> dict | None:
     """Evaluate a single PID for suspicion indicators. Returns None if benign."""
     reasons: list[str] = []
@@ -347,6 +463,7 @@ def _analyze_pid(
 
     _check_dangerous_privileges(pid, privs_pids, reasons, source_windows)
     _check_suspicious_environment(pid, envars_pids, reasons, source_windows)
+    _check_dll_anomalies(pid, dlllist_pids, reasons, source_windows)
 
     if pid in pstree_pids:
         source_windows.extend(w.model_dump() for w in pstree_pids[pid])
@@ -388,7 +505,8 @@ def find_suspicious_processes() -> dict:
     Joins data from Volatility malfind (code injection), cmdline (command
     arguments), netscan (network connections), pstree (parent-child
     relationships), psscan (hidden process detection), privs (privilege
-    escalation), and envars (environment anomalies).  Read-only.
+    escalation), envars (environment anomalies), and dlllist (DLLs loaded
+    from unusual filesystem paths).  Read-only.
     """
     ctx = get_ctx()
     composite_id = _make_tool_call_id()
@@ -398,13 +516,13 @@ def find_suspicious_processes() -> dict:
     malfind_wins, tc1 = _query_source("volatility.malfind", "find_suspicious_processes")
     sub_call_ids.append(tc1)
 
-    cmdline_wins, tc2 = _query_source("volatility.cmdline", "find_suspicious_processes")
+    cmdline_wins, tc2 = _query_source(_SRC_CMDLINE, "find_suspicious_processes")
     sub_call_ids.append(tc2)
 
     netscan_wins, tc3 = _query_source(_SRC_NETSCAN, "find_suspicious_processes")
     sub_call_ids.append(tc3)
 
-    pstree_wins, tc4 = _query_source("volatility.pstree", "find_suspicious_processes")
+    pstree_wins, tc4 = _query_source(_SRC_PSTREE, "find_suspicious_processes")
     sub_call_ids.append(tc4)
 
     pslist_wins: list[WindowRow] = []
@@ -425,6 +543,11 @@ def find_suspicious_processes() -> dict:
         envars_wins, tc_env = _query_source(_SRC_ENVARS, "find_suspicious_processes")
         sub_call_ids.append(tc_env)
 
+    dlllist_wins: list[WindowRow] = []
+    if _source_exists(_SRC_DLLLIST):
+        dlllist_wins, tc_dll = _query_source(_SRC_DLLLIST, "find_suspicious_processes")
+        sub_call_ids.append(tc_dll)
+
     malfind_pids = _extract_pids_from_windows(malfind_wins)
     cmdline_pids = _extract_pids_from_windows(cmdline_wins)
     netscan_pids = _extract_pids_from_windows(netscan_wins)
@@ -434,6 +557,7 @@ def find_suspicious_processes() -> dict:
     psscan_pids = _extract_pids_from_windows(psscan_wins) if psscan_wins else None
     privs_pids = _extract_pids_from_windows(privs_wins) if privs_wins else None
     envars_pids = _extract_pids_from_windows(envars_wins) if envars_wins else None
+    dlllist_pids = _extract_pids_from_windows(dlllist_wins) if dlllist_wins else None
 
     all_pids = set(malfind_pids) | set(cmdline_pids) | set(netscan_pids) | set(pstree_pids)
     if psscan_pids:
@@ -454,6 +578,7 @@ def find_suspicious_processes() -> dict:
             psscan_pids=psscan_pids,
             privs_pids=privs_pids,
             envars_pids=envars_pids,
+            dlllist_pids=dlllist_pids,
         )
         if entry is not None:
             suspicious.append(entry)
@@ -572,6 +697,86 @@ def _collect_startup_dir_modifications(
             )
 
 
+def _collect_ez_execution_persistence(
+    mechanisms: list[dict],
+    sub_call_ids: list[str],
+) -> None:
+    """Query EZ shimcache/amcache/prefetch for persistence-related executables."""
+    ez_sources = [
+        (_SRC_EZ_SHIMCACHE, "shimcache_persistence"),
+        (_SRC_EZ_AMCACHE, "amcache_persistence"),
+        (_SRC_EZ_PREFETCH, "prefetch_persistence"),
+    ]
+    for src, mech_type in ez_sources:
+        if not _source_exists(src):
+            continue
+        wins, tc_id = _query_source(src, "find_persistence_mechanisms")
+        sub_call_ids.append(tc_id)
+        for w in wins:
+            text_lower = w.raw_text.lower()
+            matched_exe = next(
+                (exe for exe in _PERSISTENCE_EXECUTABLES if exe in text_lower),
+                None,
+            )
+            if matched_exe is not None:
+                mechanisms.append(
+                    {
+                        "type": mech_type,
+                        "executable": matched_exe,
+                        "source": src,
+                        "evidence_text": w.raw_text.strip()[:500],
+                        "source_window": w.model_dump(),
+                    }
+                )
+
+
+def _collect_scheduled_task_persistence(
+    mechanisms: list[dict],
+    sub_call_ids: list[str],
+) -> None:
+    """Search EVTX for scheduled task creation/modification events."""
+    evtx_wins, tc_evtx = _semantic_sub_query(
+        "scheduled task created modified event 106 140 4698 schtasks",
+        "find_persistence_mechanisms",
+        source_name=_SRC_EVTX_SYSTEM,
+        k=20,
+    )
+    sub_call_ids.append(tc_evtx)
+    for w in evtx_wins:
+        text = w.raw_text
+        if any(eid in text for eid in ("106", "140", "4698")) or "schtask" in text.lower():
+            mechanisms.append(
+                {
+                    "type": "scheduled_task",
+                    "source": _SRC_EVTX_SYSTEM,
+                    "evidence_text": text.strip()[:500],
+                    "source_window": w.model_dump(),
+                }
+            )
+
+
+def _collect_startup_files(
+    mechanisms: list[dict],
+    sub_call_ids: list[str],
+) -> None:
+    """Check TSK file listing for files placed in startup directories."""
+    if not _source_exists(_SRC_TSK_FILELIST):
+        return
+    wins, tc_id = _query_source(_SRC_TSK_FILELIST, "find_persistence_mechanisms")
+    sub_call_ids.append(tc_id)
+    for w in wins:
+        text_lower = w.raw_text.lower()
+        if any(pat in text_lower for pat in _STARTUP_PATH_PATTERNS):
+            mechanisms.append(
+                {
+                    "type": "startup_directory_file",
+                    "source": _SRC_TSK_FILELIST,
+                    "evidence_text": w.raw_text.strip()[:500],
+                    "source_window": w.model_dump(),
+                }
+            )
+
+
 # ------------------------------------------------------------------
 # Tool: find_persistence_mechanisms
 # ------------------------------------------------------------------
@@ -583,9 +788,10 @@ def find_persistence_mechanisms() -> dict:
 
     Searches Windows registry hives for known autorun keys (Run, RunOnce,
     Userinit, AppInit_DLLs, etc.), cross-references with Volatility service
-    scan output, checks event logs for service installation events (Event
-    ID 7045), and inspects the Plaso timeline for modifications to startup
-    directories.  Read-only.
+    scan output, checks event logs for service installation and scheduled
+    task events, queries EZ Tools shimcache/amcache/prefetch for execution
+    of persistence-related tools, and inspects TSK file listings and the
+    Plaso timeline for modifications to startup directories.  Read-only.
     """
     ctx = get_ctx()
     composite_id = _make_tool_call_id()
@@ -597,6 +803,9 @@ def find_persistence_mechanisms() -> dict:
     _collect_service_persistence(mechanisms, sub_call_ids)
     _collect_evtx_service_installs(mechanisms, sub_call_ids)
     _collect_startup_dir_modifications(mechanisms, sub_call_ids)
+    _collect_ez_execution_persistence(mechanisms, sub_call_ids)
+    _collect_scheduled_task_persistence(mechanisms, sub_call_ids)
+    _collect_startup_files(mechanisms, sub_call_ids)
 
     elapsed = (time.monotonic() - t0) * 1000
     ctx.audit.log_tool_call(
@@ -694,7 +903,10 @@ def _collect_netscan_lateral(
     return indicators, list(indicators)
 
 
-def _collect_rdp_artifacts(rdp_wins: list[WindowRow]) -> list[dict]:
+def _collect_rdp_artifacts(
+    rdp_wins: list[WindowRow],
+    sub_call_ids: list[str],
+) -> list[dict]:
     indicators: list[dict] = []
     for w in rdp_wins:
         text_lower = w.raw_text.lower()
@@ -703,6 +915,102 @@ def _collect_rdp_artifacts(rdp_wins: list[WindowRow]) -> list[dict]:
                 {
                     "type": "rdp_artifact",
                     "source": _SRC_PLASO,
+                    "event_time": w.event_time,
+                    "evidence_text": w.raw_text.strip()[:500],
+                    "source_window": w.model_dump(),
+                }
+            )
+
+    # Augment with structured EZ EVTX for Type 10 (RDP) logons
+    if _source_exists(_SRC_EZ_EVTX_SECURITY):
+        rdp_evtx, tc_rdp_ez = _semantic_sub_query(
+            "logon type 10 remote interactive RDP RemoteInteractive",
+            "find_lateral_movement_indicators",
+            source_name=_SRC_EZ_EVTX_SECURITY,
+            k=20,
+        )
+        sub_call_ids.append(tc_rdp_ez)
+        for w in rdp_evtx:
+            text_lower = w.raw_text.lower()
+            if "type 10" in text_lower or "remoteinteractive" in text_lower:
+                indicators.append(
+                    {
+                        "type": "rdp_logon",
+                        "source": _SRC_EZ_EVTX_SECURITY,
+                        "event_time": w.event_time,
+                        "evidence_text": w.raw_text.strip()[:500],
+                        "source_window": w.model_dump(),
+                    }
+                )
+
+    # TerminalServices events from system log
+    ts_wins, tc_ts = _semantic_sub_query(
+        "TerminalServices session reconnection RDP disconnect event",
+        "find_lateral_movement_indicators",
+        source_name=_SRC_EVTX_SYSTEM,
+        k=10,
+    )
+    sub_call_ids.append(tc_ts)
+    for w in ts_wins:
+        text_lower = w.raw_text.lower()
+        if "terminalservices" in text_lower or "remote desktop" in text_lower:
+            indicators.append(
+                {
+                    "type": "rdp_terminal_services",
+                    "source": _SRC_EVTX_SYSTEM,
+                    "event_time": w.event_time,
+                    "evidence_text": w.raw_text.strip()[:500],
+                    "source_window": w.model_dump(),
+                }
+            )
+
+    return indicators
+
+
+def _collect_winrm_indicators(sub_call_ids: list[str]) -> list[dict]:
+    """Detect WinRM connection events (Event IDs 91, 168, 169)."""
+    indicators: list[dict] = []
+    winrm_wins, tc_winrm = _semantic_sub_query(
+        "WinRM WSMan event 91 168 169 remote management connection",
+        "find_lateral_movement_indicators",
+        source_name=_SRC_EVTX_SYSTEM,
+        k=20,
+    )
+    sub_call_ids.append(tc_winrm)
+    for w in winrm_wins:
+        text = w.raw_text
+        text_lower = text.lower()
+        if any(eid in text for eid in ("91", "168", "169")) or "winrm" in text_lower:
+            indicators.append(
+                {
+                    "type": "winrm_connection",
+                    "source": _SRC_EVTX_SYSTEM,
+                    "event_time": w.event_time,
+                    "evidence_text": text.strip()[:500],
+                    "source_window": w.model_dump(),
+                }
+            )
+    return indicators
+
+
+def _collect_srum_network_anomalies(sub_call_ids: list[str]) -> list[dict]:
+    """Flag SRUM entries with high byte counts or unusual process network usage."""
+    if not _source_exists(_SRC_EZ_SRUM):
+        return []
+    indicators: list[dict] = []
+    srum_wins, tc_srum = _query_source(_SRC_EZ_SRUM, "find_lateral_movement_indicators")
+    sub_call_ids.append(tc_srum)
+    for w in srum_wins:
+        text_lower = w.raw_text.lower()
+        has_high_bytes = any(
+            kw in text_lower for kw in ("bytessent", "bytes_sent", "bytesrecvd", "bytes_recv")
+        )
+        has_unusual_proc = any(proc in text_lower for proc in ("powershell", "cmd", "wscript"))
+        if has_high_bytes and has_unusual_proc:
+            indicators.append(
+                {
+                    "type": "srum_network_anomaly",
+                    "source": _SRC_EZ_SRUM,
                     "event_time": w.event_time,
                     "evidence_text": w.raw_text.strip()[:500],
                     "source_window": w.model_dump(),
@@ -757,22 +1065,29 @@ def _correlate_by_timestamp(
 def find_lateral_movement_indicators() -> dict:
     """Detect lateral movement by correlating logon events, network connections, and RDP artifacts.
 
-    Searches Windows Security event log for network logons (Event ID 4624
-    Type 3/10), failed logons (4625), and explicit credential use (4648).
-    Cross-references with Volatility netscan for connections on SMB (445),
-    RDP (3389), WinRM (5985/5986), and RPC (135) ports.  Checks the Plaso
-    timeline for RDP bitmap cache and related artifacts.  Events are
-    correlated by timestamp proximity (30-second window).  Read-only.
+    Searches Windows Security event log (raw and structured EZ EVTX) for
+    network logons (Event ID 4624 Type 3/10), failed logons (4625), and
+    explicit credential use (4648).  Cross-references with Volatility
+    netscan for connections on SMB (445), RDP (3389), WinRM (5985/5986),
+    and RPC (135) ports.  Detects WinRM events (91, 168, 169), checks
+    the Plaso timeline and EVTX for RDP artifacts, and queries SRUM for
+    network usage anomalies.  Events are correlated by timestamp
+    proximity (30-second window).  Read-only.
     """
     ctx = get_ctx()
     composite_id = _make_tool_call_id()
     t0 = time.monotonic()
     sub_call_ids: list[str] = []
 
+    # Prefer structured EZ EVTX security when available, fall back to raw
+    evtx_sec_source = (
+        _SRC_EZ_EVTX_SECURITY if _source_exists(_SRC_EZ_EVTX_SECURITY) else _SRC_EVTX_SECURITY
+    )
+
     logon_wins, tc_logon = _semantic_sub_query(
         "successful logon type 3 network logon event 4624 remote",
         "find_lateral_movement_indicators",
-        source_name=_SRC_EVTX_SECURITY,
+        source_name=evtx_sec_source,
         k=20,
     )
     sub_call_ids.append(tc_logon)
@@ -780,7 +1095,7 @@ def find_lateral_movement_indicators() -> dict:
     failed_wins, tc_failed = _semantic_sub_query(
         "failed logon event 4625 authentication failure brute force",
         "find_lateral_movement_indicators",
-        source_name=_SRC_EVTX_SECURITY,
+        source_name=evtx_sec_source,
         k=20,
     )
     sub_call_ids.append(tc_failed)
@@ -788,7 +1103,7 @@ def find_lateral_movement_indicators() -> dict:
     cred_wins, tc_cred = _semantic_sub_query(
         "explicit credentials logon event 4648 pass the hash runas",
         "find_lateral_movement_indicators",
-        source_name=_SRC_EVTX_SECURITY,
+        source_name=evtx_sec_source,
         k=20,
     )
     sub_call_ids.append(tc_cred)
@@ -807,7 +1122,10 @@ def find_lateral_movement_indicators() -> dict:
         k=20,
     )
     sub_call_ids.append(tc_rdp)
-    indicators.extend(_collect_rdp_artifacts(rdp_wins))
+    indicators.extend(_collect_rdp_artifacts(rdp_wins, sub_call_ids))
+
+    indicators.extend(_collect_winrm_indicators(sub_call_ids))
+    indicators.extend(_collect_srum_network_anomalies(sub_call_ids))
 
     correlations = _correlate_by_timestamp(indicators, lateral_connections)
     indicators.extend(correlations)
@@ -816,6 +1134,529 @@ def find_lateral_movement_indicators() -> dict:
     ctx.audit.log_tool_call(
         tool_call_id=composite_id,
         tool_name="find_lateral_movement_indicators",
+        params={},
+        output_hash=_hash_output(indicators),
+        duration_ms=elapsed,
+        sub_calls=sub_call_ids,
+    )
+    return {
+        "tool_call_id": composite_id,
+        "status": "success",
+        "results": indicators,
+        "source": None,
+        "result_count": len(indicators),
+        "reduced": False,
+        "reduction_ratio": None,
+    }
+
+
+# ------------------------------------------------------------------
+# Tool: find_data_exfiltration_indicators
+# ------------------------------------------------------------------
+
+
+def _collect_exfil_urls(sub_call_ids: list[str]) -> list[dict]:
+    """Check bulk.url for references to known upload/exfiltration services."""
+    if not _source_exists(_SRC_BULK_URL):
+        return []
+    indicators: list[dict] = []
+    wins, tc_id = _query_source(_SRC_BULK_URL, "find_data_exfiltration_indicators")
+    sub_call_ids.append(tc_id)
+    for w in wins:
+        text_lower = w.raw_text.lower()
+        matched_svc = next(
+            (svc for svc in _EXFIL_SERVICES if svc in text_lower),
+            None,
+        )
+        if matched_svc is not None:
+            indicators.append(
+                {
+                    "type": "exfil_upload_service",
+                    "service": matched_svc,
+                    "source": _SRC_BULK_URL,
+                    "event_time": w.event_time,
+                    "evidence_text": w.raw_text.strip()[:500],
+                    "source_window": w.model_dump(),
+                }
+            )
+    return indicators
+
+
+def _collect_exfil_emails(sub_call_ids: list[str]) -> list[dict]:
+    """Flag external email addresses from bulk.email."""
+    if not _source_exists(_SRC_BULK_EMAIL):
+        return []
+    indicators: list[dict] = []
+    wins, tc_id = _query_source(_SRC_BULK_EMAIL, "find_data_exfiltration_indicators")
+    sub_call_ids.append(tc_id)
+    for w in wins:
+        if "@" in w.raw_text:
+            indicators.append(
+                {
+                    "type": "exfil_email",
+                    "source": _SRC_BULK_EMAIL,
+                    "event_time": w.event_time,
+                    "evidence_text": w.raw_text.strip()[:500],
+                    "source_window": w.model_dump(),
+                }
+            )
+    return indicators
+
+
+def _collect_exfil_domains(sub_call_ids: list[str]) -> list[dict]:
+    """Check bulk.domain for known C2 / exfiltration domain patterns."""
+    if not _source_exists(_SRC_BULK_DOMAIN):
+        return []
+    indicators: list[dict] = []
+    wins, tc_id = _query_source(_SRC_BULK_DOMAIN, "find_data_exfiltration_indicators")
+    sub_call_ids.append(tc_id)
+    for w in wins:
+        text_lower = w.raw_text.lower()
+        matched_svc = next(
+            (svc for svc in _EXFIL_SERVICES if svc.split("/")[0] in text_lower),
+            None,
+        )
+        if matched_svc is not None:
+            indicators.append(
+                {
+                    "type": "exfil_domain",
+                    "domain": matched_svc,
+                    "source": _SRC_BULK_DOMAIN,
+                    "event_time": w.event_time,
+                    "evidence_text": w.raw_text.strip()[:500],
+                    "source_window": w.model_dump(),
+                }
+            )
+    return indicators
+
+
+def _collect_high_port_connections(sub_call_ids: list[str]) -> list[dict]:
+    """Flag netscan connections on high ports that are not standard services."""
+    _STANDARD_PORTS: set[int] = {
+        80,
+        443,
+        53,
+        25,
+        110,
+        143,
+        993,
+        995,
+        587,
+        22,
+        21,
+        23,
+        *_LATERAL_PORTS,
+    }
+    indicators: list[dict] = []
+    if not _source_exists(_SRC_NETSCAN):
+        return indicators
+    wins, tc_id = _query_source(_SRC_NETSCAN, "find_data_exfiltration_indicators")
+    sub_call_ids.append(tc_id)
+    for w in wins:
+        ports = _extract_ports(w.raw_text)
+        unusual = [p for p in ports if p > 1024 and p not in _STANDARD_PORTS]
+        if unusual:
+            indicators.append(
+                {
+                    "type": "high_port_connection",
+                    "ports": unusual,
+                    "source": _SRC_NETSCAN,
+                    "event_time": w.event_time,
+                    "evidence_text": w.raw_text.strip()[:500],
+                    "source_window": w.model_dump(),
+                }
+            )
+    return indicators
+
+
+def _collect_large_file_access(sub_call_ids: list[str]) -> list[dict]:
+    """Semantic search the Plaso timeline for large file access patterns."""
+    indicators: list[dict] = []
+    plaso_wins, tc_id = _semantic_sub_query(
+        "large file copy archive zip rar 7z transfer staging compress",
+        "find_data_exfiltration_indicators",
+        source_name=_SRC_PLASO,
+        k=20,
+    )
+    sub_call_ids.append(tc_id)
+    for w in plaso_wins:
+        text_lower = w.raw_text.lower()
+        if any(kw in text_lower for kw in (".zip", ".rar", ".7z", ".tar", "staging", "archive")):
+            indicators.append(
+                {
+                    "type": "large_file_access",
+                    "source": _SRC_PLASO,
+                    "event_time": w.event_time,
+                    "evidence_text": w.raw_text.strip()[:500],
+                    "source_window": w.model_dump(),
+                }
+            )
+    return indicators
+
+
+@mcp.tool()
+def find_data_exfiltration_indicators() -> dict:
+    """Detect potential data exfiltration by correlating network, URL, and file access artifacts.
+
+    Checks bulk_extractor URLs for known upload/exfil services (Mega,
+    Pastebin, Dropbox, etc.), flags external email addresses, scans
+    domains for C2 patterns, detects high-port network connections from
+    memory, and searches the Plaso timeline for large file staging or
+    archive creation.  Read-only.
+    """
+    ctx = get_ctx()
+    composite_id = _make_tool_call_id()
+    t0 = time.monotonic()
+    sub_call_ids: list[str] = []
+    indicators: list[dict] = []
+
+    indicators.extend(_collect_exfil_urls(sub_call_ids))
+    indicators.extend(_collect_exfil_emails(sub_call_ids))
+    indicators.extend(_collect_exfil_domains(sub_call_ids))
+    indicators.extend(_collect_high_port_connections(sub_call_ids))
+    indicators.extend(_collect_large_file_access(sub_call_ids))
+
+    elapsed = (time.monotonic() - t0) * 1000
+    ctx.audit.log_tool_call(
+        tool_call_id=composite_id,
+        tool_name="find_data_exfiltration_indicators",
+        params={},
+        output_hash=_hash_output(indicators),
+        duration_ms=elapsed,
+        sub_calls=sub_call_ids,
+    )
+    return {
+        "tool_call_id": composite_id,
+        "status": "success",
+        "results": indicators,
+        "source": None,
+        "result_count": len(indicators),
+        "reduced": False,
+        "reduction_ratio": None,
+    }
+
+
+# ------------------------------------------------------------------
+# Tool: find_execution_evidence
+# ------------------------------------------------------------------
+
+
+def _extract_exe_name(text: str) -> str | None:
+    """Best-effort extraction of an executable name from artifact text."""
+    m = _PROC_NAME_RE.search(text)
+    return m.group(1).strip().lower() if m else None
+
+
+def _accumulate_exe_evidence(
+    exe_evidence: dict[str, dict],
+    windows: list[WindowRow],
+    label: str,
+    include_times: bool = True,
+) -> None:
+    """Merge windows into the exe_evidence map keyed by executable name."""
+    for w in windows:
+        exe_name = _extract_exe_name(w.raw_text)
+        if exe_name is None:
+            continue
+        if exe_name not in exe_evidence:
+            exe_evidence[exe_name] = {
+                "executable": exe_name,
+                "sources": [],
+                "source_windows": [],
+                "event_times": [],
+            }
+        entry = exe_evidence[exe_name]
+        if label not in entry["sources"]:
+            entry["sources"].append(label)
+        entry["source_windows"].append(w.model_dump())
+        if include_times and w.event_time:
+            entry["event_times"].append(w.event_time)
+
+
+@mcp.tool()
+def find_execution_evidence() -> dict:
+    """Build a unified execution evidence view from multiple artifact sources.
+
+    Joins EZ Tools prefetch (run times), amcache (install/execution with
+    hashes), shimcache (file existence evidence), jump lists (user file
+    access), LNK files (shortcut execution), and the Volatility process
+    tree (processes running at capture time).  Each entry lists which
+    sources corroborate the execution.  Read-only.
+    """
+    ctx = get_ctx()
+    composite_id = _make_tool_call_id()
+    t0 = time.monotonic()
+    sub_call_ids: list[str] = []
+
+    exe_evidence: dict[str, dict] = {}
+
+    source_configs = [
+        (_SRC_EZ_PREFETCH, "prefetch"),
+        (_SRC_EZ_AMCACHE, "amcache"),
+        (_SRC_EZ_SHIMCACHE, "shimcache"),
+        (_SRC_EZ_JUMPLISTS, "jumplists"),
+        (_SRC_EZ_LNKFILES, "lnkfiles"),
+    ]
+
+    for src, label in source_configs:
+        if not _source_exists(src):
+            continue
+        wins, tc_id = _query_source(src, "find_execution_evidence")
+        sub_call_ids.append(tc_id)
+        _accumulate_exe_evidence(exe_evidence, wins, label)
+
+    if _source_exists(_SRC_PSTREE):
+        pstree_wins, tc_pt = _query_source(_SRC_PSTREE, "find_execution_evidence")
+        sub_call_ids.append(tc_pt)
+        _accumulate_exe_evidence(exe_evidence, pstree_wins, "memory_pstree", include_times=False)
+
+    results = sorted(
+        exe_evidence.values(),
+        key=lambda e: len(e["sources"]),
+        reverse=True,
+    )
+
+    elapsed = (time.monotonic() - t0) * 1000
+    ctx.audit.log_tool_call(
+        tool_call_id=composite_id,
+        tool_name="find_execution_evidence",
+        params={},
+        output_hash=_hash_output(results),
+        duration_ms=elapsed,
+        sub_calls=sub_call_ids,
+    )
+    return {
+        "tool_call_id": composite_id,
+        "status": "success",
+        "results": results,
+        "source": None,
+        "result_count": len(results),
+        "reduced": False,
+        "reduction_ratio": None,
+    }
+
+
+# ------------------------------------------------------------------
+# Tool: find_defense_evasion
+# ------------------------------------------------------------------
+
+
+def _extract_module_names(windows: list[WindowRow]) -> dict[str, list[WindowRow]]:
+    """Group windows by the kernel module name found in their text."""
+    mod_map: dict[str, list[WindowRow]] = defaultdict(list)
+    for w in windows:
+        m = _MODULE_NAME_RE.search(w.raw_text)
+        if m:
+            name = m.group(1).strip().lower()
+            mod_map[name].append(w)
+    return dict(mod_map)
+
+
+def _check_timestomping(
+    indicators: list[dict],
+    sub_call_ids: list[str],
+) -> None:
+    """Search UsnJrnl and MFT for timestamp discrepancy indicators."""
+    usnjrnl_wins, tc_usn = _semantic_sub_query(
+        "timestamp modification created renamed file entry discrepancy",
+        "find_defense_evasion",
+        source_name=_SRC_EZ_USNJRNL,
+        k=20,
+    )
+    sub_call_ids.append(tc_usn)
+
+    mft_wins, tc_mft = _semantic_sub_query(
+        "standard information filename attribute timestamp mismatch created",
+        "find_defense_evasion",
+        source_name=_SRC_EZ_MFT,
+        k=20,
+    )
+    sub_call_ids.append(tc_mft)
+
+    for w in usnjrnl_wins + mft_wins:
+        text_lower = w.raw_text.lower()
+        if any(kw in text_lower for kw in ("timestamp", "stomp", "mismatch", "modified")):
+            indicators.append(
+                {
+                    "type": "potential_timestomping",
+                    "source": w.raw_text[:20],
+                    "event_time": w.event_time,
+                    "evidence_text": w.raw_text.strip()[:500],
+                    "source_window": w.model_dump(),
+                }
+            )
+
+
+def _check_log_clearing(
+    indicators: list[dict],
+    sub_call_ids: list[str],
+) -> None:
+    """Detect Event IDs 104 (system log cleared) and 1102 (security log cleared)."""
+    clear_wins, tc_clear = _semantic_sub_query(
+        "event log cleared event 104 1102 audit log cleared",
+        "find_defense_evasion",
+        source_name=_SRC_EVTX_SECURITY,
+        k=20,
+    )
+    sub_call_ids.append(tc_clear)
+
+    sys_clear_wins, tc_sys = _semantic_sub_query(
+        "event log cleared event 104 system log cleared",
+        "find_defense_evasion",
+        source_name=_SRC_EVTX_SYSTEM,
+        k=10,
+    )
+    sub_call_ids.append(tc_sys)
+
+    for w in clear_wins + sys_clear_wins:
+        text = w.raw_text
+        if "104" in text or "1102" in text or "cleared" in text.lower():
+            indicators.append(
+                {
+                    "type": "log_clearing",
+                    "event_time": w.event_time,
+                    "evidence_text": text.strip()[:500],
+                    "source_window": w.model_dump(),
+                }
+            )
+
+
+def _check_hidden_processes_defense(
+    indicators: list[dict],
+    sub_call_ids: list[str],
+) -> None:
+    """Detect hidden processes by comparing psscan vs pslist."""
+    if not _source_exists(_SRC_PSSCAN) or not _source_exists(_SRC_PSLIST):
+        return
+    psscan_wins, tc_ps = _query_source(_SRC_PSSCAN, "find_defense_evasion")
+    sub_call_ids.append(tc_ps)
+    pslist_wins, tc_pl = _query_source(_SRC_PSLIST, "find_defense_evasion")
+    sub_call_ids.append(tc_pl)
+
+    psscan_pids = _extract_pids_from_windows(psscan_wins)
+    pslist_pids = _extract_pids_from_windows(pslist_wins)
+    hidden = set(psscan_pids) - set(pslist_pids)
+
+    for pid in sorted(hidden):
+        indicators.append(
+            {
+                "type": "hidden_process",
+                "pid": pid,
+                "source": _SRC_PSSCAN,
+                "source_windows": [w.model_dump() for w in psscan_pids[pid]],
+            }
+        )
+
+
+def _check_hidden_kernel_modules(
+    indicators: list[dict],
+    sub_call_ids: list[str],
+) -> None:
+    """Detect hidden kernel modules by comparing modscan vs modules."""
+    if not _source_exists(_SRC_MODULES) or not _source_exists(_SRC_MODSCAN):
+        return
+    modules_wins, tc_mod = _query_source(_SRC_MODULES, "find_defense_evasion")
+    sub_call_ids.append(tc_mod)
+    modscan_wins, tc_ms = _query_source(_SRC_MODSCAN, "find_defense_evasion")
+    sub_call_ids.append(tc_ms)
+
+    linked = _extract_module_names(modules_wins)
+    scanned = _extract_module_names(modscan_wins)
+    hidden = set(scanned) - set(linked)
+
+    for name in sorted(hidden):
+        indicators.append(
+            {
+                "type": "hidden_kernel_module",
+                "module_name": name,
+                "source": _SRC_MODSCAN,
+                "source_windows": [w.model_dump() for w in scanned[name]],
+            }
+        )
+
+
+def _check_disabled_security(
+    indicators: list[dict],
+    sub_call_ids: list[str],
+) -> None:
+    """Detect termination of security/AV/EDR processes."""
+    sec_wins, tc_sec = _semantic_sub_query(
+        "taskkill process terminated antivirus security defender disable stop",
+        "find_defense_evasion",
+        source_name=_SRC_PLASO,
+        k=20,
+    )
+    sub_call_ids.append(tc_sec)
+
+    for w in sec_wins:
+        text_lower = w.raw_text.lower()
+        matched = next(
+            (proc for proc in _SECURITY_PROCESSES if proc in text_lower),
+            None,
+        )
+        if matched is not None or "taskkill" in text_lower:
+            indicators.append(
+                {
+                    "type": "disabled_security",
+                    "matched_process": matched,
+                    "source": _SRC_PLASO,
+                    "event_time": w.event_time,
+                    "evidence_text": w.raw_text.strip()[:500],
+                    "source_window": w.model_dump(),
+                }
+            )
+
+    # Also check command lines from memory for security process kills
+    if _source_exists(_SRC_CMDLINE):
+        cmd_wins, tc_cmd = _query_source(_SRC_CMDLINE, "find_defense_evasion")
+        sub_call_ids.append(tc_cmd)
+        for w in cmd_wins:
+            text_lower = w.raw_text.lower()
+            if "taskkill" not in text_lower and "stop-service" not in text_lower:
+                continue
+            matched = next(
+                (proc for proc in _SECURITY_PROCESSES if proc in text_lower),
+                None,
+            )
+            if matched is not None:
+                indicators.append(
+                    {
+                        "type": "disabled_security",
+                        "matched_process": matched,
+                        "source": "volatility.cmdline",
+                        "event_time": w.event_time,
+                        "evidence_text": w.raw_text.strip()[:500],
+                        "source_window": w.model_dump(),
+                    }
+                )
+
+
+@mcp.tool()
+def find_defense_evasion() -> dict:
+    """Detect defense evasion techniques across memory, filesystem, and event logs.
+
+    Checks for timestomping (UsnJrnl vs MFT timestamp discrepancies),
+    log clearing (Event IDs 104 and 1102), hidden processes (psscan vs
+    pslist diff), hidden kernel modules (modscan vs modules diff), and
+    disabled security tools (AV/EDR process termination patterns).
+    Read-only.
+    """
+    ctx = get_ctx()
+    composite_id = _make_tool_call_id()
+    t0 = time.monotonic()
+    sub_call_ids: list[str] = []
+    indicators: list[dict] = []
+
+    _check_timestomping(indicators, sub_call_ids)
+    _check_log_clearing(indicators, sub_call_ids)
+    _check_hidden_processes_defense(indicators, sub_call_ids)
+    _check_hidden_kernel_modules(indicators, sub_call_ids)
+    _check_disabled_security(indicators, sub_call_ids)
+
+    elapsed = (time.monotonic() - t0) * 1000
+    ctx.audit.log_tool_call(
+        tool_call_id=composite_id,
+        tool_name="find_defense_evasion",
         params={},
         output_hash=_hash_output(indicators),
         duration_ms=elapsed,
