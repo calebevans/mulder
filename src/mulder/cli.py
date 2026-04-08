@@ -54,6 +54,10 @@ def run_ingestion(
     clf_config = ClassifierConfig(exclude_patterns=list(exclude_patterns))
     classifier = EvidenceClassifier(clf_config)
     registry = default_registry()
+    for ext in registry.all_extractors():
+        if hasattr(ext, "plaso_dir"):
+            ext.plaso_dir = db_dir
+            break
 
     click.echo(f"Scanning evidence at {evidence_path} ...")
     classified = classifier.classify(evidence_path)
