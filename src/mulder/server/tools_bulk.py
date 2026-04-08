@@ -72,6 +72,7 @@ def get_carved_iocs(feature: str | None = None) -> dict:
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": source,
         "result_count": result_count,

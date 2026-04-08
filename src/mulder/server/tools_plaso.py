@@ -74,18 +74,19 @@ def _error_response(
 ) -> dict:
     """Build an audited error response dict."""
     ctx = get_ctx()
-    results: dict | list = {"error": error}
     elapsed = (time.monotonic() - t0) * 1000
     ctx.audit.log_tool_call(
         tool_call_id=tc_id,
         tool_name=tool_name,
         params=params,
-        output_hash=_hash_output(results),
+        output_hash=_hash_output({"error": error}),
         duration_ms=elapsed,
     )
     return {
         "tool_call_id": tc_id,
-        "results": results,
+        "status": "error",
+        "error_message": error,
+        "results": [],
         "source": _SRC_PLASO_TIMELINE,
         "result_count": 0,
         "reduced": False,
@@ -163,6 +164,7 @@ def get_plaso_stats() -> dict:
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": _SRC_PLASO_STATS,
         "result_count": len(results),
@@ -249,6 +251,7 @@ def filter_timeline(
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": _SRC_PLASO_TIMELINE,
         "result_count": len(results),
@@ -337,6 +340,7 @@ def export_timeline_slice(timestamp: str) -> dict:
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": _SRC_PLASO_TIMELINE,
         "result_count": len(results),

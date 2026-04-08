@@ -144,6 +144,7 @@ def list_partitions() -> dict:
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": _SRC_PARTITIONS,
         "result_count": len(results),
@@ -194,6 +195,7 @@ def list_files(
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": _SRC_FILELIST,
         "result_count": len(results),
@@ -234,6 +236,7 @@ def get_deleted_files() -> dict:
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": _SRC_FILELIST,
         "result_count": len(results),
@@ -284,6 +287,7 @@ def get_fs_timeline(t_start: str, t_end: str) -> dict:
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": _SRC_TIMELINE,
         "result_count": len(results),
@@ -310,18 +314,20 @@ def extract_file_by_inode(inode: int) -> dict:
     t0 = time.monotonic()
 
     if not shutil.which("icat"):
-        results = {"error": "icat not found on PATH"}
+        error_msg = "icat not found on PATH"
         elapsed = (time.monotonic() - t0) * 1000
         ctx.audit.log_tool_call(
             tool_call_id=tc_id,
             tool_name="extract_file_by_inode",
             params={"inode": inode},
-            output_hash=_hash_output(results),
+            output_hash=_hash_output({"error": error_msg}),
             duration_ms=elapsed,
         )
         return {
             "tool_call_id": tc_id,
-            "results": results,
+            "status": "error",
+            "error_message": error_msg,
+            "results": [],
             "source": _SRC_ICAT,
             "result_count": 0,
             "reduced": False,
@@ -342,18 +348,20 @@ def extract_file_by_inode(inode: int) -> dict:
             check=False,
         )
     except subprocess.TimeoutExpired:
-        results = {"error": f"icat timed out after {_ICAT_TIMEOUT}s for inode {inode}"}
+        error_msg = f"icat timed out after {_ICAT_TIMEOUT}s for inode {inode}"
         elapsed = (time.monotonic() - t0) * 1000
         ctx.audit.log_tool_call(
             tool_call_id=tc_id,
             tool_name="extract_file_by_inode",
             params={"inode": inode},
-            output_hash=_hash_output(results),
+            output_hash=_hash_output({"error": error_msg}),
             duration_ms=elapsed,
         )
         return {
             "tool_call_id": tc_id,
-            "results": results,
+            "status": "error",
+            "error_message": error_msg,
+            "results": [],
             "source": _SRC_ICAT,
             "result_count": 0,
             "reduced": False,
@@ -362,11 +370,28 @@ def extract_file_by_inode(inode: int) -> dict:
 
     raw = proc.stdout
     if proc.returncode != 0:
-        results = {
-            "error": f"icat exited {proc.returncode}",
-            "stderr": (proc.stderr or b"").decode("utf-8", errors="replace")[:500],
+        error_msg = f"icat exited {proc.returncode}"
+        stderr_text = (proc.stderr or b"").decode("utf-8", errors="replace")[:500]
+        elapsed = (time.monotonic() - t0) * 1000
+        ctx.audit.log_tool_call(
+            tool_call_id=tc_id,
+            tool_name="extract_file_by_inode",
+            params={"inode": inode},
+            output_hash=_hash_output({"error": error_msg}),
+            duration_ms=elapsed,
+        )
+        return {
+            "tool_call_id": tc_id,
+            "status": "error",
+            "error_message": f"{error_msg}: {stderr_text}".rstrip(": "),
+            "results": [],
+            "source": _SRC_ICAT,
+            "result_count": 0,
+            "reduced": False,
+            "reduction_ratio": None,
         }
-    elif b"\x00" in raw[:8192]:
+
+    if b"\x00" in raw[:8192]:
         file_hash = hashlib.sha256(raw).hexdigest()
         results = {
             "type": "binary",
@@ -394,9 +419,10 @@ def extract_file_by_inode(inode: int) -> dict:
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": _SRC_ICAT,
-        "result_count": 1 if "error" not in results else 0,
+        "result_count": 1,
         "reduced": False,
         "reduction_ratio": None,
     }
@@ -419,18 +445,20 @@ def get_file_metadata(inode: int) -> dict:
     t0 = time.monotonic()
 
     if not shutil.which("istat"):
-        results = {"error": "istat not found on PATH"}
+        error_msg = "istat not found on PATH"
         elapsed = (time.monotonic() - t0) * 1000
         ctx.audit.log_tool_call(
             tool_call_id=tc_id,
             tool_name="get_file_metadata",
             params={"inode": inode},
-            output_hash=_hash_output(results),
+            output_hash=_hash_output({"error": error_msg}),
             duration_ms=elapsed,
         )
         return {
             "tool_call_id": tc_id,
-            "results": results,
+            "status": "error",
+            "error_message": error_msg,
+            "results": [],
             "source": _SRC_ISTAT,
             "result_count": 0,
             "reduced": False,
@@ -452,18 +480,20 @@ def get_file_metadata(inode: int) -> dict:
             check=False,
         )
     except subprocess.TimeoutExpired:
-        results = {"error": f"istat timed out after {_ISTAT_TIMEOUT}s for inode {inode}"}
+        error_msg = f"istat timed out after {_ISTAT_TIMEOUT}s for inode {inode}"
         elapsed = (time.monotonic() - t0) * 1000
         ctx.audit.log_tool_call(
             tool_call_id=tc_id,
             tool_name="get_file_metadata",
             params={"inode": inode},
-            output_hash=_hash_output(results),
+            output_hash=_hash_output({"error": error_msg}),
             duration_ms=elapsed,
         )
         return {
             "tool_call_id": tc_id,
-            "results": results,
+            "status": "error",
+            "error_message": error_msg,
+            "results": [],
             "source": _SRC_ISTAT,
             "result_count": 0,
             "reduced": False,
@@ -471,15 +501,31 @@ def get_file_metadata(inode: int) -> dict:
         }
 
     if proc.returncode != 0:
-        results = {
-            "error": f"istat exited {proc.returncode}",
-            "stderr": (proc.stderr or "")[:500],
+        error_msg = f"istat exited {proc.returncode}"
+        stderr_text = (proc.stderr or "")[:500]
+        elapsed = (time.monotonic() - t0) * 1000
+        ctx.audit.log_tool_call(
+            tool_call_id=tc_id,
+            tool_name="get_file_metadata",
+            params={"inode": inode},
+            output_hash=_hash_output({"error": error_msg}),
+            duration_ms=elapsed,
+        )
+        return {
+            "tool_call_id": tc_id,
+            "status": "error",
+            "error_message": f"{error_msg}: {stderr_text}".rstrip(": "),
+            "results": [],
+            "source": _SRC_ISTAT,
+            "result_count": 0,
+            "reduced": False,
+            "reduction_ratio": None,
         }
-    else:
-        results = {
-            "inode": inode,
-            "metadata": proc.stdout.strip(),
-        }
+
+    results = {
+        "inode": inode,
+        "metadata": proc.stdout.strip(),
+    }
 
     elapsed = (time.monotonic() - t0) * 1000
     ctx.audit.log_tool_call(
@@ -491,9 +537,10 @@ def get_file_metadata(inode: int) -> dict:
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": _SRC_ISTAT,
-        "result_count": 1 if "error" not in results else 0,
+        "result_count": 1,
         "reduced": False,
         "reduction_ratio": None,
     }

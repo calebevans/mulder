@@ -117,6 +117,7 @@ def list_sources(case_id: str) -> dict:
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": None,
         "result_count": len(results),
@@ -159,6 +160,7 @@ def search(
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": source,
         "result_count": len(results),
@@ -218,6 +220,7 @@ def get_anomalies_in_range(
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": source,
         "result_count": len(results),
@@ -273,6 +276,7 @@ def correlate_across_sources(
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": None,
         "result_count": correlation.total_windows,
@@ -311,6 +315,7 @@ def baseline_for(source: str) -> dict:
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": source,
         "result_count": 1,
@@ -348,6 +353,7 @@ def list_processes_from_memory() -> dict:
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": _SRC_PSLIST,
         "result_count": len(results),
@@ -386,6 +392,7 @@ def get_process_tree() -> dict:
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": _SRC_PSTREE,
         "result_count": len(results),
@@ -454,6 +461,7 @@ def get_eventlog_anomalies(
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": source_name,
         "result_count": len(results),
@@ -505,6 +513,7 @@ def extract_mft_timeline(t_start: str, t_end: str) -> dict:
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": source_name,
         "result_count": len(results),
@@ -543,6 +552,7 @@ def parse_prefetch() -> dict:
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": "prefetch.all",
         "result_count": len(results),
@@ -580,6 +590,7 @@ def get_amcache() -> dict:
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": "registry.system",
         "result_count": len(results),
@@ -631,6 +642,7 @@ def scan_hidden_processes() -> dict:
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": _SRC_PSSCAN,
         "result_count": len(results),
@@ -670,6 +682,7 @@ def get_process_environment(pid: int) -> dict:
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": _SRC_ENVARS,
         "result_count": len(results),
@@ -709,6 +722,7 @@ def get_process_privileges(pid: int) -> dict:
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": _SRC_PRIVS,
         "result_count": len(results),
@@ -760,6 +774,7 @@ def scan_kernel_modules() -> dict:
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": _SRC_MODSCAN,
         "result_count": len(results),
@@ -797,6 +812,7 @@ def get_userassist() -> dict:
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": _SRC_USERASSIST,
         "result_count": len(results),
@@ -835,6 +851,7 @@ def scan_files_in_memory() -> dict:
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": _SRC_FILESCAN,
         "result_count": len(results),

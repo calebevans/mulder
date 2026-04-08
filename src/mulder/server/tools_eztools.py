@@ -70,6 +70,7 @@ def parse_prefetch_detailed() -> dict:
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": _SRC_PREFETCH,
         "result_count": len(results),
@@ -103,6 +104,7 @@ def parse_amcache() -> dict:
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": _SRC_AMCACHE,
         "result_count": len(results),
@@ -136,6 +138,7 @@ def parse_shimcache() -> dict:
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": _SRC_SHIMCACHE,
         "result_count": len(results),
@@ -169,6 +172,7 @@ def parse_jump_lists() -> dict:
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": _SRC_JUMPLISTS,
         "result_count": len(results),
@@ -202,6 +206,7 @@ def parse_lnk_files() -> dict:
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": _SRC_LNKFILES,
         "result_count": len(results),
@@ -235,6 +240,7 @@ def parse_shellbags() -> dict:
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": _SRC_SHELLBAGS,
         "result_count": len(results),
@@ -269,6 +275,7 @@ def parse_srum() -> dict:
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": _SRC_SRUM,
         "result_count": len(results),
@@ -319,6 +326,7 @@ def parse_mft(t_start: str, t_end: str) -> dict:
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": _SRC_MFT,
         "result_count": len(results),
@@ -364,6 +372,7 @@ def parse_usn_journal(t_start: str, t_end: str) -> dict:
     )
     return {
         "tool_call_id": tc_id,
+        "status": "success",
         "results": results,
         "source": _SRC_USNJRNL,
         "result_count": len(results),

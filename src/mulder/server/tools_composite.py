@@ -469,6 +469,7 @@ def find_suspicious_processes() -> dict:
     )
     return {
         "tool_call_id": composite_id,
+        "status": "success",
         "results": suspicious,
         "source": None,
         "result_count": len(suspicious),
@@ -608,6 +609,7 @@ def find_persistence_mechanisms() -> dict:
     )
     return {
         "tool_call_id": composite_id,
+        "status": "success",
         "results": mechanisms,
         "source": None,
         "result_count": len(mechanisms),
@@ -821,6 +823,7 @@ def find_lateral_movement_indicators() -> dict:
     )
     return {
         "tool_call_id": composite_id,
+        "status": "success",
         "results": indicators,
         "source": None,
         "result_count": len(indicators),
