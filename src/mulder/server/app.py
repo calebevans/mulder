@@ -95,6 +95,7 @@ def init_server(
     logger.info("Server context ready for case '%s'", case_id)
 
 
+import mulder.server.tools_bulk as _tools_bulk  # noqa: E402, F401
 import mulder.server.tools_composite as _tools_composite  # noqa: E402, F401
 import mulder.server.tools_core as _tools_core  # noqa: E402, F401
 import mulder.server.tools_eztools as _tools_eztools  # noqa: E402, F401

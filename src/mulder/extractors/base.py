@@ -75,6 +75,7 @@ def default_registry() -> ExtractorRegistry:
     Concrete extractors are imported lazily so the module stays importable
     even when the underlying forensic tools are not installed.
     """
+    from mulder.extractors.bulk import BulkExtractorExtractor
     from mulder.extractors.disk import DiskImageExtractor
     from mulder.extractors.eztools import EZToolsExtractor
     from mulder.extractors.logs import LogFileExtractor
@@ -86,6 +87,7 @@ def default_registry() -> ExtractorRegistry:
     registry.register(VolatilityExtractor())
     registry.register(PlasoExtractor())
     registry.register(SleuthKitExtractor())
+    registry.register(BulkExtractorExtractor())
     registry.register(EZToolsExtractor())
     registry.register(DiskImageExtractor())
     registry.register(LogFileExtractor())
