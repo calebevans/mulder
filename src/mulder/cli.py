@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import time
 from pathlib import Path
 
@@ -18,6 +19,13 @@ from mulder.index import Embedder
 from mulder.models import EmbeddingConfig, WindowRow
 
 logger = logging.getLogger(__name__)
+
+
+def _slugify(name: str) -> str:
+    """Convert a directory name into a valid case ID."""
+    slug = name.lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", slug)
+    return slug.strip("-") or "case"
 
 
 def _sha256_file(path: Path) -> str:
@@ -242,7 +250,20 @@ def serve(case_id: str, db_dir: str, transport: str, api_key: str | None) -> Non
 
 
 @cli.command()
-@click.option("--case-id", required=True, help="Case to investigate.")
+@click.option(
+    "--path",
+    "evidence_path",
+    default=None,
+    type=click.Path(exists=True),
+    help="Evidence directory (or file) to ingest before investigating. "
+    "When provided, ingestion runs automatically.",
+)
+@click.option(
+    "--case-id",
+    default=None,
+    help="Unique case identifier. Required when --path is not given. "
+    "Auto-derived from directory name when omitted with --path.",
+)
 @click.option(
     "--db-dir",
     default="~/.mulder/cases",
@@ -265,12 +286,57 @@ def serve(case_id: str, db_dir: str, transport: str, api_key: str | None) -> Non
     "--api-key",
     default=None,
     envvar="MULDER_API_KEY",
-    help="API key for remote embeddings (if case was ingested with --embedding-backend remote).",
+    help="API key for remote embeddings. Falls back to provider env vars.",
+)
+@click.option(
+    "--exclude",
+    multiple=True,
+    help="Glob pattern(s) to exclude during ingestion. Repeatable.",
+)
+@click.option(
+    "--reingest",
+    is_flag=True,
+    default=False,
+    help="Force re-ingestion even if the case database already exists.",
+)
+@click.option(
+    "--embedding-backend",
+    default="sentence-transformers",
+    show_default=True,
+    type=click.Choice(["sentence-transformers", "remote"]),
+    help="Embedding backend for ingestion.",
+)
+@click.option(
+    "--embedding-model",
+    default="all-MiniLM-L6-v2",
+    show_default=True,
+    help="Embedding model name for ingestion.",
+)
+@click.option(
+    "--batch-size",
+    default=100,
+    show_default=True,
+    help="Embedding batch size for ingestion.",
 )
 def investigate(
-    case_id: str, db_dir: str, model: str, max_iterations: int, api_key: str | None
+    evidence_path: str | None,
+    case_id: str | None,
+    db_dir: str,
+    model: str,
+    max_iterations: int,
+    api_key: str | None,
+    exclude: tuple[str, ...],
+    reingest: bool,
+    embedding_backend: str,
+    embedding_model: str,
+    batch_size: int,
 ) -> None:
-    """Run an autonomous IR investigation against a case."""
+    """Run an autonomous IR investigation against a case.
+
+    With --path, mulder ingests all evidence under that directory tree into a
+    single case, then investigates it.  Without --path, the case must already
+    be ingested.
+    """
     import asyncio
     import sys
 
@@ -279,6 +345,41 @@ def investigate(
     from mulder.agent import Investigator
 
     db_dir_path = Path(db_dir).expanduser()
+    db_dir_path.mkdir(parents=True, exist_ok=True)
+
+    if case_id is None:
+        if evidence_path is None:
+            raise click.UsageError("--case-id is required when --path is not given.")
+        case_id = _slugify(Path(evidence_path).resolve().name)
+        click.echo(f"Auto-derived case ID: '{case_id}'")
+
+    if evidence_path is not None:
+        db_file = db_dir_path / f"{case_id}.db"
+        if db_file.exists() and not reingest:
+            click.echo(f"Case '{case_id}' already ingested, skipping (use --reingest to redo)")
+        else:
+            if db_file.exists():
+                db_file.unlink()
+                audit_file = db_dir_path / f"{case_id}.audit.jsonl"
+                if audit_file.exists():
+                    audit_file.unlink()
+                report_file = db_dir_path / f"{case_id}.report.md"
+                if report_file.exists():
+                    report_file.unlink()
+
+            emb_cfg = EmbeddingConfig(
+                backend=embedding_backend,
+                model_name=embedding_model,
+                batch_size=batch_size,
+            )
+            run_ingestion(
+                evidence_path=Path(evidence_path).expanduser().resolve(),
+                case_id=case_id,
+                db_dir=db_dir_path,
+                embedding_config=emb_cfg,
+                api_key=api_key,
+                exclude_patterns=exclude,
+            )
 
     resolved_key = api_key or (
         os.environ.get("GEMINI_API_KEY")

@@ -9,11 +9,13 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_MEMORY_DUMP_EXTS = {".mem", ".vmem", ".dmp"}
+_MEMORY_DUMP_EXTS = {".mem", ".vmem", ".dmp", ".001"}
 _DISK_IMAGE_EXTS = {".e01", ".dd", ".img"}
 _EVTX_EXTS = {".evtx"}
 _LOG_FILE_EXTS = {".log", ".txt"}
 _LOG_DIR_NAMES = {"logs", "log"}
+
+_AUTO_EXCLUDE_DIRS = {"precooked", "baseline-memory", "baseline"}
 
 _SKIP_FILENAMES: set[str] = {
     "readme",
@@ -79,7 +81,28 @@ _SKIP_EXTENSIONS: set[str] = {
     ".mp4",
     ".avi",
     ".wav",
+    ".mans",
+    ".ioc",
+    ".csv",
 }
+
+
+_ALL_EVIDENCE_EXTS = _MEMORY_DUMP_EXTS | _DISK_IMAGE_EXTS | {".raw"}
+
+
+def _is_evidence_sidecar(path: Path) -> bool:
+    """Return True for metadata files that accompany evidence images.
+
+    E.g. ``foo.E01.txt`` has stem ``foo.E01`` whose suffix ``.e01`` is a known
+    evidence extension, so it is a sidecar -- not a log file.  Also catches
+    names like ``win7-nromanoff-memory-raw.txt`` where the stem ends with
+    ``-raw``.
+    """
+    inner_ext = Path(path.stem).suffix.lower()
+    if inner_ext in _ALL_EVIDENCE_EXTS:
+        return True
+    stem_lower = path.stem.lower()
+    return stem_lower.endswith("-raw") or stem_lower.endswith("_raw")
 
 
 @dataclass
@@ -119,11 +142,18 @@ class EvidenceClassifier:
 
         results: list[ClassifiedEvidence] = []
         seen_log_dirs: set[Path] = set()
+        excluded_dirs: set[Path] = set()
 
         for item in sorted(evidence_root.rglob("*")):
             if _is_hidden(item):
                 continue
             if self._is_excluded(item, evidence_root):
+                continue
+            if any(item.is_relative_to(d) for d in excluded_dirs):
+                continue
+            if item.is_dir() and item.name.lower() in _AUTO_EXCLUDE_DIRS:
+                logger.debug("Auto-excluding directory: %s", item)
+                excluded_dirs.add(item)
                 continue
             self._process_item(item, results, seen_log_dirs)
 
@@ -178,6 +208,8 @@ class EvidenceClassifier:
             return ClassifiedEvidence(path=path, artifact_type="evtx")
 
         if ext in _LOG_FILE_EXTS:
+            if _is_evidence_sidecar(path):
+                return None
             return ClassifiedEvidence(path=path, artifact_type="log_file")
 
         return None

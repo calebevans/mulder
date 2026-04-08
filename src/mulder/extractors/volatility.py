@@ -17,7 +17,7 @@ from mulder.extractors.base import ExtractionResult
 
 logger = logging.getLogger(__name__)
 
-_MEMORY_DUMP_EXTS = frozenset({".mem", ".raw", ".vmem", ".dmp"})
+_MEMORY_DUMP_EXTS = frozenset({".mem", ".raw", ".vmem", ".dmp", ".001"})
 _MEMORY_DUMP_MIN_BYTES = 100 * 1024 * 1024  # 100 MB
 
 _PLUGIN_TIMEOUT_SECONDS = 300
