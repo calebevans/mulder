@@ -192,4 +192,30 @@ def serve(case_id: str, db_dir: str, transport: str) -> None:
 )
 def investigate(case_id: str, db_dir: str, model: str, max_iterations: int) -> None:
     """Run an autonomous IR investigation against a case."""
-    click.echo("Not yet implemented -- see Piece 9")
+    import asyncio
+    import sys
+
+    from mcp.client.stdio import StdioServerParameters
+
+    from killjoy.agent import Investigator
+
+    db_dir_path = Path(db_dir).expanduser()
+
+    server_params = StdioServerParameters(
+        command=sys.executable,
+        args=["-m", "killjoy.cli", "serve", "--case-id", case_id, "--db-dir", str(db_dir_path)],
+    )
+
+    investigator = Investigator(
+        model=model,
+        max_iterations=max_iterations,
+        case_id=case_id,
+    )
+
+    click.echo(f"Starting investigation for case '{case_id}' (model={model}) ...")
+    result = asyncio.run(investigator.run(server_params))
+    click.echo(f"Investigation complete: {result.findings_submitted} finding(s) submitted.")
+
+
+if __name__ == "__main__":
+    cli()
