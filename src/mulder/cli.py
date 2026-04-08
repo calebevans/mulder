@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -279,6 +280,12 @@ def investigate(
 
     db_dir_path = Path(db_dir).expanduser()
 
+    resolved_key = api_key or (
+        os.environ.get("GEMINI_API_KEY")
+        or os.environ.get("ANTHROPIC_API_KEY")
+        or os.environ.get("OPENAI_API_KEY")
+    )
+
     serve_args = [
         "-m",
         "mulder.cli",
@@ -288,8 +295,8 @@ def investigate(
         "--db-dir",
         str(db_dir_path),
     ]
-    if api_key:
-        serve_args.extend(["--api-key", api_key])
+    if resolved_key:
+        serve_args.extend(["--api-key", resolved_key])
 
     server_params = StdioServerParameters(
         command=sys.executable,
