@@ -61,6 +61,10 @@ class ExtractorRegistry:
                 return ext
         return None
 
+    def get_all_extractors_for(self, path: Path) -> list[Extractor]:
+        """Return every registered extractor that can handle *path*."""
+        return [ext for ext in self._extractors if ext.can_handle(path)]
+
     def all_extractors(self) -> list[Extractor]:
         return list(self._extractors)
 
@@ -71,8 +75,14 @@ def default_registry() -> ExtractorRegistry:
     Concrete extractors are imported lazily so the module stays importable
     even when the underlying forensic tools are not installed.
     """
+    from killjoy.extractors.disk import DiskImageExtractor
+    from killjoy.extractors.logs import LogFileExtractor
+    from killjoy.extractors.plaso import PlasoExtractor
     from killjoy.extractors.volatility import VolatilityExtractor
 
     registry = ExtractorRegistry()
     registry.register(VolatilityExtractor())
+    registry.register(PlasoExtractor())
+    registry.register(DiskImageExtractor())
+    registry.register(LogFileExtractor())
     return registry

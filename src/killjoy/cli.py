@@ -49,58 +49,59 @@ def run_ingestion(evidence_path: Path, case_id: str, db_dir: Path) -> None:
     total_windows = 0
 
     for item in classified:
-        extractor = registry.get_extractor_for(item.path)
-        if extractor is None:
+        extractors = registry.get_all_extractors_for(item.path)
+        if not extractors:
             click.echo(f"  [skip] No extractor for {item.path} ({item.artifact_type})")
             continue
 
-        click.echo(f"  [extract] {extractor.name}: {item.path}")
-
         source_hash = _sha256_file(item.path) if item.path.is_file() else "sha256:directory"
 
-        results = extractor.extract(item.path, case_id)
-        if extractor.name not in extractor_versions:
-            extractor_versions[extractor.name] = extractor.version()
+        for extractor in extractors:
+            click.echo(f"  [extract] {extractor.name}: {item.path}")
 
-        for result in results:
-            source_id = db.register_source(
-                source_name=result.source_name,
-                source_path=result.source_path,
-                source_hash=source_hash,
-                extractor=result.extractor,
-                line_count=result.line_count,
-            )
+            results = extractor.extract(item.path, case_id)
+            if extractor.name not in extractor_versions:
+                extractor_versions[extractor.name] = extractor.version()
 
-            windows_data = embedder.window_and_embed(result.text_output)
-            if not windows_data:
-                click.echo(f"    {result.source_name}: 0 windows (empty output)")
+            for result in results:
+                source_id = db.register_source(
+                    source_name=result.source_name,
+                    source_path=result.source_path,
+                    source_hash=source_hash,
+                    extractor=result.extractor,
+                    line_count=result.line_count,
+                )
+
+                windows_data = embedder.window_and_embed(result.text_output)
+                if not windows_data:
+                    click.echo(f"    {result.source_name}: 0 windows (empty output)")
+                    total_sources += 1
+                    continue
+
+                base_id = db.get_max_window_id() + 1
+                window_rows = [
+                    WindowRow(
+                        window_id=base_id + i,
+                        source_id=source_id,
+                        line_start=line_start,
+                        line_end=line_end,
+                        event_time=event_time,
+                        raw_text=raw_text,
+                    )
+                    for i, (raw_text, line_start, line_end, _emb, event_time) in enumerate(
+                        windows_data
+                    )
+                ]
+                vec_rows = [
+                    (base_id + i, emb) for i, (_raw, _ls, _le, emb, _et) in enumerate(windows_data)
+                ]
+
+                db.insert_windows(source_id, window_rows)
+                db.insert_vec_windows(vec_rows)
+
                 total_sources += 1
-                continue
-
-            base_id = db.get_max_window_id() + 1
-            window_rows = [
-                WindowRow(
-                    window_id=base_id + i,
-                    source_id=source_id,
-                    line_start=line_start,
-                    line_end=line_end,
-                    event_time=event_time,
-                    raw_text=raw_text,
-                )
-                for i, (raw_text, line_start, line_end, _emb, event_time) in enumerate(
-                    windows_data
-                )
-            ]
-            vec_rows = [
-                (base_id + i, emb) for i, (_raw, _ls, _le, emb, _et) in enumerate(windows_data)
-            ]
-
-            db.insert_windows(source_id, window_rows)
-            db.insert_vec_windows(vec_rows)
-
-            total_sources += 1
-            total_windows += len(window_rows)
-            click.echo(f"    {result.source_name}: {len(window_rows)} windows")
+                total_windows += len(window_rows)
+                click.echo(f"    {result.source_name}: {len(window_rows)} windows")
 
     db.update_extractor_versions(extractor_versions)
     db.close()
