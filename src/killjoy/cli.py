@@ -157,7 +157,17 @@ def ingest(evidence_path: str, case_id: str, db_dir: str) -> None:
 )
 def serve(case_id: str, db_dir: str, transport: str) -> None:
     """Start the Killjoy MCP server for a case."""
-    click.echo("Not yet implemented -- see Piece 7")
+    from killjoy.server.app import init_server
+    from killjoy.server.app import mcp as mcp_server
+
+    db_dir_path = Path(db_dir).expanduser()
+    audit_path = db_dir_path / f"{case_id}.audit.jsonl"
+
+    click.echo(f"Initialising MCP server for case '{case_id}' ...")
+    init_server(case_id, db_dir_path, audit_path)
+
+    click.echo(f"Starting MCP server (transport={transport}) ...")
+    mcp_server.run(transport=transport)
 
 
 @cli.command()
