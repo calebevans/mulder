@@ -8,9 +8,7 @@ from datetime import datetime
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
-_ISO_RE = re.compile(
-    r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}"
-)
+_ISO_RE = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}")
 
 _SYSLOG_RE = re.compile(
     r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)"
@@ -18,13 +16,21 @@ _SYSLOG_RE = re.compile(
 )
 
 _SYSLOG_MONTHS = {
-    "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
-    "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12,
+    "Jan": 1,
+    "Feb": 2,
+    "Mar": 3,
+    "Apr": 4,
+    "May": 5,
+    "Jun": 6,
+    "Jul": 7,
+    "Aug": 8,
+    "Sep": 9,
+    "Oct": 10,
+    "Nov": 11,
+    "Dec": 12,
 }
 
-_PLASO_DATE_RE = re.compile(
-    r"(\d{2})/(\d{2})/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})"
-)
+_PLASO_DATE_RE = re.compile(r"(\d{2})/(\d{2})/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})")
 
 
 def _parse_timestamp(text: str) -> str | None:
@@ -121,7 +127,7 @@ class Embedder:
         )
 
         results: list[tuple[str, int, int, bytes, str | None]] = []
-        for (raw, line_start, line_end), emb in zip(windows, embeddings):
+        for (raw, line_start, line_end), emb in zip(windows, embeddings, strict=False):
             emb_bytes = np.asarray(emb, dtype=np.float32).tobytes()
             event_time = _parse_timestamp(raw)
             results.append((raw, line_start, line_end, emb_bytes, event_time))

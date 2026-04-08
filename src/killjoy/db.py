@@ -228,6 +228,93 @@ class CaseDB:
             for row in self._conn.execute(sql, params)
         ]
 
+    def knn_query_scored(
+        self,
+        query_embedding: bytes,
+        k: int,
+        source_name: str | None = None,
+        time_start: str | None = None,
+        time_end: str | None = None,
+    ) -> list[tuple[WindowRow, float]]:
+        """k-NN search returning (window, cosine_distance) pairs."""
+        sql = (
+            "WITH knn AS ("
+            "  SELECT window_id, distance"
+            "  FROM vec_windows"
+            "  WHERE embedding MATCH ? AND k = ?"
+            ")"
+            " SELECT w.window_id, w.source_id, w.line_start, w.line_end,"
+            "        w.event_time, w.raw_text, knn.distance"
+            " FROM knn"
+            " JOIN windows w ON w.window_id = knn.window_id"
+            " JOIN sources s ON s.source_id = w.source_id"
+        )
+        params: list[object] = [query_embedding, k]
+        clauses: list[str] = []
+
+        if source_name is not None:
+            clauses.append("s.source_name = ?")
+            params.append(source_name)
+        if time_start is not None:
+            clauses.append("w.event_time >= ?")
+            params.append(time_start)
+        if time_end is not None:
+            clauses.append("w.event_time <= ?")
+            params.append(time_end)
+
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+
+        sql += " ORDER BY knn.distance"
+
+        return [
+            (
+                WindowRow(
+                    window_id=row["window_id"],
+                    source_id=row["source_id"],
+                    line_start=row["line_start"],
+                    line_end=row["line_end"],
+                    event_time=row["event_time"],
+                    raw_text=row["raw_text"],
+                ),
+                float(row["distance"]),
+            )
+            for row in self._conn.execute(sql, params)
+        ]
+
+    def get_embeddings_by_source(
+        self,
+        source_name: str,
+        time_start: str | None = None,
+        time_end: str | None = None,
+    ) -> list[tuple[int, bytes]]:
+        """Load raw embedding vectors for all windows in a source.
+
+        Returns (window_id, embedding_bytes) tuples suitable for
+        reconstruction into a numpy array for batch scoring.
+        """
+        sql = (
+            "SELECT vw.window_id, vw.embedding"
+            " FROM vec_windows vw"
+            " JOIN windows w ON w.window_id = vw.window_id"
+            " JOIN sources s ON s.source_id = w.source_id"
+            " WHERE s.source_name = ?"
+        )
+        params: list[object] = [source_name]
+
+        if time_start is not None:
+            sql += " AND w.event_time >= ?"
+            params.append(time_start)
+        if time_end is not None:
+            sql += " AND w.event_time <= ?"
+            params.append(time_end)
+
+        sql += " ORDER BY vw.window_id"
+
+        return [
+            (row["window_id"], bytes(row["embedding"])) for row in self._conn.execute(sql, params)
+        ]
+
     def get_windows_by_source(
         self,
         source_name: str,
