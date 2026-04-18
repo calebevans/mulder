@@ -1,0 +1,12 @@
+.git
+.venv
+__pycache__
+*.pyc
+.mypy_cache
+.ruff_cache
+.pre-commit-config.yaml
+uv.lock
+docs/
+*.egg-info
+.cursor/
+reports/

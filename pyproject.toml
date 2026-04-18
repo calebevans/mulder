@@ -13,13 +13,13 @@ authors = [
 ]
 dependencies = [
     "mcp>=1.27",
-    "cordon>=1.0.2",
-    "sqlite-vec>=0.1.9",
-    "litellm>=1.83",
+    "sqlalchemy>=2.0",
+    "volatility3>=2.0",
     "detect-secrets>=1.5",
     "pydantic>=2.12",
     "click>=8.3",
     "jinja2>=3.1.6",
+    "markdown>=3.6",
     "python-evtx>=0.8.1",
 ]
 
@@ -48,3 +48,12 @@ select = ["E", "F", "I", "W", "UP", "B", "SIM"]
 [tool.mypy]
 python_version = "3.10"
 strict = true
+
+[[tool.mypy.overrides]]
+module = [
+    "volatility3.*",
+    "Evtx.*",
+    "pysqlcipher3.*",
+    "psutil",
+]
+ignore_missing_imports = true
