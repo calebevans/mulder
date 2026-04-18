@@ -11,6 +11,7 @@ class Redactor:
     """Scans text for potential secrets and replaces them with [REDACTED]."""
 
     def __init__(self) -> None:
+        """Enable redaction when detect-secrets is importable; otherwise no-op."""
         self._available = True
         try:
             from detect_secrets.core.scan import scan_line  # noqa: F401
@@ -30,6 +31,7 @@ class Redactor:
             return text
 
     def _redact_with_detect_secrets(self, text: str) -> str:
+        """Replace each substring reported by detect-secrets with ``[REDACTED]``, line by line."""
         from detect_secrets.core.scan import scan_line
         from detect_secrets.settings import default_settings
 

@@ -1,29 +1,160 @@
-# Mulder Investigation Report: {{ case_id }}
+# Mulder Investigation Report
 
-Generated: {{ timestamp }}
-Evidence root: {{ evidence_root }}
+**Case:** {{ case_id }}
+**Generated:** {{ timestamp }}
+**Evidence:** {{ evidence_root }}
+
+---
 
 ## Executive Summary
 
-{{ finding_count }} finding(s) ({{ confirmed_count }} confirmed, {{ inference_count }} inference(s))
+{{ executive_summary_md }}
+
+{% if critical_findings %}
+### Critical Findings
+
+{% for f in critical_findings %}
+- **{{ f.title }}** {% if f.event_time_start %}({{ f.event_time_start }}{% if f.event_time_end %} -- {{ f.event_time_end }}{% endif %}){% endif %}
+
+{% endfor %}
+{% endif %}
+
+---
+
+## Overview
+
+| | |
+|---|---|
+| Findings | **{{ finding_count }}** ({{ confirmed_count }} confirmed, {{ inference_count }} inference) |
+| Severity | {{ critical_count }} critical, {{ high_count }} high, {{ medium_count }} medium, {{ low_count }} low, {{ info_count }} info |
+| Sources | {{ sources | length }} evidence sources across {{ total_tool_calls }} tool calls |
+{% if negative_count %}| Ruled Out | {{ negative_count }} hypotheses tested and rejected |
+{% endif %}
+{% if evidence_integrity %}
+---
+
+## Evidence Hashes
+
+SHA-256 hashes recorded at ingestion. Verify with `sha256sum <file>`.
+
+| File | SHA-256 | Size |
+|------|---------|------|
+{% for e in evidence_integrity %}| {{ e.file_path | basename }} | `{{ e.sha256 }}` | {{ e.size_bytes | filesizeformat }} |
+{% endfor %}
+{% endif %}
+
+---
+
+## Attack Timeline
+
+{% if timeline_findings %}
+| Time | Event | Severity | Sources |
+|------|-------|----------|---------|
+{% for f in timeline_findings %}| {{ f.event_time_start }} | {{ f.title }} | {{ f.severity | upper }} | {{ f.sources | join(", ") }} |
+{% endfor %}
+{% else %}
+No timestamped findings to build a timeline from.
+{% endif %}
+
+---
 
 ## Findings
 {% for finding in findings %}
 
-### {{ finding.severity | upper }}: {{ finding.title }}
+### {{ loop.index }}. {% if finding.severity == "critical" %}[CRITICAL]{% elif finding.severity == "high" %}[HIGH]{% elif finding.severity == "medium" %}[MEDIUM]{% elif finding.severity == "low" %}[LOW]{% else %}[INFO]{% endif %} {{ finding.title }}
 
-**Confidence:** {{ finding.confidence }}
-{% if finding.event_time_start or finding.event_time_end -%}
-**Time range:** {{ finding.event_time_start or "N/A" }} -- {{ finding.event_time_end or "N/A" }}
-{% endif -%}
-**Sources:** {{ finding.sources | join(", ") }}
+| | |
+|---|---|
+| **Severity** | {{ finding.severity | upper }} |
+| **Confidence** | {{ finding.confidence }} |
+{% if finding.event_time_start %}| **Time** | {{ finding.event_time_start }}{% if finding.event_time_end %} -- {{ finding.event_time_end }}{% endif %} |
+{% endif %}| **Sources** | {{ finding.sources | join(", ") }} |
+| **Evidence Refs** | {{ finding.evidence_refs | join(", ") }} |
+{% if finding.mitre_attack_ids %}| **ATT&CK** | {% for tid in finding.mitre_attack_ids %}[{{ tid }}]({{ tid | attack_url }}){% if not loop.last %}, {% endif %}{% endfor %} |
+{% endif %}
 
 {{ finding.description }}
 
-**Evidence references:** {{ finding.evidence_refs | join(", ") }}
 {% endfor %}
 
-## Audit Trail Summary
+{% if negative_findings %}
+---
 
-Total tool calls: {{ total_tool_calls }}
-Audit log: {{ audit_log_path }}
+## Ruled Out
+
+These hypotheses were explicitly tested and no supporting evidence was found.
+
+{% for f in negative_findings %}
+- **{{ f.title | replace("[NEGATIVE] ", "") }}** -- {{ f.description | truncate(200) }}
+{% endfor %}
+{% endif %}
+
+---
+
+## Indicators of Compromise
+
+### Network IOCs
+
+| Type | Value | Context |
+|------|-------|---------|
+{% for ioc in network_iocs %}| {{ ioc.type }} | `{{ ioc.value }}` | {{ ioc.context }} |
+{% endfor %}{% if not network_iocs %}| -- | No network IOCs extracted | -- |
+{% endif %}
+
+### File IOCs
+
+| Type | Value | Context |
+|------|-------|---------|
+{% for ioc in file_iocs %}| {{ ioc.type }} | `{{ ioc.value }}` | {{ ioc.context }} |
+{% endfor %}{% if not file_iocs %}| -- | No file IOCs extracted | -- |
+{% endif %}
+
+{% if email_iocs %}
+### Email IOCs
+
+| Type | Value | Context |
+|------|-------|---------|
+{% for ioc in email_iocs %}| {{ ioc.type }} | `{{ ioc.value }}` | {{ ioc.context }} |
+{% endfor %}
+{% endif %}
+
+{% if mitre_techniques %}
+---
+
+## MITRE ATT&CK Coverage
+
+{{ mitre_techniques | length }} techniques identified across findings.
+
+| Technique | Findings |
+|-----------|----------|
+{% for t in mitre_techniques %}| [{{ t.id }}]({{ t.url }}) | {% for af in t.findings %}{{ af.title | truncate(50) }}{% if not loop.last %}; {% endif %}{% endfor %} |
+{% endfor %}
+{% endif %}
+
+---
+
+## Audit Trail
+
+| Metric | Value |
+|--------|-------|
+| Total tool calls | {{ total_tool_calls }} |
+| Findings submitted | {{ finding_count }} |
+| Confirmed | {{ confirmed_count }} |
+| Inferences | {{ inference_count }} |
+| Audit log | {{ audit_log_path }} |
+
+{% if sources_list %}
+<details>
+<summary>Evidence Sources ({{ sources_list | length }})</summary>
+
+| Source | Extractor | Lines |
+|--------|-----------|-------|
+{% for s in sources_list %}| {{ s.source_name }} | {{ s.extractor }} | {{ s.line_count }} |
+{% endfor %}
+
+</details>
+{% endif %}
+
+---
+
+*Report generated by [Mulder](https://github.com/caevans/killjoy) -- AI-driven forensic investigation via MCP*

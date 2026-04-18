@@ -1,0 +1,1590 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mulder Report: {{ case_id }}</title>
+<script>
+(function(){var t=localStorage.getItem('mulder-theme');if(t==='light'||t==='dark'){document.documentElement.setAttribute('data-theme',t)}else if(window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches){document.documentElement.setAttribute('data-theme','light')}})();
+</script>
+<style>
+/* ===================== DARK THEME (default) ===================== */
+:root, [data-theme="dark"] {
+  --bg: #12161f;
+  --bg2: #171c28;
+  --surface: rgba(28,34,48,0.88);
+  --surface-solid: #1c2230;
+  --surface2: #232a3a;
+  --surface3: #2a3346;
+  --border: #303a50;
+  --border-light: #3e4a62;
+  --text: #e8ecf4;
+  --text-muted: #97a3bc;
+  --text-dim: #6b7a96;
+  --accent: #5b9ef5;
+  --accent2: #7c8cf0;
+  --accent-dim: rgba(91,158,245,0.13);
+  --accent-glow: rgba(91,158,245,0.22);
+  --critical: #f06060;
+  --critical-dim: rgba(240,96,96,0.13);
+  --critical-border: rgba(239,68,68,0.25);
+  --high: #ee8c3a;
+  --high-dim: rgba(238,140,58,0.13);
+  --high-border: rgba(249,115,22,0.25);
+  --medium: #d9b840;
+  --medium-dim: rgba(217,184,64,0.13);
+  --medium-border: rgba(234,179,8,0.25);
+  --low: #3ec97a;
+  --low-dim: rgba(62,201,122,0.13);
+  --low-border: rgba(34,197,94,0.25);
+  --info: #717bf0;
+  --info-dim: rgba(113,123,240,0.13);
+  --info-border: rgba(99,102,241,0.25);
+  --confirmed: #3ec97a;
+  --inference: #d9b840;
+  --overlay: rgba(0,0,0,0.6);
+  --overlay-light: rgba(0,0,0,0.5);
+  --code-bg: #12161f;
+  --hover-tint: rgba(96,165,250,0.04);
+  --font: 'Inter', 'SF Pro Display', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --mono: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', monospace;
+  --radius: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --shadow: 0 2px 8px rgba(0,0,0,0.22);
+  --shadow-lg: 0 8px 24px rgba(0,0,0,0.3);
+  --shadow-glow: 0 0 20px rgba(91,158,245,0.12);
+  --transition: 0.2s ease;
+  --transition-slow: 0.4s cubic-bezier(0.4,0,0.2,1);
+}
+
+/* ===================== LIGHT THEME ===================== */
+[data-theme="light"] {
+  --bg: #f5f6fa;
+  --bg2: #ffffff;
+  --surface: rgba(255,255,255,0.92);
+  --surface-solid: #ffffff;
+  --surface2: #eef0f5;
+  --surface3: #e2e5ed;
+  --border: #d5d9e2;
+  --border-light: #c0c6d2;
+  --text: #1a1d26;
+  --text-muted: #5a6478;
+  --text-dim: #8892a6;
+  --accent: #3b7de0;
+  --accent2: #5c6cd6;
+  --accent-dim: rgba(59,125,224,0.1);
+  --accent-glow: rgba(59,125,224,0.18);
+  --critical: #dc3545;
+  --critical-dim: rgba(220,53,69,0.1);
+  --critical-border: rgba(220,53,69,0.3);
+  --high: #d97a1e;
+  --high-dim: rgba(217,122,30,0.1);
+  --high-border: rgba(217,122,30,0.3);
+  --medium: #b89a10;
+  --medium-dim: rgba(184,154,16,0.1);
+  --medium-border: rgba(184,154,16,0.3);
+  --low: #28a05a;
+  --low-dim: rgba(40,160,90,0.1);
+  --low-border: rgba(40,160,90,0.3);
+  --info: #5560c0;
+  --info-dim: rgba(85,96,192,0.1);
+  --info-border: rgba(85,96,192,0.3);
+  --confirmed: #28a05a;
+  --inference: #b89a10;
+  --overlay: rgba(0,0,0,0.35);
+  --overlay-light: rgba(0,0,0,0.25);
+  --code-bg: #f0f2f7;
+  --hover-tint: rgba(59,125,224,0.04);
+  --shadow: 0 2px 8px rgba(0,0,0,0.08);
+  --shadow-lg: 0 8px 24px rgba(0,0,0,0.12);
+  --shadow-glow: 0 0 20px rgba(59,125,224,0.08);
+}
+
+/* ===================== RESET & BASE ===================== */
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { background: var(--bg); color: var(--text); font-family: var(--font); line-height: 1.65; font-size: 14px; overflow-x: hidden; }
+.app { display: flex; min-height: 100vh; }
+
+/* ===================== SIDEBAR ===================== */
+.sidebar {
+  width: 260px; background: var(--bg2); border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; position: fixed;
+  top: 0; left: 0; bottom: 0; z-index: 100; transition: transform var(--transition-slow);
+}
+.sidebar-brand {
+  padding: 1.5rem 1.5rem 1.25rem; border-bottom: 1px solid var(--border);
+  background: linear-gradient(135deg, var(--accent-dim) 0%, transparent 60%);
+}
+.sidebar-brand h1 { font-size: 1.25rem; font-weight: 800; letter-spacing: -0.02em; }
+.sidebar-brand h1 span { background: linear-gradient(135deg, var(--accent), var(--accent2)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+.sidebar-brand .case-id { font-size: 0.72rem; color: var(--text-muted); font-family: var(--mono); margin-top: 0.3rem; }
+.sidebar-nav { flex: 1; padding: 0.75rem 0; overflow-y: auto; }
+.nav-section-label { font-size: 0.62rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.08em; padding: 1rem 1.5rem 0.4rem; font-weight: 600; }
+.nav-item {
+  display: flex; align-items: center; gap: 0.75rem; padding: 0.6rem 1.5rem;
+  color: var(--text-muted); text-decoration: none; font-size: 0.82rem; font-weight: 500;
+  cursor: pointer; transition: all var(--transition); border-left: 3px solid transparent; position: relative;
+}
+.nav-item:hover { color: var(--text); background: var(--hover-tint); }
+.nav-item.active { color: var(--accent); background: linear-gradient(90deg, var(--accent-dim), transparent); border-left-color: var(--accent); }
+.nav-icon { font-size: 1rem; width: 1.4rem; text-align: center; flex-shrink: 0; opacity: 0.7; }
+.nav-item.active .nav-icon { opacity: 1; }
+.nav-badge { margin-left: auto; background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 0.1em 0.5em; font-size: 0.62rem; font-weight: 600; color: var(--text-dim); font-family: var(--mono); }
+.sidebar-footer { padding: 1rem 1.5rem; border-top: 1px solid var(--border); font-size: 0.68rem; color: var(--text-dim); }
+.sidebar-footer a { color: var(--accent); text-decoration: none; }
+.sidebar-footer .shortcut-hint { margin-top: 0.5rem; padding: 0.3rem 0.5rem; background: var(--surface2); border-radius: 6px; display: inline-block; font-family: var(--mono); font-size: 0.65rem; }
+.theme-toggle { background: var(--surface2); border: 1px solid var(--border); color: var(--text-muted); width: 32px; height: 32px; border-radius: 8px; cursor: pointer; font-size: 1rem; display: flex; align-items: center; justify-content: center; transition: all 0.15s; margin-top: 0.5rem; }
+.theme-toggle:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ===================== MAIN ===================== */
+.main { margin-left: 260px; flex: 1; min-width: 0; }
+.page { display: none; padding: 2rem 2.5rem 3rem; max-width: 1200px; opacity: 0; transform: translateY(8px); }
+.page.active { display: block; animation: pageIn 0.35s cubic-bezier(0.4,0,0.2,1) forwards; }
+@keyframes pageIn { to { opacity: 1; transform: translateY(0); } }
+
+/* ===================== MOBILE ===================== */
+.mobile-toggle { display: none; position: fixed; top: 0.75rem; left: 0.75rem; z-index: 200; background: var(--surface-solid); border: 1px solid var(--border); color: var(--text); width: 40px; height: 40px; border-radius: var(--radius); cursor: pointer; font-size: 1.1rem; backdrop-filter: blur(12px); }
+.sidebar-overlay { display: none; position: fixed; inset: 0; background: var(--overlay); z-index: 90; backdrop-filter: blur(4px); }
+@media (max-width: 860px) {
+  .sidebar { transform: translateX(-100%); }
+  .sidebar.open { transform: translateX(0); }
+  .sidebar-overlay.open { display: block; }
+  .mobile-toggle { display: flex; align-items: center; justify-content: center; }
+  .main { margin-left: 0; }
+  .page { padding: 3.5rem 1rem 2rem; }
+  .ev-browser { flex-direction: column; }
+  .ev-source-tree { width: 100%; max-height: 200px; border-right: none; border-bottom: 1px solid var(--border); }
+}
+
+/* ===================== SHARED COMPONENTS ===================== */
+.page-header { margin-bottom: 2rem; }
+.page-header h2 { font-size: 1.6rem; font-weight: 800; letter-spacing: -0.03em; background: linear-gradient(135deg, var(--text), var(--text-muted)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+.page-header .subtitle { color: var(--text-muted); font-size: 0.82rem; margin-top: 0.3rem; }
+.card { background: var(--surface); backdrop-filter: blur(16px); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; transition: border-color var(--transition), box-shadow var(--transition); }
+.card:hover { border-color: var(--border-light); }
+.card-header { padding: 0.85rem 1.25rem; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 0.78rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; display: flex; align-items: center; gap: 0.5rem; }
+.card-body { padding: 1.25rem; }
+
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.75rem; margin-bottom: 1.5rem; }
+.stat { background: var(--surface); backdrop-filter: blur(12px); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.15rem 1.25rem; transition: all var(--transition); position: relative; overflow: hidden; }
+.stat::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, transparent, var(--accent), transparent); opacity: 0; transition: opacity var(--transition); }
+.stat:hover { border-color: var(--border-light); transform: translateY(-1px); box-shadow: var(--shadow); }
+.stat:hover::before { opacity: 1; }
+.stat-value { font-size: 1.85rem; font-weight: 800; color: var(--accent); line-height: 1.1; letter-spacing: -0.02em; }
+.stat-label { font-size: 0.68rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-top: 0.3rem; font-weight: 500; }
+.stat.critical .stat-value { color: var(--critical); }
+.stat.critical::before { background: linear-gradient(90deg, transparent, var(--critical), transparent); }
+.stat.high .stat-value { color: var(--high); }
+.stat.high::before { background: linear-gradient(90deg, transparent, var(--high), transparent); }
+.stat.medium .stat-value { color: var(--medium); }
+.stat.low .stat-value { color: var(--low); }
+
+.badge { display: inline-flex; align-items: center; padding: 0.2em 0.6em; border-radius: 6px; font-size: 0.68rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap; }
+.badge-critical { background: var(--critical-dim); color: var(--critical); border: 1px solid var(--critical-border); }
+.badge-high { background: var(--high-dim); color: var(--high); border: 1px solid var(--high-border); }
+.badge-medium { background: var(--medium-dim); color: var(--medium); border: 1px solid var(--medium-border); }
+.badge-low { background: var(--low-dim); color: var(--low); border: 1px solid var(--low-border); }
+.badge-info { background: var(--info-dim); color: var(--info); border: 1px solid var(--info-border); }
+.badge-confirmed { background: var(--low-dim); color: var(--confirmed); border: 1px solid var(--low-border); }
+.badge-inference { background: var(--medium-dim); color: var(--inference); border: 1px solid var(--medium-border); }
+
+.search-input { width: 100%; padding: 0.6rem 1rem 0.6rem 2.5rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); font-family: var(--font); font-size: 0.85rem; outline: none; transition: all var(--transition); }
+.search-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+.search-input::placeholder { color: var(--text-dim); }
+.search-wrap { position: relative; margin-bottom: 1rem; }
+.search-wrap::before { content: '\2315'; position: absolute; left: 0.85rem; top: 50%; transform: translateY(-50%); color: var(--text-dim); font-size: 1.1rem; pointer-events: none; }
+
+.filter-bar { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 1rem; }
+.filter-btn { background: var(--surface); border: 1px solid var(--border); color: var(--text-muted); padding: 0.35em 0.85em; border-radius: 8px; font-size: 0.72rem; font-weight: 500; cursor: pointer; transition: all 0.15s; font-family: var(--font); }
+.filter-btn:hover { border-color: var(--accent); color: var(--text); }
+.filter-btn.active { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #fff; border-color: transparent; font-weight: 600; }
+
+table.data-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+table.data-table th { text-align: left; padding: 0.65rem 0.85rem; background: var(--surface2); border-bottom: 2px solid var(--border); font-weight: 600; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); cursor: pointer; user-select: none; white-space: nowrap; }
+table.data-table th:hover { color: var(--accent); }
+table.data-table th .sort-arrow { margin-left: 0.3em; font-size: 0.6rem; }
+table.data-table td { padding: 0.6rem 0.85rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+table.data-table tr { transition: background var(--transition); }
+table.data-table tr:hover td { background: var(--hover-tint); }
+table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(--accent); word-break: break-all; }
+
+.tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 1.25rem; }
+.tab-btn { padding: 0.6rem 1.15rem; font-size: 0.78rem; font-weight: 500; color: var(--text-muted); background: none; border: none; border-bottom: 2px solid transparent; cursor: pointer; transition: all var(--transition); font-family: var(--font); }
+.tab-btn:hover { color: var(--text); }
+.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab-pane { display: none; }
+.tab-pane.active { display: block; }
+
+.mono { font-family: var(--mono); font-size: 0.82em; }
+.text-muted { color: var(--text-muted); }
+.text-dim { color: var(--text-dim); }
+.text-accent { color: var(--accent); }
+.mt-1 { margin-top: 0.75rem; }
+.mt-2 { margin-top: 1.5rem; }
+.mb-1 { margin-bottom: 0.75rem; }
+.mb-2 { margin-bottom: 1.5rem; }
+.gap-row { display: flex; gap: 1rem; flex-wrap: wrap; }
+
+.stagger-in > * { opacity: 0; transform: translateY(12px); animation: staggerItem 0.4s cubic-bezier(0.4,0,0.2,1) forwards; }
+.stagger-in > *:nth-child(1) { animation-delay: 0.05s; }
+.stagger-in > *:nth-child(2) { animation-delay: 0.1s; }
+.stagger-in > *:nth-child(3) { animation-delay: 0.15s; }
+.stagger-in > *:nth-child(4) { animation-delay: 0.2s; }
+.stagger-in > *:nth-child(5) { animation-delay: 0.25s; }
+.stagger-in > *:nth-child(6) { animation-delay: 0.3s; }
+.stagger-in > *:nth-child(7) { animation-delay: 0.35s; }
+.stagger-in > *:nth-child(8) { animation-delay: 0.4s; }
+@keyframes staggerItem { to { opacity: 1; transform: translateY(0); } }
+
+/* ===================== EXECUTIVE SUMMARY ===================== */
+.exec-summary { background: linear-gradient(135deg, var(--accent-dim), rgba(129,140,248,0.05)); border: 1px solid var(--accent-glow); border-radius: var(--radius-lg); padding: 1.5rem 1.75rem; margin-bottom: 1.75rem; position: relative; overflow: hidden; }
+.exec-summary::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: linear-gradient(90deg, var(--accent), var(--accent2), var(--accent)); }
+.exec-summary-label { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent); font-weight: 600; margin-bottom: 0.6rem; }
+.exec-summary p { font-size: 0.92rem; line-height: 1.7; color: var(--text-muted); margin: 0 0 0.75rem 0; }
+.exec-summary p:last-child { margin-bottom: 0; }
+.exec-summary strong { color: var(--text); }
+.exec-summary em { color: var(--accent); font-style: normal; }
+
+/* ===================== DASHBOARD ===================== */
+.severity-bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; margin-top: 0.5rem; background: var(--surface2); }
+.severity-bar > div { transition: width 0.8s cubic-bezier(0.4,0,0.2,1); }
+.severity-bar .seg-critical { background: linear-gradient(90deg, var(--critical), #d44); }
+.severity-bar .seg-high { background: linear-gradient(90deg, var(--high), #d07020); }
+.severity-bar .seg-medium { background: linear-gradient(90deg, var(--medium), #b89a20); }
+.severity-bar .seg-low { background: linear-gradient(90deg, var(--low), #2aa35c); }
+.severity-bar .seg-info { background: linear-gradient(90deg, var(--info), #5560d0); }
+.severity-legend { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 0.75rem; font-size: 0.72rem; color: var(--text-muted); }
+.severity-legend span { display: flex; align-items: center; gap: 0.35rem; }
+.severity-legend span::before { content: ''; display: inline-block; width: 10px; height: 10px; border-radius: 3px; }
+.severity-legend .leg-critical::before { background: var(--critical); }
+.severity-legend .leg-high::before { background: var(--high); }
+.severity-legend .leg-medium::before { background: var(--medium); }
+.severity-legend .leg-low::before { background: var(--low); }
+.severity-legend .leg-info::before { background: var(--info); }
+.critical-list { list-style: none; }
+.critical-list li { padding: 0.75rem 1rem; border-left: 3px solid var(--critical); background: var(--critical-dim); border-radius: 0 var(--radius) var(--radius) 0; margin-bottom: 0.5rem; font-size: 0.85rem; cursor: pointer; transition: all var(--transition); }
+.critical-list li:hover { background: rgba(239,68,68,0.18); transform: translateX(4px); }
+.critical-list .crit-time { font-family: var(--mono); font-size: 0.72rem; color: var(--text-muted); margin-top: 0.2rem; }
+
+.dash-widgets { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1.5rem; }
+@media (max-width: 860px) { .dash-widgets { grid-template-columns: 1fr; } }
+.widget-grid { display: flex; flex-wrap: wrap; gap: 0.35rem; padding: 0.5rem 0; }
+.widget-tech { font-size: 0.7rem; padding: 0.25em 0.5em; border-radius: 5px; font-family: var(--mono); background: var(--info-dim); color: var(--info); border: 1px solid var(--info-border); text-decoration: none; transition: all 0.15s; cursor: pointer; }
+.widget-tech:hover { background: var(--info); color: #fff; }
+.widget-ioc-row { display: flex; justify-content: space-between; padding: 0.3rem 0; font-size: 0.8rem; border-bottom: 1px solid var(--border); }
+.widget-ioc-row:last-child { border-bottom: none; }
+
+/* ===================== TIMELINE ===================== */
+.tl-controls { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; }
+.tl-controls .filter-bar { margin-bottom: 0; }
+.tl-minimap { width: 100%; height: 32px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; margin-bottom: 1rem; overflow: hidden; position: relative; }
+.tl-minimap-bar { position: absolute; bottom: 0; background: var(--accent); opacity: 0.6; border-radius: 2px 2px 0 0; min-width: 3px; transition: opacity 0.15s; }
+.tl-minimap-bar:hover { opacity: 1; }
+.timeline { position: relative; padding-left: 2.5rem; }
+.timeline::before { content: ''; position: absolute; left: 0.85rem; top: 0; bottom: 0; width: 2px; background: linear-gradient(to bottom, var(--border) 0%, var(--accent) 30%, var(--accent) 70%, var(--border) 100%); }
+.tl-group-label { font-size: 0.72rem; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em; padding: 1rem 0 0.5rem; }
+.tl-item { position: relative; margin-bottom: 0.75rem; padding: 0.85rem 1.15rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; transition: all var(--transition); }
+.tl-item:hover { border-color: var(--accent); box-shadow: var(--shadow), var(--shadow-glow); transform: translateX(4px); }
+.tl-item::before { content: ''; position: absolute; left: -2.15rem; top: 1.1rem; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--border); background: var(--bg); transition: all var(--transition); }
+.tl-item:hover::before { transform: scale(1.3); }
+.tl-item.sev-critical::before { border-color: var(--critical); background: var(--critical); box-shadow: 0 0 8px rgba(239,68,68,0.5); }
+.tl-item.sev-high::before { border-color: var(--high); background: var(--high); box-shadow: 0 0 6px rgba(249,115,22,0.3); }
+.tl-item.sev-medium::before { border-color: var(--medium); background: var(--medium); }
+.tl-item.sev-low::before { border-color: var(--low); background: var(--low); }
+.tl-time { font-family: var(--mono); font-size: 0.72rem; color: var(--text-muted); }
+.tl-title { font-weight: 700; font-size: 0.9rem; margin-top: 0.2rem; }
+.tl-badges { display: flex; gap: 0.4rem; margin-top: 0.4rem; flex-wrap: wrap; }
+.tl-sources { font-size: 0.72rem; color: var(--text-dim); margin-top: 0.3rem; }
+.tl-detail-panel { display: none; margin: -0.75rem 0 0.75rem; padding: 1.15rem 1.25rem; background: var(--surface2); border: 1px solid var(--border); border-top: none; border-radius: 0 0 var(--radius) var(--radius); font-size: 0.85rem; }
+.tl-detail-panel.open { display: block; animation: pageIn 0.2s ease forwards; }
+.tl-detail-panel p { margin-bottom: 0.5rem; }
+.tl-detail-panel pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 0.85rem; overflow-x: auto; font-family: var(--mono); font-size: 0.78rem; line-height: 1.5; margin: 0.5rem 0; }
+.tl-detail-panel code { font-family: var(--mono); font-size: 0.82em; background: var(--surface3); padding: 0.15em 0.35em; border-radius: 4px; }
+.tl-detail-panel ul, .tl-detail-panel ol { margin: 0.3rem 0 0.5rem 1.5rem; }
+
+/* ===================== FINDINGS ===================== */
+.findings-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.5rem; }
+.findings-toolbar-actions { display: flex; gap: 0.5rem; }
+.btn-sm { padding: 0.35em 0.8em; background: var(--surface); border: 1px solid var(--border); color: var(--text-muted); border-radius: 8px; font-size: 0.72rem; font-weight: 500; cursor: pointer; transition: all 0.15s; font-family: var(--font); }
+.btn-sm:hover { border-color: var(--accent); color: var(--accent); }
+.finding-card { background: var(--surface); backdrop-filter: blur(12px); border: 1px solid var(--border); border-radius: var(--radius-lg); margin-bottom: 0.75rem; overflow: hidden; transition: all var(--transition); }
+.finding-card:hover { border-color: var(--border-light); }
+.finding-card.open { border-color: var(--accent); box-shadow: var(--shadow-glow); }
+.finding-card.kbd-focus { box-shadow: 0 0 0 2px var(--accent), var(--shadow-glow); }
+.finding-header { display: flex; align-items: center; gap: 0.6rem; padding: 0.9rem 1.25rem; cursor: pointer; user-select: none; transition: background 0.15s; }
+.finding-header:hover { background: var(--hover-tint); }
+.finding-chevron { font-size: 0.6rem; color: var(--text-dim); transition: transform 0.25s cubic-bezier(0.4,0,0.2,1); flex-shrink: 0; }
+.finding-card.open .finding-chevron { transform: rotate(90deg); }
+.finding-name { font-weight: 700; font-size: 0.88rem; flex-grow: 1; min-width: 0; }
+.finding-body { display: none; border-top: 1px solid var(--border); }
+.finding-card.open .finding-body { display: block; animation: pageIn 0.25s ease forwards; }
+.finding-desc { padding: 1.25rem 1.5rem; }
+.finding-desc p { margin-bottom: 0.6rem; line-height: 1.7; }
+.finding-desc pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; overflow-x: auto; font-family: var(--mono); font-size: 0.78rem; line-height: 1.5; margin: 0.6rem 0; }
+.finding-desc code { font-family: var(--mono); font-size: 0.82em; background: var(--surface3); padding: 0.15em 0.35em; border-radius: 4px; }
+.finding-desc ul, .finding-desc ol { margin: 0.3rem 0 0.6rem 1.5rem; }
+.evidence-strength { display: flex; align-items: center; gap: 0.5rem; padding: 0 1.25rem 0.75rem; font-size: 0.72rem; color: var(--text-dim); }
+.evidence-strength-bar { flex: 1; max-width: 120px; height: 4px; background: var(--surface2); border-radius: 2px; overflow: hidden; }
+.evidence-strength-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); border-radius: 2px; transition: width 0.6s ease; }
+.finding-related { padding: 0 1.25rem 0.75rem; display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.finding-related-link { font-size: 0.7rem; color: var(--accent); cursor: pointer; background: var(--accent-dim); padding: 0.2em 0.5em; border-radius: 4px; text-decoration: none; transition: background 0.15s; }
+.finding-related-link:hover { background: var(--accent-glow); }
+.finding-source-pills { padding: 0 1.25rem 0.75rem; display: flex; gap: 0.35rem; flex-wrap: wrap; }
+.source-pill { font-size: 0.68rem; color: var(--text-muted); background: var(--surface2); padding: 0.2em 0.55em; border-radius: 5px; border: 1px solid var(--border); cursor: pointer; transition: all 0.15s; }
+.source-pill:hover { border-color: var(--accent); color: var(--accent); }
+.attack-pill { font-size: 0.68rem; color: var(--info); background: var(--info-dim); padding: 0.2em 0.55em; border-radius: 5px; border: 1px solid var(--info-border); text-decoration: none; transition: all 0.15s; font-family: var(--mono); }
+.attack-pill:hover { border-color: var(--info); color: #fff; background: var(--info); }
+.evidence-chain { padding: 0 1.25rem 1rem; }
+.evidence-chain h4 { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.6rem; }
+.ev-item { display: grid; grid-template-columns: auto 1fr auto; gap: 0.6rem; padding: 0.5rem 0.75rem; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 0.35rem; font-size: 0.78rem; align-items: center; cursor: pointer; transition: all var(--transition); }
+.ev-item:hover { border-color: var(--accent); background: var(--accent-dim); }
+.ev-id { font-family: var(--mono); color: var(--accent); font-size: 0.7rem; }
+.ev-tool { font-weight: 600; }
+.ev-duration { font-family: var(--mono); color: var(--text-dim); font-size: 0.68rem; }
+.finding-meta-bar { display: flex; flex-wrap: wrap; gap: 1.5rem; padding: 0.9rem 1.25rem; background: var(--bg2); border-top: 1px solid var(--border); font-size: 0.75rem; color: var(--text-muted); }
+.finding-meta-bar strong { color: var(--text); }
+
+/* ===================== PERFORMANCE ===================== */
+.perf-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem; }
+@media (max-width: 860px) { .perf-grid { grid-template-columns: 1fr; } }
+.donut-container { display: flex; align-items: center; justify-content: center; gap: 2rem; padding: 1rem; }
+.donut-legend { display: flex; flex-direction: column; gap: 0.4rem; }
+.donut-legend-item { display: flex; align-items: center; gap: 0.5rem; font-size: 0.78rem; }
+.donut-legend-swatch { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; }
+.donut-legend-count { font-family: var(--mono); font-size: 0.72rem; color: var(--text-dim); margin-left: auto; padding-left: 1rem; }
+.gantt-container { overflow-x: auto; padding: 0.5rem 0; }
+.audit-bar-chart { margin: 1rem 0; }
+.bar-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.35rem; font-size: 0.78rem; }
+.bar-label { width: 200px; text-align: right; color: var(--text-muted); font-family: var(--mono); font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 0; }
+.bar-track { flex: 1; height: 22px; background: var(--surface2); border-radius: 4px; overflow: hidden; }
+.bar-fill { height: 100%; border-radius: 4px; transition: width 0.8s cubic-bezier(0.4,0,0.2,1); min-width: 3px; }
+.bar-count { width: 80px; font-family: var(--mono); font-size: 0.72rem; color: var(--text-muted); }
+.sparkline-container { padding: 0.5rem 0; }
+.sparkline-container svg { display: block; width: 100%; }
+
+/* ===================== AUDIT ===================== */
+.provenance-section { margin-top: 1.5rem; }
+.prov-finding { margin-bottom: 0.75rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; transition: border-color var(--transition); }
+.prov-finding:hover { border-color: var(--border-light); }
+.prov-header { padding: 0.7rem 1rem; cursor: pointer; display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; font-weight: 600; transition: background var(--transition); }
+.prov-header:hover { background: var(--surface2); }
+.prov-header .prov-chevron { font-size: 0.55rem; color: var(--text-dim); transition: transform 0.25s; }
+.prov-finding.open .prov-chevron { transform: rotate(90deg); }
+.prov-body { display: none; border-top: 1px solid var(--border); padding: 0.85rem 1rem; }
+.prov-finding.open .prov-body { display: block; }
+.prov-step { display: flex; align-items: flex-start; gap: 0.75rem; padding: 0.45rem 0; font-size: 0.78rem; border-bottom: 1px solid var(--border); }
+.prov-step:last-child { border-bottom: none; }
+.prov-num { width: 22px; height: 22px; background: var(--accent-dim); color: var(--accent); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.65rem; font-weight: 700; flex-shrink: 0; }
+.prov-detail { flex: 1; min-width: 0; }
+.prov-tool-name { font-weight: 600; }
+.prov-params { font-family: var(--mono); font-size: 0.68rem; color: var(--text-dim); word-break: break-all; margin-top: 0.15rem; }
+.prov-ts { font-family: var(--mono); font-size: 0.66rem; color: var(--text-dim); white-space: nowrap; flex-shrink: 0; }
+
+/* ===================== EVIDENCE BROWSER ===================== */
+.ev-browser { display: flex; height: calc(100vh - 130px); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; background: var(--surface); }
+.ev-source-tree { width: 260px; border-right: 1px solid var(--border); overflow-y: auto; flex-shrink: 0; background: var(--bg2); }
+.ev-tree-group { border-bottom: 1px solid var(--border); }
+.ev-tree-group-header { padding: 0.6rem 1rem; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-dim); cursor: pointer; display: flex; align-items: center; gap: 0.4rem; transition: background 0.15s; }
+.ev-tree-group-header:hover { background: var(--hover-tint); }
+.ev-tree-group-header .chev { font-size: 0.5rem; transition: transform 0.2s; }
+.ev-tree-group.collapsed .ev-tree-items { display: none; }
+.ev-tree-group.collapsed .chev { transform: rotate(-90deg); }
+.ev-tree-item { padding: 0.45rem 1rem 0.45rem 1.75rem; font-size: 0.78rem; cursor: pointer; color: var(--text-muted); transition: all 0.15s; border-left: 2px solid transparent; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ev-tree-item:hover { color: var(--text); background: var(--hover-tint); }
+.ev-tree-item.active { color: var(--accent); background: var(--accent-dim); border-left-color: var(--accent); }
+.ev-tree-item .line-count { font-family: var(--mono); font-size: 0.62rem; color: var(--text-dim); margin-left: 0.3rem; }
+.ev-viewer { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.ev-viewer-header { padding: 0.6rem 1rem; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 0.75rem; flex-shrink: 0; }
+.ev-viewer-header .ev-source-title { font-weight: 700; font-size: 0.9rem; }
+.ev-viewer-header .ev-source-meta { font-size: 0.72rem; color: var(--text-dim); font-family: var(--mono); }
+.ev-viewer-search { padding: 0.5rem 1rem; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.ev-viewer-search input { width: 100%; padding: 0.4rem 0.75rem; background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-family: var(--mono); font-size: 0.8rem; outline: none; }
+.ev-viewer-search input:focus { border-color: var(--accent); }
+.ev-viewer-body { flex: 1; overflow-y: auto; font-family: var(--mono); font-size: 0.78rem; line-height: 1.6; background: var(--code-bg); }
+.ev-line { display: flex; padding: 0 1rem; min-height: 1.6em; }
+.ev-line:hover { background: var(--hover-tint); }
+.ev-line.highlight { background: rgba(217,184,64,0.15); }
+.ev-line-num { width: 50px; flex-shrink: 0; text-align: right; color: var(--text-dim); padding-right: 1rem; user-select: none; opacity: 0.5; }
+.ev-line-text { white-space: pre-wrap; word-break: break-all; flex: 1; }
+.ev-empty { padding: 3rem; text-align: center; color: var(--text-dim); font-size: 0.9rem; }
+.ev-truncated { padding: 0.6rem 1rem; background: var(--medium-dim); color: var(--medium); font-size: 0.75rem; text-align: center; border-top: 1px solid var(--border); }
+
+/* ===================== IOC PAGE ===================== */
+.ioc-copy-btn { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 0.75rem; padding: 0.15em 0.3em; transition: color 0.15s; }
+.ioc-copy-btn:hover { color: var(--accent); }
+.ioc-lookup { font-size: 0.68rem; color: var(--accent); text-decoration: none; margin-left: 0.3rem; opacity: 0.7; transition: opacity 0.15s; }
+.ioc-lookup:hover { opacity: 1; }
+
+/* ===================== ATT&CK PAGE ===================== */
+.attack-grid { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.attack-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.75rem 1rem; min-width: 140px; cursor: pointer; transition: all var(--transition); position: relative; overflow: hidden; }
+.attack-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: var(--info); opacity: 0; transition: opacity 0.2s; }
+.attack-card:hover { border-color: var(--info); transform: translateY(-2px); box-shadow: var(--shadow); }
+.attack-card:hover::before { opacity: 1; }
+.attack-card.open { border-color: var(--info); }
+.attack-card-id { font-family: var(--mono); font-size: 0.82rem; font-weight: 700; color: var(--info); }
+.attack-card-count { font-size: 0.68rem; color: var(--text-muted); margin-top: 0.2rem; }
+.attack-card-findings { display: none; margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px solid var(--border); }
+.attack-card.open .attack-card-findings { display: block; }
+.attack-card-finding { font-size: 0.72rem; padding: 0.2rem 0; color: var(--text-muted); cursor: pointer; transition: color 0.15s; }
+.attack-card-finding:hover { color: var(--accent); }
+
+/* ===================== EVIDENCE DRAWER ===================== */
+.evidence-drawer-overlay { display: none; position: fixed; inset: 0; background: var(--overlay-light); backdrop-filter: blur(4px); z-index: 300; }
+.evidence-drawer-overlay.open { display: block; }
+.evidence-drawer { position: fixed; top: 0; right: -480px; bottom: 0; width: 480px; max-width: 90vw; background: var(--bg2); border-left: 1px solid var(--border); z-index: 310; overflow-y: auto; transition: right var(--transition-slow); box-shadow: -8px 0 32px rgba(0,0,0,0.4); }
+.evidence-drawer.open { right: 0; }
+.drawer-header { padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; background: var(--bg2); z-index: 1; }
+.drawer-header h3 { font-size: 1rem; font-weight: 700; }
+.drawer-close { width: 32px; height: 32px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); color: var(--text-muted); cursor: pointer; font-size: 1.1rem; display: flex; align-items: center; justify-content: center; transition: all 0.15s; }
+.drawer-close:hover { border-color: var(--accent); color: var(--accent); }
+.drawer-body { padding: 1.5rem; }
+.drawer-section { margin-bottom: 1.5rem; }
+.drawer-section-title { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); font-weight: 600; margin-bottom: 0.6rem; }
+.drawer-json { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; font-family: var(--mono); font-size: 0.72rem; overflow-x: auto; white-space: pre-wrap; line-height: 1.6; color: var(--text-muted); }
+.drawer-json .json-key { color: var(--accent); }
+.drawer-json .json-str { color: var(--low); }
+.drawer-json .json-num { color: var(--high); }
+.drawer-finding-link { display: block; padding: 0.5rem 0.75rem; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 0.35rem; font-size: 0.8rem; cursor: pointer; transition: all 0.15s; text-decoration: none; color: var(--text); }
+.drawer-finding-link:hover { border-color: var(--accent); }
+
+/* ===================== COMMAND PALETTE ===================== */
+.cmd-overlay { display: none; position: fixed; inset: 0; background: var(--overlay); backdrop-filter: blur(8px); z-index: 400; justify-content: center; padding-top: 15vh; }
+.cmd-overlay.open { display: flex; }
+.cmd-palette { width: 560px; max-width: 92vw; max-height: 70vh; background: var(--bg2); border: 1px solid var(--border-light); border-radius: var(--radius-xl); box-shadow: var(--shadow-lg), 0 0 40px var(--accent-dim); overflow: hidden; display: flex; flex-direction: column; }
+.cmd-input-wrap { padding: 0.75rem 1rem; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 0.75rem; }
+.cmd-input-icon { color: var(--accent); font-size: 1.1rem; flex-shrink: 0; }
+.cmd-input { flex: 1; background: none; border: none; color: var(--text); font-family: var(--font); font-size: 1rem; outline: none; }
+.cmd-input::placeholder { color: var(--text-dim); }
+.cmd-results { overflow-y: auto; flex: 1; padding: 0.5rem; }
+.cmd-result-item { display: flex; align-items: center; gap: 0.75rem; padding: 0.55rem 0.85rem; border-radius: 8px; cursor: pointer; transition: background 0.1s; font-size: 0.85rem; }
+.cmd-result-item:hover, .cmd-result-item.selected { background: var(--accent-dim); }
+.cmd-result-type { font-size: 0.6rem; font-weight: 600; text-transform: uppercase; padding: 0.15em 0.45em; border-radius: 4px; letter-spacing: 0.04em; flex-shrink: 0; min-width: 52px; text-align: center; }
+.cmd-result-type.t-finding { background: var(--critical-dim); color: var(--critical); }
+.cmd-result-type.t-ioc { background: var(--high-dim); color: var(--high); }
+.cmd-result-type.t-source { background: var(--info-dim); color: var(--info); }
+.cmd-result-type.t-tool { background: var(--low-dim); color: var(--low); }
+.cmd-result-type.t-page { background: var(--accent-dim); color: var(--accent); }
+.cmd-result-type.t-attack { background: var(--info-dim); color: var(--info); }
+.cmd-result-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmd-result-meta { font-size: 0.7rem; color: var(--text-dim); font-family: var(--mono); flex-shrink: 0; }
+.cmd-footer { padding: 0.5rem 1rem; border-top: 1px solid var(--border); font-size: 0.68rem; color: var(--text-dim); display: flex; gap: 1.5rem; }
+.cmd-footer kbd { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 0.1em 0.4em; font-family: var(--mono); font-size: 0.65rem; }
+
+/* ===================== TOAST & BACK TO TOP ===================== */
+.copy-toast { position: fixed; bottom: 1.5rem; right: 1.5rem; background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #fff; padding: 0.6rem 1.15rem; border-radius: var(--radius); font-size: 0.8rem; font-weight: 600; opacity: 0; transform: translateY(10px); transition: all 0.3s cubic-bezier(0.4,0,0.2,1); pointer-events: none; z-index: 1000; box-shadow: var(--shadow-lg); }
+.copy-toast.show { opacity: 1; transform: translateY(0); }
+.back-to-top { position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%) translateY(60px); width: 40px; height: 40px; border-radius: 50%; background: var(--surface-solid); border: 1px solid var(--border); color: var(--text-muted); cursor: pointer; font-size: 1.1rem; display: flex; align-items: center; justify-content: center; transition: all 0.3s; z-index: 50; opacity: 0; pointer-events: none; box-shadow: var(--shadow); }
+.back-to-top.visible { opacity: 1; pointer-events: auto; transform: translateX(-50%) translateY(0); }
+.back-to-top:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ===================== PRINT ===================== */
+@media print {
+  .sidebar, .mobile-toggle, .sidebar-overlay, .search-wrap, .filter-bar, .tabs,
+  .cmd-overlay, .evidence-drawer, .evidence-drawer-overlay, .tl-controls,
+  .findings-toolbar-actions, .btn-sm, .back-to-top, .theme-toggle, .tl-minimap { display: none !important; }
+  .main { margin-left: 0 !important; }
+  .page { display: block !important; padding: 1rem 0; break-inside: avoid; opacity: 1 !important; transform: none !important; }
+  .finding-body, .prov-body, .tab-pane, .tl-detail-panel { display: block !important; }
+  body { background: #fff; color: #111; font-size: 11px; }
+  .card, .stat, .finding-card, .tl-item, .prov-finding, .exec-summary, .attack-card { border-color: #ddd; background: #fafafa !important; backdrop-filter: none; }
+  .stat-value, .badge, .nav-item { color: #111 !important; -webkit-text-fill-color: #111 !important; }
+  .page-header h2 { -webkit-text-fill-color: #111 !important; }
+  .exec-summary::before { background: #333; }
+  .ev-browser { height: auto; }
+}
+</style>
+</head>
+<body>
+
+<button class="mobile-toggle" onclick="toggleSidebar()" aria-label="Toggle menu">&#9776;</button>
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
+
+<div class="app">
+
+<!-- SIDEBAR -->
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-brand">
+    <h1><span>Mulder</span> Report</h1>
+    <div class="case-id">{{ case_id }}</div>
+  </div>
+  <nav class="sidebar-nav">
+    <div class="nav-section-label">Overview</div>
+    <a class="nav-item active" onclick="navigate('dashboard')" data-page="dashboard">
+      <span class="nav-icon">&#9673;</span> Dashboard
+    </a>
+    <a class="nav-item" onclick="navigate('timeline')" data-page="timeline">
+      <span class="nav-icon">&#8614;</span> Timeline
+      <span class="nav-badge">{{ timeline_findings | length }}</span>
+    </a>
+    <div class="nav-section-label">Analysis</div>
+    <a class="nav-item" onclick="navigate('findings')" data-page="findings">
+      <span class="nav-icon">&#9888;</span> Findings
+      <span class="nav-badge">{{ finding_count }}</span>
+    </a>
+    {% if mitre_techniques %}<a class="nav-item" onclick="navigate('attack')" data-page="attack">
+      <span class="nav-icon">&#9876;</span> ATT&amp;CK
+      <span class="nav-badge">{{ mitre_techniques | length }}</span>
+    </a>{% endif %}
+    <a class="nav-item" onclick="navigate('iocs')" data-page="iocs">
+      <span class="nav-icon">&#9733;</span> IOCs
+      <span class="nav-badge">{{ network_iocs | length + file_iocs | length + email_iocs | length }}</span>
+    </a>
+    {% if evidence_integrity %}<a class="nav-item" onclick="navigate('integrity')" data-page="integrity">
+      <span class="nav-icon">&#9745;</span> Hashes
+    </a>{% endif %}
+    <div class="nav-section-label">Evidence</div>
+    <a class="nav-item" onclick="navigate('evidence')" data-page="evidence">
+      <span class="nav-icon">&#128269;</span> Evidence Browser
+    </a>
+    <a class="nav-item" onclick="navigate('sources')" data-page="sources">
+      <span class="nav-icon">&#9776;</span> Sources
+      <span class="nav-badge">{{ sources_list | length }}</span>
+    </a>
+    <div class="nav-section-label">Operations</div>
+    <a class="nav-item" onclick="navigate('performance')" data-page="performance">
+      <span class="nav-icon">&#9881;</span> Performance
+    </a>
+    <a class="nav-item" onclick="navigate('audit')" data-page="audit">
+      <span class="nav-icon">&#9783;</span> Audit Trail
+    </a>
+  </nav>
+  <div class="sidebar-footer">
+    Generated {{ timestamp | truncate(19, True, '') }}<br>
+    <a href="https://github.com/caevans/killjoy">Mulder</a> &mdash; AI forensics via MCP<br>
+    <span class="shortcut-hint">&#8984;K search</span>
+    <button class="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark theme" id="themeBtn">&#9790;</button>
+  </div>
+</aside>
+
+<!-- MAIN CONTENT -->
+<div class="main">
+
+<!-- ==================== DASHBOARD ==================== -->
+<div class="page active" id="page-dashboard">
+  <div class="page-header">
+    <h2>Investigation Dashboard</h2>
+    <div class="subtitle">Case <span class="mono">{{ case_id }}</span> &middot; Evidence: <span class="mono">{{ evidence_root }}</span></div>
+  </div>
+
+  <div class="exec-summary">
+    <div class="exec-summary-label">Executive Summary</div>
+    <p>{{ executive_summary }}</p>
+  </div>
+
+  <div class="stats-grid stagger-in">
+    <div class="stat"><div class="stat-value" data-count="{{ finding_count }}">0</div><div class="stat-label">Total Findings</div></div>
+    <div class="stat critical"><div class="stat-value" data-count="{{ critical_count }}">0</div><div class="stat-label">Critical</div></div>
+    <div class="stat high"><div class="stat-value" data-count="{{ high_count }}">0</div><div class="stat-label">High</div></div>
+    <div class="stat medium"><div class="stat-value" data-count="{{ medium_count }}">0</div><div class="stat-label">Medium</div></div>
+    <div class="stat"><div class="stat-value" data-count="{{ confirmed_count }}">0</div><div class="stat-label">Confirmed</div></div>
+    <div class="stat"><div class="stat-value" data-count="{{ inference_count }}">0</div><div class="stat-label">Inference</div></div>
+    <div class="stat"><div class="stat-value" data-count="{{ sources | length }}">0</div><div class="stat-label">Sources</div></div>
+    <div class="stat"><div class="stat-value" data-count="{{ total_tool_calls }}">0</div><div class="stat-label">Tool Calls</div></div>
+  </div>
+
+  {% set total = finding_count if finding_count > 0 else 1 %}
+  <div class="card mb-1">
+    <div class="card-header">Severity Breakdown</div>
+    <div class="card-body">
+      <div class="severity-bar">
+        <div class="seg-critical" style="width:{{ (critical_count / total * 100) | round(1) }}%"></div>
+        <div class="seg-high" style="width:{{ (high_count / total * 100) | round(1) }}%"></div>
+        <div class="seg-medium" style="width:{{ (medium_count / total * 100) | round(1) }}%"></div>
+        <div class="seg-low" style="width:{{ (low_count / total * 100) | round(1) }}%"></div>
+        <div class="seg-info" style="width:{{ (info_count / total * 100) | round(1) }}%"></div>
+      </div>
+      <div class="severity-legend">
+        {% if critical_count %}<span class="leg-critical">Critical ({{ critical_count }})</span>{% endif %}
+        {% if high_count %}<span class="leg-high">High ({{ high_count }})</span>{% endif %}
+        {% if medium_count %}<span class="leg-medium">Medium ({{ medium_count }})</span>{% endif %}
+        {% if low_count %}<span class="leg-low">Low ({{ low_count }})</span>{% endif %}
+        {% if info_count %}<span class="leg-info">Info ({{ info_count }})</span>{% endif %}
+      </div>
+    </div>
+  </div>
+
+  {% if critical_findings %}
+  <div class="card mb-1 mt-2">
+    <div class="card-header">&#9888; Critical Findings</div>
+    <div class="card-body">
+      <ul class="critical-list">
+        {% for f in critical_findings %}
+        <li onclick="navigateToFinding('{{ f.finding_id }}')">
+          <strong>{{ f.title }}</strong>
+          {% if f.event_time_start %}<div class="crit-time">{{ f.event_time_start }}{% if f.event_time_end %} &mdash; {{ f.event_time_end }}{% endif %}</div>{% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="dash-widgets">
+    {% if mitre_techniques %}
+    <div class="card">
+      <div class="card-header">&#9876; MITRE ATT&amp;CK Coverage</div>
+      <div class="card-body">
+        <div class="widget-grid">
+          {% for t in mitre_techniques %}<a class="widget-tech" href="{{ t.url }}" target="_blank" rel="noopener" title="{{ t.finding_count }} finding{{ 's' if t.finding_count != 1 }}">{{ t.id }}</a>{% endfor %}
+        </div>
+        <div class="text-dim" style="font-size:0.72rem;margin-top:0.5rem;">{{ mitre_techniques | length }} technique{{ 's' if mitre_techniques | length != 1 }} across {{ finding_count }} findings</div>
+      </div>
+    </div>
+    {% endif %}
+    <div class="card">
+      <div class="card-header">&#9733; IOC Summary</div>
+      <div class="card-body">
+        {% set ext_ips = network_iocs | selectattr("type", "equalto", "External IP") | list %}
+        {% set int_ips = network_iocs | selectattr("type", "equalto", "Internal IP") | list %}
+        {% set hash_iocs = file_iocs | selectattr("type", "in", ["SHA256","SHA1","MD5"]) | list %}
+        <div class="widget-ioc-row"><span class="text-muted">External IPs</span><strong>{{ ext_ips | length }}</strong></div>
+        <div class="widget-ioc-row"><span class="text-muted">Internal IPs</span><strong>{{ int_ips | length }}</strong></div>
+        <div class="widget-ioc-row"><span class="text-muted">File Paths</span><strong>{{ file_iocs | selectattr("type", "equalto", "Path") | list | length }}</strong></div>
+        <div class="widget-ioc-row"><span class="text-muted">Hashes</span><strong>{{ hash_iocs | length }}</strong></div>
+        <div class="widget-ioc-row"><span class="text-muted">Emails</span><strong>{{ email_iocs | length }}</strong></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card mt-2">
+    <div class="card-header">Investigation Metadata</div>
+    <div class="card-body">
+      <table class="data-table">
+        <tbody>
+          <tr><td style="width:180px;color:var(--text-muted)">Case ID</td><td class="mono">{{ case_id }}</td></tr>
+          <tr><td style="color:var(--text-muted)">Evidence Root</td><td class="mono">{{ evidence_root }}</td></tr>
+          <tr><td style="color:var(--text-muted)">Report Generated</td><td class="mono">{{ timestamp | truncate(19, True, '') }}</td></tr>
+          {% if first_timestamp %}<tr><td style="color:var(--text-muted)">Investigation Start</td><td class="mono">{{ first_timestamp | truncate(19, True, '') }}</td></tr>{% endif %}
+          {% if last_timestamp %}<tr><td style="color:var(--text-muted)">Investigation End</td><td class="mono">{{ last_timestamp | truncate(19, True, '') }}</td></tr>{% endif %}
+          {% if total_duration_ms %}<tr><td style="color:var(--text-muted)">Total Processing</td><td class="mono">{{ "%.1f" | format(total_duration_ms / 1000) }}s</td></tr>{% endif %}
+          <tr><td style="color:var(--text-muted)">Audit Log</td><td class="mono" style="font-size:0.72rem;">{{ audit_log_path }}</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== EVIDENCE HASHES ==================== -->
+{% if evidence_integrity %}
+<div class="page" id="page-integrity">
+  <div class="page-header">
+    <h2>Evidence Hashes</h2>
+    <div class="subtitle">SHA-256 hashes recorded at ingestion &mdash; verify with <code>sha256sum &lt;file&gt;</code></div>
+  </div>
+  <div class="card" style="margin-bottom:1.5rem;">
+    <div style="display:flex;align-items:center;gap:1rem;padding:1rem 1.25rem;">
+      <span class="badge" style="background:var(--info-dim);color:var(--info);font-size:0.85rem;padding:0.4rem 0.8rem;">{{ evidence_integrity | length }} FILES</span>
+      <span style="color:var(--text-muted)">Hashes computed during evidence ingestion. Compare against your local copies to confirm integrity.</span>
+    </div>
+  </div>
+  <div class="card">
+    <table class="data-table">
+      <thead><tr><th>File</th><th>SHA-256</th><th>Size</th></tr></thead>
+      <tbody>
+        {% for e in evidence_integrity %}
+        <tr>
+          <td class="mono" style="font-size:0.75rem;">{{ e.file_path | basename }}</td>
+          <td class="mono" style="font-size:0.72rem;user-select:all;">{{ e.sha256 }}</td>
+          <td>{{ e.size_bytes | filesizeformat }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<!-- ==================== TIMELINE ==================== -->
+<div class="page" id="page-timeline">
+  <div class="page-header">
+    <h2>Attack Timeline</h2>
+    <div class="subtitle">{{ timeline_findings | length }} events ordered chronologically</div>
+  </div>
+  {% if timeline_findings %}
+  <div id="tlMinimap" class="tl-minimap"></div>
+  <div class="tl-controls">
+    <div class="filter-bar" id="tlFilters" style="margin-bottom:0;">
+      <button class="filter-btn active" onclick="setTlFilter('all', this)">All</button>
+      <button class="filter-btn" onclick="setTlFilter('critical', this)">Critical</button>
+      <button class="filter-btn" onclick="setTlFilter('high', this)">High</button>
+      <button class="filter-btn" onclick="setTlFilter('medium', this)">Medium</button>
+      <button class="filter-btn" onclick="setTlFilter('low', this)">Low</button>
+    </div>
+  </div>
+  <div id="tl-list-view">
+    <div class="timeline">
+      {% set ns = namespace(last_day='') %}
+      {% for f in timeline_findings %}
+      {% set day = f.event_time_start[:10] if f.event_time_start and f.event_time_start|length >= 10 else 'Unknown' %}
+      {% if day != ns.last_day %}{% set ns.last_day = day %}<div class="tl-group-label">{{ day }}</div>{% endif %}
+      <div class="tl-item sev-{{ f.severity }}" data-severity="{{ f.severity }}" onclick="toggleTimelineDetail('tld_{{ f.finding_id }}')">
+        <div class="tl-time">{{ f.event_time_start }}{% if f.event_time_end %} &mdash; {{ f.event_time_end }}{% endif %}</div>
+        <div class="tl-title">{{ f.title }}</div>
+        <div class="tl-badges">
+          <span class="badge badge-{{ f.severity }}">{{ f.severity }}</span>
+          <span class="badge badge-{{ f.confidence }}">{{ f.confidence }}</span>
+        </div>
+        <div class="tl-sources">{{ f.sources | join(', ') }}</div>
+      </div>
+      <div class="tl-detail-panel" id="tld_{{ f.finding_id }}">
+        {{ f.description_html }}
+        <div style="margin-top:0.75rem;">
+          <a style="color:var(--accent);cursor:pointer;font-size:0.8rem;" onclick="event.stopPropagation();navigateToFinding('{{ f.finding_id }}')">View full finding &rarr;</a>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% else %}
+  <p class="text-muted">No timeline events available.</p>
+  {% endif %}
+</div>
+
+<!-- ==================== FINDINGS ==================== -->
+<div class="page" id="page-findings">
+  <div class="page-header">
+    <h2>Findings</h2>
+    <div class="subtitle">{{ finding_count }} findings across {{ sources | length }} evidence sources</div>
+  </div>
+  <div class="search-wrap">
+    <input type="text" class="search-input" id="findingSearch" placeholder="Search findings..." oninput="filterFindings()">
+  </div>
+  <div class="findings-toolbar">
+    <div class="filter-bar" id="findingFilters">
+      <button class="filter-btn active" onclick="setFindingFilter('all', this)">All ({{ finding_count }})</button>
+      {% if critical_count %}<button class="filter-btn" onclick="setFindingFilter('critical', this)">Critical ({{ critical_count }})</button>{% endif %}
+      {% if high_count %}<button class="filter-btn" onclick="setFindingFilter('high', this)">High ({{ high_count }})</button>{% endif %}
+      {% if medium_count %}<button class="filter-btn" onclick="setFindingFilter('medium', this)">Medium ({{ medium_count }})</button>{% endif %}
+      {% if low_count %}<button class="filter-btn" onclick="setFindingFilter('low', this)">Low ({{ low_count }})</button>{% endif %}
+      {% if confirmed_count %}<button class="filter-btn" onclick="setFindingFilter('confirmed', this)">Confirmed ({{ confirmed_count }})</button>{% endif %}
+      {% if inference_count %}<button class="filter-btn" onclick="setFindingFilter('inference', this)">Inference ({{ inference_count }})</button>{% endif %}
+    </div>
+    <div class="findings-toolbar-actions">
+      <button class="btn-sm" onclick="toggleAllFindings(true)">Expand All</button>
+      <button class="btn-sm" onclick="toggleAllFindings(false)">Collapse All</button>
+    </div>
+  </div>
+  <div id="findingsList">
+  {% for f in findings %}
+  <div class="finding-card" id="{{ f.finding_id }}" data-severity="{{ f.severity }}" data-confidence="{{ f.confidence }}" data-sources="{{ f.sources | join(',') }}">
+    <div class="finding-header" onclick="toggleFinding(this)">
+      <span class="finding-chevron">&#9654;</span>
+      <span class="badge badge-{{ f.severity }}">{{ f.severity }}</span>
+      <span class="badge badge-{{ f.confidence }}">{{ f.confidence }}</span>
+      <span class="finding-name">{{ f.title }}</span>
+    </div>
+    <div class="finding-body">
+      <div class="finding-desc">{{ f.description_html }}</div>
+      <div class="evidence-strength">
+        <span>Evidence strength:</span>
+        <div class="evidence-strength-bar"><div class="evidence-strength-fill" style="width:{{ [f.evidence_refs | length * 20, 100] | min }}%"></div></div>
+        <span>{{ f.evidence_refs | length }} ref{{ 's' if f.evidence_refs | length != 1 }}</span>
+      </div>
+      {% if related_titles.get(f.finding_id) %}
+      <div class="finding-related">
+        <span style="font-size:0.7rem;color:var(--text-dim);margin-right:0.3rem;">Related:</span>
+        {% for rt in related_titles[f.finding_id] %}
+        <a class="finding-related-link" onclick="navigateToFinding('{{ rt.finding_id }}')">{{ rt.title | truncate(50) }}</a>
+        {% endfor %}
+      </div>
+      {% endif %}
+      <div class="finding-source-pills">
+        {% for src in f.sources %}<span class="source-pill" onclick="navigateToEvidence('{{ src }}')">{{ src | truncate(40) }}</span>{% endfor %}
+      </div>
+      {% if f.mitre_attack_ids %}
+      <div class="finding-source-pills">
+        {% for tid in f.mitre_attack_ids %}<a class="attack-pill" href="{{ tid | attack_url }}" target="_blank" rel="noopener">{{ tid }}</a>{% endfor %}
+      </div>
+      {% endif %}
+      {% for pc in provenance_chains %}{% if pc.finding_id == f.finding_id and pc.evidence | length > 0 %}
+      <div class="evidence-chain">
+        <h4>Evidence Chain</h4>
+        {% for ev in pc.evidence %}
+        <div class="ev-item" onclick="openDrawer('{{ ev.tool_call_id }}')">
+          <span class="ev-id">{{ ev.tool_call_id }}</span>
+          <span class="ev-tool">{{ ev.tool_name }}</span>
+          <span class="ev-duration">{{ "%.0f" | format(ev.duration_ms) }}ms</span>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}{% endfor %}
+      <div class="finding-meta-bar">
+        {% if f.event_time_start %}<div><strong>Time:</strong> {{ f.event_time_start }}{% if f.event_time_end %} &mdash; {{ f.event_time_end }}{% endif %}</div>{% endif %}
+        <div><strong>Sources:</strong> {{ f.sources | join(', ') }}</div>
+        <div><strong>Evidence Refs:</strong> {{ f.evidence_refs | join(', ') }}</div>
+        {% if f.mitre_attack_ids %}<div><strong>ATT&amp;CK:</strong> {% for tid in f.mitre_attack_ids %}<a href="{{ tid | attack_url }}" target="_blank" rel="noopener" style="color:var(--info)">{{ tid }}</a>{% if not loop.last %}, {% endif %}{% endfor %}</div>{% endif %}
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+  </div>
+  {% if negative_findings %}
+  <div class="card mt-2">
+    <div class="card-header">&#10003; Ruled Out (Negative Findings)</div>
+    <div class="card-body">
+      <p style="opacity:0.7;margin-bottom:1em;">These hypotheses were explicitly tested and no supporting evidence was found.</p>
+      <ul style="list-style:none;padding:0;">
+        {% for nf in negative_findings %}
+        <li style="padding:0.5em 0;border-bottom:1px solid var(--border);">
+          <strong>{{ nf.title | replace("[NEGATIVE] ", "") }}</strong>
+          <div style="opacity:0.8;font-size:0.9em;margin-top:0.25em;">{{ nf.description | truncate(300) }}</div>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+<!-- ==================== ATT&CK ==================== -->
+{% if mitre_techniques %}
+<div class="page" id="page-attack">
+  <div class="page-header">
+    <h2>MITRE ATT&amp;CK Coverage</h2>
+    <div class="subtitle">{{ mitre_techniques | length }} technique{{ 's' if mitre_techniques | length != 1 }} identified across findings</div>
+  </div>
+  <div class="stats-grid stagger-in" style="margin-bottom:1.5rem;">
+    <div class="stat"><div class="stat-value" data-count="{{ mitre_techniques | length }}">0</div><div class="stat-label">Techniques</div></div>
+    <div class="stat"><div class="stat-value" data-count="{{ finding_count }}">0</div><div class="stat-label">Findings Mapped</div></div>
+  </div>
+  <div class="attack-grid">
+    {% for t in mitre_techniques %}
+    <div class="attack-card" onclick="this.classList.toggle('open')">
+      <div class="attack-card-id"><a href="{{ t.url }}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;" onclick="event.stopPropagation()">{{ t.id }}</a></div>
+      <div class="attack-card-count">{{ t.finding_count }} finding{{ 's' if t.finding_count != 1 }}</div>
+      <div class="attack-card-findings">
+        {% for af in t.findings %}
+        <div class="attack-card-finding" onclick="event.stopPropagation();navigateToFinding('{{ af.finding_id }}')">{{ af.title | truncate(60) }}</div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<!-- ==================== IOCs ==================== -->
+<div class="page" id="page-iocs">
+  <div class="page-header">
+    <h2>Indicators of Compromise</h2>
+    <div class="subtitle">Extracted from finding descriptions</div>
+  </div>
+  {% set total_iocs = network_iocs | length + file_iocs | length + email_iocs | length %}
+  {% set ext_ips = network_iocs | selectattr("type", "equalto", "External IP") | list %}
+  <div class="stats-grid stagger-in">
+    <div class="stat"><div class="stat-value" data-count="{{ total_iocs }}">0</div><div class="stat-label">Total IOCs</div></div>
+    <div class="stat"><div class="stat-value" data-count="{{ ext_ips | length }}">0</div><div class="stat-label">External IPs</div></div>
+    <div class="stat"><div class="stat-value" data-count="{{ file_iocs | length }}">0</div><div class="stat-label">File IOCs</div></div>
+    <div class="stat"><div class="stat-value" data-count="{{ email_iocs | length }}">0</div><div class="stat-label">Emails</div></div>
+  </div>
+
+  <div class="search-wrap">
+    <input type="text" class="search-input" id="iocSearch" placeholder="Search IOCs..." oninput="filterIocTables()">
+  </div>
+
+  {% if network_iocs %}
+  <div class="card mb-2">
+    <div class="card-header">Network IOCs ({{ network_iocs | length }})</div>
+    <table class="data-table" id="networkIocTable">
+      <thead><tr><th>Type</th><th>Value</th><th>Context</th><th>Actions</th></tr></thead>
+      <tbody>
+      {% for ioc in network_iocs %}
+      <tr>
+        <td><span class="badge badge-{{ 'critical' if ioc.type == 'External IP' else 'info' }}">{{ ioc.type }}</span></td>
+        <td><code>{{ ioc.value }}</code></td>
+        <td class="text-muted" style="font-size:0.78rem;">{{ ioc.context }}</td>
+        <td>
+          <button class="ioc-copy-btn" onclick="copyText('{{ ioc.value }}')" title="Copy">&#128203;</button>
+          {% if 'IP' in ioc.type %}<a class="ioc-lookup" href="https://www.virustotal.com/gui/ip-address/{{ ioc.value }}" target="_blank" rel="noopener" title="VirusTotal">VT</a>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% if file_iocs %}
+  <div class="card mb-2">
+    <div class="card-header">File IOCs ({{ file_iocs | length }})</div>
+    <table class="data-table" id="fileIocTable">
+      <thead><tr><th>Type</th><th>Value</th><th>Context</th><th>Actions</th></tr></thead>
+      <tbody>
+      {% for ioc in file_iocs %}
+      <tr>
+        <td><span class="badge badge-{{ 'high' if ioc.type in ['SHA256','SHA1','MD5'] else 'medium' }}">{{ ioc.type }}</span></td>
+        <td><code style="font-size:0.68rem;">{{ ioc.value | truncate(60) }}</code></td>
+        <td class="text-muted" style="font-size:0.78rem;">{{ ioc.context }}</td>
+        <td>
+          <button class="ioc-copy-btn" onclick="copyText('{{ ioc.value }}')" title="Copy">&#128203;</button>
+          {% if ioc.type in ['SHA256','SHA1','MD5'] %}<a class="ioc-lookup" href="https://www.virustotal.com/gui/search/{{ ioc.value }}" target="_blank" rel="noopener" title="VirusTotal">VT</a>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% if email_iocs %}
+  <div class="card mb-2">
+    <div class="card-header">Email IOCs ({{ email_iocs | length }})</div>
+    <table class="data-table" id="emailIocTable">
+      <thead><tr><th>Type</th><th>Value</th><th>Context</th><th>Actions</th></tr></thead>
+      <tbody>
+      {% for ioc in email_iocs %}
+      <tr>
+        <td><span class="badge badge-info">{{ ioc.type }}</span></td>
+        <td><code>{{ ioc.value }}</code></td>
+        <td class="text-muted" style="font-size:0.78rem;">{{ ioc.context }}</td>
+        <td><button class="ioc-copy-btn" onclick="copyText('{{ ioc.value }}')" title="Copy">&#128203;</button></td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% if not network_iocs and not file_iocs and not email_iocs %}
+  <p class="text-muted">No IOCs extracted from findings.</p>
+  {% endif %}
+</div>
+
+<!-- ==================== EVIDENCE BROWSER ==================== -->
+<div class="page" id="page-evidence">
+  <div class="page-header">
+    <h2>Evidence Browser</h2>
+    <div class="subtitle">Browse raw extracted evidence analyzed during the investigation</div>
+  </div>
+  <div class="ev-browser" id="evBrowser">
+    <div class="ev-source-tree" id="evSourceTree"></div>
+    <div class="ev-viewer">
+      <div class="ev-viewer-header">
+        <span class="ev-source-title" id="evTitle">Select a source</span>
+        <span class="ev-source-meta" id="evMeta"></span>
+      </div>
+      <div class="ev-viewer-search">
+        <input type="text" id="evSearchInput" placeholder="Search in source..." oninput="evSearchHighlight()">
+      </div>
+      <div class="ev-viewer-body" id="evViewerBody">
+        <div class="ev-empty">Select a source from the tree to view raw evidence output.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== EVIDENCE SOURCES ==================== -->
+<div class="page" id="page-sources">
+  <div class="page-header">
+    <h2>Evidence Sources</h2>
+    <div class="subtitle">{{ sources_list | length }} ingested sources from {{ evidence_root }}</div>
+  </div>
+  {% if sources_list %}
+  <div class="search-wrap">
+    <input type="text" class="search-input" id="sourceSearch" placeholder="Search sources..." oninput="filterSourceTable()">
+  </div>
+  <table class="data-table" id="sourceTable">
+    <thead>
+      <tr>
+        <th onclick="sortTable('sourceTable',0)">Source Name <span class="sort-arrow"></span></th>
+        <th onclick="sortTable('sourceTable',1)">Extractor <span class="sort-arrow"></span></th>
+        <th onclick="sortTable('sourceTable',2)">Lines <span class="sort-arrow"></span></th>
+        <th onclick="sortTable('sourceTable',3)">Hash <span class="sort-arrow"></span></th>
+        <th onclick="sortTable('sourceTable',4)">Referenced By <span class="sort-arrow"></span></th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for s in sources_list %}
+      <tr style="cursor:pointer" onclick="navigateToEvidence('{{ s.source_name }}')">
+        <td><strong>{{ s.source_name }}</strong></td>
+        <td class="mono">{{ s.extractor }}</td>
+        <td class="mono" style="text-align:right;">{{ s.line_count | string }}</td>
+        <td><code style="font-size:0.66rem;">{{ s.source_hash[:16] }}...</code></td>
+        <td class="text-muted" style="font-size:0.75rem;">
+          {% if s.referencing_findings %}{{ s.referencing_findings | length }} finding{{ 's' if s.referencing_findings | length != 1 }}{% else %}&mdash;{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="text-muted">No source metadata available.</p>
+  {% endif %}
+</div>
+
+<!-- ==================== PERFORMANCE ==================== -->
+<div class="page" id="page-performance">
+  <div class="page-header">
+    <h2>Investigation Performance</h2>
+    <div class="subtitle">Tool usage, processing time, and cost estimates</div>
+  </div>
+  <div class="stats-grid stagger-in">
+    <div class="stat"><div class="stat-value" data-count="{{ total_tool_calls }}">0</div><div class="stat-label">Tool Calls</div></div>
+    <div class="stat"><div class="stat-value" data-count="{{ tool_call_counts | length }}">0</div><div class="stat-label">Unique Tools</div></div>
+    <div class="stat"><div class="stat-value">{{ "%.1f" | format(total_duration_ms / 1000) if total_duration_ms else '0' }}s</div><div class="stat-label">Processing Time</div></div>
+    <div class="stat"><div class="stat-value">~{{ "%.0f" | format((estimated_input_tokens + estimated_output_tokens) / 1000) }}k</div><div class="stat-label">Est. Tokens</div></div>
+    <div class="stat"><div class="stat-value">${{ "%.2f" | format(estimated_cost_usd) }}</div><div class="stat-label">Est. Cost</div></div>
+  </div>
+  <div class="perf-grid">
+    <div class="card">
+      <div class="card-header">Tool Distribution</div>
+      <div class="card-body"><div class="donut-container"><svg id="donutChart" width="160" height="160" viewBox="0 0 160 160"></svg><div class="donut-legend" id="donutLegend"></div></div></div>
+    </div>
+    <div class="card">
+      <div class="card-header">Token Breakdown</div>
+      <div class="card-body">
+        <table class="data-table" style="font-size:0.8rem;">
+          <tbody>
+            <tr><td style="color:var(--text-muted)">Input Tokens (est.)</td><td class="mono" style="text-align:right;">{{ "{:,}".format(estimated_input_tokens) }}</td></tr>
+            <tr><td style="color:var(--text-muted)">Output Tokens (est.)</td><td class="mono" style="text-align:right;">{{ "{:,}".format(estimated_output_tokens) }}</td></tr>
+            <tr><td style="color:var(--text-muted)">Total Tokens (est.)</td><td class="mono" style="text-align:right;font-weight:700;">{{ "{:,}".format(estimated_input_tokens + estimated_output_tokens) }}</td></tr>
+            <tr><td style="color:var(--text-muted)">Estimated Cost</td><td class="mono" style="text-align:right;color:var(--accent);font-weight:700;">${{ "%.4f" | format(estimated_cost_usd) }}</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="card mb-2">
+    <div class="card-header">Activity Sparkline</div>
+    <div class="card-body"><div class="sparkline-container" id="sparklineContainer"></div></div>
+  </div>
+  <div class="card mb-2">
+    <div class="card-header">Tool Calls by Duration</div>
+    <div class="card-body">
+      {% if tool_call_counts %}
+      {% set max_dur = tool_durations.values() | max if tool_durations else 1 %}
+      <div class="audit-bar-chart">
+        {% for tool_name, count in tool_call_counts | dictsort(by='value', reverse=true) %}
+        {% set dur = tool_durations.get(tool_name, 0) %}
+        <div class="bar-row">
+          <div class="bar-label" title="{{ tool_name }}">{{ tool_name }}</div>
+          <div class="bar-track"><div class="bar-fill" style="width:{{ (dur / max_dur * 100) | round(1) }}%;background:linear-gradient(90deg,var(--accent),var(--accent2));"></div></div>
+          <div class="bar-count">{{ count }}x &middot; {{ "%.1f" | format(dur / 1000) }}s</div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}<p class="text-muted">No tool call data available.</p>{% endif %}
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-header">Top Longest Operations</div>
+    <div class="card-body">
+      {% if audit_entries %}
+      <table class="data-table">
+        <thead><tr><th>Tool</th><th>Duration</th><th>Params</th></tr></thead>
+        <tbody>
+        {% for entry in audit_entries | sort(attribute='duration_ms', reverse=true) %}{% if loop.index <= 10 %}
+        <tr>
+          <td><strong>{{ entry.tool_name }}</strong></td>
+          <td class="mono" style="text-align:right;">{{ "%.1f" | format(entry.duration_ms / 1000) }}s</td>
+          <td class="mono" style="font-size:0.68rem;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ entry.params | tojson | truncate(80) }}</td>
+        </tr>
+        {% endif %}{% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<!-- ==================== AUDIT TRAIL ==================== -->
+<div class="page" id="page-audit">
+  <div class="page-header">
+    <h2>Audit Trail</h2>
+    <div class="subtitle">Complete provenance chain from evidence to findings</div>
+  </div>
+  <div class="tabs">
+    <button class="tab-btn active" onclick="switchTab('audit', 'log', this)">Full Log</button>
+    <button class="tab-btn" onclick="switchTab('audit', 'provenance', this)">Provenance Chains</button>
+  </div>
+  <div class="tab-pane active" id="audit-log">
+    <div class="search-wrap">
+      <input type="text" class="search-input" id="auditSearch" placeholder="Search audit log..." oninput="filterAuditTable()">
+    </div>
+    {% if audit_entries %}
+    <table class="data-table" id="auditTable">
+      <thead>
+        <tr>
+          <th onclick="sortTable('auditTable',0)">ID <span class="sort-arrow"></span></th>
+          <th onclick="sortTable('auditTable',1)">Tool <span class="sort-arrow"></span></th>
+          <th onclick="sortTable('auditTable',2)">Duration <span class="sort-arrow"></span></th>
+          <th onclick="sortTable('auditTable',3)">Timestamp <span class="sort-arrow"></span></th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for entry in audit_entries %}
+        <tr id="audit_{{ entry.tool_call_id }}">
+          <td class="mono" style="font-size:0.68rem;color:var(--accent);">{{ entry.tool_call_id }}</td>
+          <td><strong>{{ entry.tool_name }}</strong></td>
+          <td class="mono" style="text-align:right;">{{ "%.0f" | format(entry.duration_ms) }}ms</td>
+          <td class="mono" style="font-size:0.68rem;">{{ entry.timestamp[:19] if entry.timestamp else '' }}</td>
+          <td><button class="btn-sm" onclick="openDrawer('{{ entry.tool_call_id }}')" style="font-size:0.68rem;">Inspect</button></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<p class="text-muted">No audit entries available.</p>{% endif %}
+  </div>
+  <div class="tab-pane" id="audit-provenance">
+    <p class="text-muted mb-1">Each finding traces back to the specific tool calls that produced the supporting evidence.</p>
+    {% for pc in provenance_chains %}
+    <div class="prov-finding" id="prov_{{ pc.finding_id }}">
+      <div class="prov-header" onclick="this.parentElement.classList.toggle('open')">
+        <span class="prov-chevron">&#9654;</span>
+        <span>{{ pc.title }}</span>
+        <span class="badge badge-info" style="margin-left:auto;">{{ pc.evidence | length }} refs</span>
+      </div>
+      <div class="prov-body">
+        {% for ev in pc.evidence %}
+        <div class="prov-step">
+          <div class="prov-num">{{ loop.index }}</div>
+          <div class="prov-detail">
+            <div class="prov-tool-name">{{ ev.tool_name }}</div>
+            {% if ev.params %}<div class="prov-params">{{ ev.params | tojson(indent=0) | truncate(120, True) }}</div>{% endif %}
+          </div>
+          <div class="prov-ts">
+            <div>{{ ev.tool_call_id }}</div>
+            <div>{{ "%.0f" | format(ev.duration_ms) }}ms</div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+</div><!-- end main -->
+</div><!-- end app -->
+
+<!-- Evidence Drawer -->
+<div class="evidence-drawer-overlay" id="drawerOverlay" onclick="closeDrawer()"></div>
+<div class="evidence-drawer" id="evidenceDrawer">
+  <div class="drawer-header">
+    <h3 id="drawerTitle">Tool Call Details</h3>
+    <button class="drawer-close" onclick="closeDrawer()">&times;</button>
+  </div>
+  <div class="drawer-body" id="drawerBody"></div>
+</div>
+
+<!-- Command Palette -->
+<div class="cmd-overlay" id="cmdOverlay" onclick="if(event.target===this)closeCmdPalette()">
+  <div class="cmd-palette">
+    <div class="cmd-input-wrap">
+      <span class="cmd-input-icon">&#8984;</span>
+      <input type="text" class="cmd-input" id="cmdInput" placeholder="Search findings, tools, IOCs, pages..." oninput="cmdSearch()" onkeydown="cmdKeydown(event)">
+    </div>
+    <div class="cmd-results" id="cmdResults"></div>
+    <div class="cmd-footer">
+      <span><kbd>&#8593;&#8595;</kbd> navigate</span>
+      <span><kbd>&#8629;</kbd> open</span>
+      <span><kbd>esc</kbd> close</span>
+    </div>
+  </div>
+</div>
+
+<div class="copy-toast" id="copyToast">Copied to clipboard</div>
+<button class="back-to-top" id="backToTop" onclick="window.scrollTo({top:0,behavior:'smooth'})" title="Back to top">&#8593;</button>
+
+<script>
+/* ========== DATA ========== */
+var AUDIT_DATA = {{ audit_entries | tojson }};
+var TOOL_COUNTS = {{ tool_call_counts | tojson }};
+var FINDINGS_TITLES = { {% for f in findings %}"{{ f.finding_id }}": {{ f.title | tojson }}{% if not loop.last %},{% endif %}{% endfor %} };
+var SOURCE_WINDOWS = {{ source_windows | tojson }};
+var SOURCES_META = { {% for s in sources_list %}"{{ s.source_name }}": {"extractor":"{{ s.extractor }}","line_count":{{ s.line_count }},"hash":"{{ s.source_hash[:16] }}"}{% if not loop.last %},{% endif %}{% endfor %} };
+
+var AUDIT_INDEX = {};
+AUDIT_DATA.forEach(function(e) { AUDIT_INDEX[e.tool_call_id] = e; });
+var FINDING_REFS = {};
+{% for f in findings %}FINDING_REFS["{{ f.finding_id }}"] = {{ f.evidence_refs | tojson }};
+{% endfor %}
+var TC_TO_FINDINGS = {};
+Object.keys(FINDING_REFS).forEach(function(fid) {
+  FINDING_REFS[fid].forEach(function(tc) {
+    if (!TC_TO_FINDINGS[tc]) TC_TO_FINDINGS[tc] = [];
+    TC_TO_FINDINGS[tc].push(fid);
+  });
+});
+
+/* ========== THEME ========== */
+function toggleTheme() {
+  var html = document.documentElement;
+  var cur = html.getAttribute('data-theme');
+  var next = cur === 'dark' ? 'light' : 'dark';
+  html.setAttribute('data-theme', next);
+  localStorage.setItem('mulder-theme', next);
+  updateThemeIcon();
+  donutRendered = false; sparkRendered = false;
+}
+function updateThemeIcon() {
+  var btn = document.getElementById('themeBtn');
+  if (btn) btn.textContent = document.documentElement.getAttribute('data-theme') === 'dark' ? '\u263E' : '\u2600';
+}
+updateThemeIcon();
+
+/* ========== SPA ROUTER ========== */
+function navigate(page, skipHash) {
+  document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
+  document.querySelectorAll('.nav-item').forEach(function(n) { n.classList.remove('active'); });
+  var el = document.getElementById('page-' + page);
+  if (el) el.classList.add('active');
+  var nav = document.querySelector('[data-page="' + page + '"]');
+  if (nav) nav.classList.add('active');
+  if (!skipHash) window.location.hash = '#/' + page;
+  closeSidebar();
+  if (page === 'dashboard' || page === 'performance' || page === 'iocs' || page === 'attack') animateCounters();
+  if (page === 'performance') { renderDonut(); renderSparkline(); }
+  if (page === 'evidence') buildEvSourceTree();
+  if (page === 'timeline') renderMinimap();
+}
+
+function navigateToFinding(findingId) {
+  navigate('findings');
+  setTimeout(function() {
+    var el = document.getElementById(findingId);
+    if (el) {
+      el.classList.add('open');
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      el.style.boxShadow = '0 0 0 2px var(--accent), 0 0 20px rgba(96,165,250,0.2)';
+      setTimeout(function() { el.style.boxShadow = ''; }, 2500);
+    }
+  }, 120);
+}
+
+function navigateToEvidence(sourceName) {
+  navigate('evidence');
+  setTimeout(function() { selectEvSource(sourceName); }, 150);
+}
+
+function handleHash() {
+  var hash = window.location.hash;
+  if (hash.startsWith('#/findings/')) navigateToFinding(hash.replace('#/findings/', ''));
+  else if (hash.startsWith('#/evidence/')) { navigate('evidence', true); setTimeout(function(){ selectEvSource(decodeURIComponent(hash.replace('#/evidence/','')));},150); }
+  else if (hash.startsWith('#/')) { var page = hash.replace('#/', ''); if (document.getElementById('page-' + page)) navigate(page, true); }
+}
+window.addEventListener('hashchange', handleHash);
+window.addEventListener('load', function() { if (window.location.hash) handleHash(); else animateCounters(); });
+
+/* ========== COUNTERS ========== */
+function animateCounters() {
+  document.querySelectorAll('.page.active .stat-value[data-count]').forEach(function(el) {
+    var target = parseInt(el.dataset.count, 10);
+    if (isNaN(target)) return;
+    var dur = 600, startTime = null;
+    function step(ts) {
+      if (!startTime) startTime = ts;
+      var p = Math.min((ts - startTime) / dur, 1);
+      p = 1 - Math.pow(1 - p, 3);
+      el.textContent = Math.round(target * p);
+      if (p < 1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  });
+}
+
+/* ========== SIDEBAR ========== */
+function toggleSidebar() { document.getElementById('sidebar').classList.toggle('open'); document.getElementById('sidebarOverlay').classList.toggle('open'); }
+function closeSidebar() { document.getElementById('sidebar').classList.remove('open'); document.getElementById('sidebarOverlay').classList.remove('open'); }
+
+/* ========== FINDINGS ========== */
+function toggleFinding(header) { header.parentElement.classList.toggle('open'); }
+function toggleAllFindings(open) { document.querySelectorAll('.finding-card').forEach(function(c) { if (open) c.classList.add('open'); else c.classList.remove('open'); }); }
+var currentFindingFilter = 'all';
+function setFindingFilter(filter, btn) { currentFindingFilter = filter; document.querySelectorAll('#findingFilters .filter-btn').forEach(function(b) { b.classList.remove('active'); }); btn.classList.add('active'); filterFindings(); }
+function filterFindings() {
+  var query = document.getElementById('findingSearch').value.toLowerCase();
+  document.querySelectorAll('.finding-card').forEach(function(f) {
+    var matchFilter = currentFindingFilter === 'all' || f.dataset.severity === currentFindingFilter || f.dataset.confidence === currentFindingFilter;
+    var matchSearch = !query || f.textContent.toLowerCase().indexOf(query) !== -1;
+    f.style.display = (matchFilter && matchSearch) ? '' : 'none';
+  });
+}
+function filterFindingsBySource(src) { document.getElementById('findingSearch').value = src; currentFindingFilter = 'all'; document.querySelectorAll('#findingFilters .filter-btn').forEach(function(b){b.classList.remove('active');}); document.querySelector('#findingFilters .filter-btn').classList.add('active'); filterFindings(); }
+
+/* Keyboard nav for findings */
+var kbdFocusIdx = -1;
+function getVisibleFindings() { return Array.from(document.querySelectorAll('.finding-card')).filter(function(c){return c.style.display !== 'none';}); }
+function kbdMoveFinding(dir) {
+  var cards = getVisibleFindings();
+  if (!cards.length) return;
+  if (kbdFocusIdx >= 0 && kbdFocusIdx < cards.length) cards[kbdFocusIdx].classList.remove('kbd-focus');
+  kbdFocusIdx = Math.max(0, Math.min(cards.length - 1, kbdFocusIdx + dir));
+  cards[kbdFocusIdx].classList.add('kbd-focus');
+  cards[kbdFocusIdx].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+/* ========== TIMELINE ========== */
+function toggleTimelineDetail(id) { var el = document.getElementById(id); if (el) el.classList.toggle('open'); }
+var tlFilter = 'all';
+function setTlFilter(f, btn) {
+  tlFilter = f;
+  document.querySelectorAll('#tlFilters .filter-btn').forEach(function(b) { b.classList.remove('active'); });
+  btn.classList.add('active');
+  document.querySelectorAll('#tl-list-view .tl-item').forEach(function(item) { item.style.display = (f === 'all' || item.dataset.severity === f) ? '' : 'none'; });
+}
+var minimapRendered = false;
+function renderMinimap() {
+  if (minimapRendered) return;
+  var items = document.querySelectorAll('.tl-item');
+  var container = document.getElementById('tlMinimap');
+  if (!items.length || !container) return;
+  var times = [];
+  items.forEach(function(it) { var t = it.querySelector('.tl-time'); if (t) { var d = Date.parse(t.textContent.split(' \u2014 ')[0]); if (!isNaN(d)) times.push({ts:d, sev:it.dataset.severity}); }});
+  if (times.length < 2) return;
+  times.sort(function(a,b){return a.ts-b.ts;});
+  var minT = times[0].ts, maxT = times[times.length-1].ts, span = maxT - minT || 60000;
+  var sevColors = {critical:'var(--critical)',high:'var(--high)',medium:'var(--medium)',low:'var(--low)'};
+  var html = '';
+  times.forEach(function(t) {
+    var pct = ((t.ts - minT) / span * 100);
+    html += '<div class="tl-minimap-bar" style="left:'+pct.toFixed(1)+'%;width:max(3px,'+Math.max(1,100/times.length).toFixed(1)+'%);height:100%;background:'+(sevColors[t.sev]||'var(--accent)')+';"></div>';
+  });
+  container.innerHTML = html;
+  minimapRendered = true;
+}
+
+/* ========== TABS ========== */
+function switchTab(group, tab, btn) {
+  var page = btn.closest('.page');
+  page.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
+  btn.classList.add('active');
+  page.querySelectorAll('.tab-pane').forEach(function(p) { p.classList.remove('active'); });
+  var pane = document.getElementById(group + '-' + tab);
+  if (pane) pane.classList.add('active');
+}
+
+/* ========== TABLE SORT ========== */
+function sortTable(tableId, colIdx) {
+  var table = document.getElementById(tableId);
+  if (!table) return;
+  var tbody = table.querySelector('tbody'), rows = Array.from(tbody.querySelectorAll('tr'));
+  var asc = table.dataset.sortCol === String(colIdx) && table.dataset.sortDir === 'asc';
+  table.dataset.sortCol = String(colIdx); table.dataset.sortDir = asc ? 'desc' : 'asc';
+  rows.sort(function(a, b) { var av=(a.cells[colIdx]||{}).textContent||'', bv=(b.cells[colIdx]||{}).textContent||''; var an=parseFloat(av.replace(/[^\d.-]/g,'')), bn=parseFloat(bv.replace(/[^\d.-]/g,'')); if(!isNaN(an)&&!isNaN(bn))return asc?bn-an:an-bn; return asc?bv.localeCompare(av):av.localeCompare(bv); });
+  rows.forEach(function(r) { tbody.appendChild(r); });
+}
+
+/* ========== SEARCH FILTERS ========== */
+function filterSourceTable() { var q=document.getElementById('sourceSearch').value.toLowerCase(); var t=document.getElementById('sourceTable'); if(!t)return; t.querySelectorAll('tbody tr').forEach(function(r){r.style.display=(!q||r.textContent.toLowerCase().indexOf(q)!==-1)?'':'none';}); }
+function filterAuditTable() { var q=document.getElementById('auditSearch').value.toLowerCase(); var t=document.getElementById('auditTable'); if(!t)return; t.querySelectorAll('tbody tr').forEach(function(r){r.style.display=(!q||r.textContent.toLowerCase().indexOf(q)!==-1)?'':'none';}); }
+function filterIocTables() {
+  var q = document.getElementById('iocSearch').value.toLowerCase();
+  ['networkIocTable','fileIocTable','emailIocTable'].forEach(function(id) {
+    var t = document.getElementById(id);
+    if (!t) return;
+    t.querySelectorAll('tbody tr').forEach(function(r) { r.style.display = (!q || r.textContent.toLowerCase().indexOf(q) !== -1) ? '' : 'none'; });
+  });
+}
+
+/* ========== UTILS ========== */
+function showToast(msg) { var t=document.getElementById('copyToast'); t.textContent=msg; t.classList.add('show'); setTimeout(function(){t.classList.remove('show');},1500); }
+function copyText(text) { if(navigator.clipboard)navigator.clipboard.writeText(text); showToast('Copied: '+text.substring(0,30)+(text.length>30?'...':'')); }
+
+/* ========== EVIDENCE DRAWER ========== */
+function openDrawer(tcId) {
+  var entry = AUDIT_INDEX[tcId]; if (!entry) return;
+  document.getElementById('drawerTitle').textContent = entry.tool_name;
+  var body = document.getElementById('drawerBody'), html = '';
+  html += '<div class="drawer-section"><div class="drawer-section-title">Tool Call ID</div><div class="mono" style="font-size:0.8rem;color:var(--accent);">'+tcId+'</div></div>';
+  html += '<div class="drawer-section"><div class="drawer-section-title">Duration</div><div class="mono" style="font-size:0.9rem;">'+(entry.duration_ms/1000).toFixed(1)+'s ('+Math.round(entry.duration_ms)+'ms)</div></div>';
+  if (entry.timestamp) html += '<div class="drawer-section"><div class="drawer-section-title">Timestamp</div><div class="mono" style="font-size:0.8rem;">'+entry.timestamp.substring(0,19)+'</div></div>';
+  html += '<div class="drawer-section"><div class="drawer-section-title">Parameters</div><div class="drawer-json">'+syntaxHighlight(JSON.stringify(entry.params||{},null,2))+'</div></div>';
+  if (entry.output_hash) html += '<div class="drawer-section"><div class="drawer-section-title">Output Hash</div><div class="mono" style="font-size:0.72rem;color:var(--text-dim);word-break:break-all;">'+entry.output_hash+'</div></div>';
+  var rf = TC_TO_FINDINGS[tcId] || [];
+  if (rf.length) { html += '<div class="drawer-section"><div class="drawer-section-title">Referenced by Findings ('+rf.length+')</div>'; rf.forEach(function(fid){ html += '<a class="drawer-finding-link" onclick="closeDrawer();navigateToFinding(\''+fid+'\')">'+(FINDINGS_TITLES[fid]||fid)+'</a>'; }); html += '</div>'; }
+  html += '<div class="drawer-section"><button class="btn-sm" onclick="copyDrawerJson(\''+tcId+'\')">Copy as JSON</button></div>';
+  body.innerHTML = html;
+  document.getElementById('drawerOverlay').classList.add('open');
+  document.getElementById('evidenceDrawer').classList.add('open');
+}
+function closeDrawer() { document.getElementById('drawerOverlay').classList.remove('open'); document.getElementById('evidenceDrawer').classList.remove('open'); }
+function copyDrawerJson(tcId) { var e=AUDIT_INDEX[tcId]; if(e&&navigator.clipboard)navigator.clipboard.writeText(JSON.stringify(e,null,2)); showToast('Audit entry copied'); }
+function syntaxHighlight(json) { return json.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"([^"]+)":/g,'<span class="json-key">"$1"</span>:').replace(/: "([^"]*)"/g,': <span class="json-str">"$1"</span>').replace(/: (\d+\.?\d*)/g,': <span class="json-num">$1</span>'); }
+
+/* ========== EVIDENCE BROWSER ========== */
+var evTreeBuilt = false;
+var currentEvSource = null;
+function buildEvSourceTree() {
+  if (evTreeBuilt) return;
+  var tree = document.getElementById('evSourceTree');
+  var groups = {};
+  Object.keys(SOURCE_WINDOWS).forEach(function(name) {
+    var parts = name.split('.');
+    var group = parts[0] || 'other';
+    if (!groups[group]) groups[group] = [];
+    groups[group].push(name);
+  });
+  var html = '';
+  Object.keys(groups).sort().forEach(function(g) {
+    html += '<div class="ev-tree-group"><div class="ev-tree-group-header" onclick="this.parentElement.classList.toggle(\'collapsed\')"><span class="chev">&#9660;</span> ' + g.charAt(0).toUpperCase()+g.slice(1) + ' <span style="opacity:0.5;font-size:0.6rem;">(' + groups[g].length + ')</span></div><div class="ev-tree-items">';
+    groups[g].sort().forEach(function(name) {
+      var meta = SOURCES_META[name] || {};
+      html += '<div class="ev-tree-item" data-source="'+name+'" onclick="selectEvSource(\''+name+'\')">'+name+'<span class="line-count">'+(meta.line_count||'')+'</span></div>';
+    });
+    html += '</div></div>';
+  });
+  if (!html) html = '<div class="ev-empty">No evidence data embedded in this report.</div>';
+  tree.innerHTML = html;
+  evTreeBuilt = true;
+}
+function selectEvSource(name) {
+  buildEvSourceTree();
+  currentEvSource = name;
+  document.querySelectorAll('.ev-tree-item').forEach(function(i) { i.classList.toggle('active', i.dataset.source === name); });
+  var activeItem = document.querySelector('.ev-tree-item[data-source="'+name+'"]');
+  if (activeItem) {
+    var group = activeItem.closest('.ev-tree-group');
+    if (group) group.classList.remove('collapsed');
+    activeItem.scrollIntoView({block:'nearest'});
+  }
+  document.getElementById('evTitle').textContent = name;
+  var meta = SOURCES_META[name] || {};
+  document.getElementById('evMeta').textContent = (meta.extractor||'')+' \u2022 '+(meta.line_count||0)+' lines';
+  var windows = SOURCE_WINDOWS[name] || [];
+  var body = document.getElementById('evViewerBody');
+  if (!windows.length) { body.innerHTML = '<div class="ev-empty">No evidence data available for this source.</div>'; return; }
+  var html = '';
+  var lineNum = 0;
+  windows.forEach(function(w) {
+    var lines = w.raw_text.split('\n');
+    lines.forEach(function(line) {
+      lineNum++;
+      var escaped = line.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      html += '<div class="ev-line" data-ln="'+lineNum+'"><span class="ev-line-num">'+lineNum+'</span><span class="ev-line-text">'+escaped+'</span></div>';
+    });
+  });
+  if (windows.length > 0 && windows[0].truncated) {
+    html += '<div class="ev-truncated">Showing first 500 windows of '+windows[0].total+' total. Full data available in the case database.</div>';
+  }
+  body.innerHTML = html;
+  body.scrollTop = 0;
+  document.getElementById('evSearchInput').value = '';
+  window.location.hash = '#/evidence/' + encodeURIComponent(name);
+}
+function evSearchHighlight() {
+  var q = document.getElementById('evSearchInput').value.toLowerCase();
+  document.querySelectorAll('#evViewerBody .ev-line').forEach(function(line) {
+    line.classList.toggle('highlight', q.length > 1 && line.textContent.toLowerCase().indexOf(q) !== -1);
+  });
+}
+
+/* ========== COMMAND PALETTE ========== */
+var cmdItems = [], cmdSelected = 0;
+function buildCmdIndex() {
+  cmdItems = [];
+  cmdItems.push({type:'page',label:'Dashboard',action:function(){navigate('dashboard');}});
+  cmdItems.push({type:'page',label:'Timeline',action:function(){navigate('timeline');}});
+  cmdItems.push({type:'page',label:'Findings',action:function(){navigate('findings');}});
+  cmdItems.push({type:'page',label:'ATT&CK Coverage',action:function(){navigate('attack');}});
+  cmdItems.push({type:'page',label:'IOCs',action:function(){navigate('iocs');}});
+  cmdItems.push({type:'page',label:'Evidence Browser',action:function(){navigate('evidence');}});
+  cmdItems.push({type:'page',label:'Evidence Sources',action:function(){navigate('sources');}});
+  cmdItems.push({type:'page',label:'Performance',action:function(){navigate('performance');}});
+  cmdItems.push({type:'page',label:'Audit Trail',action:function(){navigate('audit');}});
+  Object.keys(FINDINGS_TITLES).forEach(function(fid) { cmdItems.push({type:'finding',label:FINDINGS_TITLES[fid],meta:fid,action:function(){navigateToFinding(fid);}}); });
+  Object.keys(TOOL_COUNTS).forEach(function(tn) { cmdItems.push({type:'tool',label:tn,meta:TOOL_COUNTS[tn]+' calls',action:function(){navigate('performance');}}); });
+  Object.keys(SOURCE_WINDOWS).forEach(function(sn) { cmdItems.push({type:'source',label:sn,meta:(SOURCES_META[sn]||{}).line_count+' lines',action:function(){navigateToEvidence(sn);}}); });
+  {% for ioc in network_iocs %}cmdItems.push({type:'ioc',label:{{ ioc.value | tojson }},meta:{{ ioc.type | tojson }},action:function(){navigate('iocs');}});
+  {% endfor %}{% for ioc in file_iocs %}cmdItems.push({type:'ioc',label:{{ ioc.value | tojson }},meta:{{ ioc.type | tojson }},action:function(){navigate('iocs');}});
+  {% endfor %}{% for t in mitre_techniques %}cmdItems.push({type:'attack',label:{{ t.id | tojson }},meta:{{ t.finding_count }}+' findings',action:function(){navigate('attack');}});
+  {% endfor %}
+}
+function openCmdPalette() { if(!cmdItems.length)buildCmdIndex(); document.getElementById('cmdOverlay').classList.add('open'); document.getElementById('cmdInput').value=''; cmdSelected=0; cmdSearch(); setTimeout(function(){document.getElementById('cmdInput').focus();},50); }
+function closeCmdPalette() { document.getElementById('cmdOverlay').classList.remove('open'); }
+function cmdSearch() {
+  var q = document.getElementById('cmdInput').value.toLowerCase();
+  var results = cmdItems.filter(function(item) { return !q || item.label.toLowerCase().indexOf(q) !== -1; }).slice(0, 15);
+  var html = '';
+  results.forEach(function(r, i) {
+    var cls = 'cmd-result-item' + (i === cmdSelected ? ' selected' : '');
+    html += '<div class="'+cls+'" data-idx="'+i+'" onclick="cmdExec('+i+')" onmouseenter="cmdSelected='+i+';cmdHighlight()">';
+    html += '<span class="cmd-result-type t-'+r.type+'">'+r.type+'</span><span class="cmd-result-name">'+r.label+'</span>';
+    if (r.meta) html += '<span class="cmd-result-meta">'+r.meta+'</span>';
+    html += '</div>';
+  });
+  if (!results.length) html = '<div style="padding:1rem;text-align:center;color:var(--text-dim);font-size:0.85rem;">No results</div>';
+  document.getElementById('cmdResults').innerHTML = html;
+  window._cmdFiltered = results;
+}
+function cmdHighlight() { document.querySelectorAll('.cmd-result-item').forEach(function(el,i){el.classList.toggle('selected',i===cmdSelected);}); }
+function cmdExec(idx) { var r=window._cmdFiltered||[]; if(r[idx]){r[idx].action();closeCmdPalette();} }
+function cmdKeydown(e) { var r=window._cmdFiltered||[]; if(e.key==='ArrowDown'){e.preventDefault();cmdSelected=Math.min(cmdSelected+1,r.length-1);cmdHighlight();}else if(e.key==='ArrowUp'){e.preventDefault();cmdSelected=Math.max(cmdSelected-1,0);cmdHighlight();}else if(e.key==='Enter'){e.preventDefault();cmdExec(cmdSelected);}else if(e.key==='Escape'){closeCmdPalette();} }
+
+/* ========== DONUT ========== */
+var donutRendered = false;
+function renderDonut() {
+  if (donutRendered) return;
+  var counts = TOOL_COUNTS, entries = Object.keys(counts).map(function(k){return{name:k,count:counts[k]};});
+  entries.sort(function(a,b){return b.count-a.count;});
+  var topN = entries.slice(0,8), otherCount = entries.slice(8).reduce(function(s,e){return s+e.count;},0);
+  if (otherCount > 0) topN.push({name:'Other',count:otherCount});
+  var total = topN.reduce(function(s,e){return s+e.count;},0);
+  if (!total) return;
+  var colors = ['#5b9ef5','#7c8cf0','#3ec97a','#ee8c3a','#d9b840','#f06060','#e570a0','#2eb8a8','#8b6ef0'];
+  var svg = document.getElementById('donutChart');
+  var cx=80,cy=80,r=60,inner=38, svgHtml='', angle=-Math.PI/2;
+  topN.forEach(function(item,i) {
+    var slice=(item.count/total)*Math.PI*2;
+    var x1=cx+r*Math.cos(angle),y1=cy+r*Math.sin(angle),x1i=cx+inner*Math.cos(angle),y1i=cy+inner*Math.sin(angle);
+    angle+=slice;
+    var x2=cx+r*Math.cos(angle),y2=cy+r*Math.sin(angle),x2i=cx+inner*Math.cos(angle),y2i=cy+inner*Math.sin(angle);
+    var large=slice>Math.PI?1:0, c=colors[i%colors.length];
+    svgHtml+='<path d="M'+x1+','+y1+' A'+r+','+r+' 0 '+large+',1 '+x2+','+y2+' L'+x2i+','+y2i+' A'+inner+','+inner+' 0 '+large+',0 '+x1i+','+y1i+' Z" fill="'+c+'" opacity="0.85" stroke="var(--bg)" stroke-width="2"><title>'+item.name+': '+item.count+'</title></path>';
+  });
+  svgHtml+='<text x="'+cx+'" y="'+(cy-4)+'" text-anchor="middle" fill="var(--text)" font-size="18" font-weight="800" font-family="var(--font)">'+total+'</text>';
+  svgHtml+='<text x="'+cx+'" y="'+(cy+12)+'" text-anchor="middle" fill="var(--text-dim)" font-size="9" font-family="var(--font)">calls</text>';
+  svg.innerHTML = svgHtml;
+  var legend=document.getElementById('donutLegend'), legendHtml='';
+  topN.forEach(function(item,i){var c=colors[i%colors.length]; legendHtml+='<div class="donut-legend-item"><div class="donut-legend-swatch" style="background:'+c+';"></div><span>'+item.name+'</span><span class="donut-legend-count">'+item.count+'</span></div>';});
+  legend.innerHTML=legendHtml;
+  donutRendered=true;
+}
+
+/* ========== SPARKLINE ========== */
+var sparkRendered = false;
+function renderSparkline() {
+  if (sparkRendered || !AUDIT_DATA.length) return;
+  var timestamps = AUDIT_DATA.filter(function(e){return e.timestamp;}).map(function(e){return new Date(e.timestamp).getTime();});
+  if (!timestamps.length) return;
+  timestamps.sort(function(a,b){return a-b;});
+  var minT=timestamps[0],maxT=timestamps[timestamps.length-1],span=maxT-minT||60000;
+  var buckets=60, counts=new Array(buckets).fill(0);
+  timestamps.forEach(function(t){var idx=Math.min(Math.floor((t-minT)/span*buckets),buckets-1);counts[idx]++;});
+  var maxCount=Math.max.apply(null,counts)||1;
+  var W=800,H=80,padB=20,svgHtml='',points=[];
+  counts.forEach(function(c,i){var x=(i/(buckets-1))*W,y=(H-padB)-(c/maxCount)*(H-padB-5);points.push(x+','+y);});
+  svgHtml+='<defs><linearGradient id="sparkGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="var(--accent)" stop-opacity="0.3"/><stop offset="100%" stop-color="var(--accent)" stop-opacity="0"/></linearGradient></defs>';
+  svgHtml+='<polygon points="0,'+(H-padB)+' '+points.join(' ')+' '+W+','+(H-padB)+'" fill="url(#sparkGrad)"/>';
+  svgHtml+='<polyline points="'+points.join(' ')+'" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"/>';
+  var startLabel=new Date(minT).toISOString().substring(11,16), endLabel=new Date(maxT).toISOString().substring(11,16);
+  svgHtml+='<text x="0" y="'+H+'" fill="var(--text-dim)" font-size="10" font-family="var(--mono)">'+startLabel+'</text>';
+  svgHtml+='<text x="'+W+'" y="'+H+'" fill="var(--text-dim)" font-size="10" font-family="var(--mono)" text-anchor="end">'+endLabel+'</text>';
+  document.getElementById('sparklineContainer').innerHTML='<svg viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none" style="width:100%;height:80px;">'+svgHtml+'</svg>';
+  sparkRendered=true;
+}
+
+/* ========== BACK TO TOP ========== */
+window.addEventListener('scroll', function() {
+  document.getElementById('backToTop').classList.toggle('visible', window.scrollY > 400);
+});
+
+/* ========== KEYBOARD SHORTCUTS ========== */
+document.addEventListener('keydown', function(e) {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); openCmdPalette(); return; }
+  if (e.key === 'Escape') { closeCmdPalette(); closeDrawer(); }
+  if (e.key === '/' && !['INPUT','TEXTAREA'].includes(document.activeElement.tagName)) { e.preventDefault(); var ap=document.querySelector('.page.active'), s=ap?ap.querySelector('.search-input'):null; if(s)s.focus(); }
+  var findingsActive = document.getElementById('page-findings') && document.getElementById('page-findings').classList.contains('active');
+  if (findingsActive && !['INPUT','TEXTAREA'].includes(document.activeElement.tagName)) {
+    if (e.key === 'j') { e.preventDefault(); kbdMoveFinding(1); }
+    else if (e.key === 'k') { e.preventDefault(); kbdMoveFinding(-1); }
+    else if (e.key === 'Enter' && kbdFocusIdx >= 0) { e.preventDefault(); var c = getVisibleFindings()[kbdFocusIdx]; if(c) c.classList.toggle('open'); }
+  }
+});
+</script>
+</body>
+</html>
