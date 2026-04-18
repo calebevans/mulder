@@ -2,113 +2,497 @@
 
 from __future__ import annotations
 
+import functools
+import inspect
 import logging
-import os
+import re
+import threading
+import time
+from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
+import anyio
 from mcp.server.fastmcp import FastMCP
 
 from mulder.audit import AuditLog
 from mulder.db import CaseDB
 from mulder.index.correlator import Correlator
-from mulder.index.embedder import Embedder
-from mulder.index.query import QueryEngine
-from mulder.index.reducer import OutputReducer, ReducerConfig
+from mulder.server.jobs import JobStore
 
 logger = logging.getLogger(__name__)
 
 mcp = FastMCP("Mulder")
+
+# ---------------------------------------------------------------------------
+# Concurrent tool execution: wrap every sync @mcp.tool() to run in a thread
+# pool so that the MCP SDK's task-group dispatch can execute them in parallel.
+# ---------------------------------------------------------------------------
+
+_tool_limiter: anyio.CapacityLimiter | None = None
+
+
+def _get_tool_limiter() -> anyio.CapacityLimiter:
+    """Return a shared CapacityLimiter bounded by ``max_workers``."""
+    global _tool_limiter  # noqa: PLW0603
+    if _tool_limiter is None:
+        workers = get_cfg().max_workers if _cfg is not None else 4
+        _tool_limiter = anyio.CapacityLimiter(workers)
+    return _tool_limiter
+
+
+def _wrap_sync_tool(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Return an async wrapper that runs *fn* in a worker thread.
+
+    Resource throttling happens on the event loop via
+    ``async_wait_for_resources`` (using ``anyio.sleep``) so the MCP
+    transport stays responsive to heartbeats and new requests while
+    the tool waits for CPU/memory pressure to subside.  The actual
+    tool execution then runs in a worker thread.
+    """
+    tool_name = getattr(fn, "__name__", "unknown")
+
+    @functools.wraps(fn)
+    async def wrapper(*args: Any, **kwargs: Any) -> Any:
+        """Async bridge that throttles then dispatches *fn* in a thread."""
+        await async_wait_for_resources(tool_name)
+        return await anyio.to_thread.run_sync(
+            functools.partial(fn, *args, **kwargs),
+            limiter=_get_tool_limiter(),
+        )
+
+    return wrapper
+
+
+_original_mcp_tool = mcp.tool
+_tool_dispatch: dict[str, Callable[..., Any]] = {}
+_tool_dispatch_sync: dict[str, Callable[..., Any]] = {}
+
+
+def _concurrent_tool(**kwargs: Any) -> Callable[..., Any]:
+    """Drop-in replacement for ``mcp.tool()`` that auto-threads sync handlers."""
+    original_decorator = _original_mcp_tool(**kwargs)
+
+    def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+        """Register *fn* with the MCP server, wrapping sync handlers for threading."""
+        tool_name = kwargs.get("name") or fn.__name__
+        _tool_dispatch_sync[tool_name] = fn
+        if not inspect.iscoroutinefunction(fn):
+            fn = _wrap_sync_tool(fn)
+        _tool_dispatch[tool_name] = fn
+        return original_decorator(fn)
+
+    return decorator
+
+
+mcp.tool = _concurrent_tool  # type: ignore[assignment]
+
+
+# ---------------------------------------------------------------------------
+# Resource-aware throttle: every tool call checks memory/CPU before running.
+# ---------------------------------------------------------------------------
+
+_RESOURCE_CHECK_INTERVAL = 5  # seconds between rechecks when throttled
+_RESOURCE_MAX_WAIT = 300  # max total wait before proceeding anyway
+
+
+_psutil_seeded = False
+
+
+def _get_resource_usage() -> tuple[float, float]:
+    """Return (memory_percent, cpu_percent) as system-wide 0-100 values.
+
+    ``psutil.cpu_percent(interval=None)`` returns average CPU usage
+    across **all** cores since the last call.  The first call after
+    import always returns 0.0, so we seed it once at startup (see
+    ``_seed_psutil``).  After that, each call reflects real usage.
+
+    Returns ``(-1, -1)`` if neither psutil nor ``/proc`` is available.
+    """
+    global _psutil_seeded  # noqa: PLW0603
+    try:
+        import psutil
+
+        if not _psutil_seeded:
+            psutil.cpu_percent(interval=None)
+            _psutil_seeded = True
+        mem = psutil.virtual_memory().percent
+        cpu = psutil.cpu_percent(interval=None)
+        return mem, cpu
+    except (ImportError, AttributeError):
+        pass
+    try:
+        mem_pct = -1.0
+        with open("/proc/meminfo") as f:
+            total = avail = 0
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    total = int(line.split()[1])
+                elif line.startswith("MemAvailable:"):
+                    avail = int(line.split()[1])
+            if total > 0:
+                mem_pct = 100.0 * (1 - avail / total)
+        cpu_pct = -1.0
+        with open("/proc/loadavg") as f:
+            import os
+
+            load1 = float(f.read().split()[0])
+            ncpu = os.cpu_count() or 1
+            cpu_pct = min(100.0, 100.0 * load1 / ncpu)
+        return mem_pct, cpu_pct
+    except OSError:
+        return -1.0, -1.0
+
+
+def _check_resource_pressure() -> tuple[bool, str]:
+    """Return ``(ok, reason_string)`` for current resource levels."""
+    cfg = _cfg
+    if cfg is None:
+        return True, ""
+    mem_limit = cfg.mem_percent_limit
+    cpu_limit = cfg.cpu_percent_limit
+    if mem_limit <= 0 and cpu_limit <= 0:
+        return True, ""
+
+    mem, cpu = _get_resource_usage()
+    mem_ok = mem < 0 or mem_limit <= 0 or mem < mem_limit
+    cpu_ok = cpu < 0 or cpu_limit <= 0 or cpu < cpu_limit
+    if mem_ok and cpu_ok:
+        return True, ""
+    parts: list[str] = []
+    if not mem_ok:
+        parts.append(f"mem={mem:.0f}%>={mem_limit}%")
+    if not cpu_ok:
+        parts.append(f"cpu={cpu:.0f}%>={cpu_limit}%")
+    return False, ", ".join(parts)
+
+
+async def async_wait_for_resources(tool_name: str = "") -> None:
+    """Async throttle for MCP tool calls -- yields to the event loop while waiting.
+
+    Uses ``anyio.sleep`` so the MCP event loop can still process
+    heartbeats and new requests while this tool waits for resources
+    to free up.  This prevents the MCP client from timing out.
+    """
+    waited = 0.0
+    while waited < _RESOURCE_MAX_WAIT:
+        ok, reason = _check_resource_pressure()
+        if ok:
+            return
+        logger.info(
+            "Resource throttle: %s waiting (%s, waited %.0fs)",
+            tool_name or "tool",
+            reason,
+            waited,
+        )
+        await anyio.sleep(_RESOURCE_CHECK_INTERVAL)
+        waited += _RESOURCE_CHECK_INTERVAL
+
+
+def wait_for_resources(tool_name: str = "") -> None:
+    """Blocking throttle for background job threads.
+
+    Uses ``time.sleep`` -- only safe for threads that are NOT on the
+    MCP event loop (i.e. background ``JobStore`` workers).  MCP tool
+    calls use ``async_wait_for_resources`` instead so the event loop
+    stays responsive.
+    """
+    waited = 0.0
+    while waited < _RESOURCE_MAX_WAIT:
+        ok, reason = _check_resource_pressure()
+        if ok:
+            return
+        logger.info(
+            "Resource throttle: %s waiting (%s, waited %.0fs)",
+            tool_name or "tool",
+            reason,
+            waited,
+        )
+        time.sleep(_RESOURCE_CHECK_INTERVAL)
+        waited += _RESOURCE_CHECK_INTERVAL
+
+
+@dataclass
+class ServerConfig:
+    """Immutable server-level settings shared across case loads."""
+
+    db_dir: Path
+    max_workers: int = 8
+    mem_percent_limit: float = 90.0
+    cpu_percent_limit: float = 90.0
 
 
 @dataclass
 class ServerContext:
     """Shared state available to every MCP tool at runtime."""
 
+    case_id: str
     db: CaseDB
-    query_engine: QueryEngine
     correlator: Correlator
-    reducer: OutputReducer
     audit: AuditLog
 
 
+_cfg: ServerConfig | None = None
 _ctx: ServerContext | None = None
+_ctx_lock = threading.Lock()
+_job_store: JobStore | None = None
+
+
+def get_cfg() -> ServerConfig:
+    """Return the server config or raise if not initialised."""
+    if _cfg is None:
+        raise RuntimeError("Server not initialised. Call init_server() first.")
+    return _cfg
 
 
 def get_ctx() -> ServerContext:
-    """Return the current server context or raise if not initialised."""
+    """Return the active case context or raise if no case is loaded."""
     if _ctx is None:
-        raise RuntimeError("Server context not initialised. Call init_server() before mcp.run().")
+        raise RuntimeError("No case loaded. Call scan_evidence or open_case first.")
     return _ctx
 
 
+def has_ctx() -> bool:
+    """Return True if a case is currently loaded."""
+    return _ctx is not None
+
+
+def get_job_store() -> JobStore:
+    """Return the background job store or raise if not initialised."""
+    if _job_store is None:
+        raise RuntimeError("Server not initialised. Call init_server() first.")
+    return _job_store
+
+
+def slugify(name: str) -> str:
+    """Convert a directory name into a valid case ID."""
+    slug = name.lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", slug)
+    return slug.strip("-") or "case"
+
+
 def init_server(
-    case_id: str,
     db_dir: Path,
-    audit_path: Path,
-    api_key: str | None = None,
+    case_id: str | None = None,
+    max_workers: int = 8,
+    mem_percent_limit: float = 90.0,
+    cpu_percent_limit: float = 90.0,
+    **_kwargs: object,
 ) -> None:
-    """Initialise all components and store them in the module-level context.
+    """Initialise server-level config and optionally pre-load a case.
 
     Called by ``cli.py`` before ``mcp.run()``.
     """
+    global _cfg, _job_store  # noqa: PLW0603
+
+    _cfg = ServerConfig(
+        db_dir=db_dir,
+        max_workers=max_workers,
+        mem_percent_limit=mem_percent_limit,
+        cpu_percent_limit=cpu_percent_limit,
+    )
+
+    _job_store = JobStore(
+        max_workers=max_workers,
+        tool_dispatch=_tool_dispatch_sync,
+    )
+
+    if case_id is not None:
+        load_case(case_id)
+
+    logger.info("Mulder MCP server ready (db_dir=%s)", db_dir)
+
+
+def _close_current_ctx() -> None:
+    """Close the current case context if one is active."""
+    global _ctx  # noqa: PLW0603
+    with _ctx_lock:
+        if _ctx is not None and _ctx.db is not None:
+            with suppress(Exception):
+                _ctx.db.close()
+
+
+def _build_context(case_id: str, db: CaseDB) -> ServerContext:
+    """Build a ServerContext from a CaseDB."""
     global _ctx  # noqa: PLW0603
 
-    # litellm prints "Give Feedback" and debug info to stdout, which
-    # corrupts the MCP stdio JSON-RPC channel. Suppress it.
-    import litellm
+    cfg = get_cfg()
+    correlator = Correlator(db=db)
+    audit = AuditLog(cfg.db_dir / f"{case_id}.audit.jsonl")
 
-    litellm.suppress_debug_info = True
+    with _ctx_lock:
+        _ctx = ServerContext(
+            case_id=case_id,
+            db=db,
+            correlator=correlator,
+            audit=audit,
+        )
+    logger.info("Server context ready for case '%s'", case_id)
+    return _ctx
 
-    if api_key is None:
-        api_key = (
-            os.environ.get("MULDER_API_KEY")
-            or os.environ.get("GEMINI_API_KEY")
-            or os.environ.get("ANTHROPIC_API_KEY")
-            or os.environ.get("OPENAI_API_KEY")
+
+def load_case(case_id: str) -> ServerContext:
+    """Open (or re-open) a case and set it as the active context."""
+    _close_current_ctx()
+
+    cfg = get_cfg()
+    logger.info("Opening case database for '%s' ...", case_id)
+    db = CaseDB.open(case_id, cfg.db_dir)
+
+    return _build_context(case_id, db)
+
+
+def create_case(
+    case_id: str, evidence_root: str, replace: bool = False
+) -> ServerContext | dict[str, object]:
+    """Create a new empty case and set it as the active context.
+
+    No extractors are run -- the agent populates the case incrementally
+    by calling Tier 2 extraction tools.
+
+    If the case already exists and *replace* is ``False``, loads the
+    existing case and returns a summary instead of deleting it.
+    """
+    _close_current_ctx()
+
+    cfg = get_cfg()
+
+    db_file = cfg.db_dir / f"{case_id}.db"
+    if db_file.exists() and not replace:
+        try:
+            existing = CaseDB.open(case_id, cfg.db_dir)
+            meta = existing.get_case_metadata()
+            source_count = existing.get_source_count()
+        except Exception:
+            logger.exception("Failed to open existing case '%s'; loading anyway", case_id)
+            existing = CaseDB.open(case_id, cfg.db_dir)
+            meta = existing.get_case_metadata()
+            source_count = existing.get_source_count()
+
+        _build_context(case_id, existing)
+        return {
+            "status": "case_exists",
+            "case_id": case_id,
+            "created_at": meta.ingested_at,
+            "evidence_root": meta.evidence_root,
+            "source_count": source_count,
+            "action_required": (
+                "Case already loaded. Use open_case to switch cases, "
+                "or scan_evidence with replace=true to start fresh."
+            ),
+        }
+
+    if db_file.exists():
+        db_file.unlink()
+        for suffix in (".audit.jsonl", ".report.md", ".plaso"):
+            sidecar = cfg.db_dir / f"{case_id}{suffix}"
+            if sidecar.exists():
+                sidecar.unlink()
+
+    logger.info("Creating empty case database for '%s' ...", case_id)
+
+    db = CaseDB.create(case_id, evidence_root, cfg.db_dir)
+    return _build_context(case_id, db)
+
+
+_SEQUENTIAL_ONLY: set[str] = {
+    "run_bulk_extractor",
+}
+
+
+@mcp.tool()
+async def run_parallel(tasks: list[dict[str, Any]]) -> dict[str, Any]:
+    """Run multiple tool calls in parallel and return all results.
+
+    Use this when you need to run the same tool on multiple evidence items
+    (e.g., extracting 4 archives, running fls on 4 disk images) or any mix
+    of independent tools that can safely execute concurrently.
+
+    Each task specifies a tool name and its arguments.  All tasks execute
+    in parallel worker threads bounded by ``max_workers``.  Tools that
+    spawn heavy child processes (e.g. ``run_bulk_extractor``) are
+    automatically run sequentially to avoid resource exhaustion.
+
+    Args:
+        tasks: List of objects, each with ``tool`` (tool name string) and
+            ``args`` (dict of keyword arguments for that tool).
+    """
+    from uuid import uuid4
+
+    from mulder.server.helpers import current_batch_id, hash_output
+
+    batch_id = f"bp_{uuid4().hex[:8]}"
+    results: list[Any] = [None] * len(tasks)
+
+    async def _run_one(idx: int, tool_name: str, arguments: dict[str, Any]) -> None:
+        """Execute a single task and store its result at *idx*."""
+        token = current_batch_id.set(batch_id)
+        try:
+            fn = _tool_dispatch.get(tool_name)
+            if fn is None:
+                results[idx] = {"error": f"Unknown tool: {tool_name}"}
+                return
+            try:
+                results[idx] = await fn(**arguments)
+            except Exception as exc:
+                logger.exception("run_parallel: %s failed", tool_name)
+                results[idx] = {"error": f"{tool_name} failed: {exc}"}
+        finally:
+            current_batch_id.reset(token)
+
+    parallel_tasks = [(i, t) for i, t in enumerate(tasks) if t["tool"] not in _SEQUENTIAL_ONLY]
+    sequential_tasks = [(i, t) for i, t in enumerate(tasks) if t["tool"] in _SEQUENTIAL_ONLY]
+
+    t0 = time.monotonic()
+
+    async with anyio.create_task_group() as tg:
+        for i, task in parallel_tasks:
+            tg.start_soon(_run_one, i, task["tool"], task.get("args", {}))
+
+    for i, task in sequential_tasks:
+        await _run_one(i, task["tool"], task.get("args", {}))
+
+    elapsed_ms = (time.monotonic() - t0) * 1000
+
+    sub_call_ids = [
+        r.get("tool_call_id", "") for r in results if isinstance(r, dict) and "tool_call_id" in r
+    ]
+
+    if has_ctx():
+        ctx = get_ctx()
+        ctx.audit.log_tool_call(
+            tool_call_id=batch_id,
+            tool_name="run_parallel",
+            params={"tasks": [t["tool"] for t in tasks]},
+            output_hash=hash_output(results),
+            duration_ms=elapsed_ms,
+            sub_calls=sub_call_ids,
+            batch_id=None,
         )
 
-    logger.info("Opening case database for '%s' ...", case_id)
-    db = CaseDB.open(case_id, db_dir)
-
-    meta = db.get_case_metadata()
-    emb_cfg = meta.embedding_config
-    logger.info(
-        "Embedding config: backend=%s, model=%s, dim=%d",
-        emb_cfg.backend,
-        emb_cfg.model_name,
-        emb_cfg.embedding_dim,
-    )
-
-    logger.info("Loading embedding model ...")
-    embedder = Embedder(config=emb_cfg, api_key=api_key)
-
-    query_engine = QueryEngine(db, embedder)
-    correlator = Correlator(query_engine, db)
-
-    reducer_config = ReducerConfig(
-        backend=emb_cfg.backend,
-        model_name=emb_cfg.model_name,
-        api_key=api_key,
-    )
-    reducer = OutputReducer(reducer_config)
-    audit = AuditLog(audit_path)
-
-    _ctx = ServerContext(
-        db=db,
-        query_engine=query_engine,
-        correlator=correlator,
-        reducer=reducer,
-        audit=audit,
-    )
-    logger.info("Server context ready for case '%s'", case_id)
+    return {
+        "batch_id": batch_id,
+        "parallel_results": [
+            {"tool": tasks[i]["tool"], "result": results[i]} for i in range(len(tasks))
+        ],
+        "total_tasks": len(tasks),
+    }
 
 
+import mulder.server.tools_artifacts as _tools_artifacts  # noqa: E402, F401
+import mulder.server.tools_attack as _tools_attack  # noqa: E402, F401
 import mulder.server.tools_bulk as _tools_bulk  # noqa: E402, F401
+import mulder.server.tools_case as _tools_case  # noqa: E402, F401
 import mulder.server.tools_composite as _tools_composite  # noqa: E402, F401
 import mulder.server.tools_core as _tools_core  # noqa: E402, F401
+import mulder.server.tools_extract as _tools_extract  # noqa: E402, F401
 import mulder.server.tools_eztools as _tools_eztools  # noqa: E402, F401
 import mulder.server.tools_findings as _tools_findings  # noqa: E402, F401
+import mulder.server.tools_hayabusa as _tools_hayabusa  # noqa: E402, F401
+import mulder.server.tools_jobs as _tools_jobs  # noqa: E402, F401
+import mulder.server.tools_phone as _tools_phone  # noqa: E402, F401
 import mulder.server.tools_plaso as _tools_plaso  # noqa: E402, F401
 import mulder.server.tools_tsk as _tools_tsk  # noqa: E402, F401
 import mulder.server.tools_yara as _tools_yara  # noqa: E402, F401

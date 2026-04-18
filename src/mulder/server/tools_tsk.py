@@ -8,15 +8,19 @@ extraction and metadata retrieval.  All tools are read-only.
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import re
 import shutil
 import subprocess
 import time
-from uuid import uuid4
 
 from mulder.server.app import get_ctx, mcp
+from mulder.server.extract_helpers import extract_and_index
+from mulder.server.helpers import (
+    hash_output,
+    make_tool_call_id,
+    windowed_response,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,22 +43,9 @@ _MMLS_ROW_RE = re.compile(
 _NTFS_INDICATORS = ("ntfs", "exfat", "0x07", "win95 fat", "0x0b", "0x0c")
 _LINUX_INDICATORS = ("linux", "0x83", "ext", "0x8e")
 
-_cached_image_info: tuple[str, int] | None = None
+_cached_image_info: dict[str, tuple[str, int, str | None]] = {}
 
-
-def _make_tool_call_id() -> str:
-    return f"tc_{uuid4().hex[:8]}"
-
-
-def _hash_output(output: object) -> str:
-    return (
-        "sha256:"
-        + hashlib.sha256(json.dumps(output, sort_keys=True, default=str).encode()).hexdigest()
-    )
-
-
-def _serialize_windows(windows: list) -> list[dict]:
-    return [w.model_dump() for w in windows]
+_FSSTAT_TYPE_RE = re.compile(r"File System Type:\s*(.+)", re.IGNORECASE)
 
 
 def _find_tsk_source_path() -> str:
@@ -88,81 +79,105 @@ def _parse_offset_from_windows(mmls_text: str) -> int:
     return biggest[0] if biggest[1] > 0 else 0
 
 
-def _resolve_image_and_offset() -> tuple[str, int]:
-    """Resolve the disk image path and partition offset from ingested TSK data.
+def _detect_filesystem_type(image_path: str, offset: int) -> str | None:
+    """Run ``fsstat`` to determine the filesystem type at *offset*.
+
+    Returns a TSK filesystem type string (``ntfs``, ``ext4``, ``hfs``,
+    ``fat32``, etc.) or ``None`` when detection fails.
+    """
+    fsstat = shutil.which("fsstat")
+    if not fsstat:
+        return None
+    cmd = ["fsstat"]
+    if offset > 0:
+        cmd.extend(["-o", str(offset)])
+    cmd.append(image_path)
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        if proc.returncode != 0:
+            return None
+        m = _FSSTAT_TYPE_RE.search(proc.stdout)
+        if m:
+            raw = m.group(1).strip().lower()
+            if "ntfs" in raw:
+                return "ntfs"
+            if "fat32" in raw or "fat16" in raw or "fat12" in raw:
+                return "fat"
+            if "exfat" in raw:
+                return "exfat"
+            if "ext" in raw:
+                return "ext"
+            if "hfs" in raw:
+                return "hfs"
+            if "ufs" in raw:
+                return "ufs"
+            return raw.split()[0] if raw else None
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+    return None
+
+
+def _resolve_image_and_offset() -> tuple[str, int, str | None]:
+    """Resolve the disk image path, partition offset, and filesystem type.
 
     Reads the ``tsk.partitions`` source metadata and window text to
     determine the image path (from ``source_path``) and the partition
-    offset used during ingest.  Result is cached for the session.
+    offset used during ingest.  Also runs ``fsstat`` to detect the
+    filesystem type for use with ``-f`` flag in icat/istat.
+    Result is cached per case_id so switching cases invalidates stale data.
     """
-    global _cached_image_info  # noqa: PLW0603
-    if _cached_image_info is not None:
-        return _cached_image_info
-
     ctx = get_ctx()
+    cache_key = ctx.case_id
+    if cache_key in _cached_image_info:
+        return _cached_image_info[cache_key]
+
     sources = ctx.db.get_sources()
     tsk_source = next((s for s in sources if s.source_name == _SRC_PARTITIONS), None)
 
     if tsk_source is None:
-        _cached_image_info = (_find_tsk_source_path(), 0)
-        return _cached_image_info
+        image_path = _find_tsk_source_path()
+        fs_type = _detect_filesystem_type(image_path, 0)
+        result = (image_path, 0, fs_type)
+        _cached_image_info[cache_key] = result
+        return result
 
     windows = ctx.db.get_windows_by_source(_SRC_PARTITIONS)
     mmls_text = "\n".join(w.raw_text for w in windows)
     offset = _parse_offset_from_windows(mmls_text)
+    fs_type = _detect_filesystem_type(tsk_source.source_path, offset)
 
-    _cached_image_info = (tsk_source.source_path, offset)
-    return _cached_image_info
-
-
-# ------------------------------------------------------------------
-# Tool: list_partitions
-# ------------------------------------------------------------------
+    result = (tsk_source.source_path, offset, fs_type)
+    _cached_image_info[cache_key] = result
+    return result
 
 
 @mcp.tool()
-def list_partitions() -> dict:
+def list_partitions() -> dict[str, object]:
     """Return the partition table extracted from the disk image (TSK mmls).
 
     Shows partition layout including type, start sector, end sector,
     and size.  Read-only.
     """
     ctx = get_ctx()
-    tc_id = _make_tool_call_id()
+    tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
     windows = ctx.db.get_windows_by_source(_SRC_PARTITIONS)
-    results = _serialize_windows(windows)
-
     elapsed = (time.monotonic() - t0) * 1000
-    ctx.audit.log_tool_call(
-        tool_call_id=tc_id,
-        tool_name="list_partitions",
-        params={},
-        output_hash=_hash_output(results),
-        duration_ms=elapsed,
-    )
-    return {
-        "tool_call_id": tc_id,
-        "status": "success",
-        "results": results,
-        "source": _SRC_PARTITIONS,
-        "result_count": len(results),
-        "reduced": False,
-        "reduction_ratio": None,
-    }
-
-
-# ------------------------------------------------------------------
-# Tool: list_files
-# ------------------------------------------------------------------
+    return windowed_response(tc_id, windows, _SRC_PARTITIONS, "list_partitions", {}, elapsed)
 
 
 @mcp.tool()
 def list_files(
     path_filter: str | None = None,
     include_deleted: bool = False,
-) -> dict:
+) -> dict[str, object]:
     """List files from the disk image filesystem (TSK fls).
 
     Returns the recursive file listing extracted at ingest time.
@@ -171,7 +186,7 @@ def list_files(
     Read-only.
     """
     ctx = get_ctx()
-    tc_id = _make_tool_call_id()
+    tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
     windows = ctx.db.get_windows_by_source(_SRC_FILELIST)
@@ -183,34 +198,19 @@ def list_files(
         pf_lower = path_filter.lower()
         windows = [w for w in windows if pf_lower in w.raw_text.lower()]
 
-    results = _serialize_windows(windows)
-
     elapsed = (time.monotonic() - t0) * 1000
-    ctx.audit.log_tool_call(
-        tool_call_id=tc_id,
-        tool_name="list_files",
-        params={"path_filter": path_filter, "include_deleted": include_deleted},
-        output_hash=_hash_output(results),
-        duration_ms=elapsed,
+    return windowed_response(
+        tc_id,
+        windows,
+        _SRC_FILELIST,
+        "list_files",
+        {"path_filter": path_filter, "include_deleted": include_deleted},
+        elapsed,
     )
-    return {
-        "tool_call_id": tc_id,
-        "status": "success",
-        "results": results,
-        "source": _SRC_FILELIST,
-        "result_count": len(results),
-        "reduced": False,
-        "reduction_ratio": None,
-    }
-
-
-# ------------------------------------------------------------------
-# Tool: get_deleted_files
-# ------------------------------------------------------------------
 
 
 @mcp.tool()
-def get_deleted_files() -> dict:
+def get_deleted_files() -> dict[str, object]:
     """Return deleted files detected in the disk image (TSK fls).
 
     TSK marks deleted entries with a ``*`` prefix.  This tool filters
@@ -219,98 +219,70 @@ def get_deleted_files() -> dict:
     Read-only.
     """
     ctx = get_ctx()
-    tc_id = _make_tool_call_id()
+    tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
     windows = ctx.db.get_windows_by_source(_SRC_FILELIST)
     deleted = [w for w in windows if "* " in w.raw_text]
-    results = _serialize_windows(deleted)
-
     elapsed = (time.monotonic() - t0) * 1000
-    ctx.audit.log_tool_call(
-        tool_call_id=tc_id,
-        tool_name="get_deleted_files",
-        params={},
-        output_hash=_hash_output(results),
-        duration_ms=elapsed,
-    )
-    return {
-        "tool_call_id": tc_id,
-        "status": "success",
-        "results": results,
-        "source": _SRC_FILELIST,
-        "result_count": len(results),
-        "reduced": False,
-        "reduction_ratio": None,
-    }
-
-
-# ------------------------------------------------------------------
-# Tool: get_fs_timeline
-# ------------------------------------------------------------------
+    return windowed_response(tc_id, deleted, _SRC_FILELIST, "get_deleted_files", {}, elapsed)
 
 
 @mcp.tool()
-def get_fs_timeline(t_start: str, t_end: str) -> dict:
+def get_fs_timeline(t_start: str, t_end: str) -> dict[str, object]:
     """Return the filesystem timeline (mactime) within a time range.
 
     The timeline is generated from TSK ``fls`` bodyfile output processed
-    through ``mactime``.  Large results are Cordon-reduced to keep
-    context-window usage manageable.  Read-only.
+    through ``mactime``.  Read-only.
     """
     ctx = get_ctx()
-    tc_id = _make_tool_call_id()
+    tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
-    windows = ctx.query_engine.get_windows_in_range(_SRC_TIMELINE, t_start, t_end)
-
-    reduced = False
-    reduction_ratio: float | None = None
-    raw_text = "\n".join(w.raw_text for w in windows)
-    if raw_text and ctx.reducer.should_reduce(_SRC_TIMELINE, len(raw_text)):
-        reduced_out = ctx.reducer.reduce(raw_text)
-        blocks = [b.model_dump() for b in reduced_out.blocks]
-        results: list[dict] = [{"reduced_text": reduced_out.text, "blocks": blocks}]
-        reduced = True
-        reduction_ratio = reduced_out.reduction_ratio
-    else:
-        results = _serialize_windows(windows)
-
+    windows = ctx.db.get_windows_by_source(_SRC_TIMELINE, t_start, t_end)
     elapsed = (time.monotonic() - t0) * 1000
-    ctx.audit.log_tool_call(
-        tool_call_id=tc_id,
-        tool_name="get_fs_timeline",
-        params={"t_start": t_start, "t_end": t_end},
-        output_hash=_hash_output(results),
-        cordon_ratio=reduction_ratio,
-        duration_ms=elapsed,
+    return windowed_response(
+        tc_id,
+        windows,
+        _SRC_TIMELINE,
+        "get_fs_timeline",
+        {"t_start": t_start, "t_end": t_end},
+        elapsed,
     )
-    return {
-        "tool_call_id": tc_id,
-        "status": "success",
-        "results": results,
-        "source": _SRC_TIMELINE,
-        "result_count": len(results),
-        "reduced": reduced,
-        "reduction_ratio": reduction_ratio,
-    }
 
 
-# ------------------------------------------------------------------
-# Tool: extract_file_by_inode
-# ------------------------------------------------------------------
+def _build_tsk_cmd(
+    tool: str,
+    image_path: str,
+    offset: int,
+    fs_type: str | None,
+) -> list[str]:
+    """Build the base TSK command with optional offset and filesystem type."""
+    cmd = [tool]
+    if fs_type:
+        cmd.extend(["-f", fs_type])
+    if offset > 0:
+        cmd.extend(["-o", str(offset)])
+    cmd.append(image_path)
+    return cmd
 
 
 @mcp.tool()
-def extract_file_by_inode(inode: int) -> dict:
+def extract_file_by_inode(inode: int, filesystem_type: str | None = None) -> dict[str, object]:
     """Extract a file from the disk image by inode number using TSK icat.
 
     For text files the content is returned directly (capped at 1 MB).
     For binary files a SHA-256 hash and size are returned instead.
     Requires ``icat`` on PATH.  Read-only against the original image.
+
+    Args:
+        inode: The inode number of the file to extract.
+        filesystem_type: Optional TSK filesystem type (e.g. "ntfs", "ext",
+            "fat", "hfs").  Auto-detected via ``fsstat`` when omitted.
+            Specify manually if auto-detection fails on raw DD images.
     """
     ctx = get_ctx()
-    tc_id = _make_tool_call_id()
+    tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
     if not shutil.which("icat"):
@@ -320,7 +292,7 @@ def extract_file_by_inode(inode: int) -> dict:
             tool_call_id=tc_id,
             tool_name="extract_file_by_inode",
             params={"inode": inode},
-            output_hash=_hash_output({"error": error_msg}),
+            output_hash=hash_output({"error": error_msg}),
             duration_ms=elapsed,
         )
         return {
@@ -330,15 +302,12 @@ def extract_file_by_inode(inode: int) -> dict:
             "results": [],
             "source": _SRC_ICAT,
             "result_count": 0,
-            "reduced": False,
-            "reduction_ratio": None,
         }
 
-    image_path, offset = _resolve_image_and_offset()
-    cmd = ["icat"]
-    if offset > 0:
-        cmd.extend(["-o", str(offset)])
-    cmd.extend([image_path, str(inode)])
+    image_path, offset, detected_fs = _resolve_image_and_offset()
+    fs_type = filesystem_type or detected_fs
+    cmd = _build_tsk_cmd("icat", image_path, offset, fs_type)
+    cmd.append(str(inode))
 
     try:
         proc = subprocess.run(
@@ -354,7 +323,7 @@ def extract_file_by_inode(inode: int) -> dict:
             tool_call_id=tc_id,
             tool_name="extract_file_by_inode",
             params={"inode": inode},
-            output_hash=_hash_output({"error": error_msg}),
+            output_hash=hash_output({"error": error_msg}),
             duration_ms=elapsed,
         )
         return {
@@ -364,8 +333,6 @@ def extract_file_by_inode(inode: int) -> dict:
             "results": [],
             "source": _SRC_ICAT,
             "result_count": 0,
-            "reduced": False,
-            "reduction_ratio": None,
         }
 
     raw = proc.stdout
@@ -377,7 +344,7 @@ def extract_file_by_inode(inode: int) -> dict:
             tool_call_id=tc_id,
             tool_name="extract_file_by_inode",
             params={"inode": inode},
-            output_hash=_hash_output({"error": error_msg}),
+            output_hash=hash_output({"error": error_msg}),
             duration_ms=elapsed,
         )
         return {
@@ -387,13 +354,11 @@ def extract_file_by_inode(inode: int) -> dict:
             "results": [],
             "source": _SRC_ICAT,
             "result_count": 0,
-            "reduced": False,
-            "reduction_ratio": None,
         }
 
     if b"\x00" in raw[:8192]:
         file_hash = hashlib.sha256(raw).hexdigest()
-        results = {
+        results: dict[str, object] = {
             "type": "binary",
             "inode": inode,
             "size_bytes": len(raw),
@@ -401,12 +366,17 @@ def extract_file_by_inode(inode: int) -> dict:
         }
     else:
         text = raw[:_MAX_TEXT_BYTES].decode("utf-8", errors="replace")
+        source_name = f"tsk.extracted.{inode}"
+        index_summary: dict[str, object] = {}
+        if text.strip():
+            index_summary = extract_and_index(text, source_name, image_path, "icat")
         results = {
             "type": "text",
             "inode": inode,
             "size_bytes": len(raw),
-            "content": text,
-            "truncated": len(raw) > _MAX_TEXT_BYTES,
+            "source_name": source_name,
+            "windows_indexed": index_summary.get("windows_indexed", 0),
+            "hint": f"Use get_raw_output('{source_name}') to read the file content.",
         }
 
     elapsed = (time.monotonic() - t0) * 1000
@@ -414,7 +384,7 @@ def extract_file_by_inode(inode: int) -> dict:
         tool_call_id=tc_id,
         tool_name="extract_file_by_inode",
         params={"inode": inode},
-        output_hash=_hash_output(results),
+        output_hash=hash_output(results),
         duration_ms=elapsed,
     )
     return {
@@ -423,25 +393,23 @@ def extract_file_by_inode(inode: int) -> dict:
         "results": results,
         "source": _SRC_ICAT,
         "result_count": 1,
-        "reduced": False,
-        "reduction_ratio": None,
     }
 
 
-# ------------------------------------------------------------------
-# Tool: get_file_metadata
-# ------------------------------------------------------------------
-
-
 @mcp.tool()
-def get_file_metadata(inode: int) -> dict:
+def get_file_metadata(inode: int, filesystem_type: str | None = None) -> dict[str, object]:
     """Return file metadata (MAC times, size, blocks) for an inode using TSK istat.
 
     Shells out to ``istat`` at query time.  Requires ``istat`` on PATH.
     Read-only against the original image.
+
+    Args:
+        inode: The inode number of the file.
+        filesystem_type: Optional TSK filesystem type (e.g. "ntfs", "ext",
+            "fat", "hfs").  Auto-detected via ``fsstat`` when omitted.
     """
     ctx = get_ctx()
-    tc_id = _make_tool_call_id()
+    tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
     if not shutil.which("istat"):
@@ -451,7 +419,7 @@ def get_file_metadata(inode: int) -> dict:
             tool_call_id=tc_id,
             tool_name="get_file_metadata",
             params={"inode": inode},
-            output_hash=_hash_output({"error": error_msg}),
+            output_hash=hash_output({"error": error_msg}),
             duration_ms=elapsed,
         )
         return {
@@ -461,15 +429,12 @@ def get_file_metadata(inode: int) -> dict:
             "results": [],
             "source": _SRC_ISTAT,
             "result_count": 0,
-            "reduced": False,
-            "reduction_ratio": None,
         }
 
-    image_path, offset = _resolve_image_and_offset()
-    cmd = ["istat"]
-    if offset > 0:
-        cmd.extend(["-o", str(offset)])
-    cmd.extend([image_path, str(inode)])
+    image_path, offset, detected_fs = _resolve_image_and_offset()
+    fs_type = filesystem_type or detected_fs
+    cmd = _build_tsk_cmd("istat", image_path, offset, fs_type)
+    cmd.append(str(inode))
 
     try:
         proc = subprocess.run(
@@ -486,7 +451,7 @@ def get_file_metadata(inode: int) -> dict:
             tool_call_id=tc_id,
             tool_name="get_file_metadata",
             params={"inode": inode},
-            output_hash=_hash_output({"error": error_msg}),
+            output_hash=hash_output({"error": error_msg}),
             duration_ms=elapsed,
         )
         return {
@@ -496,8 +461,6 @@ def get_file_metadata(inode: int) -> dict:
             "results": [],
             "source": _SRC_ISTAT,
             "result_count": 0,
-            "reduced": False,
-            "reduction_ratio": None,
         }
 
     if proc.returncode != 0:
@@ -508,7 +471,7 @@ def get_file_metadata(inode: int) -> dict:
             tool_call_id=tc_id,
             tool_name="get_file_metadata",
             params={"inode": inode},
-            output_hash=_hash_output({"error": error_msg}),
+            output_hash=hash_output({"error": error_msg}),
             duration_ms=elapsed,
         )
         return {
@@ -518,13 +481,20 @@ def get_file_metadata(inode: int) -> dict:
             "results": [],
             "source": _SRC_ISTAT,
             "result_count": 0,
-            "reduced": False,
-            "reduction_ratio": None,
         }
 
-    results = {
+    output_text = proc.stdout.strip()
+    source_name = f"tsk.metadata.{inode}"
+
+    index_summary: dict[str, object] = {}
+    if output_text:
+        index_summary = extract_and_index(output_text, source_name, image_path, "istat")
+
+    results: dict[str, object] = {
         "inode": inode,
-        "metadata": proc.stdout.strip(),
+        "source_name": source_name,
+        "windows_indexed": index_summary.get("windows_indexed", 0),
+        "hint": f"Use get_raw_output('{source_name}') to read the metadata.",
     }
 
     elapsed = (time.monotonic() - t0) * 1000
@@ -532,7 +502,7 @@ def get_file_metadata(inode: int) -> dict:
         tool_call_id=tc_id,
         tool_name="get_file_metadata",
         params={"inode": inode},
-        output_hash=_hash_output(results),
+        output_hash=hash_output(results),
         duration_ms=elapsed,
     )
     return {
@@ -541,6 +511,4 @@ def get_file_metadata(inode: int) -> dict:
         "results": results,
         "source": _SRC_ISTAT,
         "result_count": 1,
-        "reduced": False,
-        "reduction_ratio": None,
     }

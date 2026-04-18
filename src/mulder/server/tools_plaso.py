@@ -7,16 +7,16 @@ against the stored ``.plaso`` file.  All tools are read-only.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 import shutil
 import subprocess
 import time
+from collections.abc import Mapping
 from pathlib import Path
-from uuid import uuid4
 
 from mulder.server.app import get_ctx, mcp
+from mulder.server.extract_helpers import extract_and_index
+from mulder.server.helpers import hash_output, make_tool_call_id, windowed_response
 
 logger = logging.getLogger(__name__)
 
@@ -26,21 +26,6 @@ _SRC_PLASO_TIMELINE = "plaso.timeline"
 _PSORT_BIN = "psort.py"
 _PSORT_TIMEOUT = 300  # 5 minutes for filtered queries
 _SLICE_SIZE_SECONDS = 300  # 5-minute window for timeline slices
-
-
-def _make_tool_call_id() -> str:
-    return f"tc_{uuid4().hex[:8]}"
-
-
-def _hash_output(output: object) -> str:
-    return (
-        "sha256:"
-        + hashlib.sha256(json.dumps(output, sort_keys=True, default=str).encode()).hexdigest()
-    )
-
-
-def _serialize_windows(windows: list) -> list[dict]:
-    return [w.model_dump() for w in windows]
 
 
 def _find_plaso_file() -> str:
@@ -68,10 +53,10 @@ def _find_plaso_file() -> str:
 def _error_response(
     tc_id: str,
     tool_name: str,
-    params: dict,
+    params: Mapping[str, object],
     error: str,
     t0: float,
-) -> dict:
+) -> dict[str, object]:
     """Build an audited error response dict."""
     ctx = get_ctx()
     elapsed = (time.monotonic() - t0) * 1000
@@ -79,7 +64,7 @@ def _error_response(
         tool_call_id=tc_id,
         tool_name=tool_name,
         params=params,
-        output_hash=_hash_output({"error": error}),
+        output_hash=hash_output({"error": error}),
         duration_ms=elapsed,
     )
     return {
@@ -89,8 +74,6 @@ def _error_response(
         "results": [],
         "source": _SRC_PLASO_TIMELINE,
         "result_count": 0,
-        "reduced": False,
-        "reduction_ratio": None,
     }
 
 
@@ -105,23 +88,14 @@ def _run_psort(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _reduce_or_return(output: str) -> tuple[list[dict], bool, float | None]:
-    """Cordon-reduce *output* if warranted, returning ``(results, reduced, ratio)``."""
-    ctx = get_ctx()
-    if ctx.reducer.should_reduce(_SRC_PLASO_TIMELINE, len(output)):
-        reduced_out = ctx.reducer.reduce(output)
-        blocks = [b.model_dump() for b in reduced_out.blocks]
-        return (
-            [{"reduced_text": reduced_out.text, "blocks": blocks}],
-            True,
-            reduced_out.reduction_ratio,
-        )
-    return [{"timeline_text": output, "line_count": output.count("\n") + 1}], False, None
+def _reduce_or_return(output: str) -> list[dict[str, str | int]]:
+    """Return timeline output as a single-item result list."""
+    return [{"timeline_text": output, "line_count": output.count("\n") + 1}]
 
 
 def _resolve_psort_prerequisites(
-    tc_id: str, tool_name: str, params: dict, t0: float
-) -> str | dict:
+    tc_id: str, tool_name: str, params: Mapping[str, object], t0: float
+) -> str | dict[str, object]:
     """Check psort availability and locate the .plaso file.
 
     Returns the plaso file path on success, or an error response dict.
@@ -134,13 +108,8 @@ def _resolve_psort_prerequisites(
         return _error_response(tc_id, tool_name, params, str(exc), t0)
 
 
-# ------------------------------------------------------------------
-# Tool: get_plaso_stats
-# ------------------------------------------------------------------
-
-
 @mcp.tool()
-def get_plaso_stats() -> dict:
+def get_plaso_stats() -> dict[str, object]:
     """Return Plaso parser hit statistics collected during ingest.
 
     Shows which parsers fired and how many events each produced.
@@ -148,34 +117,12 @@ def get_plaso_stats() -> dict:
     the case timeline.  Read-only.
     """
     ctx = get_ctx()
-    tc_id = _make_tool_call_id()
+    tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
     windows = ctx.db.get_windows_by_source(_SRC_PLASO_STATS)
-    results = _serialize_windows(windows)
-
     elapsed = (time.monotonic() - t0) * 1000
-    ctx.audit.log_tool_call(
-        tool_call_id=tc_id,
-        tool_name="get_plaso_stats",
-        params={},
-        output_hash=_hash_output(results),
-        duration_ms=elapsed,
-    )
-    return {
-        "tool_call_id": tc_id,
-        "status": "success",
-        "results": results,
-        "source": _SRC_PLASO_STATS,
-        "result_count": len(results),
-        "reduced": False,
-        "reduction_ratio": None,
-    }
-
-
-# ------------------------------------------------------------------
-# Tool: filter_timeline
-# ------------------------------------------------------------------
+    return windowed_response(tc_id, windows, _SRC_PLASO_STATS, "get_plaso_stats", {}, elapsed)
 
 
 @mcp.tool()
@@ -184,16 +131,16 @@ def filter_timeline(
     t_end: str,
     keyword: str | None = None,
     parser: str | None = None,
-) -> dict:
+) -> dict[str, object]:
     """Query the Plaso timeline with time range and optional filters.
 
     Runs ``psort.py`` against the stored ``.plaso`` file with a date
     filter expression.  Optionally narrow results to a specific
     *parser* (e.g. ``"winevtx"``) or grep for *keyword* in the output.
-    Large results are Cordon-reduced.  Read-only.
+    Read-only.
     """
     ctx = get_ctx()
-    tc_id = _make_tool_call_id()
+    tc_id = make_tool_call_id()
     t0 = time.monotonic()
     params = {"t_start": t_start, "t_end": t_end, "keyword": keyword, "parser": parser}
 
@@ -226,37 +173,34 @@ def filter_timeline(
             t0,
         )
 
-    if not output:
-        results: list[dict] = []
-        reduced = False
-        reduction_ratio: float | None = None
-    else:
+    result_count = 0
+    index_summary: dict[str, object] = {}
+    if output:
         if keyword:
             output = _apply_keyword_filter(output, keyword)
-        if not output:
-            results = []
-            reduced = False
-            reduction_ratio = None
-        else:
-            results, reduced, reduction_ratio = _reduce_or_return(output)
+        if output:
+            result_count = len(output.splitlines()) - 1
+            index_summary = extract_and_index(output, "plaso.filtered", str(plaso_path), "psort")
 
     elapsed = (time.monotonic() - t0) * 1000
     ctx.audit.log_tool_call(
         tool_call_id=tc_id,
         tool_name="filter_timeline",
         params=params,
-        output_hash=_hash_output(results),
-        cordon_ratio=reduction_ratio,
+        output_hash=hash_output({"result_count": result_count}),
         duration_ms=elapsed,
     )
     return {
         "tool_call_id": tc_id,
         "status": "success",
-        "results": results,
         "source": _SRC_PLASO_TIMELINE,
-        "result_count": len(results),
-        "reduced": reduced,
-        "reduction_ratio": reduction_ratio,
+        "source_name": "plaso.filtered",
+        "result_count": result_count,
+        "windows_indexed": index_summary.get("windows_indexed", 0),
+        "hint": (
+            "Use search(query, source='plaso.filtered') or "
+            "get_raw_output('plaso.filtered') to read timeline events."
+        ),
     }
 
 
@@ -269,22 +213,17 @@ def _apply_keyword_filter(output: str, keyword: str) -> str:
     return "\n".join([header, *filtered]) if filtered else ""
 
 
-# ------------------------------------------------------------------
-# Tool: export_timeline_slice
-# ------------------------------------------------------------------
-
-
 @mcp.tool()
-def export_timeline_slice(timestamp: str) -> dict:
+def export_timeline_slice(timestamp: str) -> dict[str, object]:
     """Export a 5-minute timeline slice centred on a timestamp.
 
     Runs ``psort.py --slice`` to produce a narrow window of events around
     the given *timestamp* (ISO-8601 format, e.g. ``2024-01-15T14:30:00``).
     Useful for quickly pivoting around a known event of interest.
-    Large results are Cordon-reduced.  Read-only.
+    Read-only.
     """
     ctx = get_ctx()
-    tc_id = _make_tool_call_id()
+    tc_id = make_tool_call_id()
     t0 = time.monotonic()
     params = {"timestamp": timestamp}
 
@@ -322,28 +261,29 @@ def export_timeline_slice(timestamp: str) -> dict:
             t0,
         )
 
-    if not output:
-        results: list[dict] = []
-        reduced = False
-        reduction_ratio: float | None = None
-    else:
-        results, reduced, reduction_ratio = _reduce_or_return(output)
+    result_count = 0
+    index_summary: dict[str, object] = {}
+    if output:
+        result_count = len(output.splitlines()) - 1
+        index_summary = extract_and_index(output, "plaso.slice", str(plaso_path), "psort")
 
     elapsed = (time.monotonic() - t0) * 1000
     ctx.audit.log_tool_call(
         tool_call_id=tc_id,
         tool_name="export_timeline_slice",
         params=params,
-        output_hash=_hash_output(results),
-        cordon_ratio=reduction_ratio,
+        output_hash=hash_output({"result_count": result_count}),
         duration_ms=elapsed,
     )
     return {
         "tool_call_id": tc_id,
         "status": "success",
-        "results": results,
         "source": _SRC_PLASO_TIMELINE,
-        "result_count": len(results),
-        "reduced": reduced,
-        "reduction_ratio": reduction_ratio,
+        "source_name": "plaso.slice",
+        "result_count": result_count,
+        "windows_indexed": index_summary.get("windows_indexed", 0),
+        "hint": (
+            "Use search(query, source='plaso.slice') or "
+            "get_raw_output('plaso.slice') to read the timeline slice."
+        ),
     }

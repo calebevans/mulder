@@ -7,31 +7,37 @@ not by prompts.
 
 from __future__ import annotations
 
-import hashlib
-import json
+import base64
+import binascii
 import re
 import time
-from uuid import uuid4
+from typing import Any
 
 from mulder.server.app import get_ctx, mcp
+from mulder.server.helpers import (
+    hash_output,
+    make_tool_call_id,
+    serialize_windows,
+    windowed_response,
+)
+
+_RAW_TEXT_SEARCH_CAP = 300
+_RAW_TEXT_CORRELATE_CAP = 200
+_CORRELATE_WINDOW_CAP = 20
 
 
-def _make_tool_call_id() -> str:
-    return f"tc_{uuid4().hex[:8]}"
+def _truncated_window(w: Any, cap: int = _RAW_TEXT_SEARCH_CAP) -> dict[str, object]:
+    """Serialize a window with raw_text truncated for compact output."""
+    d = w.model_dump() if hasattr(w, "model_dump") else dict(w)
+    full = d.get("raw_text", "")
+    if len(full) > cap:
+        d["raw_text"] = full[:cap] + "..."
+        d["full_text_available"] = True
+    return d
 
 
-def _hash_output(output: object) -> str:
-    return (
-        "sha256:"
-        + hashlib.sha256(json.dumps(output, sort_keys=True, default=str).encode()).hexdigest()
-    )
-
-
-def _serialize_windows(windows: list) -> list[dict]:
-    return [w.model_dump() for w in windows]
-
-
-def _serialize_scored(scored: list) -> list[dict]:
+def _serialize_scored(scored: list[Any]) -> list[dict[str, object]]:
+    """Convert ScoredWindow objects to serializable dicts."""
     return [
         {
             "window": s.window.model_dump(),
@@ -67,9 +73,9 @@ def _extract_pid(text: str) -> int | None:
     return None
 
 
-def _extract_pids_from_windows(windows: list) -> dict[int, list]:
+def _extract_pids_from_windows(windows: list[Any]) -> dict[int, list[Any]]:
     """Group windows by the PID found in their text."""
-    pid_map: dict[int, list] = {}
+    pid_map: dict[int, list[Any]] = {}
     for w in windows:
         pid = _extract_pid(w.raw_text)
         if pid is not None:
@@ -77,9 +83,9 @@ def _extract_pids_from_windows(windows: list) -> dict[int, list]:
     return pid_map
 
 
-def _extract_module_names(windows: list) -> dict[str, list]:
+def _extract_module_names(windows: list[Any]) -> dict[str, list[Any]]:
     """Group windows by the kernel module name found in their text."""
-    mod_map: dict[str, list] = {}
+    mod_map: dict[str, list[Any]] = {}
     for w in windows:
         m = _MODULE_NAME_RE.search(w.raw_text)
         if m:
@@ -88,20 +94,16 @@ def _extract_module_names(windows: list) -> dict[str, list]:
     return mod_map
 
 
-# ------------------------------------------------------------------
-# Tool: list_sources
-# ------------------------------------------------------------------
-
-
 @mcp.tool()
-def list_sources(case_id: str) -> dict:
-    """List every evidence source ingested for this case.
+def list_sources() -> dict[str, object]:
+    """List every evidence source indexed for the active case.
 
     Returns source names, file paths, hash digests, extractors used,
-    and line counts.  Read-only: queries the case database.
+    and line counts.  Initially empty for a new case -- grows as the
+    agent runs Tier 2 extraction tools.  Read-only.
     """
     ctx = get_ctx()
-    tc_id = _make_tool_call_id()
+    tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
     sources = ctx.db.get_sources()
@@ -111,51 +113,96 @@ def list_sources(case_id: str) -> dict:
     ctx.audit.log_tool_call(
         tool_call_id=tc_id,
         tool_name="list_sources",
-        params={"case_id": case_id},
-        output_hash=_hash_output(results),
+        params={},
+        output_hash=hash_output(results),
         duration_ms=elapsed,
     )
-    return {
+    response: dict[str, object] = {
         "tool_call_id": tc_id,
         "status": "success",
         "results": results,
         "source": None,
         "result_count": len(results),
-        "reduced": False,
-        "reduction_ratio": None,
     }
-
-
-# ------------------------------------------------------------------
-# Tool: search
-# ------------------------------------------------------------------
+    if not results:
+        response["message"] = (
+            "No sources indexed yet. Use scan_evidence() to see available evidence, "
+            "then run extraction tools (run_volatility, run_fls, etc.) to populate sources."
+        )
+    return response
 
 
 @mcp.tool()
 def search(
     query: str,
-    k: int = 20,
     source: str | None = None,
-) -> dict:
-    """Semantic search across all ingested evidence.
+    max_results: int = 50,
+    regex: bool = False,
+) -> dict[str, object]:
+    """Keyword or regex search across all ingested evidence.
 
-    Embeds the free-text *query* and returns the *k* closest windows
-    from the per-case vector index.  Optionally filter by *source* name.
-    Read-only: no evidence is modified.
+    Searches the raw text of all stored windows for *query*.  Use
+    *source* to scope to a specific source name or prefix (e.g.
+    ``"volatility.netscan"``).  Use *regex=True* for regular
+    expression matching.  Read-only.
+
+    Args:
+        query: Search term (substring match) or regex pattern.
+        source: Optional source name or prefix to scope the search.
+        max_results: Maximum number of matching windows to return.
+        regex: If True, treat *query* as a Python regex pattern.
     """
+    import re as _re
+
     ctx = get_ctx()
-    tc_id = _make_tool_call_id()
+    tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
-    scored = ctx.query_engine.semantic_search(query, k=k, source_name=source)
-    results = _serialize_scored(scored)
+    if regex:
+        try:
+            pattern = _re.compile(query, _re.IGNORECASE)
+        except _re.error as exc:
+            return {
+                "tool_call_id": tc_id,
+                "status": "error",
+                "error_message": f"Invalid regex: {exc}",
+                "results": [],
+                "result_count": 0,
+            }
+        _CHUNK = 5000
+        matches: list[dict[str, object]] = []
+        cursor = 0
+        src_prefix = source or ""
+        while len(matches) < max_results:
+            chunk, _total = ctx.db.get_windows_page(src_prefix, after_id=cursor, limit=_CHUNK)
+            if not chunk:
+                break
+            for w in chunk:
+                if pattern.search(w.raw_text):
+                    matches.append(
+                        {
+                            "window": _truncated_window(w),
+                            "source_name": source or "unknown",
+                        }
+                    )
+                    if len(matches) >= max_results:
+                        break
+            cursor = chunk[-1].window_id or 0
+        results = matches
+    else:
+        raw_matches = ctx.db.search_windows(query, source_name=source, max_results=max_results)
+        results = [
+            {"window": _truncated_window(w), "source_name": sname} for w, sname in raw_matches
+        ]
+
+    sources_matched = sorted({str(r["source_name"]) for r in results})
 
     elapsed = (time.monotonic() - t0) * 1000
     ctx.audit.log_tool_call(
         tool_call_id=tc_id,
         tool_name="search",
-        params={"query": query, "k": k, "source": source},
-        output_hash=_hash_output(results),
+        params={"query": query, "source": source, "max_results": max_results, "regex": regex},
+        output_hash=hash_output(results),
         duration_ms=elapsed,
     )
     return {
@@ -164,74 +211,10 @@ def search(
         "results": results,
         "source": source,
         "result_count": len(results),
-        "reduced": False,
-        "reduction_ratio": None,
+        "sources_matched": sources_matched,
+        "has_more": len(results) == max_results,
+        "hint": "Use get_raw_output(source_name, offset, limit) to retrieve full evidence text.",
     }
-
-
-# ------------------------------------------------------------------
-# Tool: get_anomalies_in_range
-# ------------------------------------------------------------------
-
-
-@mcp.tool()
-def get_anomalies_in_range(
-    source: str,
-    t_start: str,
-    t_end: str,
-    top_percent: float = 0.1,
-) -> dict:
-    """Return the most anomalous windows from a source within a time range.
-
-    Uses k-NN density scoring: windows whose embeddings are furthest
-    from their neighbours are ranked highest.  For verbose sources the
-    output is automatically reduced via Cordon.  Read-only.
-    """
-    ctx = get_ctx()
-    tc_id = _make_tool_call_id()
-    t0 = time.monotonic()
-
-    scored = ctx.query_engine.get_anomalies(
-        source_name=source,
-        time_start=t_start,
-        time_end=t_end,
-        top_percent=top_percent,
-    )
-    results = _serialize_scored(scored)
-
-    reduced = False
-    reduction_ratio: float | None = None
-    raw_text = "\n".join(s.window.raw_text for s in scored)
-    if ctx.reducer.should_reduce(source, len(raw_text)):
-        reduced_out = ctx.reducer.reduce(raw_text, target_percentile=top_percent)
-        blocks = [b.model_dump() for b in reduced_out.blocks]
-        results = [{"reduced_text": reduced_out.text, "blocks": blocks}]
-        reduced = True
-        reduction_ratio = reduced_out.reduction_ratio
-
-    elapsed = (time.monotonic() - t0) * 1000
-    ctx.audit.log_tool_call(
-        tool_call_id=tc_id,
-        tool_name="get_anomalies_in_range",
-        params={"source": source, "t_start": t_start, "t_end": t_end, "top_percent": top_percent},
-        output_hash=_hash_output(results),
-        cordon_ratio=reduction_ratio,
-        duration_ms=elapsed,
-    )
-    return {
-        "tool_call_id": tc_id,
-        "status": "success",
-        "results": results,
-        "source": source,
-        "result_count": len(results),
-        "reduced": reduced,
-        "reduction_ratio": reduction_ratio,
-    }
-
-
-# ------------------------------------------------------------------
-# Tool: correlate_across_sources
-# ------------------------------------------------------------------
 
 
 @mcp.tool()
@@ -239,7 +222,7 @@ def correlate_across_sources(
     t_start: str,
     t_end: str,
     sources: list[str] | None = None,
-) -> dict:
+) -> dict[str, object]:
     """Cross-reference evidence from multiple sources in a time window.
 
     For every source (or the specified subset), retrieves all windows
@@ -248,7 +231,7 @@ def correlate_across_sources(
     artifact type see?"  Read-only.
     """
     ctx = get_ctx()
-    tc_id = _make_tool_call_id()
+    tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
     correlation = ctx.correlator.correlate_across_sources(
@@ -256,14 +239,40 @@ def correlate_across_sources(
         time_end=t_end,
         sources=sources,
     )
+
+    sources_with_data = sorted(correlation.windows_by_source.keys())
+    sources_without_data = sorted(set(correlation.sources_queried) - set(sources_with_data))
+    all_source_names = [s.source_name for s in ctx.db.get_sources()]
+    unindexed = sorted(set(all_source_names) - set(correlation.sources_queried))
+
+    n_with = len(sources_with_data)
+    n_queried = len(correlation.sources_queried)
+    hint_parts = [f"{n_with} of {n_queried} indexed sources had data in this time window."]
+    if sources_without_data:
+        hint_parts.append(f"Sources without data in range: {sources_without_data[:10]}.")
+    if unindexed:
+        hint_parts.append(
+            f"{len(unindexed)} other source(s) exist but were not queried. "
+            "Consider running additional extractions to fill gaps."
+        )
+    hint = " ".join(hint_parts)
+
+    slimmed_by_source: dict[str, Any] = {}
+    for src, wins in correlation.windows_by_source.items():
+        total_for_src = len(wins)
+        capped = wins[:_CORRELATE_WINDOW_CAP]
+        slimmed_by_source[src] = {
+            "windows": [_truncated_window(w, cap=_RAW_TEXT_CORRELATE_CAP) for w in capped],
+            "total_windows": total_for_src,
+            "truncated": total_for_src > _CORRELATE_WINDOW_CAP,
+        }
+
     results = {
         "time_start": correlation.time_start,
         "time_end": correlation.time_end,
         "sources_queried": correlation.sources_queried,
         "total_windows": correlation.total_windows,
-        "windows_by_source": {
-            src: _serialize_windows(wins) for src, wins in correlation.windows_by_source.items()
-        },
+        "windows_by_source": slimmed_by_source,
     }
 
     elapsed = (time.monotonic() - t0) * 1000
@@ -271,7 +280,7 @@ def correlate_across_sources(
         tool_call_id=tc_id,
         tool_name="correlate_across_sources",
         params={"t_start": t_start, "t_end": t_end, "sources": sources},
-        output_hash=_hash_output(results),
+        output_hash=hash_output(results),
         duration_ms=elapsed,
     )
     return {
@@ -280,95 +289,32 @@ def correlate_across_sources(
         "results": results,
         "source": None,
         "result_count": correlation.total_windows,
-        "reduced": False,
-        "reduction_ratio": None,
+        "sources_with_data": sources_with_data,
+        "sources_without_data": sources_without_data,
+        "hint": hint + " Use get_raw_output(source_name) for full evidence text.",
     }
 
 
-# ------------------------------------------------------------------
-# Tool: baseline_for
-# ------------------------------------------------------------------
-
-
 @mcp.tool()
-def baseline_for(source: str) -> dict:
-    """Return anomaly-score distribution statistics for a source.
-
-    Shows min, mean, median, p90, and max anomaly scores so the
-    investigator can understand what "normal" looks like for this
-    artifact type before hunting for outliers.  Read-only.
-    """
-    ctx = get_ctx()
-    tc_id = _make_tool_call_id()
-    t0 = time.monotonic()
-
-    stats = ctx.query_engine.get_baseline_stats(source)
-    results = stats.model_dump()
-
-    elapsed = (time.monotonic() - t0) * 1000
-    ctx.audit.log_tool_call(
-        tool_call_id=tc_id,
-        tool_name="baseline_for",
-        params={"source": source},
-        output_hash=_hash_output(results),
-        duration_ms=elapsed,
-    )
-    return {
-        "tool_call_id": tc_id,
-        "status": "success",
-        "results": results,
-        "source": source,
-        "result_count": 1,
-        "reduced": False,
-        "reduction_ratio": None,
-    }
-
-
-# ------------------------------------------------------------------
-# Tool: list_processes_from_memory
-# ------------------------------------------------------------------
-
-
-@mcp.tool()
-def list_processes_from_memory() -> dict:
+def list_processes_from_memory() -> dict[str, object]:
     """List all processes captured in the memory dump (Volatility pslist).
 
     Returns every window from the ``volatility.pslist`` source.  This is
     typically small enough to return in full without reduction.  Read-only.
     """
     ctx = get_ctx()
-    tc_id = _make_tool_call_id()
+    tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
     windows = ctx.db.get_windows_by_source(_SRC_PSLIST)
-    results = _serialize_windows(windows)
-
     elapsed = (time.monotonic() - t0) * 1000
-    ctx.audit.log_tool_call(
-        tool_call_id=tc_id,
-        tool_name="list_processes_from_memory",
-        params={},
-        output_hash=_hash_output(results),
-        duration_ms=elapsed,
+    return windowed_response(
+        tc_id, windows, _SRC_PSLIST, "list_processes_from_memory", {}, elapsed
     )
-    return {
-        "tool_call_id": tc_id,
-        "status": "success",
-        "results": results,
-        "source": _SRC_PSLIST,
-        "result_count": len(results),
-        "reduced": False,
-        "reduction_ratio": None,
-    }
-
-
-# ------------------------------------------------------------------
-# Tool: get_process_tree
-# ------------------------------------------------------------------
 
 
 @mcp.tool()
-def get_process_tree() -> dict:
+def get_process_tree() -> dict[str, object]:
     """Return the process parent-child tree from memory (Volatility pstree).
 
     Shows process hierarchy as captured in the memory dump.  Useful for
@@ -376,34 +322,12 @@ def get_process_tree() -> dict:
     by svchost.exe).  Read-only.
     """
     ctx = get_ctx()
-    tc_id = _make_tool_call_id()
+    tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
     windows = ctx.db.get_windows_by_source(_SRC_PSTREE)
-    results = _serialize_windows(windows)
-
     elapsed = (time.monotonic() - t0) * 1000
-    ctx.audit.log_tool_call(
-        tool_call_id=tc_id,
-        tool_name="get_process_tree",
-        params={},
-        output_hash=_hash_output(results),
-        duration_ms=elapsed,
-    )
-    return {
-        "tool_call_id": tc_id,
-        "status": "success",
-        "results": results,
-        "source": _SRC_PSTREE,
-        "result_count": len(results),
-        "reduced": False,
-        "reduction_ratio": None,
-    }
-
-
-# ------------------------------------------------------------------
-# Tool: get_eventlog_anomalies
-# ------------------------------------------------------------------
+    return windowed_response(tc_id, windows, _SRC_PSTREE, "get_process_tree", {}, elapsed)
 
 
 @mcp.tool()
@@ -412,38 +336,19 @@ def get_eventlog_anomalies(
     t_start: str,
     t_end: str,
     top_percent: float = 0.1,
-) -> dict:
+) -> dict[str, object]:
     """Find anomalous entries in a Windows Event Log channel.
 
     Scores every event in the specified *channel* (e.g. "security",
     "system") within [t_start, t_end] by k-NN density and returns
-    the top outliers.  Output is always Cordon-reduced because EVTX
-    channels are typically very large.  Read-only.
+    the top outliers.  Read-only.
     """
     ctx = get_ctx()
-    tc_id = _make_tool_call_id()
+    tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
     source_name = f"evtx.{channel}"
-    scored = ctx.query_engine.get_anomalies(
-        source_name=source_name,
-        time_start=t_start,
-        time_end=t_end,
-        top_percent=top_percent,
-    )
-
-    reduced = False
-    reduction_ratio: float | None = None
-    raw_text = "\n".join(s.window.raw_text for s in scored)
-    if raw_text:
-        reduced_out = ctx.reducer.reduce(raw_text, target_percentile=top_percent)
-        blocks = [b.model_dump() for b in reduced_out.blocks]
-        results: list[dict] = [{"reduced_text": reduced_out.text, "blocks": blocks}]
-        reduced = True
-        reduction_ratio = reduced_out.reduction_ratio
-    else:
-        results = _serialize_scored(scored)
-
+    windows = ctx.db.get_windows_by_source(source_name, t_start, t_end)
     elapsed = (time.monotonic() - t0) * 1000
     params = {
         "channel": channel,
@@ -451,84 +356,36 @@ def get_eventlog_anomalies(
         "t_end": t_end,
         "top_percent": top_percent,
     }
-    ctx.audit.log_tool_call(
-        tool_call_id=tc_id,
-        tool_name="get_eventlog_anomalies",
-        params=params,
-        output_hash=_hash_output(results),
-        cordon_ratio=reduction_ratio,
-        duration_ms=elapsed,
+    return windowed_response(
+        tc_id, windows, source_name, "get_eventlog_anomalies", params, elapsed
     )
-    return {
-        "tool_call_id": tc_id,
-        "status": "success",
-        "results": results,
-        "source": source_name,
-        "result_count": len(results),
-        "reduced": reduced,
-        "reduction_ratio": reduction_ratio,
-    }
-
-
-# ------------------------------------------------------------------
-# Tool: extract_mft_timeline
-# ------------------------------------------------------------------
 
 
 @mcp.tool()
-def extract_mft_timeline(t_start: str, t_end: str) -> dict:
+def extract_mft_timeline(t_start: str, t_end: str) -> dict[str, object]:
     """Extract the Plaso super-timeline for a time range.
 
-    Plaso timelines are extremely large, so the output is always
-    reduced via Cordon anomaly detection.  Only the most anomalous
-    blocks are returned.  Read-only.
+    Only the most relevant blocks are returned.  Read-only.
     """
     ctx = get_ctx()
-    tc_id = _make_tool_call_id()
+    tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
     source_name = "plaso.timeline"
-    windows = ctx.query_engine.get_windows_in_range(source_name, t_start, t_end)
-
-    reduced = False
-    reduction_ratio: float | None = None
-    raw_text = "\n".join(w.raw_text for w in windows)
-    if raw_text:
-        reduced_out = ctx.reducer.reduce(raw_text)
-        blocks = [b.model_dump() for b in reduced_out.blocks]
-        results: list[dict] = [{"reduced_text": reduced_out.text, "blocks": blocks}]
-        reduced = True
-        reduction_ratio = reduced_out.reduction_ratio
-    else:
-        results = _serialize_windows(windows)
-
+    windows = ctx.db.get_windows_by_source(source_name, t_start, t_end)
     elapsed = (time.monotonic() - t0) * 1000
-    ctx.audit.log_tool_call(
-        tool_call_id=tc_id,
-        tool_name="extract_mft_timeline",
-        params={"t_start": t_start, "t_end": t_end},
-        output_hash=_hash_output(results),
-        cordon_ratio=reduction_ratio,
-        duration_ms=elapsed,
+    return windowed_response(
+        tc_id,
+        windows,
+        source_name,
+        "extract_mft_timeline",
+        {"t_start": t_start, "t_end": t_end},
+        elapsed,
     )
-    return {
-        "tool_call_id": tc_id,
-        "status": "success",
-        "results": results,
-        "source": source_name,
-        "result_count": len(results),
-        "reduced": reduced,
-        "reduction_ratio": reduction_ratio,
-    }
-
-
-# ------------------------------------------------------------------
-# Tool: parse_prefetch
-# ------------------------------------------------------------------
 
 
 @mcp.tool()
-def parse_prefetch() -> dict:
+def parse_prefetch() -> dict[str, object]:
     """Return all parsed Windows Prefetch data.
 
     Prefetch files are small, so the full output is returned without
@@ -536,76 +393,32 @@ def parse_prefetch() -> dict:
     many times.  Read-only.
     """
     ctx = get_ctx()
-    tc_id = _make_tool_call_id()
+    tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
     windows = ctx.db.get_windows_by_source("prefetch.all")
-    results = _serialize_windows(windows)
-
     elapsed = (time.monotonic() - t0) * 1000
-    ctx.audit.log_tool_call(
-        tool_call_id=tc_id,
-        tool_name="parse_prefetch",
-        params={},
-        output_hash=_hash_output(results),
-        duration_ms=elapsed,
-    )
-    return {
-        "tool_call_id": tc_id,
-        "status": "success",
-        "results": results,
-        "source": "prefetch.all",
-        "result_count": len(results),
-        "reduced": False,
-        "reduction_ratio": None,
-    }
-
-
-# ------------------------------------------------------------------
-# Tool: get_amcache
-# ------------------------------------------------------------------
+    return windowed_response(tc_id, windows, "prefetch.all", "parse_prefetch", {}, elapsed)
 
 
 @mcp.tool()
-def get_amcache() -> dict:
+def get_amcache() -> dict[str, object]:
     """Return parsed AmCache / registry system hive data.
 
     Shows application execution history from the Windows registry.
     This is a small artifact returned in full.  Read-only.
     """
     ctx = get_ctx()
-    tc_id = _make_tool_call_id()
+    tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
     windows = ctx.db.get_windows_by_source("registry.system")
-    results = _serialize_windows(windows)
-
     elapsed = (time.monotonic() - t0) * 1000
-    ctx.audit.log_tool_call(
-        tool_call_id=tc_id,
-        tool_name="get_amcache",
-        params={},
-        output_hash=_hash_output(results),
-        duration_ms=elapsed,
-    )
-    return {
-        "tool_call_id": tc_id,
-        "status": "success",
-        "results": results,
-        "source": "registry.system",
-        "result_count": len(results),
-        "reduced": False,
-        "reduction_ratio": None,
-    }
-
-
-# ------------------------------------------------------------------
-# Tool: scan_hidden_processes
-# ------------------------------------------------------------------
+    return windowed_response(tc_id, windows, "registry.system", "get_amcache", {}, elapsed)
 
 
 @mcp.tool()
-def scan_hidden_processes() -> dict:
+def scan_hidden_processes() -> dict[str, object]:
     """Detect hidden processes by comparing psscan (pool-tag scan) against pslist (linked list).
 
     PIDs present in psscan but absent from pslist may be hidden or unlinked
@@ -613,7 +426,7 @@ def scan_hidden_processes() -> dict:
     windows from psscan.  Read-only.
     """
     ctx = get_ctx()
-    tc_id = _make_tool_call_id()
+    tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
     psscan_wins = ctx.db.get_windows_by_source(_SRC_PSSCAN)
@@ -627,7 +440,7 @@ def scan_hidden_processes() -> dict:
         {
             "pid": pid,
             "source": _SRC_PSSCAN,
-            "evidence_windows": _serialize_windows(psscan_pids[pid]),
+            "evidence_windows": serialize_windows(psscan_pids[pid], cap=10),
         }
         for pid in sorted(hidden_pids)
     ]
@@ -637,7 +450,7 @@ def scan_hidden_processes() -> dict:
         tool_call_id=tc_id,
         tool_name="scan_hidden_processes",
         params={},
-        output_hash=_hash_output(results),
+        output_hash=hash_output(results),
         duration_ms=elapsed,
     )
     return {
@@ -646,18 +459,11 @@ def scan_hidden_processes() -> dict:
         "results": results,
         "source": _SRC_PSSCAN,
         "result_count": len(results),
-        "reduced": False,
-        "reduction_ratio": None,
     }
 
 
-# ------------------------------------------------------------------
-# Tool: get_process_environment
-# ------------------------------------------------------------------
-
-
 @mcp.tool()
-def get_process_environment(pid: int) -> dict:
+def get_process_environment(pid: int) -> dict[str, object]:
     """Return environment variables for a specific process from memory.
 
     Filters Volatility envars output by *pid*.  Useful for detecting
@@ -665,39 +471,19 @@ def get_process_environment(pid: int) -> dict:
     Read-only.
     """
     ctx = get_ctx()
-    tc_id = _make_tool_call_id()
+    tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
     all_wins = ctx.db.get_windows_by_source(_SRC_ENVARS)
     matching = [w for w in all_wins if _extract_pid(w.raw_text) == pid]
-    results = _serialize_windows(matching)
-
     elapsed = (time.monotonic() - t0) * 1000
-    ctx.audit.log_tool_call(
-        tool_call_id=tc_id,
-        tool_name="get_process_environment",
-        params={"pid": pid},
-        output_hash=_hash_output(results),
-        duration_ms=elapsed,
+    return windowed_response(
+        tc_id, matching, _SRC_ENVARS, "get_process_environment", {"pid": pid}, elapsed
     )
-    return {
-        "tool_call_id": tc_id,
-        "status": "success",
-        "results": results,
-        "source": _SRC_ENVARS,
-        "result_count": len(results),
-        "reduced": False,
-        "reduction_ratio": None,
-    }
-
-
-# ------------------------------------------------------------------
-# Tool: get_process_privileges
-# ------------------------------------------------------------------
 
 
 @mcp.tool()
-def get_process_privileges(pid: int) -> dict:
+def get_process_privileges(pid: int) -> dict[str, object]:
     """Return token privileges for a specific process from memory.
 
     Filters Volatility privs output by *pid*.  SeDebugPrivilege or
@@ -705,39 +491,19 @@ def get_process_privileges(pid: int) -> dict:
     privilege escalation.  Read-only.
     """
     ctx = get_ctx()
-    tc_id = _make_tool_call_id()
+    tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
     all_wins = ctx.db.get_windows_by_source(_SRC_PRIVS)
     matching = [w for w in all_wins if _extract_pid(w.raw_text) == pid]
-    results = _serialize_windows(matching)
-
     elapsed = (time.monotonic() - t0) * 1000
-    ctx.audit.log_tool_call(
-        tool_call_id=tc_id,
-        tool_name="get_process_privileges",
-        params={"pid": pid},
-        output_hash=_hash_output(results),
-        duration_ms=elapsed,
+    return windowed_response(
+        tc_id, matching, _SRC_PRIVS, "get_process_privileges", {"pid": pid}, elapsed
     )
-    return {
-        "tool_call_id": tc_id,
-        "status": "success",
-        "results": results,
-        "source": _SRC_PRIVS,
-        "result_count": len(results),
-        "reduced": False,
-        "reduction_ratio": None,
-    }
-
-
-# ------------------------------------------------------------------
-# Tool: scan_kernel_modules
-# ------------------------------------------------------------------
 
 
 @mcp.tool()
-def scan_kernel_modules() -> dict:
+def scan_kernel_modules() -> dict[str, object]:
     """Detect hidden kernel modules by comparing modscan (pool-tag) against modules (linked list).
 
     Modules present in modscan but absent from the linked list may have
@@ -745,7 +511,7 @@ def scan_kernel_modules() -> dict:
     supporting evidence windows.  Read-only.
     """
     ctx = get_ctx()
-    tc_id = _make_tool_call_id()
+    tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
     modules_wins = ctx.db.get_windows_by_source(_SRC_MODULES)
@@ -759,7 +525,7 @@ def scan_kernel_modules() -> dict:
         {
             "module_name": name,
             "source": _SRC_MODSCAN,
-            "evidence_windows": _serialize_windows(scanned_mods[name]),
+            "evidence_windows": serialize_windows(scanned_mods[name], cap=10),
         }
         for name in sorted(hidden_names)
     ]
@@ -769,7 +535,7 @@ def scan_kernel_modules() -> dict:
         tool_call_id=tc_id,
         tool_name="scan_kernel_modules",
         params={},
-        output_hash=_hash_output(results),
+        output_hash=hash_output(results),
         duration_ms=elapsed,
     )
     return {
@@ -778,56 +544,27 @@ def scan_kernel_modules() -> dict:
         "results": results,
         "source": _SRC_MODSCAN,
         "result_count": len(results),
-        "reduced": False,
-        "reduction_ratio": None,
     }
 
 
-# ------------------------------------------------------------------
-# Tool: get_userassist
-# ------------------------------------------------------------------
-
-
 @mcp.tool()
-def get_userassist() -> dict:
+def get_userassist() -> dict[str, object]:
     """Return UserAssist registry entries extracted from memory.
 
     UserAssist tracks GUI program execution with run counts and
     timestamps.  Useful for building an execution timeline.  Read-only.
     """
     ctx = get_ctx()
-    tc_id = _make_tool_call_id()
+    tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
     windows = ctx.db.get_windows_by_source(_SRC_USERASSIST)
-    results = _serialize_windows(windows)
-
     elapsed = (time.monotonic() - t0) * 1000
-    ctx.audit.log_tool_call(
-        tool_call_id=tc_id,
-        tool_name="get_userassist",
-        params={},
-        output_hash=_hash_output(results),
-        duration_ms=elapsed,
-    )
-    return {
-        "tool_call_id": tc_id,
-        "status": "success",
-        "results": results,
-        "source": _SRC_USERASSIST,
-        "result_count": len(results),
-        "reduced": False,
-        "reduction_ratio": None,
-    }
-
-
-# ------------------------------------------------------------------
-# Tool: scan_files_in_memory
-# ------------------------------------------------------------------
+    return windowed_response(tc_id, windows, _SRC_USERASSIST, "get_userassist", {}, elapsed)
 
 
 @mcp.tool()
-def scan_files_in_memory() -> dict:
+def scan_files_in_memory() -> dict[str, object]:
     """Return all file objects cached in the memory dump (Volatility filescan).
 
     Lists every file object found via pool-tag scanning.  Useful for
@@ -835,26 +572,263 @@ def scan_files_in_memory() -> dict:
     of capture.  Read-only.
     """
     ctx = get_ctx()
-    tc_id = _make_tool_call_id()
+    tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
     windows = ctx.db.get_windows_by_source(_SRC_FILESCAN)
-    results = _serialize_windows(windows)
+    elapsed = (time.monotonic() - t0) * 1000
+    return windowed_response(tc_id, windows, _SRC_FILESCAN, "scan_files_in_memory", {}, elapsed)
+
+
+@mcp.tool()
+def get_raw_output(
+    source_name: str,
+    after_id: int = 0,
+    limit: int = 500,
+) -> dict[str, object]:
+    """Retrieve raw extraction output for a source, with cursor pagination.
+
+    Returns windows for the given source ordered by ID.  Pass
+    ``after_id`` from the previous response's ``next_after_id`` to
+    get the next page.  Every page is equally fast regardless of
+    position in the source.
+
+    For finding specific content in large sources, prefer
+    ``search(query, source=source_name)`` over paginating.
+
+    Args:
+        source_name: Exact source name or prefix (e.g. "volatility.pslist"
+            matches "volatility.pslist" and "volatility.pslist.host1").
+        after_id: Cursor -- return windows with ID > this value.
+            Use 0 for the first page, then pass ``next_after_id`` from
+            the response to get subsequent pages.
+        limit: Maximum number of windows to return (default 500).
+    """
+    ctx = get_ctx()
+    tc_id = make_tool_call_id()
+    t0 = time.monotonic()
+
+    page, total = ctx.db.get_windows_page(source_name, after_id=after_id, limit=limit)
+    raw_text = "\n".join(w.raw_text for w in page)
+
+    next_after = page[-1].window_id if page else after_id
 
     elapsed = (time.monotonic() - t0) * 1000
     ctx.audit.log_tool_call(
         tool_call_id=tc_id,
-        tool_name="scan_files_in_memory",
-        params={},
-        output_hash=_hash_output(results),
+        tool_name="get_raw_output",
+        params={"source_name": source_name, "after_id": after_id, "limit": limit},
+        output_hash=hash_output({"total": total, "returned": len(page)}),
+        duration_ms=elapsed,
+    )
+    result: dict[str, object] = {
+        "tool_call_id": tc_id,
+        "status": "success",
+        "source_name": source_name,
+        "total_windows": total,
+        "returned_windows": len(page),
+        "next_after_id": next_after,
+        "has_more": len(page) == limit,
+        "raw_text": raw_text,
+    }
+    if total > 5000:
+        result["hint"] = (
+            f"This source has {total} windows. Use search(query, source='{source_name}') "
+            "to find specific content efficiently instead of paginating."
+        )
+    return result
+
+
+_MAX_DECODE_INPUT = 100_000
+_MAX_DECODE_OUTPUT = 50_000
+
+
+@mcp.tool()
+def decode_payload(
+    data: str,
+    encoding: str = "auto",
+) -> dict[str, object]:
+    """Safely decode an encoded payload found in evidence.
+
+    Supports base64, hex, UTF-16LE (PowerShell -EncodedCommand), and
+    Python pickle (inspection only -- never executed).  Use this instead
+    of shell commands to decode suspicious strings.  Read-only and safe:
+    no code is ever executed.
+
+    Args:
+        data: The encoded string to decode.
+        encoding: One of ``"auto"``, ``"base64"``, ``"hex"``,
+            ``"utf16le"`` (PowerShell encoded commands), or
+            ``"pickle"``.  ``"auto"`` tries to detect the encoding.
+    """
+    ctx = get_ctx()
+    tc_id = make_tool_call_id()
+    t0 = time.monotonic()
+    params = {"encoding": encoding, "data_length": len(data)}
+
+    if len(data) > _MAX_DECODE_INPUT:
+        return {
+            "tool_call_id": tc_id,
+            "status": "error",
+            "error_message": f"Input too large ({len(data)} chars, max {_MAX_DECODE_INPUT})",
+        }
+
+    data = data.strip()
+    decoded: str | None = None
+    detected_encoding: str = encoding
+    layers: list[dict[str, str]] = []
+
+    if encoding == "auto":
+        detected_encoding = _detect_encoding(data)
+
+    raw_bytes: bytes | None = None
+
+    if detected_encoding == "hex":
+        try:
+            raw_bytes = binascii.unhexlify(data)
+            decoded = _safe_decode_bytes(raw_bytes)
+            layers.append({"encoding": "hex", "preview": decoded[:200]})
+        except (binascii.Error, ValueError) as exc:
+            decoded = f"[hex decode failed: {exc}]"
+
+    elif detected_encoding == "utf16le":
+        try:
+            raw_bytes = base64.b64decode(data)
+            decoded = raw_bytes.decode("utf-16-le", errors="replace").rstrip("\x00")
+            layers.append(
+                {"encoding": "utf16le (PowerShell -EncodedCommand)", "preview": decoded[:500]}
+            )
+        except Exception as exc:
+            decoded = f"[utf16le decode failed: {exc}]"
+
+    elif detected_encoding == "pickle":
+        decoded = _inspect_pickle(data)
+        layers.append({"encoding": "pickle (inspected, NOT executed)", "preview": decoded[:500]})
+
+    elif detected_encoding == "base64":
+        try:
+            raw_bytes = base64.b64decode(data)
+        except (binascii.Error, ValueError) as exc:
+            decoded = f"[base64 decode failed: {exc}]"
+
+        if raw_bytes is not None:
+            if raw_bytes[:2] == b"\x80\x04" or raw_bytes[:2] == b"\x80\x05":
+                layers.append({"encoding": "base64", "preview": "(binary -> pickle detected)"})
+                decoded = _inspect_pickle_bytes(raw_bytes)
+                layers.append(
+                    {"encoding": "pickle (inspected, NOT executed)", "preview": decoded[:500]}
+                )
+            elif raw_bytes[:2] == b"\x1f\x8b":
+                import gzip
+                import io
+
+                try:
+                    decompressed = gzip.GzipFile(fileobj=io.BytesIO(raw_bytes)).read()
+                    decoded = _safe_decode_bytes(decompressed)
+                    layers.append({"encoding": "base64", "preview": "(binary -> gzip detected)"})
+                    layers.append({"encoding": "gzip", "preview": decoded[:500]})
+                except Exception:
+                    decoded = _safe_decode_bytes(raw_bytes)
+                    layers.append({"encoding": "base64", "preview": decoded[:200]})
+            else:
+                decoded = _safe_decode_bytes(raw_bytes)
+                layers.append({"encoding": "base64", "preview": decoded[:200]})
+                inner = _detect_encoding(decoded)
+                if inner != "base64" and inner != "unknown":
+                    inner_result = decode_payload(decoded, encoding=inner)
+                    if isinstance(inner_result.get("results"), dict):
+                        inner_layers = inner_result["results"].get("layers", [])
+                        if inner_layers:
+                            layers.extend(inner_layers)
+                            decoded = inner_result["results"].get("decoded", decoded)
+
+    else:
+        decoded = f"[unknown encoding: {detected_encoding}]"
+
+    if decoded and len(decoded) > _MAX_DECODE_OUTPUT:
+        decoded = decoded[:_MAX_DECODE_OUTPUT] + f"\n... [truncated at {_MAX_DECODE_OUTPUT} chars]"
+
+    results: dict[str, object] = {
+        "detected_encoding": detected_encoding,
+        "layers": layers,
+        "decoded": decoded,
+        "decoded_length": len(decoded) if decoded else 0,
+    }
+
+    elapsed = (time.monotonic() - t0) * 1000
+    ctx.audit.log_tool_call(
+        tool_call_id=tc_id,
+        tool_name="decode_payload",
+        params=params,
+        output_hash=hash_output(results),
         duration_ms=elapsed,
     )
     return {
         "tool_call_id": tc_id,
         "status": "success",
         "results": results,
-        "source": _SRC_FILESCAN,
-        "result_count": len(results),
-        "reduced": False,
-        "reduction_ratio": None,
     }
+
+
+def _detect_encoding(data: str) -> str:
+    """Best-effort encoding detection from the raw string."""
+    stripped = data.strip()
+
+    if stripped.startswith(("gASV", "gAST", "gANV")):
+        return "pickle"
+
+    if re.fullmatch(r"[0-9a-fA-F]+", stripped) and len(stripped) % 2 == 0 and len(stripped) >= 8:
+        return "hex"
+
+    try:
+        raw = base64.b64decode(stripped, validate=True)
+        if len(raw) >= 4:
+            if raw[:2] in (b"\xff\xfe", b"\x00\x00") or b"\x00" in raw[:20]:
+                return "utf16le"
+            return "base64"
+    except Exception:
+        pass
+
+    return "unknown"
+
+
+def _safe_decode_bytes(raw: bytes) -> str:
+    """Decode bytes to text, preferring UTF-8 with latin-1 fallback."""
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("latin-1")
+
+
+def _inspect_pickle(b64_data: str) -> str:
+    """Decode base64 pickle and disassemble it without executing."""
+    try:
+        raw = base64.b64decode(b64_data)
+        return _inspect_pickle_bytes(raw)
+    except Exception as exc:
+        return f"[pickle inspection failed: {exc}]"
+
+
+def _inspect_pickle_bytes(raw: bytes) -> str:
+    """Disassemble pickle bytes without executing them."""
+    import io
+    import pickletools
+
+    out = io.StringIO()
+    try:
+        pickletools.dis(io.BytesIO(raw), out, annotate=1)
+        disasm = out.getvalue()
+    except Exception as exc:
+        text = _safe_decode_bytes(raw)
+        return f"[pickle disassembly failed: {exc}]\nRaw text preview:\n{text[:2000]}"
+
+    text_fragments: list[str] = []
+    for line in disasm.splitlines():
+        for match in re.finditer(r"'([^']{4,})'", line):
+            text_fragments.append(match.group(1))
+
+    result = ""
+    if text_fragments:
+        result = "Embedded strings:\n" + "\n".join(f"  {s}" for s in text_fragments[:50])
+    result += "\n\nPickle disassembly:\n" + disasm
+    return result
