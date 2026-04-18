@@ -13,7 +13,7 @@ class Extractor(Protocol):
 
     Each extractor knows how to handle one class of forensic artifact (memory
     dumps, disk images, log files, etc.) and produces plain-text output ready
-    for windowing and embedding.
+    for windowing and indexing.
     """
 
     name: str
@@ -50,12 +50,15 @@ class ExtractorRegistry:
     """Ordered registry of extractors; first match wins."""
 
     def __init__(self) -> None:
+        """Create an empty registry."""
         self._extractors: list[Extractor] = []
 
     def register(self, extractor: Extractor) -> None:
+        """Append *extractor*; earlier entries win in :meth:`get_extractor_for`."""
         self._extractors.append(extractor)
 
     def get_extractor_for(self, path: Path) -> Extractor | None:
+        """Return the first registered extractor for which ``can_handle(path)`` is true."""
         for ext in self._extractors:
             if ext.can_handle(path):
                 return ext
@@ -66,6 +69,7 @@ class ExtractorRegistry:
         return [ext for ext in self._extractors if ext.can_handle(path)]
 
     def all_extractors(self) -> list[Extractor]:
+        """Return all registered extractors in registration order."""
         return list(self._extractors)
 
 

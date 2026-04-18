@@ -37,6 +37,7 @@ _LINUX_INDICATORS = ("linux", "0x83", "ext", "0x8e")
 
 
 def _tsk_available() -> bool:
+    """Return True if The Sleuth Kit is installed (``fls`` on $PATH)."""
     return shutil.which("fls") is not None
 
 
@@ -78,9 +79,11 @@ class SleuthKitExtractor:
     name: str = "sleuthkit"
 
     def can_handle(self, path: Path) -> bool:
+        """Return True for disk image files (.e01/.dd/.img)."""
         return path.suffix.lower() in _DISK_IMAGE_EXTS
 
-    def extract(self, path: Path, case_id: str) -> list[ExtractionResult]:
+    def extract(self, path: Path, _case_id: str) -> list[ExtractionResult]:
+        """Run TSK tools (mmls, fls, mactime, fsstat) and return filesystem metadata."""
         if not _tsk_available():
             logger.info("Sleuth Kit not installed (fls not on PATH) -- skipping %s", path)
             return []
@@ -145,6 +148,7 @@ class SleuthKitExtractor:
         return results
 
     def version(self) -> str:
+        """Return the Sleuth Kit version string from ``fls -V``."""
         if not _tsk_available():
             return "sleuthkit (not installed)"
         try:

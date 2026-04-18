@@ -2,7 +2,7 @@
 
 Runs a curated set of Volatility 3 plugins against a memory dump via
 subprocess, captures each plugin's tab-separated text output as a separate
-logical source, and returns them for windowing and embedding.
+logical source, and returns them for windowing and indexing.
 """
 
 from __future__ import annotations
@@ -80,7 +80,6 @@ class VolatilityExtractor:
         # Process analysis
         "windows.psscan.PsScan",
         "windows.envars.Envars",
-        "windows.privs.Privs",
         "windows.getsids.GetSIDs",
         # Network
         "windows.netstat.NetStat",
@@ -109,10 +108,12 @@ class VolatilityExtractor:
     ]
 
     def __init__(self) -> None:
+        """Initialize with empty caches for the vol binary and version string."""
         self._vol_cmd: list[str] | None = None
         self._cached_version: str | None = None
 
     def _vol_command(self) -> list[str]:
+        """Return the Volatility 3 command list, locating the binary on first call."""
         if self._vol_cmd is None:
             self._vol_cmd = _find_vol_binary()
         return self._vol_cmd
@@ -157,7 +158,7 @@ class VolatilityExtractor:
         logger.warning("Could not detect OS for %s, defaulting to windows", dump_path)
         return "windows"
 
-    def extract(self, path: Path, case_id: str) -> list[ExtractionResult]:
+    def extract(self, path: Path, _case_id: str) -> list[ExtractionResult]:
         """Run all plugins against *path* and return one result per successful plugin."""
         vol_cmd = self._vol_command()
         detected_os = self._detect_os(vol_cmd, path)
@@ -205,6 +206,7 @@ class VolatilityExtractor:
 
     @staticmethod
     def _run_plugin(vol_cmd: list[str], dump_path: Path, plugin: str) -> ExtractionResult | None:
+        """Execute a single Volatility plugin and return its output as an ExtractionResult."""
         short = _plugin_short_name(plugin)
         cmd = [*vol_cmd, "-f", str(dump_path), plugin]
 

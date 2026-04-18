@@ -65,19 +65,23 @@ class LogFileExtractor:
     name: str = "logs"
 
     def can_handle(self, path: Path) -> bool:
+        """Return True for directories and .log/.txt files."""
         if path.is_dir():
             return True
         return path.suffix.lower() in _LOG_FILE_EXTS
 
-    def extract(self, path: Path, case_id: str) -> list[ExtractionResult]:
+    def extract(self, path: Path, _case_id: str) -> list[ExtractionResult]:
+        """Read log files (or all text files in a directory) and return extraction results."""
         if path.is_dir():
             return self._extract_directory(path)
         return self._extract_single_file(path)
 
     def version(self) -> str:
+        """Return a static version string (no external tool dependency)."""
         return "builtin"
 
     def _extract_single_file(self, path: Path) -> list[ExtractionResult]:
+        """Read a single text file and return it as an ExtractionResult."""
         if not _is_text_file(path):
             logger.debug("Skipping binary file %s", path)
             return []
@@ -97,6 +101,7 @@ class LogFileExtractor:
         ]
 
     def _extract_directory(self, directory: Path) -> list[ExtractionResult]:
+        """Recursively read all text files under *directory*."""
         results: list[ExtractionResult] = []
         for file_path in sorted(directory.rglob("*")):
             if not file_path.is_file():

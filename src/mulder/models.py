@@ -7,22 +7,8 @@ from typing import Literal
 from pydantic import BaseModel, model_validator
 
 
-class EmbeddingConfig(BaseModel):
-    """Persisted embedding backend configuration for a case.
-
-    Stored in case_metadata so that serve/investigate use the same
-    model that was used during ingestion.  The api_key is intentionally
-    excluded -- it must come from the environment or CLI flags.
-    """
-
-    backend: Literal["sentence-transformers", "remote"] = "sentence-transformers"
-    model_name: str = "all-MiniLM-L6-v2"
-    embedding_dim: int = 384
-    batch_size: int = 32
-
-
 class WindowRow(BaseModel):
-    window_id: int
+    window_id: int | None = None
     source_id: int
     line_start: int
     line_end: int
@@ -45,7 +31,6 @@ class CaseMetadataRow(BaseModel):
     ingested_at: str
     evidence_root: str
     extractor_versions: dict[str, str]
-    embedding_config: EmbeddingConfig = EmbeddingConfig()
 
 
 class Finding(BaseModel):
@@ -57,20 +42,17 @@ class Finding(BaseModel):
     confidence: Literal["confirmed", "inference"]
     evidence_refs: list[str]
     sources: list[str]
+    mitre_attack_ids: list[str] = []
     event_time_start: str | None = None
     event_time_end: str | None = None
     submitted_at: str
 
     @model_validator(mode="after")
     def _check_evidence_refs_nonempty(self) -> Finding:
+        """Require at least one evidence_refs entry (tool_call_id citations)."""
         if not self.evidence_refs:
             raise ValueError("evidence_refs must contain at least one tool_call_id")
         return self
-
-
-# ------------------------------------------------------------------
-# Audit trail models (Piece 11)
-# ------------------------------------------------------------------
 
 
 class ToolCallEntry(BaseModel):
@@ -78,10 +60,11 @@ class ToolCallEntry(BaseModel):
 
     tool_call_id: str
     tool_name: str
-    params: dict
+    params: dict[str, object]
     output_hash: str
     timestamp: str
     duration_ms: float
+    batch_id: str | None = None
 
 
 class SourceProvenance(BaseModel):
@@ -110,3 +93,7 @@ class AuditSummary(BaseModel):
     total_duration_ms: float
     first_timestamp: str
     last_timestamp: str
+    tool_durations: dict[str, float] = {}
+    estimated_input_tokens: int = 0
+    estimated_output_tokens: int = 0
+    estimated_cost_usd: float = 0.0

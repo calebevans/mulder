@@ -2,7 +2,7 @@
 
 Runs EZ Tools (PECmd, AmcacheParser, MFTECmd, etc.) against mounted disk
 images at ingest time.  Each tool produces CSV output which is parsed into
-text for windowing and embedding.  Tools live at ``/opt/zimmermantools/``
+text for windowing and indexing.  Tools live at ``/opt/zimmermantools/``
 on a SIFT workstation and are invoked via ``dotnet``.
 
 Query-time MCP tools are exposed in ``tools_eztools.py``.
@@ -18,7 +18,6 @@ import re
 import shutil
 import subprocess
 import tempfile
-from dataclasses import dataclass
 from pathlib import Path
 
 from mulder.extractors.base import ExtractionResult
@@ -39,17 +38,8 @@ _MMLS_ROW_RE = re.compile(
 _NTFS_INDICATORS = ("ntfs", "exfat", "0x07", "win95 fat", "0x0b", "0x0c")
 
 
-@dataclass(frozen=True)
-class _ArtifactJob:
-    """Describes one EZ tool invocation."""
-
-    tool_dll: str
-    source_name: str
-    input_path: Path
-    use_dir_flag: bool
-
-
 def _ez_available() -> bool:
+    """Return True if dotnet and the EZ Tools directory are present."""
     return shutil.which("dotnet") is not None and _EZ_TOOLS_DIR.is_dir()
 
 
@@ -63,22 +53,17 @@ def _run_ez_tool(
     extra_args: list[str] | None = None,
 ) -> str:
     """Invoke an EZ tool and return the CSV text output, or empty string on failure."""
-    dll_path = _EZ_TOOLS_DIR / tool_dll
-    if not dll_path.exists():
-        logger.info("EZ tool not found: %s -- skipping", dll_path)
+    tool_path = _EZ_TOOLS_DIR / tool_dll
+    if not tool_path.exists():
+        alt = tool_dll.replace(".dll", ".exe")
+        tool_path = _EZ_TOOLS_DIR / alt
+    if not tool_path.exists():
+        logger.info("EZ tool not found: %s -- skipping", _EZ_TOOLS_DIR / tool_dll)
         return ""
 
     flag = "-d" if use_dir_flag else "-f"
-    cmd = [
-        "dotnet",
-        str(dll_path),
-        flag,
-        str(input_path),
-        "--csv",
-        str(csv_dir),
-        "--csvf",
-        csv_filename,
-    ]
+    cmd = [str(tool_path)] if tool_path.suffix == ".exe" else ["dotnet", str(tool_path)]
+    cmd.extend([flag, str(input_path), "--csv", str(csv_dir), "--csvf", csv_filename])
     if extra_args:
         cmd.extend(extra_args)
 
@@ -116,7 +101,7 @@ def _run_ez_tool(
 
 
 def _csv_to_text(csv_content: str) -> str:
-    """Convert CSV content to tab-separated key=value lines for embedding."""
+    """Convert CSV content to tab-separated key=value lines for indexing."""
     if not csv_content.strip():
         return ""
 
@@ -199,27 +184,17 @@ def _find_case_insensitive(root: Path, *segments: str) -> Path | None:
     return current
 
 
-def _find_all_case_insensitive(root: Path, *segments: str) -> list[Path]:
-    """Like _find_case_insensitive but globs the last segment."""
-    if len(segments) < 2:
-        pattern = segments[0] if segments else "*"
-        return sorted(root.glob(pattern))
-
-    parent = _find_case_insensitive(root, *segments[:-1])
-    if parent is None or not parent.is_dir():
-        return []
-    return sorted(parent.glob(segments[-1]))
-
-
 class EZToolsExtractor:
     """Extracts Windows artifacts from disk images using Eric Zimmerman Tools."""
 
     name: str = "eztools"
 
     def can_handle(self, path: Path) -> bool:
+        """Return True for disk image formats (.E01/.dd/.img)."""
         return path.suffix.lower() in _DISK_IMAGE_EXTS
 
     def extract(self, path: Path, case_id: str) -> list[ExtractionResult]:
+        """Mount the image and run all EZ tool parsers against it."""
         if not _ez_available():
             logger.info(
                 "EZ Tools not available (need dotnet + %s) -- skipping %s",
@@ -262,6 +237,7 @@ class EZToolsExtractor:
                 mount_point.rmdir()
 
     def version(self) -> str:
+        """Return dotnet runtime version or an unavailability notice."""
         if not _ez_available():
             return "eztools (not available)"
         try:
@@ -277,13 +253,10 @@ class EZToolsExtractor:
         except (subprocess.TimeoutExpired, OSError):
             return "eztools (dotnet unknown version)"
 
-    # ------------------------------------------------------------------
-    # Individual tool runners
-    # ------------------------------------------------------------------
-
     def _make_result(
         self, source_name: str, source_path: str, text: str
     ) -> list[ExtractionResult]:
+        """Wrap non-empty text into a single-element ExtractionResult list."""
         if not text.strip():
             return []
         return [
@@ -318,6 +291,7 @@ class EZToolsExtractor:
             return _csv_to_text(raw_csv)
 
     def _run_prefetch(self, root: Path, image: str) -> list[ExtractionResult]:
+        """Run PECmd against the Windows Prefetch directory."""
         pf_dir = _find_case_insensitive(root, "Windows", "Prefetch")
         if pf_dir is None or not pf_dir.is_dir():
             return []
@@ -325,6 +299,7 @@ class EZToolsExtractor:
         return self._make_result("ez.prefetch", image, text)
 
     def _run_amcache(self, root: Path, image: str) -> list[ExtractionResult]:
+        """Run AmcacheParser against the Amcache.hve hive."""
         amcache = _find_case_insensitive(root, "Windows", "appcompat", "Programs", "Amcache.hve")
         if amcache is None or not amcache.is_file():
             return []
@@ -332,6 +307,7 @@ class EZToolsExtractor:
         return self._make_result("ez.amcache", image, text)
 
     def _run_shimcache(self, root: Path, image: str) -> list[ExtractionResult]:
+        """Run AppCompatCacheParser against the SYSTEM hive."""
         system_hive = _find_case_insensitive(root, "Windows", "System32", "config", "SYSTEM")
         if system_hive is None or not system_hive.is_file():
             return []
@@ -339,6 +315,7 @@ class EZToolsExtractor:
         return self._make_result("ez.shimcache", image, text)
 
     def _run_mft(self, root: Path, image: str) -> list[ExtractionResult]:
+        """Extract $MFT via icat and parse it with MFTECmd."""
         with tempfile.TemporaryDirectory(prefix="mulder_ez_mft_") as tmp:
             mft_path = Path(tmp) / "$MFT"
             offset = _resolve_partition_offset(image)
@@ -356,6 +333,7 @@ class EZToolsExtractor:
             return self._make_result("ez.mft", image, text)
 
     def _run_usnjrnl(self, root: Path, image: str) -> list[ExtractionResult]:
+        """Extract $UsnJrnl:$J via icat and parse it with MFTECmd."""
         with tempfile.TemporaryDirectory(prefix="mulder_ez_usn_") as tmp:
             usn_path = Path(tmp) / "$J"
             offset = _resolve_partition_offset(image)
@@ -395,6 +373,7 @@ class EZToolsExtractor:
         return None
 
     def _run_evtx(self, root: Path, image: str) -> list[ExtractionResult]:
+        """Run EvtxECmd against the Windows event log directory."""
         evtx_dir = _find_case_insensitive(root, "Windows", "System32", "winevt", "Logs")
         if evtx_dir is None or not evtx_dir.is_dir():
             return []
@@ -402,7 +381,7 @@ class EZToolsExtractor:
         results: list[ExtractionResult] = []
         with tempfile.TemporaryDirectory(prefix="mulder_ez_evtx_") as csv_dir:
             raw_csv = _run_ez_tool(
-                "EvtxECmd.dll",
+                "EvtxeCmd/EvtxECmd.exe",
                 evtx_dir,
                 Path(csv_dir),
                 "evtx_all.csv",
@@ -431,6 +410,7 @@ class EZToolsExtractor:
         return results
 
     def _run_registry(self, root: Path, image: str) -> list[ExtractionResult]:
+        """Run RECmd against each registry hive in System32\\config."""
         config_dir = _find_case_insensitive(root, "Windows", "System32", "config")
         if config_dir is None or not config_dir.is_dir():
             return []
@@ -445,13 +425,14 @@ class EZToolsExtractor:
             batch_file = _EZ_TOOLS_DIR / "BatchExamples" / "RECmd_Batch_MC.reb"
             extra = ["--bn", str(batch_file)] if batch_file.exists() else None
             text = self._run_tool_and_parse(
-                "RECmd.dll", child, f"registry_{label}.csv", extra_args=extra
+                "RECmd/RECmd.exe", child, f"registry_{label}.csv", extra_args=extra
             )
             results.extend(self._make_result(f"ez.registry.{label}", image, text))
 
         return results
 
     def _run_jumplists(self, root: Path, image: str) -> list[ExtractionResult]:
+        """Run JLECmd against AutomaticDestinations for each user profile."""
         users_dir = _find_case_insensitive(root, "Users")
         if users_dir is None or not users_dir.is_dir():
             return []
@@ -479,6 +460,7 @@ class EZToolsExtractor:
         return self._make_result("ez.jumplists", image, "\n".join(all_text))
 
     def _run_lnkfiles(self, root: Path, image: str) -> list[ExtractionResult]:
+        """Run LECmd against the Recent folder for each user profile."""
         users_dir = _find_case_insensitive(root, "Users")
         if users_dir is None or not users_dir.is_dir():
             return []
@@ -505,6 +487,7 @@ class EZToolsExtractor:
         return self._make_result("ez.lnkfiles", image, "\n".join(all_text))
 
     def _run_shellbags(self, root: Path, image: str) -> list[ExtractionResult]:
+        """Run SBECmd against UsrClass.dat for each user profile."""
         users_dir = _find_case_insensitive(root, "Users")
         if users_dir is None or not users_dir.is_dir():
             return []
@@ -529,6 +512,7 @@ class EZToolsExtractor:
         return self._make_result("ez.shellbags", image, "\n".join(all_text))
 
     def _run_recyclebin(self, root: Path, image: str) -> list[ExtractionResult]:
+        """Run RBCmd against the $Recycle.Bin directory."""
         rb_dir = _find_case_insensitive(root, "$Recycle.Bin")
         if rb_dir is None or not rb_dir.is_dir():
             return []
@@ -536,6 +520,7 @@ class EZToolsExtractor:
         return self._make_result("ez.recyclebin", image, text)
 
     def _run_srum(self, root: Path, image: str) -> list[ExtractionResult]:
+        """Run SrumECmd against the SRUDB.dat database."""
         srudb = _find_case_insensitive(root, "Windows", "System32", "sru", "SRUDB.dat")
         if srudb is None or not srudb.is_file():
             return []

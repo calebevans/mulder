@@ -2,7 +2,7 @@
 
 Runs ``log2timeline.py`` to build a Plaso storage file, then ``psort.py``
 to export the super-timeline as L2T CSV text.  The resulting timeline is
-returned as an :class:`ExtractionResult` for windowing and embedding.
+returned as an :class:`ExtractionResult` for windowing and indexing.
 
 When ``plaso_dir`` is configured, the ``.plaso`` storage file is persisted
 alongside the case database so that query-time tools (``tools_plaso.py``)
@@ -24,9 +24,20 @@ from mulder.extractors.base import ExtractionResult
 logger = logging.getLogger(__name__)
 
 _DISK_IMAGE_EXTS = frozenset({".e01", ".dd", ".img"})
-_LOG2TIMELINE_BIN = "log2timeline.py"
-_PSORT_BIN = "psort.py"
-_PINFO_BIN = "pinfo.py"
+
+
+def _find_bin(*names: str) -> str:
+    """Return the first executable found on $PATH, falling back to *names[0]*."""
+    for n in names:
+        p = shutil.which(n)
+        if p:
+            return p
+    return names[0]
+
+
+_LOG2TIMELINE_BIN = _find_bin("log2timeline.py", "log2timeline")
+_PSORT_BIN = _find_bin("psort.py", "psort")
+_PINFO_BIN = _find_bin("pinfo.py", "pinfo")
 _LOG2TIMELINE_TIMEOUT = 1800  # 30 minutes
 _PSORT_TIMEOUT = 600  # 10 minutes
 _PINFO_TIMEOUT = 60
@@ -113,24 +124,30 @@ class PlasoExtractor:
     name: str = "plaso"
 
     def __init__(self) -> None:
+        """Initialize with empty caches and no persistent plaso directory."""
         self._cached_version: str | None = None
         self.plaso_dir: Path | None = None
 
     def can_handle(self, path: Path) -> bool:
+        """Return True for disk images (.e01/.dd/.img) or mounted filesystems."""
         if path.suffix.lower() in _DISK_IMAGE_EXTS:
             return True
         return _looks_like_mounted_fs(path)
 
-    # ------------------------------------------------------------------
-    # Extraction
-    # ------------------------------------------------------------------
-
     def extract(self, path: Path, case_id: str) -> list[ExtractionResult]:
+        """Run log2timeline + psort against *path*, returning timeline and stats results."""
         if not shutil.which(_LOG2TIMELINE_BIN):
             logger.warning("%s not found on $PATH -- skipping Plaso extraction", _LOG2TIMELINE_BIN)
             return []
         if not shutil.which(_PSORT_BIN):
             logger.warning("%s not found on $PATH -- skipping Plaso extraction", _PSORT_BIN)
+            return []
+
+        if path.suffix.lower() == ".e01" and not self._check_ewf_support():
+            logger.error(
+                "Plaso cannot read E01 images: libewf-python bindings not available. "
+                "Rebuild the container with libewf built from source and matching dev headers."
+            )
             return []
 
         plaso_path, is_persistent = self._resolve_plaso_path(case_id)
@@ -159,9 +176,18 @@ class PlasoExtractor:
                 with contextlib.suppress(OSError):
                     Path(plaso_path).unlink(missing_ok=True)
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
+    def _check_ewf_support(self) -> bool:
+        """Verify that Plaso's Python environment has working libewf bindings."""
+        try:
+            proc = subprocess.run(
+                ["python3", "-c", "import pyewf"],
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+            return proc.returncode == 0
+        except (subprocess.TimeoutExpired, OSError):
+            return False
 
     def _resolve_plaso_path(self, case_id: str) -> tuple[str, bool]:
         """Return ``(plaso_file_path, is_persistent)``.
@@ -194,10 +220,6 @@ class PlasoExtractor:
             elif detected_os == "linux":
                 cmd.extend(["--parsers", "linux"])
 
-        is_disk_image = path.is_file() and path.suffix.lower() in _DISK_IMAGE_EXTS
-        if is_disk_image:
-            cmd.extend(["--vss-stores", "all"])
-
         cmd.extend(["--storage-file", plaso_path, str(path)])
         return cmd
 
@@ -215,12 +237,14 @@ class PlasoExtractor:
             check=False,
         )
         if proc.returncode != 0:
-            stderr_preview = (proc.stderr or "")[:500]
+            stderr_preview = (proc.stderr or "")[:1000]
+            stdout_preview = (proc.stdout or "")[:500]
             logger.warning(
-                "log2timeline exited %d on %s: %s",
+                "log2timeline exited %d on %s\nSTDERR: %s\nSTDOUT: %s",
                 proc.returncode,
                 path,
                 stderr_preview,
+                stdout_preview,
             )
             return False
         return True
@@ -288,11 +312,8 @@ class PlasoExtractor:
             line_count=output.count("\n") + 1,
         )
 
-    # ------------------------------------------------------------------
-    # Version
-    # ------------------------------------------------------------------
-
     def version(self) -> str:
+        """Return the Plaso version string (cached after first call)."""
         if self._cached_version is not None:
             return self._cached_version
 

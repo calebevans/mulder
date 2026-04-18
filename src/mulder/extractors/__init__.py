@@ -1,4 +1,4 @@
-"""Evidence extraction pipeline framework."""
+"""Public re-exports for extractors, registry helpers, and evidence classification."""
 
 from mulder.extractors.base import (
     ExtractionResult,

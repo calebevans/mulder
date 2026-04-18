@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import threading
 from collections import defaultdict
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from mulder.models import (
     AuditSummary,
@@ -29,16 +30,13 @@ class AuditLog:
     """
 
     def __init__(self, log_path: Path) -> None:
+        """Open or create an audit log at ``log_path`` and load existing entries."""
         self._log_path = Path(log_path)
         self._lock = threading.Lock()
         self._tool_call_ids: set[str] = set()
-        self._tool_calls: dict[str, dict] = {}
-        self._finding_entries: dict[str, dict] = {}
+        self._tool_calls: dict[str, dict[str, object]] = {}
+        self._finding_entries: dict[str, dict[str, object]] = {}
         self._load_existing()
-
-    # ------------------------------------------------------------------
-    # Initialization
-    # ------------------------------------------------------------------
 
     def _load_existing(self) -> None:
         """Populate in-memory indexes from an existing JSONL file."""
@@ -53,62 +51,66 @@ class AuditLog:
                     entry = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                self._index_entry(entry)
+                if isinstance(entry, dict):
+                    self._index_entry(cast(dict[str, object], entry))
 
-    def _index_entry(self, entry: dict) -> None:
+    def _index_entry(self, entry: dict[str, object]) -> None:
+        """Index a parsed audit entry by type (tool_call or finding)."""
         entry_type = entry.get("type")
         if entry_type == "tool_call" and "tool_call_id" in entry:
             tcid = entry["tool_call_id"]
+            if not isinstance(tcid, str):
+                return
             self._tool_call_ids.add(tcid)
             self._tool_calls[tcid] = entry
         elif entry_type == "finding" and "finding_id" in entry:
-            self._finding_entries[entry["finding_id"]] = entry
+            fid = entry["finding_id"]
+            if not isinstance(fid, str):
+                return
+            self._finding_entries[fid] = entry
 
-    def _append(self, entry: dict) -> None:
+    def _append(self, entry: dict[str, object]) -> None:
+        """Append ``entry`` to the JSONL log file and update in-memory indexes."""
         with self._lock:
             self._log_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self._log_path, "a") as fh:
                 fh.write(json.dumps(entry, separators=(",", ":")) + "\n")
             self._index_entry(entry)
 
-    # ------------------------------------------------------------------
-    # Tool call logging (Piece 1 original)
-    # ------------------------------------------------------------------
-
     def log_tool_call(
         self,
         tool_call_id: str,
         tool_name: str,
-        params: dict,
+        params: Mapping[str, object],
         output_hash: str,
-        cordon_ratio: float | None = None,
         duration_ms: float = 0,
         sub_calls: list[str] | None = None,
+        batch_id: str | None = None,
     ) -> None:
-        entry = {
+        """Record a tool invocation as one JSONL line and index ``tool_call_id``."""
+        entry: dict[str, object] = {
             "type": "tool_call",
             "tool_call_id": tool_call_id,
             "tool_name": tool_name,
-            "params": params,
+            "params": dict(params),
             "output_hash": output_hash,
-            "cordon_ratio": cordon_ratio,
             "duration_ms": duration_ms,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         if sub_calls is not None:
             entry["sub_calls"] = sub_calls
+        if batch_id is not None:
+            entry["batch_id"] = batch_id
         self._append(entry)
 
     def has_tool_call(self, tool_call_id: str) -> bool:
+        """Return True if ``tool_call_id`` appears in this audit log."""
         return tool_call_id in self._tool_call_ids
 
     @property
     def tool_call_ids(self) -> set[str]:
+        """All tool call IDs indexed from the log (copy of the internal set)."""
         return set(self._tool_call_ids)
-
-    # ------------------------------------------------------------------
-    # Ingestion logging (Piece 11)
-    # ------------------------------------------------------------------
 
     def log_ingestion_step(
         self,
@@ -119,7 +121,8 @@ class AuditLog:
         window_count: int,
         duration_ms: float,
     ) -> None:
-        entry = {
+        """Record a source ingestion step (extractor run and window count)."""
+        entry: dict[str, object] = {
             "type": "ingestion",
             "source_name": source_name,
             "source_path": source_path,
@@ -131,16 +134,13 @@ class AuditLog:
         }
         self._append(entry)
 
-    # ------------------------------------------------------------------
-    # Finding logging (Piece 11)
-    # ------------------------------------------------------------------
-
     def log_finding_submission(
         self,
         finding_id: str,
         evidence_refs: list[str],
     ) -> None:
-        entry = {
+        """Record a finding submission and its evidence tool-call references."""
+        entry: dict[str, object] = {
             "type": "finding",
             "finding_id": finding_id,
             "evidence_refs": evidence_refs,
@@ -148,17 +148,17 @@ class AuditLog:
         }
         self._append(entry)
 
-    # ------------------------------------------------------------------
-    # Provenance chain (Piece 11)
-    # ------------------------------------------------------------------
-
     def get_provenance_chain(self, finding_id: str, db: CaseDB) -> ProvenanceChain:
         """Trace a finding back through tool calls to original evidence files."""
         finding_entry = self._finding_entries.get(finding_id)
         if finding_entry is None:
             raise KeyError(f"No finding with id '{finding_id}' in the audit log")
 
-        evidence_refs: list[str] = finding_entry.get("evidence_refs", [])
+        raw_refs = finding_entry.get("evidence_refs", [])
+        if isinstance(raw_refs, list):
+            evidence_refs = [x for x in raw_refs if isinstance(x, str)]
+        else:
+            evidence_refs = []
         tool_calls, queried_source_names = self._resolve_tool_calls(evidence_refs)
         sources = self._resolve_sources(queried_source_names, db)
 
@@ -171,6 +171,7 @@ class AuditLog:
     def _resolve_tool_calls(
         self, evidence_refs: list[str]
     ) -> tuple[list[ToolCallEntry], set[str]]:
+        """Map ``evidence_refs`` to ``ToolCallEntry`` rows and collect source names."""
         tool_calls: list[ToolCallEntry] = []
         source_names: set[str] = set()
 
@@ -178,37 +179,51 @@ class AuditLog:
             tc = self._tool_calls.get(ref)
             if tc is None:
                 continue
+            tcid_o = tc.get("tool_call_id", "")
+            tname_o = tc.get("tool_name", "")
+            params_o = tc.get("params", {})
+            outh_o = tc.get("output_hash", "")
+            ts_o = tc.get("timestamp", "")
+            dur_o = tc.get("duration_ms", 0)
+            params: dict[str, object] = (
+                cast(dict[str, object], params_o) if isinstance(params_o, dict) else {}
+            )
+            dur_f = float(dur_o) if isinstance(dur_o, int | float) else 0.0
+            bid_o = tc.get("batch_id")
             tool_calls.append(
                 ToolCallEntry(
-                    tool_call_id=tc["tool_call_id"],
-                    tool_name=tc["tool_name"],
-                    params=tc.get("params", {}),
-                    output_hash=tc.get("output_hash", ""),
-                    timestamp=tc.get("timestamp", ""),
-                    duration_ms=tc.get("duration_ms", 0),
+                    tool_call_id=tcid_o if isinstance(tcid_o, str) else "",
+                    tool_name=tname_o if isinstance(tname_o, str) else "",
+                    params=params,
+                    output_hash=outh_o if isinstance(outh_o, str) else "",
+                    timestamp=ts_o if isinstance(ts_o, str) else "",
+                    duration_ms=dur_f,
+                    batch_id=bid_o if isinstance(bid_o, str) else None,
                 )
             )
-            source_names.update(self._extract_source_names(tc.get("params", {})))
+            source_names.update(self._extract_source_names(params))
 
         return tool_calls, source_names
 
     @staticmethod
-    def _extract_source_names(params: dict) -> set[str]:
+    def _extract_source_names(params: dict[str, object]) -> set[str]:
+        """Collect source identifiers from tool ``params`` (keys, channel, lists)."""
         names: set[str] = set()
         for key in ("source", "source_name"):
             val = params.get(key)
-            if val is not None:
+            if isinstance(val, str):
                 names.add(val)
         channel = params.get("channel")
         if channel is not None:
             names.add(f"evtx.{channel}")
         sources_list = params.get("sources")
         if isinstance(sources_list, list):
-            names.update(sources_list)
+            names.update(x for x in sources_list if isinstance(x, str))
         return names
 
     @staticmethod
     def _resolve_sources(queried_names: set[str], db: CaseDB) -> list[SourceProvenance]:
+        """Look up ``SourceProvenance`` rows in the case DB for ``queried_names``."""
         db_sources = {s.source_name: s for s in db.get_sources()}
         return [
             SourceProvenance(
@@ -221,17 +236,16 @@ class AuditLog:
             if (src := db_sources.get(name)) is not None
         ]
 
-    # ------------------------------------------------------------------
-    # Summary (Piece 11)
-    # ------------------------------------------------------------------
-
     def summary(self) -> AuditSummary:
         """Compute aggregate statistics over the full audit log."""
         total_tool_calls = 0
         total_findings = 0
         tool_call_counts: dict[str, int] = defaultdict(int)
+        tool_durations: dict[str, float] = defaultdict(float)
         total_duration_ms = 0.0
         timestamps: list[str] = []
+        estimated_input_tokens = 0
+        estimated_output_tokens = 0
 
         if not self._log_path.exists():
             return AuditSummary(
@@ -259,17 +273,36 @@ class AuditLog:
 
                 entry_type = entry.get("type")
                 if entry_type == "tool_call":
+                    tool_name = entry.get("tool_name", "unknown")
+                    if tool_name == "run_parallel":
+                        continue
                     total_tool_calls += 1
-                    tool_call_counts[entry.get("tool_name", "unknown")] += 1
-                    total_duration_ms += entry.get("duration_ms", 0)
+                    dur = entry.get("duration_ms", 0)
+                    tool_call_counts[tool_name] += 1
+                    tool_durations[tool_name] += dur
+                    total_duration_ms += dur
+                    params_str = json.dumps(entry.get("params", {}))
+                    estimated_input_tokens += len(params_str) // 4
+                    estimated_output_tokens += max(len(params_str) // 2, 100)
                 elif entry_type == "finding":
                     total_findings += 1
+
+        cost_per_mtok_in = 3.0
+        cost_per_mtok_out = 15.0
+        estimated_cost = (
+            estimated_input_tokens / 1_000_000 * cost_per_mtok_in
+            + estimated_output_tokens / 1_000_000 * cost_per_mtok_out
+        )
 
         return AuditSummary(
             total_tool_calls=total_tool_calls,
             total_findings=total_findings,
             tool_call_counts=dict(tool_call_counts),
+            tool_durations=dict(tool_durations),
             total_duration_ms=total_duration_ms,
             first_timestamp=timestamps[0] if timestamps else "",
             last_timestamp=timestamps[-1] if timestamps else "",
+            estimated_input_tokens=estimated_input_tokens,
+            estimated_output_tokens=estimated_output_tokens,
+            estimated_cost_usd=round(estimated_cost, 4),
         )

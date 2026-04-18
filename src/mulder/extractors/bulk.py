@@ -4,7 +4,7 @@ Runs ``bulk_extractor`` against disk images at ingest time to carve
 indicators of compromise (emails, URLs, domains, IPs, credit card
 numbers, etc.) from unallocated space and file slack.  Each feature
 file produced by ``bulk_extractor`` becomes its own source for
-windowing and embedding.
+windowing and indexing.
 """
 
 from __future__ import annotations
@@ -57,12 +57,15 @@ class BulkExtractorExtractor:
     name: str = "bulk_extractor"
 
     def __init__(self) -> None:
+        """Initialize with an empty version cache."""
         self._cached_version: str | None = None
 
     def can_handle(self, path: Path) -> bool:
+        """Return True for disk image files (.e01/.dd/.img)."""
         return path.suffix.lower() in _DISK_IMAGE_EXTS
 
     def extract(self, path: Path, case_id: str) -> list[ExtractionResult]:
+        """Run bulk_extractor on *path* and return one result per non-empty feature file."""
         if not shutil.which(_BULK_EXTRACTOR_BIN):
             logger.info("bulk_extractor not found on $PATH -- skipping IOC carving for %s", path)
             return []
@@ -74,6 +77,7 @@ class BulkExtractorExtractor:
             shutil.rmtree(outdir, ignore_errors=True)
 
     def version(self) -> str:
+        """Return the bulk_extractor version string (cached after first call)."""
         if self._cached_version is not None:
             return self._cached_version
 
@@ -94,10 +98,6 @@ class BulkExtractorExtractor:
         except (subprocess.TimeoutExpired, OSError):
             self._cached_version = "bulk_extractor (unknown version)"
         return self._cached_version
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
 
     def _run_and_collect(self, path: Path, outdir: str) -> list[ExtractionResult]:
         """Run bulk_extractor and collect results from feature files."""
