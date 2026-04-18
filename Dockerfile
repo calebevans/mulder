@@ -46,14 +46,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 ENV PKG_CONFIG_PATH=/opt/libewf/lib/pkgconfig \
-    CFLAGS="-O2 -march=native -mtune=native -flto" \
-    CXXFLAGS="-O2 -march=native -mtune=native -flto" \
     CPPFLAGS="-I/opt/libewf/include" \
-    LDFLAGS="-L/opt/libewf/lib -flto" \
+    LDFLAGS="-L/opt/libewf/lib" \
     LD_LIBRARY_PATH=/opt/libewf/lib
 
-RUN git clone --recursive --depth 1 --branch perf \
-        https://github.com/calebevans/bulk_extractor.git /tmp/bulk_extractor \
+RUN git clone --recursive --depth 1 \
+        https://github.com/simsong/bulk_extractor.git /tmp/bulk_extractor \
     && cd /tmp/bulk_extractor \
     && ./bootstrap.sh \
     && ./configure --prefix=/opt/bulk_extractor --with-libewf=/opt/libewf \
