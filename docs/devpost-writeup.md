@@ -2,9 +2,9 @@
 
 ## What It Does
 
-Mulder is a custom MCP server that turns the SANS SIFT Workstation into an autonomous forensic investigation platform. It ingests a forensic case (memory dumps, disk images, event logs, text logs), builds a per-case semantic index, and then lets an AI agent investigate through typed, read-only MCP tools.
+Mulder is a custom MCP server that gives Claude Code forensic investigation superpowers on the SANS SIFT Workstation. It ingests forensic evidence (memory dumps, disk images, event logs, text logs), builds a per-case semantic index, and exposes 50+ typed, read-only forensic tools that Claude Code uses to investigate autonomously.
 
-The agent follows a structured investigation strategy: broad sweeps with composite tools (suspicious processes, persistence mechanisms, lateral movement), cross-verification across multiple artifact types, and self-correction when evidence conflicts. Every finding must pass Pydantic validation that rejects submissions missing evidence references or citing non-existent tool calls.
+Claude Code follows a structured investigation strategy via a skill file: broad sweeps with composite tools (suspicious processes, persistence mechanisms, lateral movement), cross-verification across multiple artifact types, and self-correction when evidence conflicts. Every finding must pass Pydantic validation that rejects submissions missing evidence references or citing non-existent tool calls.
 
 The result: a Markdown report where every finding traces back through the audit trail to the original evidence file with its SHA-256 hash.
 
@@ -20,11 +20,11 @@ The result: a Markdown report where every finding traces back through the audit 
 - **Per-case sqlite-vec databases.** Each case gets its own database file. No cross-case contamination. The semantic index is immutable after ingestion.
 
 **Tech stack:**
+- Agentic framework: Claude Code
 - MCP server: `mcp` (FastMCP)
-- Embeddings: `sentence-transformers` (all-MiniLM-L6-v2)
+- Embeddings: `sentence-transformers` (local) or remote via `litellm` (Gemini, OpenAI, etc.)
 - Vector store: `sqlite-vec`
 - Anomaly scoring: `cordon`
-- LLM calls: `litellm`
 - Findings validation: `pydantic`
 - Report rendering: `jinja2`
 - Secret redaction: `detect-secrets`
@@ -35,7 +35,7 @@ The result: a Markdown report where every finding traces back through the audit 
 - **Cordon baseline scope.** Per-source baselines produce much better anomaly scores than per-case baselines, because "normal" looks very different across artifact types (a normal pslist vs. a normal event log). We had to score anomalies within each source independently.
 - **Timestamp parsing across formats.** ISO 8601, syslog (`MMM DD HH:MM:SS`), Windows event log, and Plaso L2T CSV all use different formats. The multi-format parser handles the common cases and falls back to `None` for unparseable timestamps.
 - **Volatility output variability.** Different memory images produce wildly different output sizes. The malfind plugin can return nothing or thousands of lines. The token budget planner handles this dynamically.
-- **Self-correction without over-correction.** The agent needs to cross-verify findings without falling into infinite re-query loops. The iteration cap (default 20) and the structured investigation strategy keep it focused.
+- **Self-correction without over-correction.** The agent needs to cross-verify findings without falling into infinite re-query loops. The structured investigation skill and Claude Code's built-in reasoning keep it focused.
 
 ## What We Learned
 
@@ -48,4 +48,4 @@ The result: a Markdown report where every finding traces back through the audit 
 - **Live SOC mode.** Stream new evidence into the index as it arrives, rather than requiring batch ingestion.
 - **Wider extractor coverage.** Add extractors for macOS/Linux memory (via Volatility Linux/Mac plugins), cloud logs (AWS CloudTrail, Azure Activity Log), and network captures (Zeek logs).
 - **Cross-case baselines.** Maintain a baseline database across cases to detect patterns that repeat across incidents.
-- **Interactive mode.** Let a human analyst ask follow-up questions via the MCP server while the agent is investigating.
+- **Multi-case correlation.** Let the agent correlate findings across multiple cases simultaneously via the `open_case` tool.

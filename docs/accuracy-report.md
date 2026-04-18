@@ -3,7 +3,7 @@
 ## Section 1: False Positive Rate vs. Ground Truth
 
 **Methodology:**
-- Run `mulder investigate` against a dataset with known ground truth findings.
+- Run a Claude Code investigation against a dataset with known ground truth findings.
 - Compare submitted findings against the ground truth.
 - Classify each finding as true positive (TP), false positive (FP), or missed (FN).
 

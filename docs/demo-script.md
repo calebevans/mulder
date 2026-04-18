@@ -10,59 +10,67 @@ Target length: 5 minutes.
 
 **Narration:**
 
-> Mulder is a custom MCP server for forensic investigations on the SANS SIFT Workstation. It ingests evidence once, builds a semantic index, and then lets an autonomous AI agent investigate through typed, read-only tools. The agent cannot modify evidence because the API surface does not contain destructive operations.
+> Mulder is a custom MCP server for forensic investigations on the SANS SIFT Workstation. It gives Claude Code 50+ typed, read-only forensic tools. The agent ingests evidence, builds a semantic index, investigates autonomously, and produces a report -- all through MCP. The agent cannot modify evidence because the API surface does not contain destructive operations.
 
 **Key points to hit:**
 - Custom MCP Server architecture (hackathon approach #2)
-- Three-command UX: ingest, investigate, serve
+- Claude Code as the agentic framework
 - Evidence integrity enforced by API design, not prompts
 
 ---
 
-## 0:30 -- 1:30 | Ingestion
+## 0:30 -- 1:00 | Setup
 
-**On screen:** Terminal running `mulder ingest`.
-
-```bash
-mulder ingest /cases/sample-case/ --case-id demo
-```
+**On screen:** Terminal showing the `.mcp.json` config and the skill file.
 
 **Show:**
+- The `.mcp.json` file: one MCP server entry, points to `mulder serve`
+- The `.claude/skills/investigate.md` skill: phased investigation strategy
+- Start Claude Code: `claude`
+
+**Narration:**
+
+> Setup is two files. The MCP config tells Claude Code how to launch the Mulder server. The skill file teaches Claude the investigation methodology -- how to sequence tools, when to cross-verify, and when to demote confidence. Let's start Claude Code and give it some evidence.
+
+---
+
+## 1:00 -- 1:30 | Ingestion
+
+**On screen:** Claude Code calling `ingest_evidence`.
+
+**Show:**
+- User prompt: "Investigate the evidence at /cases/sample-case/"
+- Claude calls `ingest_evidence("/cases/sample-case/")`
 - Evidence classification output (memory dump detected, EVTX files found, log directories scanned)
-- Volatility plugins running against the memory dump (pslist, pstree, cmdline, netscan, malfind, dlllist, svcscan, handles)
-- Windowing and embedding progress
+- Extractors running (Volatility, Plaso, EVTX parser)
 - Final summary: N sources, M windows, elapsed time
 
 **Narration:**
 
-> Mulder scans the evidence directory, classifies each file, and runs the appropriate extractor. Memory dumps go through Volatility 3, disk images through Plaso, event logs through our EVTX parser. Every piece of extracted text is split into windows, embedded with all-MiniLM-L6-v2, and stored in a per-case sqlite-vec database.
+> I ask Claude to investigate evidence. It calls `ingest_evidence`, which scans the directory, classifies each file, and runs the appropriate extractor. Memory dumps go through Volatility 3, disk images through Plaso and Sleuth Kit, event logs through our EVTX parser. Everything is embedded and stored in a per-case sqlite-vec database.
 
 ---
 
 ## 1:30 -- 4:00 | Autonomous Investigation
 
-**On screen:** Terminal running `mulder investigate`.
+**On screen:** Claude Code calling forensic tools.
 
-```bash
-mulder investigate --case-id demo --model claude-sonnet-4-20250514
-```
+**Show the real-time tool calls:**
 
-**Show the real-time terminal output:**
-
-1. Agent calls `list_sources` -- show the enumeration of available evidence
-2. Agent calls `find_suspicious_processes` -- highlight the composite query joining malfind + cmdline + netscan + pstree
-3. Agent calls `correlate_across_sources` for the suspicious time range
+1. Claude calls `list_sources` -- show the enumeration of available evidence
+2. Claude calls `find_suspicious_processes` -- highlight the composite query joining malfind + cmdline + netscan + pstree
+3. Claude calls `correlate_across_sources` for the suspicious time range
 4. **Self-correction moment** (the tiebreaker):
-   - Agent finds a process flagged by malfind
+   - Claude finds a process flagged by malfind
    - Cross-checks with event logs -- no corresponding service installation event
    - Demotes the finding from "confirmed" to "inference" and notes the gap
-5. Agent calls `find_lateral_movement_indicators` -- show RDP logon correlation
-6. Agent calls `submit_finding` -- show the Pydantic validation accepting the finding with evidence refs
-7. Agent calls `finalize_report`
+5. Claude calls `find_lateral_movement_indicators` -- show RDP logon correlation
+6. Claude calls `submit_finding` -- show the Pydantic validation accepting the finding with evidence refs
+7. Claude calls `finalize_report`
 
 **Narration:**
 
-> The agent follows a structured investigation strategy. It starts broad with composite tools, then cross-verifies every finding using correlate_across_sources. Watch here -- the agent found a suspicious process via malfind, but when it checked the event logs, there was no corroborating evidence. Instead of reporting a false positive, it demoted the finding to "inference" and noted the missing corroboration. This self-correction loop is what separates Mulder from a simple prompt-and-pray approach.
+> Claude follows the investigation skill. It starts broad with composite tools, then cross-verifies every finding. Watch here -- Claude found a suspicious process via malfind, but when it checked the event logs, there was no corroborating evidence. Instead of reporting a false positive, it demoted the finding to "inference" and noted the missing corroboration. This self-correction loop is what separates Mulder from a simple prompt-and-pray approach.
 
 ---
 
@@ -84,10 +92,10 @@ mulder investigate --case-id demo --model claude-sonnet-4-20250514
 
 ## 4:45 -- 5:00 | Spoliation Test
 
-**On screen:** Terminal showing the MCP tool list.
+**On screen:** The MCP tool list.
 
 **Show:**
-- Print the full list of registered MCP tools
+- List all registered MCP tools
 - Highlight: every single tool is a query/read operation
 - No `execute_shell`, no `write_file`, no `delete`, no `modify`
 
@@ -101,6 +109,6 @@ mulder investigate --case-id demo --model claude-sonnet-4-20250514
 
 - Record on the SIFT Workstation (or Docker container) for authenticity
 - Use a dark terminal theme with large font for readability
-- Color-coded agent output (THINK/TOOL/RESULT/FINDING/VERIFY prefixes) is built into `mulder investigate --verbose`
+- Claude Code's built-in tool-use display shows each MCP call clearly
 - Keep the mouse cursor visible when clicking through the report for the audit trail walkthrough
 - Target 720p or 1080p resolution
