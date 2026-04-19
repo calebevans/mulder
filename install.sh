@@ -2,10 +2,12 @@
 # Mulder MCP Server — bare-metal installer for Debian / Ubuntu hosts.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/calebdevans/mulder/main/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/<org>/killjoy/main/install.sh | sudo bash
+#
+# SIFT-aware: detects SANS SIFT Workstation and skips packages it already
+# provides.  On bare Ubuntu, installs the full forensic tool suite.
 #
 # Re-running is safe: every section is idempotent.
-# Tested on Ubuntu 22.04 / 24.04 (amd64 & arm64).
 
 set -euo pipefail
 
@@ -101,7 +103,15 @@ case "$ARCH" in
         ;;
 esac
 
-log_ok "OS: ${PRETTY_NAME} | Arch: ${ARCH} (${NORM_ARCH})"
+# Detect SANS SIFT Workstation (GIFT PPA or sift metapackage).
+IS_SIFT=false
+if dpkg -s sift &>/dev/null \
+   || grep -rqs "gift" /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null \
+   || command_exists sift; then
+    IS_SIFT=true
+fi
+
+log_ok "OS: ${PRETTY_NAME} | Arch: ${ARCH} (${NORM_ARCH}) | SIFT: ${IS_SIFT}"
 
 # ---------------------------------------------------------------------------
 # 1. System packages (apt)
@@ -113,9 +123,10 @@ export DEBIAN_FRONTEND=noninteractive
 
 apt-get update -qq
 
+# Packages needed regardless of SIFT status: build toolchain, dev headers,
+# and a handful of tools SIFT may not include.
 apt-get install -y --no-install-recommends \
     software-properties-common \
-    gnupg \
     ca-certificates \
     curl \
     wget \
@@ -127,32 +138,7 @@ apt-get install -y --no-install-recommends \
     libtool \
     flex \
     pkg-config \
-    afflib-tools \
-    sleuthkit \
-    yara \
-    libssl3 \
     libssl-dev \
-    fuse3 \
-    libfuse3-dev \
-    regripper \
-    clamav clamav-freshclam \
-    hashdeep \
-    foremost \
-    libimage-exiftool-perl \
-    binutils \
-    dc3dd \
-    libguestfs-tools \
-    pasco \
-    tshark \
-    tcpdump \
-    ssdeep \
-    scalpel \
-    binwalk \
-    testdisk \
-    chkrootkit \
-    outguess \
-    libheif-examples \
-    p7zip-full \
     zlib1g-dev \
     libbz2-dev \
     libjpeg-dev \
@@ -161,24 +147,63 @@ apt-get install -y --no-install-recommends \
     libsqlite3-dev \
     libffi-dev
 
-log_ok "System packages installed"
+if $IS_SIFT; then
+    log_ok "SIFT detected — skipping forensic packages already provided by SIFT"
 
-# libyal forensic libraries: SIFT/GIFT PPA uses different package names than
-# Ubuntu universe (e.g. libbde-tools vs libbde-utils).  Install whichever
-# variant is available, preferring what is already present.
-for _pair in "libbde-tools:libbde-utils" "libfvde-tools:libfvde-utils" "libvshadow-tools:libvshadow-utils"; do
-    _gift="${_pair%%:*}"
-    _universe="${_pair##*:}"
-    if dpkg -s "$_gift" &>/dev/null || dpkg -s "$_universe" &>/dev/null; then
-        log_ok "${_gift%%-*} tools already installed"
-    elif apt-get install -y --no-install-recommends "$_universe" 2>/dev/null; then
-        log_ok "$_universe installed"
-    elif apt-get install -y --no-install-recommends "$_gift" 2>/dev/null; then
-        log_ok "$_gift installed (GIFT PPA)"
-    else
-        log_warn "Could not install ${_gift%%-*} tools — skipping (non-fatal)"
-    fi
-done
+    # Install the few packages SIFT may not include.
+    apt-get install -y --no-install-recommends \
+        outguess \
+        libheif-examples \
+        2>/dev/null || log_warn "Some optional packages unavailable (non-fatal)"
+else
+    log_info "Bare system — installing full forensic tool suite"
+
+    apt-get install -y --no-install-recommends \
+        gnupg \
+        afflib-tools \
+        sleuthkit \
+        yara \
+        libssl3 \
+        fuse3 \
+        libfuse3-dev \
+        regripper \
+        clamav clamav-freshclam \
+        hashdeep \
+        foremost \
+        libimage-exiftool-perl \
+        binutils \
+        dc3dd \
+        libguestfs-tools \
+        pasco \
+        tshark \
+        tcpdump \
+        ssdeep \
+        scalpel \
+        binwalk \
+        testdisk \
+        chkrootkit \
+        outguess \
+        libheif-examples \
+        p7zip-full
+
+    # libyal forensic libraries: SIFT/GIFT PPA uses different names than
+    # Ubuntu universe (e.g. libbde-tools vs libbde-utils).
+    for _pair in "libbde-tools:libbde-utils" "libfvde-tools:libfvde-utils" "libvshadow-tools:libvshadow-utils"; do
+        _gift="${_pair%%:*}"
+        _universe="${_pair##*:}"
+        if dpkg -s "$_gift" &>/dev/null || dpkg -s "$_universe" &>/dev/null; then
+            log_ok "${_gift%%-*} tools already installed"
+        elif apt-get install -y --no-install-recommends "$_universe" 2>/dev/null; then
+            log_ok "$_universe installed"
+        elif apt-get install -y --no-install-recommends "$_gift" 2>/dev/null; then
+            log_ok "$_gift installed (GIFT PPA)"
+        else
+            log_warn "Could not install ${_gift%%-*} tools — skipping (non-fatal)"
+        fi
+    done
+fi
+
+log_ok "System packages installed"
 
 # ---------------------------------------------------------------------------
 # 2. Python 3.12 (deadsnakes PPA)
@@ -215,12 +240,16 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 4. libewf (build from source)
+# 4. libewf (build from source — skipped if already present)
 # ---------------------------------------------------------------------------
 
 log_section "Installing libewf"
 
-if ! ldconfig -p | grep -q libewf; then
+if ldconfig -p | grep -q libewf; then
+    log_ok "libewf already installed"
+elif command_exists ewfmount; then
+    log_ok "libewf already available (ewfmount found)"
+else
     log_info "Building libewf ${LIBEWF_VERSION} from source..."
     curl -fsSL "$LIBEWF_URL" -o "${BUILD_DIR}/libewf.tar.gz"
     tar xzf "${BUILD_DIR}/libewf.tar.gz" -C "$BUILD_DIR"
@@ -231,18 +260,18 @@ if ! ldconfig -p | grep -q libewf; then
         make install --quiet
     )
     ldconfig
-    log_ok "libewf ${LIBEWF_VERSION} installed"
-else
-    log_ok "libewf already installed"
+    log_ok "libewf ${LIBEWF_VERSION} built and installed"
 fi
 
 # ---------------------------------------------------------------------------
-# 5. bulk_extractor (build from source with libewf)
+# 5. bulk_extractor (build from source — skipped if already present)
 # ---------------------------------------------------------------------------
 
 log_section "Installing bulk_extractor"
 
-if ! command_exists bulk_extractor; then
+if command_exists bulk_extractor; then
+    log_ok "bulk_extractor already installed ($(bulk_extractor -V 2>&1 | head -1))"
+else
     log_info "Building bulk_extractor from source..."
     git clone --recursive --depth 1 \
         "$BULK_EXTRACTOR_REPO" "${BUILD_DIR}/bulk_extractor"
@@ -258,9 +287,7 @@ if ! command_exists bulk_extractor; then
         make install --quiet
     )
     ldconfig
-    log_ok "bulk_extractor installed"
-else
-    log_ok "bulk_extractor already installed ($(bulk_extractor -V 2>&1 | head -1))"
+    log_ok "bulk_extractor built and installed"
 fi
 
 # ---------------------------------------------------------------------------
@@ -269,7 +296,9 @@ fi
 
 log_section "Installing stegdetect"
 
-if ! command_exists stegdetect; then
+if command_exists stegdetect; then
+    log_ok "stegdetect already installed"
+else
     log_info "Building stegdetect from source..."
     git clone --depth 1 "$STEGDETECT_REPO" "${BUILD_DIR}/stegdetect"
     (
@@ -280,9 +309,7 @@ if ! command_exists stegdetect; then
         mkdir -p /usr/local/bin /usr/local/share /usr/local/man/man1
         make install --quiet
     )
-    log_ok "stegdetect installed"
-else
-    log_ok "stegdetect already installed"
+    log_ok "stegdetect built and installed"
 fi
 
 # ---------------------------------------------------------------------------
@@ -291,7 +318,7 @@ fi
 
 log_section "Installing .NET 8 runtime"
 
-if [ ! -x "${DOTNET_INSTALL_DIR}/dotnet" ]; then
+if [ ! -x "${DOTNET_INSTALL_DIR}/dotnet" ] && ! command_exists dotnet; then
     log_info "Installing .NET ${DOTNET_CHANNEL} runtime..."
     curl -fsSL https://dot.net/v1/dotnet-install.sh -o "${BUILD_DIR}/dotnet-install.sh"
     chmod +x "${BUILD_DIR}/dotnet-install.sh"
@@ -426,11 +453,19 @@ log_ok "Volatility 3 symbols installed"
 
 log_section "Installing Python forensic packages"
 
-uv pip install --system --no-cache \
-    volatility3 \
-    plaso \
-    mvt \
-    pysqlcipher3
+if $IS_SIFT; then
+    log_info "SIFT provides volatility3 and plaso — installing only supplementary packages"
+    uv pip install --system --no-cache \
+        mvt \
+        pysqlcipher3 \
+        2>/dev/null || log_warn "Some Python packages failed (non-fatal if already present via SIFT)"
+else
+    uv pip install --system --no-cache \
+        volatility3 \
+        plaso \
+        mvt \
+        pysqlcipher3
+fi
 
 log_ok "Python forensic packages installed"
 
@@ -440,7 +475,11 @@ log_ok "Python forensic packages installed"
 
 log_section "Updating ClamAV signatures"
 
-freshclam --quiet 2>/dev/null || log_warn "freshclam update failed (non-fatal — may need manual run)"
+if command_exists freshclam; then
+    freshclam --quiet 2>/dev/null || log_warn "freshclam update failed (non-fatal — may need manual run)"
+else
+    log_warn "freshclam not found — skipping ClamAV signature update"
+fi
 
 # ---------------------------------------------------------------------------
 # 15. Install Mulder
@@ -448,7 +487,7 @@ freshclam --quiet 2>/dev/null || log_warn "freshclam update failed (non-fatal �
 
 log_section "Installing Mulder"
 
-MULDER_GIT_URL="git+https://github.com/calebevans/mulder.git"
+MULDER_GIT_URL="git+https://github.com/calebevans/killjoy.git"
 
 # When run from a local clone, prefer editable install; otherwise pull from git.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "")"
