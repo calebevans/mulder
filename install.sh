@@ -2,7 +2,7 @@
 # Mulder MCP Server — bare-metal installer for Debian / Ubuntu hosts.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/<org>/killjoy/main/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/calebevans/mulder/main/install.sh | sudo bash
 #
 # SIFT-aware: detects SANS SIFT Workstation and skips packages it already
 # provides.  On bare Ubuntu, installs the full forensic tool suite.
@@ -487,7 +487,7 @@ fi
 
 log_section "Installing Mulder"
 
-MULDER_GIT_URL="git+https://github.com/calebevans/killjoy.git"
+MULDER_GIT_URL="git+https://github.com/calebevans/mulder.git"
 
 # When run from a local clone, prefer editable install; otherwise pull from git.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "")"
@@ -503,7 +503,42 @@ fi
 log_ok "Mulder installed"
 
 # ---------------------------------------------------------------------------
-# 16. PATH and environment (persistent)
+# 16. Claude Code MCP configuration
+# ---------------------------------------------------------------------------
+
+log_section "Configuring Claude Code MCP"
+
+# Resolve the real user's home directory (not root's when run via sudo).
+REAL_USER="${SUDO_USER:-$USER}"
+REAL_HOME="$(getent passwd "$REAL_USER" | cut -d: -f6)"
+REAL_HOME="${REAL_HOME:-$HOME}"
+CLAUDE_DIR="${REAL_HOME}/.claude"
+MCP_JSON="${CLAUDE_DIR}/mcp.json"
+
+ensure_dir "$CLAUDE_DIR"
+
+MCP_ENTRY='{"mcpServers":{"mulder":{"type":"stdio","command":"mulder","args":["serve"]}}}'
+
+if [ ! -f "$MCP_JSON" ]; then
+    printf '%s\n' "$MCP_ENTRY" | python3 -m json.tool > "$MCP_JSON"
+    chown "$REAL_USER":"$(id -gn "$REAL_USER")" "$MCP_JSON" "$CLAUDE_DIR"
+    log_ok "Created ${MCP_JSON}"
+elif python3 -c "import json,sys; cfg=json.load(open('$MCP_JSON')); sys.exit(0 if 'mulder' in cfg.get('mcpServers',{}) else 1)" 2>/dev/null; then
+    log_ok "Mulder already configured in ${MCP_JSON}"
+else
+    python3 -c "
+import json, pathlib
+p = pathlib.Path('$MCP_JSON')
+cfg = json.loads(p.read_text())
+cfg.setdefault('mcpServers', {})['mulder'] = {'type': 'stdio', 'command': 'mulder', 'args': ['serve']}
+p.write_text(json.dumps(cfg, indent=2) + '\n')
+"
+    chown "$REAL_USER":"$(id -gn "$REAL_USER")" "$MCP_JSON"
+    log_ok "Added mulder to existing ${MCP_JSON}"
+fi
+
+# ---------------------------------------------------------------------------
+# 17. PATH and environment (persistent)
 # ---------------------------------------------------------------------------
 
 log_section "Configuring environment"
