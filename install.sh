@@ -140,9 +140,6 @@ apt-get install -y --no-install-recommends \
     foremost \
     libimage-exiftool-perl \
     binutils \
-    libvshadow-utils \
-    libbde-utils \
-    libfvde-utils \
     dc3dd \
     libguestfs-tools \
     pasco \
@@ -165,6 +162,23 @@ apt-get install -y --no-install-recommends \
     libffi-dev
 
 log_ok "System packages installed"
+
+# libyal forensic libraries: SIFT/GIFT PPA uses different package names than
+# Ubuntu universe (e.g. libbde-tools vs libbde-utils).  Install whichever
+# variant is available, preferring what is already present.
+for _pair in "libbde-tools:libbde-utils" "libfvde-tools:libfvde-utils" "libvshadow-tools:libvshadow-utils"; do
+    _gift="${_pair%%:*}"
+    _universe="${_pair##*:}"
+    if dpkg -s "$_gift" &>/dev/null || dpkg -s "$_universe" &>/dev/null; then
+        log_ok "${_gift%%-*} tools already installed"
+    elif apt-get install -y --no-install-recommends "$_universe" 2>/dev/null; then
+        log_ok "$_universe installed"
+    elif apt-get install -y --no-install-recommends "$_gift" 2>/dev/null; then
+        log_ok "$_gift installed (GIFT PPA)"
+    else
+        log_warn "Could not install ${_gift%%-*} tools — skipping (non-fatal)"
+    fi
+done
 
 # ---------------------------------------------------------------------------
 # 2. Python 3.12 (deadsnakes PPA)
