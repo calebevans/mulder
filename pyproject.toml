@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "mulder"
+name = "mulder-mcp"
 version = "0.1.0"
 description = "Custom MCP server for SANS SIFT Workstation forensic investigations"
 requires-python = ">=3.10"
@@ -26,6 +26,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest",
+    "pytest-cov",
     "mypy",
     "ruff",
     "pre-commit",
@@ -57,3 +58,11 @@ module = [
     "psutil",
 ]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_decorators = false
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
