@@ -1,5 +1,5 @@
 # libewf: build from source (GIFT PPA lacks arm64 packages)
-FROM ubuntu:22.04 AS libewf-builder
+FROM ubuntu:24.04 AS libewf-builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -23,7 +23,7 @@ RUN curl -fsSL https://github.com/libyal/libewf/releases/download/20240506/libew
     && make install
 
 # bulk_extractor: build from source with libewf support
-FROM ubuntu:22.04 AS bulk-builder
+FROM ubuntu:24.04 AS bulk-builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -59,7 +59,7 @@ RUN git clone --recursive --depth 1 \
     && make install
 
 # Eric Zimmerman tools: .NET runtime + forensic parsers
-FROM ubuntu:22.04 AS eztools-fetch
+FROM ubuntu:24.04 AS eztools-fetch
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -85,7 +85,7 @@ RUN mkdir -p /opt/zimmermantools && cd /opt/zimmermantools \
     done
 
 # Volatility 3 symbol tables
-FROM ubuntu:22.04 AS symbols-fetch
+FROM ubuntu:24.04 AS symbols-fetch
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -99,7 +99,7 @@ RUN mkdir -p /opt/vol-symbols \
         -O /opt/vol-symbols/linux.zip
 
 # YARA rule libraries (signature-base + community rules)
-FROM ubuntu:22.04 AS yara-fetch
+FROM ubuntu:24.04 AS yara-fetch
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -114,7 +114,7 @@ RUN git clone --depth 1 https://github.com/Yara-Rules/rules.git \
         /opt/yara-rules
 
 # Hayabusa: Sigma rule engine for Windows EVTX logs
-FROM ubuntu:22.04 AS hayabusa-fetch
+FROM ubuntu:24.04 AS hayabusa-fetch
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -132,7 +132,7 @@ RUN curl -fsSL "https://github.com/Yamato-Security/hayabusa/releases/download/v$
     && rm /tmp/hayabusa.zip
 
 # MITRE ATT&CK Enterprise STIX data
-FROM ubuntu:22.04 AS attack-fetch
+FROM ubuntu:24.04 AS attack-fetch
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -144,7 +144,7 @@ RUN mkdir -p /opt/attack \
         -o /opt/attack/enterprise-attack.json
 
 # stegdetect: build from source
-FROM ubuntu:22.04 AS stegdetect-builder
+FROM ubuntu:24.04 AS stegdetect-builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -167,7 +167,7 @@ RUN git clone --depth 1 https://github.com/redNixon/stegdetect.git /tmp/stegdete
     && make install
 
 # Runtime image
-FROM ubuntu:22.04 AS runtime
+FROM ubuntu:24.04 AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
