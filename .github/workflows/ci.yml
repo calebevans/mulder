@@ -5,6 +5,7 @@ on:
     paths-ignore:
       - "**.md"
       - "docs/**"
+      - "examples/**"
       - "LICENSE"
       - ".gitignore"
       - ".pre-commit-config.yaml"
@@ -17,6 +18,7 @@ on:
     paths-ignore:
       - "**.md"
       - "docs/**"
+      - "examples/**"
       - "LICENSE"
       - ".gitignore"
       - ".pre-commit-config.yaml"
