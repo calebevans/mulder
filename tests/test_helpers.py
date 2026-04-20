@@ -15,39 +15,39 @@ class TestHashOutput:
         data = {"key": "value"}
         result = hash_output(data)
         expected_json = json.dumps(data, sort_keys=True, default=str)
-        expected = "sha256:" + hashlib.sha256(expected_json.encode()).hexdigest()
+        expected = "blake2b:" + hashlib.blake2b(expected_json.encode(), digest_size=32).hexdigest()
         assert result == expected
 
     def test_small_list_full_hash(self) -> None:
         data = [1, 2, 3]
         result = hash_output(data)
         expected_json = json.dumps(data, sort_keys=True, default=str)
-        expected = "sha256:" + hashlib.sha256(expected_json.encode()).hexdigest()
+        expected = "blake2b:" + hashlib.blake2b(expected_json.encode(), digest_size=32).hexdigest()
         assert result == expected
 
     def test_large_dict_summary_hash(self) -> None:
         data = {f"k{i}": "x" * 1000 for i in range(20)}
         result = hash_output(data)
         full_json = json.dumps(data, sort_keys=True, default=str)
-        full_hash = "sha256:" + hashlib.sha256(full_json.encode()).hexdigest()
+        full_hash = "blake2b:" + hashlib.blake2b(full_json.encode(), digest_size=32).hexdigest()
         assert result != full_hash
-        assert result.startswith("sha256:")
+        assert result.startswith("blake2b:")
 
     def test_large_list_summary_hash(self) -> None:
         data = ["x" * 500 for _ in range(30)]
         result = hash_output(data)
         full_json = json.dumps(data, sort_keys=True, default=str)
-        full_hash = "sha256:" + hashlib.sha256(full_json.encode()).hexdigest()
+        full_hash = "blake2b:" + hashlib.blake2b(full_json.encode(), digest_size=32).hexdigest()
         assert result != full_hash
-        assert result.startswith("sha256:")
+        assert result.startswith("blake2b:")
 
     def test_scalar_input(self) -> None:
         result = hash_output("hello world")
-        assert result.startswith("sha256:")
+        assert result.startswith("blake2b:")
 
     def test_none_input(self) -> None:
         result = hash_output(None)
-        assert result.startswith("sha256:")
+        assert result.startswith("blake2b:")
 
 
 class TestSerializeWindows:

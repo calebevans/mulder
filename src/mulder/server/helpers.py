@@ -20,10 +20,16 @@ def make_tool_call_id() -> str:
 
 
 _HASH_SIZE_THRESHOLD = 10000
+_HASH_PREFIX = "blake2b:"
+_HASH_DIGEST_SIZE = 32
+
+
+def _blake2b_hex(data: bytes) -> str:
+    return _HASH_PREFIX + hashlib.blake2b(data, digest_size=_HASH_DIGEST_SIZE).hexdigest()
 
 
 def hash_output(output: object) -> str:
-    """Return a sha256 fingerprint of *output* for audit purposes.
+    """Return a BLAKE2b fingerprint of *output* for audit purposes.
 
     For small payloads, hashes the full JSON.  For large payloads
     (>10KB serialized), hashes a compact summary to avoid expensive
@@ -33,14 +39,14 @@ def hash_output(output: object) -> str:
     if isinstance(output, list | dict):
         probe = json.dumps(output, sort_keys=True, default=str)
         if len(probe) <= _HASH_SIZE_THRESHOLD:
-            return "sha256:" + hashlib.sha256(probe.encode()).hexdigest()
+            return _blake2b_hex(probe.encode())
         if isinstance(output, list):
             summary = f"list:len={len(output)}"
         else:
             summary = f"dict:keys={sorted(output.keys())}"
-        return "sha256:" + hashlib.sha256(summary.encode()).hexdigest()
+        return _blake2b_hex(summary.encode())
     raw = json.dumps(output, sort_keys=True, default=str)
-    return "sha256:" + hashlib.sha256(raw.encode()).hexdigest()
+    return _blake2b_hex(raw.encode())
 
 
 _DEFAULT_WINDOW_CAP = 200
