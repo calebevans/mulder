@@ -90,21 +90,30 @@ theory. Phase 3.5 enforces this -- you CANNOT skip it.
    Otherwise `"inference"`.
 5. **Verbatim evidence.** Include actual tool output lines in code blocks.
    Do not summarize when you can quote.
-6. **Always include timestamps.** When submitting findings, ALWAYS set
-   `event_time_start` (and `event_time_end` if the activity spans a
-   range) in ISO 8601 format. Extract timestamps from the tool output.
-   The report timeline is built from these timestamps -- findings
-   without timestamps do not appear on the timeline.
-7. **NEVER use Bash, shell commands, or built-in search/memory for
-   evidence.** This includes ls, cat, find, grep, head, tail, sed, awk,
-   and any other shell command. Do NOT use IDE memory search or file read
-   tools -- ALL evidence access MUST go through Mulder MCP tools so
-   it is logged and traceable. Use only:
+6. **Every finding MUST have a timestamp.** Set `event_time_start`
+   (and `event_time_end` if spanning a range) in ISO 8601 format.
+   Extract the timestamp from tool output -- LNK file timestamps,
+   Prefetch execution times, process creation times, PCAP frame times,
+   log entries, EXIF dates, file MAC times. A finding without a
+   timestamp is an incomplete finding. The report timeline is built
+   entirely from these -- an empty timeline means the report is broken.
+   If you genuinely cannot determine a timestamp, explain why in the
+   finding description.
+7. **NEVER use Bash, shell commands, inline Python scripts, or built-in
+   search/memory for evidence.** This includes `python3 -c`, `bash -c`,
+   ls, cat, find, grep, head, tail, sed, awk, and any other non-MCP
+   method of reading or parsing evidence files. Do NOT use IDE memory
+   search or file read tools. ALL evidence access MUST go through Mulder
+   MCP tools so it is logged and traceable. Use only:
    - `search(query)` to find evidence across indexed data
    - `list_directory(path)` to list files in any directory
-   - `read_evidence_file(path)` to read text files
+   - `read_evidence_file(path)` to read text files (including extracted logs)
    - `list_files(path_filter=...)` for disk image file listings
    - `get_raw_output(source)` to read tool output
+   - `decode_payload(source=..., pattern=...)` to extract and decode
+     encoded strings from indexed evidence
+   If you find yourself writing a Python or shell one-liner to parse a
+   file, STOP -- there is always an MCP tool that can do it.
 7. **Tag findings with MITRE ATT&CK IDs.** Use
    `lookup_attack_technique(query)` when unsure of the exact ID. Pass
    IDs via `mitre_attack_ids` in `submit_finding`.
@@ -219,6 +228,9 @@ Not all tools apply to every case -- use what fits the evidence.
 
 ### PCAPs / Network Evidence
 - `run_pcap_analysis(mode="all")` -- DNS, HTTP, SMTP, TLS, beaconing, tunneling
+- `run_pcap_analysis(mode="all", ssl_keylog_path="...")` -- same but with TLS
+  decryption using an NSS key log file. Look for `sslkeylog.log` or
+  `ssl_keylog*.log` in the evidence before running PCAP analysis.
 - `correlate_pcap_with_host(t_start, t_end)` -- link network to host evidence
 
 ### Cross-System / Composite (run after per-system analysis)
@@ -240,10 +252,18 @@ Not all tools apply to every case -- use what fits the evidence.
 - `read_evidence_file(path)` -- read text files from evidence
 - `list_directory(path)` -- list directory contents
 - `lookup_attack_technique(query)` -- MITRE ATT&CK reference
+
+### Report and Self-Correction (run before finalize_report)
+- `submit_narrative(narrative)` -- submit long-form prose investigation report
+- `audit_evidence_coverage()` -- find indexed sources not cited by any finding
+- `audit_tool_coverage()` -- find applicable tools that were never invoked
 - `decode_payload(data, encoding)` -- safely decode base64, hex,
   UTF-16LE (PowerShell -EncodedCommand), or Python pickle payloads.
   Never executes code. Use this instead of Bash to decode suspicious
-  strings found in evidence.
+  strings found in evidence. Can also extract encoded strings directly
+  from indexed evidence: `decode_payload(source="read_evidence",
+  pattern="gASV")` finds the matching window and extracts the longest
+  base64-like substring for decoding.
 
 ### Investigation Questions to Tool Mapping
 
@@ -555,6 +575,16 @@ finalize_report until every item is covered. This is non-negotiable.
 **Step 1: Review submitted findings.**
 Call `get_findings()` to see everything submitted so far.
 
+**Step 1.5: Timestamp audit.**
+Print each finding title and its `event_time_start` value. If ANY
+finding has a null timestamp, go back and fix it NOW by searching
+the evidence for a timestamp to associate with that finding. Common
+sources: Prefetch execution times, LNK file timestamps, process
+creation times from volatility, PCAP frame times, log entry
+timestamps, EXIF dates, file system MAC times. Only proceed after
+every finding has a timestamp or an explicit documented reason why
+one cannot be determined.
+
 **Step 2: Print the investigation questions scorecard.**
 For EVERY question Q1--Q8, print one of:
 - ANSWERED: [brief summary of the answer]
@@ -575,7 +605,69 @@ evidence item, either:
 **Step 5: Negative findings.**
 Submit `[NEGATIVE]` findings for all tested hypotheses with no evidence.
 
-Only after Steps 0-5 are complete may you call `finalize_report()`.
+**Step 6: Write the narrative report.**
+Call `submit_narrative()` with a long-form incident report in markdown.
+Structure it with these sections:
+- **Background:** What organization/systems are involved, what prompted
+  the investigation
+- **Incident Timeline:** Chronological narrative of what happened, told
+  as a story with cause and effect
+- **Key Findings:** Detailed discussion of each major finding and how
+  they connect to each other
+- **Impact Assessment:** What data was compromised, what systems were
+  affected, business impact
+- **Recommendations:** Specific actions to prevent recurrence (technical
+  controls, policy changes, monitoring improvements)
+- **Conclusion:** Summary of the investigation outcome
+
+Write in full paragraphs. This is for executives and legal -- not a
+technical audience. Do NOT repeat raw tool output. Synthesize findings
+into a coherent narrative that tells the story of what happened and why.
+
+Only after Steps 0-6 are complete may you proceed to Phase 4.5.
+
+### Phase 4.5 -- Self-Correction Audit
+
+**THIS PHASE IS MANDATORY. Do NOT skip it. Do NOT fold it into Phase 4.**
+
+The goal: use server-side audit tools to detect blind spots that you
+missed through manual review. These tools compare what you extracted
+against what you explained, and what tools you could have run against
+what you actually ran.
+
+**Step 1: Run `audit_evidence_coverage()`.**
+This returns every indexed source NOT cited by any finding, grouped by
+extractor type, with content samples for non-empty sources.
+
+For each uncited source with `line_count > 0`:
+- Use `search(query, source=source_name)` to check for relevant evidence
+- Pay special attention to uncited `bulk.email`, `bulk.url`, `bulk.rfc822`
+  sources -- communication data is almost always investigatively relevant
+- If the source contains relevant evidence, submit a finding
+- If it does not, no action needed -- but note it for your own awareness
+
+**Step 2: Run `audit_tool_coverage()`.**
+This re-classifies the evidence and compares applicable tools for each
+artifact type against the tools you actually invoked.
+
+For each tool listed in `tools_not_run`:
+- Run the tool now if it could yield new evidence (especially
+  `detect_steganography` on disk images with suspicious media files,
+  `yara_scan_files` on unscanned images, `run_pcap_analysis` on
+  unanalyzed captures)
+- Skip tools that are genuinely not applicable (e.g., Windows-specific
+  tools on a macOS image) -- no documentation needed for obvious skips
+
+**Step 3: Re-examine ruled-out hypotheses.**
+For each `[NEGATIVE]` finding you submitted:
+- Check whether the uncited evidence from Step 1 could change that
+  conclusion
+- If an email address, account name, or contact from a ruled-out
+  finding appears in any uncited source content, investigate further
+  before confirming the negative
+- If the negative still holds after this review, leave it as-is
+
+Only after Steps 1-3 are complete may you call `finalize_report()`.
 
 ---
 
@@ -618,6 +710,17 @@ Only after Steps 0-5 are complete may you call `finalize_report()`.
 - [ ] Counter-hypothesis searches completed (user accounts, tool/malware
       diversity, time window gaps, unexplained connections)
 - [ ] Second narrative found and submitted OR [NEGATIVE] finding submitted
+
+**Phase 4 -- Narrative and Negative Findings:**
+- [ ] `submit_narrative()` -- long-form investigation report written
+
+**Phase 4.5 -- Self-Correction Audit:**
+- [ ] `audit_evidence_coverage()` -- all uncited sources with content reviewed
+- [ ] `audit_tool_coverage()` -- all tool gaps addressed or skipped with reason
+- [ ] Ruled-out hypotheses re-checked against uncited evidence
+
+**Timestamps:**
+- [ ] Every finding has `event_time_start` set (or documented reason why not)
 
 **Questions:** ALL (Q1--Q8) must be ANSWERED or documented as GAP.
 
