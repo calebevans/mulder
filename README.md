@@ -1,4 +1,4 @@
-<h1 align="center">Mulder</h1>
+<h1 align="center">mulder</h1>
 
 Mulder is an [MCP](https://modelcontextprotocol.io/) server for digital forensics on [SANS SIFT](https://www.sans.org/tools/sift-workstation/) workstations. It gives an AI agent the ability to create investigation cases, run forensic tools (Volatility 3, Sleuthkit, Plaso, Hayabusa, YARA, and more), index evidence into a searchable SQLite database, submit provenance-tracked findings, and generate investigation reports.
 
