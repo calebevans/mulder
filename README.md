@@ -158,7 +158,6 @@ Reads `{case_id}.db` and `{case_id}.audit.jsonl` from the database directory and
 | [strings](https://man7.org/linux/man-pages/man1/strings.1.html) | Extract printable strings from binary files |
 | [pasco](https://www.mcafee.com/enterprise/en-us/downloads/free-tools.html) | Internet Explorer history parsing |
 | [Hindsight](https://github.com/obsidianforensics/hindsight) | Chrome/Chromium browser forensics (history, cookies, downloads, cache) |
-
 | [MVT](https://github.com/mvt-project/mvt) | Mobile Verification Toolkit for spyware detection (Pegasus, Predator) |
 | [radare2](https://github.com/radareorg/radare2) | Binary analysis and reverse engineering for malware triage |
 | [dislocker](https://github.com/Aorimn/dislocker) / [libbde](https://github.com/libyal/libbde) | BitLocker volume decryption and metadata extraction |
