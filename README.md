@@ -17,6 +17,18 @@ Mulder is an [MCP](https://modelcontextprotocol.io/) server for digital forensic
 - **Resource throttling** with configurable memory and CPU limits so extractions do not overwhelm the host
 - **Parallel extraction** with a configurable worker pool and a `run_parallel` meta-tool for batch dispatch
 
+### Example Output
+
+From the [NGDC investigation](examples/ngdc/) (12 findings, 7 critical, ~28 minutes):
+
+> **Two distinct incidents identified:** an insider data theft conspiracy involving five actors, and unauthorized surveillance via a kernel-level keylogger installed by the suspect's ex-husband.
+>
+> Tracy Sumtwelve, an employee at the National Gallery DC facing a private school tuition crisis, exfiltrated confidential stamp exhibit documents -- insurance valuations, security guard rotation schedules, and blank letterhead. She created an encrypted ZIP (password: "Hercules"), emailed it to her co-conspirator Coral, who forwarded the stolen documents to Perry Patsum within 20 minutes. The full conspiracy network was mapped: Tracy, Coral/Carry, Pat, Perry Patsum, and an individual known as "King."
+>
+> Ironically, the keylogger Joe installed to monitor Tracy and their daughter captured every terminal command, email composition, and password entry -- providing the most detailed forensic evidence in the investigation.
+
+See [examples/](examples/) for full reports from three forensic datasets with ground truth comparisons.
+
 ## Getting Started
 
 ### Docker (recommended)

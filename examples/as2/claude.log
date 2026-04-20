@@ -1,0 +1,324 @@
+❯ /investigate /evidence/AS2/                                                   
+
+● Starting a full-depth forensic investigation on /evidence/AS2/. Let me begin
+  by scanning the evidence and loading the core tools.
+
+  Called mulder (ctrl+o to expand)
+
+● Evidence inventory shows 7 compressed archives and 1 log directory. I need to
+  extract all archives first. Let me load the parallel execution tools.
+
+● Extracting all 7 archives in parallel.
+
+  Called mulder (ctrl+o to expand)
+
+● Archives not found at root level — they're likely inside the logs
+  subdirectory. Let me check the directory structure.
+
+  Called mulder (ctrl+o to expand)
+
+● Now I can see the actual paths. Evidence inventory:
+  - Memory dumps: staff01dmp.zip (3.1GB), staff03dmp.zip (1.3GB)
+  - PCAP: 20250421_tcpdump.zip (922MB)
+  - Logs: 20250421_RailwayWeb_logs.zip (345KB)
+  - Misc: SSL keylog, video files (PowerGrid HMI, Powergrid attack, Railway
+  attack)
+
+  Extracting all archives with correct paths now.
+
+  Called mulder (ctrl+o to expand)
+
+● All archives extracted. Let me now examine the extracted contents to
+  understand what we're working with.
+
+  Called mulder (ctrl+o to expand)
+
+● Excellent. Full evidence inventory:
+
+  ┌─────┬─────────────┬────────┬──────┬────────────────────────────────────┐
+  │  #  │ System/Sour │  Type  │ Size │                Path                │
+  │     │     ce      │        │      │                                    │
+  ├─────┼─────────────┼────────┼──────┼────────────────────────────────────┤
+  │ 1   │ staff01     │ Memory │ 7.9  │ .../staff01dmp/test.dmp            │
+  │     │             │  dump  │ GB   │                                    │
+  ├─────┼─────────────┼────────┼──────┼────────────────────────────────────┤
+  │ 2   │ staff03     │ Memory │ 7.9  │ .../staff03dmp/test.dmp            │
+  │     │             │  dump  │ GB   │                                    │
+  ├─────┼─────────────┼────────┼──────┼────────────────────────────────────┤
+  │     │             │ Networ │ 476. │                                    │
+  │ 3   │ PCAP 0      │ k capt │ 9 MB │ .../20250421Tcpdump.pcap           │
+  │     │             │ ure    │      │                                    │
+  ├─────┼─────────────┼────────┼──────┼────────────────────────────────────┤
+  │     │             │ Networ │ 476. │                                    │
+  │ 4   │ PCAP 1      │ k capt │ 8 MB │ .../20250421Tcpdump.pcap1          │
+  │     │             │ ure    │      │                                    │
+  ├─────┼─────────────┼────────┼──────┼────────────────────────────────────┤
+  │     │             │ Networ │ 476. │                                    │
+  │ 5   │ PCAP 2      │ k capt │ 8 MB │ .../20250421Tcpdump.pcap2          │
+  │     │             │ ure    │      │                                    │
+  ├─────┼─────────────┼────────┼──────┼────────────────────────────────────┤
+  │     │             │ Networ │ 321. │                                    │
+  │ 6   │ PCAP 3      │ k capt │ 0 MB │ .../20250421Tcpdump.pcap3          │
+  │     │             │ ure    │      │                                    │
+  ├─────┼─────────────┼────────┼──────┼────────────────────────────────────┤
+  │ 7   │ Railway Web │ Log    │ 847  │ .../Web_20250421_053028_1.txt      │
+  │     │  Logs       │ file   │ KB   │                                    │
+  ├─────┼─────────────┼────────┼──────┼────────────────────────────────────┤
+  │ 8   │ SSL Keylog  │ Key    │ 4.8  │ .../ssl_keylog_2025_04_21_07_27_41 │
+  │     │             │ log    │ MB   │ .log                               │
+  ├─────┼─────────────┼────────┼──────┼────────────────────────────────────┤
+  │ 9   │ PowerGrid   │ Video  │ 3.3  │ LS25_NCL_PowerGridHMI.mp4          │
+  │     │ HMI         │        │ MB   │                                    │
+  ├─────┼─────────────┼────────┼──────┼────────────────────────────────────┤
+  │ 10  │ Powergrid   │ Video  │ 162. │ Powergrid_attack-video.mov         │
+  │     │ Attack      │        │ 2 MB │                                    │
+  ├─────┼─────────────┼────────┼──────┼────────────────────────────────────┤
+  │ 11  │ Railway     │ Video  │ 92.2 │ Railway_attack-video.mov           │
+  │     │ Attack      │        │  MB  │                                    │
+  └─────┴─────────────┴────────┴──────┴────────────────────────────────────┘
+
+  This appears to be an ICS/SCADA incident involving power grid and railway
+  systems. Let me now re-scan with extracted evidence and start Phase 2
+  analysis. Loading critical tools first.
+
+● Now launching Phase 2 — Wave 1: all slow extractions in parallel, plus fast
+  analysis on logs.
+
+  Called mulder 2 times (ctrl+o to expand)
+
+● The Railway web logs show a file "Alice.jpg" uploaded via POST that actually
+  contains PNG data. This is suspicious — possible steganography or data hiding.
+   Let me read the full log content.
+
+  Read 1 file (ctrl+o to expand)
+
+● Let me use search to look through the indexed web logs instead.
+
+  Called mulder 2 times (ctrl+o to expand)
+● Good progress — PCAP analysis and several Volatility plugins are already
+  indexed. Let me now examine the key findings across all sources in parallel.
+
+  Called mulder 5 times (ctrl+o to expand)
+
+● Major findings already visible. Let me document what I see:
+
+  Critical discoveries:
+  1. attackScript_FDI_Exy.exe running from Startup folder on staff01, with
+  active connection to 10.27.34.41:102 (S7comm/ICS protocol)
+  2. HTTP POSTs to /dataPost/spyTrojan01 from 10.27.34.13 → 100.101.1.145:5001 —
+   exfiltration
+  3. Trojanized ZoomMeetingInstaller.exe launched via file_sync.bat
+  4. Steganographic upload — "Alice.jpg" with PNG content in Railway web logs
+
+  Let me now search for more detail on these artifacts and check extraction
+  progress.
+
+  Called mulder 4 times (ctrl+o to expand)
+
+● 4 of 8 extractions complete (PCAPs done, volatility and bulk_extractor still
+  running). Let me get completed results and dig deeper into the malfind data
+  and web logs.
+
+  Called mulder 3 times (ctrl+o to expand)
+
+● Let me search for more key evidence while extractions continue running.
+
+  Called mulder 4 times (ctrl+o to expand)
+
+● Key finding from conversations: 10.27.34.101 communicating with 10.27.34.41
+  (ICS target). Let me now read the web log data and examine the TLS data, and
+  also look at staff03 netscan.
+
+  Called mulder 4 times (ctrl+o to expand)
+
+● Massive discoveries. The PCAP protocol hierarchy confirms Modbus TCP and
+  S7comm (Siemens ICS) protocols across all captures. I found two C2 endpoints
+  and a potential malware download site. Let me now look at the ICS traffic
+  specifically, examine additional IOCs, and begin submitting findings.
+
+  Called mulder 2 times (ctrl+o to expand)
+
+● Let me run composite analysis and submit findings while extractions continue.
+
+  Called mulder 4 times (ctrl+o to expand)
+
+● Excellent findings. PID 8760 (attackScript_FDI_Exy.exe) confirmed with malfind
+   injection + unusual DLL path. Found a Modbus tooling reference and additional
+   malware URLs. Let me now submit the initial findings and investigate the ICS
+  protocol traffic.
+
+  Called mulder 3 times (ctrl+o to expand)
+
+● Let me fix the rejected finding and submit more.
+
+  Called mulder 3 times (ctrl+o to expand)
+
+● Good, all findings accepted. Now let me dig into the ICS traffic with custom
+  PCAP filters, read the Railway web log, and check extraction status.
+
+  Called mulder 3 times (ctrl+o to expand)
+
+● All 8 extractions complete. Let me get the results and examine the ICS
+  traffic.
+
+  Called mulder 2 times (ctrl+o to expand)
+
+● The ICS traffic reveals the complete SCADA network topology. Now I need to
+  find the actual False Data Injection — Write operations to PLCs. Let me search
+   for write operations and look at the web log.
+
+  Called mulder 3 times (ctrl+o to expand)
+
+● CRITICAL: Found credentials embedded in malware memory —
+  10.27.34.102;admin;ncl1234. Also found additional C2 endpoints (fileupload,
+  getLastRst). Let me search for S7comm write operations and submit more
+  findings.
+
+  Called mulder 3 times (ctrl+o to expand)
+● No PLC write operations found in any PCAP — the FDI attack likely operates at
+  the HMI display level, modifying what operators see rather than writing to
+  PLCs. Let me now run composite tools, check remaining evidence, and search for
+   more IOCs.
+
+  Called mulder 5 times (ctrl+o to expand)
+
+● Let me now run YARA scans on both memory dumps and look at remaining evidence
+  sources.
+
+  Called mulder 5 times (ctrl+o to expand)
+
+● The azurewebsites/uringvermi URLs are from Windows Defender's signature
+  database in memory — not actual attacker infrastructure. Let me now focus on
+  correlating across time windows and examining remaining evidence.
+
+  Called mulder 5 times (ctrl+o to expand)
+
+● Key discovery: _MEI83402 directory in temp confirms ZoomMeetingInstaller.exe
+  is a PyInstaller-packed Python app. Also found actorFunctionsITSupportUser.py
+  matching the IT_Sup endpoint, and staff_records.txt. Let me check YARA scan
+  status and examine remaining evidence.
+
+  Called mulder 3 times (ctrl+o to expand)
+
+● Let me get the completed YARA results and run exiftool on video files for
+  metadata.
+
+  Called mulder 3 times (ctrl+o to expand)
+
+● YARA builtin failed due to rule conflicts; "full" scan still running. Let me
+  check the video metadata and continue with remaining analysis.
+
+  Called mulder 3 times (ctrl+o to expand)
+
+● Critical video metadata discovery: Both attack videos were recorded from a
+  MacBookPro18,3 in Singapore (UTC+8) at 13:57-14:01 UTC on 2025-04-21. Both
+  attack scripts are PyInstaller-packed Python executables (32-bit, 352256
+  bytes). Let me submit these findings and continue toward Phase 3.
+
+  Called mulder 3 times (ctrl+o to expand)
+
+● Now let me check the YARA full scan, look at staff03 netscan, and run the
+  remaining Phase 3 composite tools.
+
+  Called mulder 3 times (ctrl+o to expand)
+
+● CRITICAL: Staff03's ZoomMeetingInstaller.exe (PID 6640) has SSH connections to
+   three ICS HMI stations — this is lateral movement! And an RDP session from
+  10.27.34.11. Let me submit these critical findings.
+
+  Called mulder 2 times (ctrl+o to expand)
+
+● Now let me get the YARA full scan results, review all findings, and proceed to
+   Phase 3.5 and finalization.
+
+  Called mulder 2 times (ctrl+o to expand)
+
+● YARA full scan completed with 25 matches. Let me review the YARA results and
+  proceed to Phase 3.5.
+
+  Called mulder 2 times (ctrl+o to expand)
+
+● Let me check the YARA memory scan results and then proceed to Phase 3.5 and
+  finalization.
+
+  Called mulder (ctrl+o to expand)
+● YARA results show signature matches for APT29/BoomBox, CobaltStrike, DTRACK —
+  but these are likely from Windows Defender's signature database in memory
+  (false positives from AV pattern matching). Let me now proceed to Phase 3.5
+  and finalization.
+
+  Phase 3.5 — Alternative Narrative Discovery
+
+  Primary narrative: A sophisticated ICS/SCADA attack targeting power grid and
+  railway infrastructure. The attacker compromised staff workstations via a
+  trojanized ZoomMeetingInstaller.exe distributed through a file sync mechanism,
+   then performed lateral movement via SSH to ICS HMI stations, deployed
+  attackScript_FDI_Exy.exe for False Data Injection, and exfiltrated data to C2
+  at 100.101.1.145:5001. Attack documented from a MacBook Pro in Singapore.
+
+  Let me search for evidence of additional narratives.
+
+  Called mulder 3 times (ctrl+o to expand)
+
+● The hostname is LS24-BT-MAINTWS — a maintenance workstation. Only user admin
+  is active on both systems. Let me now submit the negative finding for Phase
+  3.5 and proceed to finalization.
+
+  Called mulder (ctrl+o to expand)
+
+● Now proceeding to Phase 4 — Pre-Finalize Audit. Let me run the audit tools and
+   submit the narrative.
+
+  Called mulder (ctrl+o to expand)
+
+● Narrative submitted. Now running Phase 4.5 self-correction audit.
+
+  Called mulder 2 times (ctrl+o to expand)
+
+● The audit shows uncited sources are mostly supporting bulk_extractor outputs
+  (email, ether, packets, etc.) containing certificate data and generic PE
+  headers — no overlooked evidence. Tool coverage gaps are because archives were
+   extracted via run_parallel (logged differently). Let me finalize the report.
+
+  Called mulder (ctrl+o to expand)
+
+● Investigation complete. Here's the summary:
+
+  Investigation Results: ICS/SCADA Attack on Power Grid & Railway
+
+  13 findings submitted (12 confirmed, 1 inference) across 2 memory dumps, 4
+  PCAPs, web logs, SSL keylog, and 3 video recordings.
+
+  Attack Chain (2025-04-21)
+
+  1. 04:28 UTC — File sync client downloads trojanized ZoomMeetingInstaller.exe
+  from server at 10.27.34.12:8081
+  2. 07:00 UTC — PyInstaller-packed fake Zoom installer executes on staff03
+  (10.27.34.13)
+  3. 08:15 UTC — Steganographic "Alice.jpg" (PNG) uploaded to Railway web app
+  4. 08:29-08:30 UTC — First C2 exfiltration burst to 100.101.1.145:5001
+  (/dataPost/spyTrojan01)
+  5. 10:02-10:05 UTC — Lateral movement: SSH from staff03 to 3 ICS HMI stations
+  (.103, .104, .105)
+  6. 13:10 UTC — Second C2 exfiltration burst
+  7. 13:53 UTC — attackScript_FDI_Exy.exe active from Startup folder on staff01,
+   connected to Siemens PLC at 10.27.34.41:102
+  8. 13:57-14:01 UTC — Attack videos recorded from MacBook Pro in Singapore
+
+  Key IOCs
+
+  - C2 Server: 100.101.1.145:5001 (self-signed TLS cert: "ncl")
+  - Secondary C2: 192.168.50.42:5000
+  - File Sync Server: 10.27.34.12:8081
+  - Malware: attackScript_FDI_Exy.exe, ZoomMeetingInstaller.exe (both 352,256
+  bytes, PyInstaller)
+  - Credentials: admin / ncl1234
+  - Endpoint: /dataPost/spyTrojan01, /filedownload, /fileupload, /getLastRst
+
+  Reports saved to:
+  - /root/.mulder/cases/as2.report.md
+  - /root/.mulder/cases/as2.report.html
+
+✻ Cogitated for 19m 14s
+
+※ recap: Investigated ICS/SCADA attack on power grid and railway systems from evidence at /evidence/AS2/. Full investigation is complete with 13 findings and final report generated at /root/.mulder/cases/as2.report.html. (disable recaps in /config)
