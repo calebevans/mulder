@@ -14,7 +14,9 @@ Usage::
     python scripts/extract_attack_tactics.py --download
 
     # From custom paths:
-    python scripts/extract_attack_tactics.py --stix-path /tmp/enterprise-attack.json --ics-stix-path /tmp/ics-attack.json
+    python scripts/extract_attack_tactics.py \
+        --stix-path /tmp/enterprise-attack.json \
+        --ics-stix-path /tmp/ics-attack.json
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ import json
 import sys
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 _DEFAULT_STIX_PATH = Path("/opt/attack/enterprise-attack.json")
 _DEFAULT_ICS_STIX_PATH = Path("/opt/attack/ics-attack.json")
@@ -35,7 +38,14 @@ _ICS_STIX_URL = (
     "https://raw.githubusercontent.com/mitre-attack/attack-stix-data"
     "/master/ics-attack/ics-attack.json"
 )
-_OUTPUT_PATH = Path(__file__).resolve().parent.parent / "src" / "mulder" / "report" / "data" / "attack_tactics.json"
+_OUTPUT_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "src"
+    / "mulder"
+    / "report"
+    / "data"
+    / "attack_tactics.json"
+)
 
 _TACTIC_KILL_CHAIN_ORDER = [
     "reconnaissance",
@@ -57,9 +67,12 @@ _TACTIC_KILL_CHAIN_ORDER = [
 _KILL_CHAIN_NAMES = {"mitre-attack", "mitre-ics-attack"}
 
 
-def _parse_tactics(objects: list[dict], known_order: list[str] | None = None) -> list[dict[str, str]]:
+def _parse_tactics(
+    objects: list[dict[str, Any]],
+    known_order: list[str] | None = None,
+) -> list[dict[str, Any]]:
     """Extract ordered tactic list from ``x-mitre-tactic`` STIX objects."""
-    raw_tactics: dict[str, dict[str, str]] = {}
+    raw_tactics: dict[str, dict[str, Any]] = {}
 
     for obj in objects:
         if obj.get("type") != "x-mitre-tactic":
@@ -83,7 +96,7 @@ def _parse_tactics(objects: list[dict], known_order: list[str] | None = None) ->
         }
 
     order = known_order or []
-    ordered: list[dict[str, str]] = []
+    ordered: list[dict[str, Any]] = []
     for idx, shortname in enumerate(order):
         if shortname in raw_tactics:
             t = raw_tactics[shortname]
@@ -98,9 +111,12 @@ def _parse_tactics(objects: list[dict], known_order: list[str] | None = None) ->
     return ordered
 
 
-def _parse_techniques(objects: list[dict], tactic_shortname_to_id: dict[str, str]) -> dict[str, dict]:
+def _parse_techniques(
+    objects: list[dict[str, Any]],
+    tactic_shortname_to_id: dict[str, str],
+) -> dict[str, dict[str, Any]]:
     """Extract technique-id -> {name, tactics} mapping from attack-pattern objects."""
-    techniques: dict[str, dict] = {}
+    techniques: dict[str, dict[str, Any]] = {}
 
     for obj in objects:
         if obj.get("type") != "attack-pattern":
@@ -226,7 +242,7 @@ def main() -> None:
 
         enterprise_shortnames = {t["shortname"] for t in tactics}
         ics_tactics = _parse_tactics(ics_objects)
-        next_order = max((t["order"] for t in tactics), default=-1) + 1
+        next_order: int = max((t["order"] for t in tactics), default=-1) + 1
         for t in ics_tactics:
             if t["shortname"] not in enterprise_shortnames:
                 t["order"] = next_order
@@ -259,7 +275,8 @@ def main() -> None:
     }
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(result, separators=(",", ":"), sort_keys=False), encoding="utf-8")
+    payload = json.dumps(result, separators=(",", ":"), sort_keys=False)
+    args.output.write_text(payload, encoding="utf-8")
     print(f"Wrote {args.output} ({args.output.stat().st_size:,} bytes)")
     print(f"  {len(tactics)} tactics, {len(techniques)} techniques ({ics_count} ICS-only)")
 

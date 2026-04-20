@@ -83,10 +83,7 @@ def _source_is_cited(source_name: str, finding_sources: set[str]) -> bool:
     source_name appears as a substring of any finding source string,
     or vice versa.
     """
-    for fs in finding_sources:
-        if source_name in fs or fs in source_name:
-            return True
-    return False
+    return any(source_name in fs or fs in source_name for fs in finding_sources)
 
 
 @mcp.tool()
@@ -213,12 +210,14 @@ def audit_tool_coverage() -> dict[str, object]:
         not_run = [t for t in applicable if t not in tools_invoked]
         total_gaps += len(not_run)
 
-        items.append({
-            "path": str(ev.path),
-            "artifact_type": ev.artifact_type,
-            "tools_run": run,
-            "tools_not_run": not_run,
-        })
+        items.append(
+            {
+                "path": str(ev.path),
+                "artifact_type": ev.artifact_type,
+                "tools_run": run,
+                "tools_not_run": not_run,
+            }
+        )
 
     result = {
         "tool_call_id": tc_id,

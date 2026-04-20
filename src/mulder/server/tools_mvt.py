@@ -78,14 +78,18 @@ def run_mvt_android(
 
     if not shutil.which("mvt-android"):
         return error_response(
-            tc_id, tool_name, params,
+            tc_id,
+            tool_name,
+            params,
             "mvt-android not found on PATH. Install with: pip install mvt",
             error_type="binary_missing",
         )
 
     if not Path(evidence_path).exists():
         return error_response(
-            tc_id, tool_name, params,
+            tc_id,
+            tool_name,
+            params,
             f"Evidence path not found: {evidence_path}",
             error_type="file_not_found",
         )
@@ -109,7 +113,9 @@ def run_mvt_android(
             )
         except subprocess.TimeoutExpired:
             return error_response(
-                tc_id, tool_name, params,
+                tc_id,
+                tool_name,
+                params,
                 f"mvt-android timed out after {_MVT_TIMEOUT}s",
                 elapsed_ms=(time.monotonic() - t0) * 1000,
             )
@@ -120,11 +126,15 @@ def run_mvt_android(
             raw_output = proc.stdout.strip() or proc.stderr.strip()
 
     index_result = extract_and_index(
-        raw_output, "mvt.android", evidence_path, "mvt",
+        raw_output,
+        "mvt.android",
+        evidence_path,
+        "mvt",
     )
 
     detections = sum(
-        c for name, c in module_counts.items()
+        c
+        for name, c in module_counts.items()
         if "detected" in name.lower() or "warning" in name.lower()
     )
 
@@ -182,14 +192,18 @@ def run_mvt_ios(
 
     if not shutil.which("mvt-ios"):
         return error_response(
-            tc_id, tool_name, params,
+            tc_id,
+            tool_name,
+            params,
             "mvt-ios not found on PATH. Install with: pip install mvt",
             error_type="binary_missing",
         )
 
     if not Path(evidence_path).exists():
         return error_response(
-            tc_id, tool_name, params,
+            tc_id,
+            tool_name,
+            params,
             f"Evidence path not found: {evidence_path}",
             error_type="file_not_found",
         )
@@ -211,7 +225,9 @@ def run_mvt_ios(
             )
         except subprocess.TimeoutExpired:
             return error_response(
-                tc_id, tool_name, params,
+                tc_id,
+                tool_name,
+                params,
                 f"mvt-ios timed out after {_MVT_TIMEOUT}s",
                 elapsed_ms=(time.monotonic() - t0) * 1000,
             )
@@ -222,11 +238,15 @@ def run_mvt_ios(
             raw_output = proc.stdout.strip() or proc.stderr.strip()
 
     index_result = extract_and_index(
-        raw_output, "mvt.ios", evidence_path, "mvt",
+        raw_output,
+        "mvt.ios",
+        evidence_path,
+        "mvt",
     )
 
     detections = sum(
-        c for name, c in module_counts.items()
+        c
+        for name, c in module_counts.items()
         if "detected" in name.lower() or "warning" in name.lower()
     )
 

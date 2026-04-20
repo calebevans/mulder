@@ -7,7 +7,6 @@ local storage, preferences, etc.) into the case database.
 
 from __future__ import annotations
 
-import json
 import logging
 import shutil
 import subprocess
@@ -74,14 +73,18 @@ def run_hindsight(
     hs_cmd = _find_hindsight_cmd()
     if not hs_cmd:
         return error_response(
-            tc_id, tool_name, params,
+            tc_id,
+            tool_name,
+            params,
             "Hindsight not found. Install with: pip install pyhindsight",
             error_type="binary_missing",
         )
 
     if not Path(profile_path).is_dir():
         return error_response(
-            tc_id, tool_name, params,
+            tc_id,
+            tool_name,
+            params,
             f"Profile directory not found: {profile_path}",
             error_type="file_not_found",
         )
@@ -93,10 +96,14 @@ def run_hindsight(
 
         cmd = [
             *hs_cmd,
-            "-i", profile_path,
-            "-o", output_base,
-            "-b", browser_type,
-            "-f", "jsonl",
+            "-i",
+            profile_path,
+            "-o",
+            output_base,
+            "-b",
+            browser_type,
+            "-f",
+            "jsonl",
         ]
 
         try:
@@ -109,7 +116,9 @@ def run_hindsight(
             )
         except subprocess.TimeoutExpired:
             return error_response(
-                tc_id, tool_name, params,
+                tc_id,
+                tool_name,
+                params,
                 f"Hindsight timed out after {_HINDSIGHT_TIMEOUT}s",
                 elapsed_ms=(time.monotonic() - t0) * 1000,
             )
@@ -134,7 +143,10 @@ def run_hindsight(
             raw_output = proc.stdout.strip() or proc.stderr.strip()
 
     index_result = extract_and_index(
-        raw_output, "hindsight.browser", profile_path, "hindsight",
+        raw_output,
+        "hindsight.browser",
+        profile_path,
+        "hindsight",
     )
 
     elapsed = (time.monotonic() - t0) * 1000
