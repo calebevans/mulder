@@ -19,15 +19,37 @@ Mulder is an [MCP](https://modelcontextprotocol.io/) server for digital forensic
 
 ### Example Output
 
-From the [NGDC investigation](examples/ngdc/) (12 findings, 7 critical, ~28 minutes):
+From the agent's live terminal during a [NIST insider threat investigation](examples/nist-data-leakage/):
 
-> **Two distinct incidents identified:** an insider data theft conspiracy involving five actors, and unauthorized surveillance via a kernel-level keylogger installed by the suspect's ex-husband.
->
-> Tracy Sumtwelve, an employee at the National Gallery DC facing a private school tuition crisis, exfiltrated confidential stamp exhibit documents -- insurance valuations, security guard rotation schedules, and blank letterhead. She created an encrypted ZIP (password: "Hercules"), emailed it to her co-conspirator Coral, who forwarded the stolen documents to Perry Patsum within 20 minutes. The full conspiracy network was mapped: Tracy, Coral/Carry, Pat, Perry Patsum, and an individual known as "King."
->
-> Ironically, the keylogger Joe installed to monitor Tracy and their daughter captured every terminal command, email composition, and password entry -- providing the most detailed forensic evidence in the investigation.
+```
+● BOMBSHELL: Informant's Downloads folder contains:
+  - googledrivesync.exe + Zone.Identifier (downloaded from internet!)
+  - icloudsetup.exe + Zone.Identifier (also downloaded from internet!)
 
-See [examples/](examples/) for full reports from three forensic datasets with ground truth comparisons.
+  Multi-vector exfiltration: USB drives (×2), CD-R burn, Google Drive cloud
+  sync, and possibly iCloud!
+
+● SMOKING GUN — Browser Search Queries Show Premeditation:
+  search?q=anti-forensic+tools      (n=85)
+  search?q=ccleaner                 (n=65)
+  search?q=cd+burning+method        (n=64)
+  search?q=external+device+forensics (n=65)
+  search?q=DLP+DRM                  (n=90)
+  search?q=e-mail+investigation     (n=88)
+
+  The informant researched how to cover their tracks AND how forensic
+  investigations work. This is deliberate, premeditated data theft.
+
+● EXPLOSIVE FIND: LNK shows network share accessed:
+  \\10.11.11.128\secured_drive\Secret Project Data\final
+  on 2015-03-22T14:52:21Z (drive V:).
+
+  This is the server where the secret project files were stored!
+```
+
+14 findings, 9 critical, 34 minutes. Full report with narrative, IOCs, and MITRE ATT&CK mappings generated automatically.
+
+See [examples/](examples/) for reports from multiple forensic datasets with ground truth comparisons, including runs on both Opus and Sonnet.
 
 ## Getting Started
 
@@ -47,7 +69,7 @@ The container expects three volume mounts:
 |-------|---------|
 | `/evidence` | Your evidence directory (mount read-only with `:ro`) |
 | `/root/.mulder/cases` | Case databases, audit logs, and generated reports (persisted to host) |
-| `/home/mulder-user/.claude` | Claude Code configuration and session data |
+| `/root/.claude` | Claude Code configuration and session data |
 
 **With an Anthropic API key:**
 
@@ -57,7 +79,7 @@ mkdir -p ~/mulder-cases
 docker run -it --privileged \
   -v /path/to/evidence:/evidence:ro            `# evidence directory (read-only)` \
   -v ~/mulder-cases:/root/.mulder/cases        `# case DBs, audit logs, reports` \
-  -v ~/.claude:/home/mulder-user/.claude       `# Claude Code config and sessions` \
+  -v ~/.claude:/root/.claude                   `# Claude Code config and sessions` \
   -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
   ghcr.io/calebevans/mulder:latest
 ```
@@ -70,7 +92,7 @@ mkdir -p ~/mulder-cases
 docker run -it --privileged \
   -v /path/to/evidence:/evidence:ro            `# evidence directory (read-only)` \
   -v ~/mulder-cases:/root/.mulder/cases        `# case DBs, audit logs, reports` \
-  -v ~/.claude:/home/mulder-user/.claude       `# Claude Code config and sessions` \
+  -v ~/.claude:/root/.claude                   `# Claude Code config and sessions` \
   -e CLAUDE_CODE_USE_VERTEX=1 \
   -e CLOUD_ML_REGION=us-east5 \
   -e ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project-id \
@@ -87,7 +109,7 @@ mkdir -p ~/mulder-cases
 docker run -it --privileged \
   -v /path/to/evidence:/evidence:ro            `# evidence directory (read-only)` \
   -v ~/mulder-cases:/root/.mulder/cases        `# case DBs, audit logs, reports` \
-  -v ~/.claude:/home/mulder-user/.claude       `# Claude Code config and sessions` \
+  -v ~/.claude:/root/.claude                   `# Claude Code config and sessions` \
   -e CLAUDE_CODE_USE_BEDROCK=1 \
   -e AWS_REGION=us-east-1 \
   -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \

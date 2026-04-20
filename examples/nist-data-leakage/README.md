@@ -2,74 +2,74 @@
 
 ## Scenario
 
-The [NIST CFReDS Data Leakage Case](https://cfreds.nist.gov/all/NIST/DataLeakageCase) is a single-actor insider threat investigation. A NIST employee identified as "Iaman Informant" systematically exfiltrated classified "Secret Project Data" from a secured network share to removable media and cloud storage over a six-week period (February--March 2015), while simultaneously researching anti-forensic techniques to cover their tracks.
+The [NIST CFReDS Data Leakage Case](https://cfreds.nist.gov/all/NIST/DataLeakageCase) is a single-actor insider threat investigation. A NIST employee identified as "Iaman Informant" systematically exfiltrated classified "Secret Project Data" from a secured network share to removable media and cloud storage over a multi-month period (December 2014 -- March 2015), while simultaneously researching anti-forensic techniques to cover their tracks.
 
-**Source:** [NIST CFReDS](https://cfreds.nist.gov/all/NIST/DataLeakageCase) (free download)
+**Source:** [NIST CFReDS](https://cfreds.nist.gov/all/NIST/DataLeakageCase) (free download, ~7.7 GB)
+**Answer Key:** [NIST published answers](https://cfreds-archive.nist.gov/data_leakage_case/leakage-answers.pdf) (60 questions with detailed answers)
 
 ## Evidence Analyzed
 
 | Evidence Type | Items | Description |
 |---------------|-------|-------------|
-| PC disk image (E01) | 1 | Suspect's Windows 7 x64 workstation (~20GB NTFS) |
-| USB images (E01) | 2 | RM1 "Authorized USB" (exFAT), RM2 "IAMAN" (FAT32) |
-| CD-R image (E01) | 1 | RM3 optical media with government documents and photos |
+| PC disk image (E01) | 4 segments | Windows 7 x64 workstation (~20 GB NTFS) |
+| USB images (E01) | 2 | RM1 "Authorized USB" (exFAT, 4 GB), RM2 "IAMAN $_@" (FAT32, 4 GB) |
+| CD-R image (E01) | 1 | RM3 "IAMAN CD" (UDF, 700 MB) |
 
-**Total evidence items classified:** 43 disk, 2 other
+## Model Comparison
 
-## Results
+| Metric | Opus | Sonnet |
+|--------|------|--------|
+| Findings | 15 (6 crit, 7 high) | 14 (9 crit, 4 high) |
+| Confirmed / Inference | 13 / 2 | 13 / 1 |
+| Tool calls | 157 | 246 |
+| Wall-clock time | ~23 min | ~34 min |
+| Timeline start | 2015-03-22 | **2015-02-15** (found earlier USB access) |
+| Earliest data staging | Not found | **2014-12-16** (LNK write time on USB) |
+| Gov agency docs named | General reference | **NASA, NIH, LoC, DOE** specifically identified |
+| Post-cleanup cloud sync | Not found | **Google Drive Sync ran after Eraser/CCleaner** |
+| Anti-forensic detail | Tool identification | **Minute-by-minute March 25 cleanup timeline** |
 
-| Metric | Value |
-|--------|-------|
-| Findings | 10 (5 critical, 5 high) |
-| Confirmed | 10 |
-| Inference | 0 |
-| Hypotheses ruled out | 1 |
-| Tool calls | 167 |
-| Wall-clock time | ~30 minutes |
-| Evidence sources indexed | 8 |
+**Opus** was faster and identified more total findings (15 vs 14), including the shared content between RM2 and RM3 as a dedicated finding. Conservative and thorough on tool-level artifacts.
 
-### Findings
-
-1. **[CRITICAL] Insider Threat: User "Iaman Informant" Exfiltrating Secret Project Data via USB** -- Complete Secret Project Data package on RM1 USB with Office temp files confirming editing. LNK files corroborate access.
-2. **[CRITICAL] Google Drive Exfiltration via Personal Gmail** -- Google Drive Sync installed and configured with `iaman.informant.personal@gmail.com` (separate from work email). Prefetch confirms execution. Sync databases deleted to hide evidence.
-3. **[CRITICAL] Premeditated Data Theft: Systematic Research on Leaking and Anti-Forensics** -- 900+ search queries for data theft methods, anti-forensic tools, and counter-investigation techniques. Precise Prefetch timestamp at 2015-03-25T14:31:53Z.
-4. **[CRITICAL] Data Source: Secret Project from Network Share** -- LNK artifacts trace data to `\\10.11.11.128\SECURED_DRIVE` (mapped as V:). Timestamps: 2015-02-15T21:52:08Z through 2015-03-22T14:52:21Z.
-5. **[CRITICAL] Resignation Letter Created After Anti-Forensic Cleanup** -- Created 2015-03-25T14:20:09Z, exported to XPS at 15:28:33Z, during same session as Eraser/CCleaner execution.
-6. **[HIGH] Anti-Forensic Tool Installation: Eraser 6 and CCleaner** -- Both downloaded from internet (Zone.Identifier confirmed), installed, executed (Prefetch), then installers deleted.
-7. **[HIGH] Deleted Data on USB RM2 (FAT32)** -- Orphan files in project-structure directories (design, pricing, progress, proposal, technical) including 6 diary files.
-8. **[HIGH] CD-R (RM3) Contains Image Files** -- Used as additional exfiltration medium. User searched "cd burning method" 64 times. Windows Burn staging directory found.
-9. **[HIGH] Eraser 6 Executed for Secure Deletion** -- Precise Prefetch execution timestamp 2015-03-25T14:50:14Z. Task list at `Eraser 6/Task List.ersy`. Confirmed file deletion activity.
-10. **[HIGH] Prefetch Execution Timeline: Minute-by-Minute Cleanup Session** -- March 25 session reconstructed: Outlook 14:41, Eraser installer 14:50, CCleaner 14:58, Eraser execution 15:13, IE 15:22, resignation XPS 15:28.
-
-### ATT&CK Coverage
-
-| Tactic | Techniques |
-|--------|-----------|
-| Defense Evasion | T1027 Obfuscation, T1070 Indicator Removal, T1070.004 File Deletion |
-| Collection | T1005 Local Data, T1039 Network Shared Drive, T1074.001 Local Data Staging, T1119 Automated Collection |
-| Exfiltration | T1052.001 Exfiltration over USB, T1567.002 Exfiltration to Cloud Storage, T1052 Physical Medium |
-| Impact | T1485 Data Destruction |
+**Sonnet** found deeper temporal evidence (December 2014 data staging, February 2015 first USB access), produced a more detailed anti-forensic timeline, and caught that Google Drive Sync executed *after* the cleanup tools -- meaning cloud exfiltration may have continued even as local evidence was being destroyed. The narrative reads like a professional forensic examiner's report with minute-by-minute chronology.
 
 ## Ground Truth Comparison
 
-The CFReDS Data Leakage Case has a [published answer key](https://cfreds.nist.gov/all/NIST/DataLeakageCase).
+The CFReDS Data Leakage Case has a [published answer key](https://cfreds-archive.nist.gov/data_leakage_case/leakage-answers.pdf) with 60 detailed questions and answers.
 
-**Correctly identified:**
+**Correctly identified (both models):**
 - Complete exfiltration chain: network share -> USB -> cloud storage -> CD-R
 - All four evidence images analyzed with relevant artifacts extracted
-- Anti-forensic tool usage (Eraser, CCleaner) with Prefetch execution timestamps
-- Premeditation established through search history analysis
-- Timeline reconstruction from Feb 15 through Mar 25, 2015 cleanup session
-- Suspect identity and both work and personal email accounts confirmed
-- Personal Gmail (`iaman.informant.personal@gmail.com`) distinguished from work email
-- Multiple exfiltration vectors identified (USB, CD-R, Google Drive)
+- Anti-forensic tool usage (Eraser, CCleaner) with Prefetch timestamps
+- Premeditation established through search history analysis (900+ queries)
+- Suspect identity (Iaman Informant, iaman.informant@nist.gov)
+- Network share source (\\10.11.11.128\SECURED_DRIVE)
+- Multiple exfiltration vectors (USB, CD-R, Google Drive, iCloud)
+- Resignation letter correlated with cleanup session
 - Evidence of data wiping on RM2 USB drive
-- Resignation letter timing correlated with cleanup session
 
-**Not fully articulated:**
-- The "temporary" user account created on March 22 is mentioned but not explored as a separate finding
+**Sonnet additionally found:**
+- December 2014 earliest data staging via LNK write timestamps
+- Government agency documents named (NASA HQ, NIH, Library of Congress, DOE)
+- Google Drive Sync active after anti-forensic cleanup
+- Eraser Task List.ersy file at specific inode as actionable evidence
+
+**Not fully articulated (both models):**
+- Email exchange with spy.conspirator@nist.gov (Outlook OST not parsed)
+- Volume Shadow Copy analysis (NIST questions 47-50)
+- Windows Search database content (NIST questions 42-46)
+- Sticky Notes content (NIST questions 40-41)
 
 ## Output Files
 
-- [`nist-data-leakage.report.md`](nist-data-leakage.report.md) -- Full markdown report
-- [`nist-data-leakage.report.html`](nist-data-leakage.report.html) -- Self-contained HTML report
+### Opus
+
+- [`opus/nist-data-leakage.report.md`](opus/nist-data-leakage.report.md) -- Markdown report
+- [`opus/nist-data-leakage.report.html`](opus/nist-data-leakage.report.html) -- HTML report
+- [`opus/claude.log`](opus/claude.log) -- Claude Code session log
+
+### Sonnet
+
+- [`sonnet/nist-data-leakage.report.md`](sonnet/nist-data-leakage.report.md) -- Markdown report
+- [`sonnet/nist-data-leakage.report.html`](sonnet/nist-data-leakage.report.html) -- HTML report
+- [`sonnet/claude.log`](sonnet/claude.log) -- Claude Code session log
