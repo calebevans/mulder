@@ -294,12 +294,22 @@ class AuditLog:
             + estimated_output_tokens / 1_000_000 * cost_per_mtok_out
         )
 
+        wall_clock_ms = total_duration_ms
+        if len(timestamps) >= 2:
+            try:
+                t0 = datetime.fromisoformat(timestamps[0])
+                t1 = datetime.fromisoformat(timestamps[-1])
+                wall_clock_ms = (t1 - t0).total_seconds() * 1000
+            except (ValueError, TypeError):
+                pass
+
         return AuditSummary(
             total_tool_calls=total_tool_calls,
             total_findings=total_findings,
             tool_call_counts=dict(tool_call_counts),
             tool_durations=dict(tool_durations),
             total_duration_ms=total_duration_ms,
+            wall_clock_ms=wall_clock_ms,
             first_timestamp=timestamps[0] if timestamps else "",
             last_timestamp=timestamps[-1] if timestamps else "",
             estimated_input_tokens=estimated_input_tokens,

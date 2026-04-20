@@ -176,6 +176,42 @@ def submit_finding(
 
 
 @mcp.tool()
+def submit_narrative(narrative: str) -> dict[str, object]:
+    """Submit the long-form investigation narrative report.
+
+    Write this as an official incident report in markdown with these
+    sections: Background, Incident Timeline, Key Findings, Impact
+    Assessment, Recommendations, and Conclusion.  Use full paragraphs,
+    not bullet points.  This becomes the "Report" page in the final
+    output.
+
+    Can be called multiple times -- each call replaces the previous
+    narrative.
+    """
+    ctx = get_ctx()
+    tc_id = make_tool_call_id()
+    t0 = time.monotonic()
+
+    ctx.db.set_narrative(narrative)
+
+    result: dict[str, object] = {
+        "tool_call_id": tc_id,
+        "status": "accepted",
+        "length": len(narrative),
+    }
+
+    elapsed = (time.monotonic() - t0) * 1000
+    ctx.audit.log_tool_call(
+        tool_call_id=tc_id,
+        tool_name="submit_narrative",
+        params={"length": len(narrative)},
+        output_hash=hash_output(result),
+        duration_ms=elapsed,
+    )
+    return result
+
+
+@mcp.tool()
 def get_findings(limit: int = 20, offset: int = 0) -> dict[str, object]:
     """Retrieve findings submitted so far in this case.
 

@@ -397,6 +397,45 @@ def create_case(
     return _build_context(case_id, db)
 
 
+_PARALLEL_TEXT_CAP = 500
+_PARALLEL_RESULTS_CAP = 5
+
+
+def _slim_result(result: Any) -> Any:
+    """Trim a sub-tool result for inclusion in a run_parallel response.
+
+    Caps inline ``raw_text`` and large ``results`` arrays so the
+    combined parallel response stays within a reasonable token budget.
+    Full data remains in the case DB for retrieval via ``search()`` or
+    ``get_raw_output()``.
+    """
+    if not isinstance(result, dict):
+        return result
+    slimmed = dict(result)
+
+    if isinstance(slimmed.get("raw_text"), str):
+        text = slimmed["raw_text"]
+        if len(text) > _PARALLEL_TEXT_CAP:
+            slimmed["raw_text"] = text[:_PARALLEL_TEXT_CAP]
+            slimmed["raw_text_truncated"] = True
+
+    if isinstance(slimmed.get("results"), list):
+        full = slimmed["results"]
+        if len(full) > _PARALLEL_RESULTS_CAP:
+            slimmed["results"] = full[:_PARALLEL_RESULTS_CAP]
+            slimmed["results_truncated"] = True
+            slimmed["results_total"] = len(full)
+
+    if isinstance(slimmed.get("results"), dict):
+        inner = slimmed["results"]
+        for k, v in inner.items():
+            if isinstance(v, str) and len(v) > _PARALLEL_TEXT_CAP:
+                inner[k] = v[:_PARALLEL_TEXT_CAP]
+                slimmed.setdefault("truncated_fields", []).append(k)
+
+    return slimmed
+
+
 _SEQUENTIAL_ONLY: set[str] = {
     "run_bulk_extractor",
 }
@@ -475,7 +514,8 @@ async def run_parallel(tasks: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "batch_id": batch_id,
         "parallel_results": [
-            {"tool": tasks[i]["tool"], "result": results[i]} for i in range(len(tasks))
+            {"tool": tasks[i]["tool"], "result": _slim_result(results[i])}
+            for i in range(len(tasks))
         ],
         "total_tasks": len(tasks),
     }
@@ -491,8 +531,11 @@ import mulder.server.tools_extract as _tools_extract  # noqa: E402, F401
 import mulder.server.tools_eztools as _tools_eztools  # noqa: E402, F401
 import mulder.server.tools_findings as _tools_findings  # noqa: E402, F401
 import mulder.server.tools_hayabusa as _tools_hayabusa  # noqa: E402, F401
+import mulder.server.tools_hindsight as _tools_hindsight  # noqa: E402, F401
 import mulder.server.tools_jobs as _tools_jobs  # noqa: E402, F401
+import mulder.server.tools_mvt as _tools_mvt  # noqa: E402, F401
 import mulder.server.tools_phone as _tools_phone  # noqa: E402, F401
 import mulder.server.tools_plaso as _tools_plaso  # noqa: E402, F401
+import mulder.server.tools_review as _tools_review  # noqa: E402, F401
 import mulder.server.tools_tsk as _tools_tsk  # noqa: E402, F401
 import mulder.server.tools_yara as _tools_yara  # noqa: E402, F401

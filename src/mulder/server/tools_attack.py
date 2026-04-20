@@ -21,6 +21,7 @@ from mulder.server.helpers import error_response, make_tool_call_id, tool_respon
 logger = logging.getLogger(__name__)
 
 _STIX_PATH = Path("/opt/attack/enterprise-attack.json")
+_ICS_STIX_PATH = Path("/opt/attack/ics-attack.json")
 
 _TECHNIQUE_ID_RE = re.compile(r"^T\d{4}(?:\.\d{3})?$")
 
@@ -44,7 +45,7 @@ def _parse_stix_technique(obj: dict[str, Any]) -> tuple[str, dict[str, Any]] | N
 
     ext_refs: list[dict[str, str]] = obj.get("external_references", [])
     attack_ref = next(
-        (r for r in ext_refs if r.get("source_name") == "mitre-attack"),
+        (r for r in ext_refs if r.get("source_name") in ("mitre-attack", "mitre-ics-attack")),
         None,
     )
     if attack_ref is None:
@@ -56,7 +57,7 @@ def _parse_stix_technique(obj: dict[str, Any]) -> tuple[str, dict[str, Any]] | N
     tactics = [
         phase["phase_name"]
         for phase in obj.get("kill_chain_phases", [])
-        if phase.get("kill_chain_name") == "mitre-attack"
+        if phase.get("kill_chain_name") in ("mitre-attack", "mitre-ics-attack")
     ]
 
     detection = obj.get("x_mitre_detection", "")
@@ -91,8 +92,20 @@ def _load_attack_data() -> dict[str, dict[str, Any]]:
             if parsed is not None:
                 techniques[parsed[0]] = parsed[1]
 
+        if _ICS_STIX_PATH.exists():
+            ics_raw = json.loads(_ICS_STIX_PATH.read_text(encoding="utf-8"))
+            ics_count = 0
+            for obj in ics_raw.get("objects", []):
+                if obj.get("type") != "attack-pattern":
+                    continue
+                parsed = _parse_stix_technique(obj)
+                if parsed is not None and parsed[0] not in techniques:
+                    techniques[parsed[0]] = parsed[1]
+                    ics_count += 1
+            logger.info("Loaded %d ICS ATT&CK techniques from %s", ics_count, _ICS_STIX_PATH)
+
         _attack_techniques = techniques
-        logger.info("Loaded %d ATT&CK techniques from %s", len(techniques), _STIX_PATH)
+        logger.info("Loaded %d total ATT&CK techniques", len(techniques))
         return techniques
 
 

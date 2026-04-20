@@ -31,6 +31,7 @@ class CaseMetadataRow(BaseModel):
     ingested_at: str
     evidence_root: str
     extractor_versions: dict[str, str]
+    narrative: str | None = None
 
 
 class Finding(BaseModel):
@@ -91,6 +92,7 @@ class AuditSummary(BaseModel):
     total_findings: int
     tool_call_counts: dict[str, int]
     total_duration_ms: float
+    wall_clock_ms: float = 0.0
     first_timestamp: str
     last_timestamp: str
     tool_durations: dict[str, float] = {}

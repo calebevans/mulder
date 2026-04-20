@@ -310,9 +310,18 @@ def verify_evidence_integrity() -> str:
 
 
 def _extract_zip(archive: Path, dest: Path) -> list[str]:
-    """Extract a zip archive to *dest* and return paths relative to *dest*."""
-    with zipfile.ZipFile(archive, "r") as zf:
-        zf.extractall(dest)
+    """Extract a zip archive to *dest* and return paths relative to *dest*.
+
+    Falls back to the ``7z`` binary when Python's zipfile module cannot
+    handle the compression method (e.g. deflate64, LZMA).
+    """
+    try:
+        with zipfile.ZipFile(archive, "r") as zf:
+            zf.extractall(dest)
+    except (NotImplementedError, zipfile.BadZipFile):
+        if not shutil.which("7z"):
+            raise
+        return _extract_7z(archive, dest)
     return [str(f.relative_to(dest)) for f in dest.rglob("*") if f.is_file()]
 
 

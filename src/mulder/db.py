@@ -43,6 +43,7 @@ case_metadata_t = Table(
     Column("ingested_at", Text, nullable=False),
     Column("evidence_root", Text, nullable=False),
     Column("extractor_versions", Text, nullable=False),
+    Column("narrative", Text, nullable=True),
 )
 
 sources_t = Table(
@@ -137,6 +138,12 @@ def _migrate_add_mitre_attack_ids(conn: Any) -> None:
     """Add the mitre_attack_ids column if it doesn't exist yet."""
     with contextlib.suppress(Exception):
         conn.execute(text("ALTER TABLE findings ADD COLUMN mitre_attack_ids TEXT"))
+
+
+def _migrate_add_narrative(conn: Any) -> None:
+    """Add the narrative column to case_metadata if it doesn't exist yet."""
+    with contextlib.suppress(Exception):
+        conn.execute(text("ALTER TABLE case_metadata ADD COLUMN narrative TEXT"))
 
 
 def _migrate_add_evidence_registry(conn: Any) -> None:
@@ -257,6 +264,7 @@ class CaseDB:
             conn.execute(text(_FTS_CREATE))
             conn.execute(text(_IX_WINDOWS_SOURCE_LINE))
             _migrate_add_mitre_attack_ids(conn)
+            _migrate_add_narrative(conn)
             _migrate_add_evidence_registry(conn)
         return db
 
@@ -552,12 +560,28 @@ class CaseDB:
         if row is None:
             raise RuntimeError("No case metadata found in database")
 
+        narrative = getattr(row, "narrative", None)
         return CaseMetadataRow(
             case_id=row.case_id,
             ingested_at=row.ingested_at,
             evidence_root=row.evidence_root,
             extractor_versions=json.loads(row.extractor_versions),
+            narrative=narrative,
         )
+
+    def set_narrative(self, narrative: str) -> None:
+        """Store or replace the investigation narrative in case metadata."""
+        case_id = self._get_case_id()
+
+        def _do_update() -> None:
+            with self._engine.begin() as conn:
+                conn.execute(
+                    update(case_metadata_t)
+                    .where(case_metadata_t.c.case_id == case_id)
+                    .values(narrative=narrative)
+                )
+
+        self._wq.submit(_do_update)
 
     def insert_finding(self, finding: Finding) -> None:
         """Persist a Finding to the database."""

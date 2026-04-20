@@ -642,11 +642,15 @@ def get_raw_output(
 _MAX_DECODE_INPUT = 100_000
 _MAX_DECODE_OUTPUT = 50_000
 
+_B64_EXTRACT_RE = re.compile(r"[A-Za-z0-9+/=]{20,}")
+
 
 @mcp.tool()
 def decode_payload(
-    data: str,
+    data: str = "",
     encoding: str = "auto",
+    source: str | None = None,
+    pattern: str | None = None,
 ) -> dict[str, object]:
     """Safely decode an encoded payload found in evidence.
 
@@ -655,16 +659,70 @@ def decode_payload(
     of shell commands to decode suspicious strings.  Read-only and safe:
     no code is ever executed.
 
+    Can also extract encoded strings directly from indexed evidence when
+    ``source`` is provided, removing the need for shell commands like
+    grep or tail.
+
     Args:
-        data: The encoded string to decode.
+        data: The encoded string to decode.  May be empty when ``source``
+            is provided (the encoded string is extracted from the matching
+            evidence window).
         encoding: One of ``"auto"``, ``"base64"``, ``"hex"``,
             ``"utf16le"`` (PowerShell encoded commands), or
             ``"pickle"``.  ``"auto"`` tries to detect the encoding.
+        source: Optional indexed source name (e.g. ``"read_evidence"``).
+            When provided with an empty ``data``, searches the source for
+            ``pattern`` and extracts the longest base64-like substring
+            from the first match.
+        pattern: Search pattern within the source.  Required when
+            ``source`` is provided and ``data`` is empty.
     """
     ctx = get_ctx()
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
+    extraction_meta: dict[str, object] = {}
+
+    if source and not data:
+        if not pattern:
+            return {
+                "tool_call_id": tc_id,
+                "status": "error",
+                "error_message": "pattern is required when source is provided and data is empty",
+            }
+        hits = ctx.db.search_windows(pattern, source_name=source, max_results=5)
+        if not hits:
+            return {
+                "tool_call_id": tc_id,
+                "status": "error",
+                "error_message": f"No matches for pattern '{pattern}' in source '{source}'",
+            }
+        best_match = ""
+        for window, src_name in hits:
+            candidates = _B64_EXTRACT_RE.findall(window.raw_text)
+            if candidates:
+                longest = max(candidates, key=len)
+                if len(longest) > len(best_match):
+                    best_match = longest
+                    extraction_meta = {
+                        "extracted_from_source": src_name,
+                        "extracted_length": len(longest),
+                        "window_line_start": window.line_start,
+                        "search_pattern": pattern,
+                    }
+        if not best_match:
+            return {
+                "tool_call_id": tc_id,
+                "status": "error",
+                "error_message": (
+                    f"Found matches for '{pattern}' in '{source}'"
+                    " but no base64-like substring detected"
+                ),
+            }
+        data = best_match
+
     params = {"encoding": encoding, "data_length": len(data)}
+    if extraction_meta:
+        params["extraction"] = extraction_meta
 
     if len(data) > _MAX_DECODE_INPUT:
         return {
@@ -754,6 +812,8 @@ def decode_payload(
         "decoded": decoded,
         "decoded_length": len(decoded) if decoded else 0,
     }
+    if extraction_meta:
+        results["extraction"] = extraction_meta
 
     elapsed = (time.monotonic() - t0) * 1000
     ctx.audit.log_tool_call(

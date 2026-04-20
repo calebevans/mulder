@@ -2274,9 +2274,13 @@ def _run_tshark(
     args: list[str],
     pcap_path: str,
     timeout: int = _PCAP_TIMEOUT,
+    ssl_keylog_path: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run tshark with the given args against a PCAP file."""
-    cmd = ["tshark", "-r", pcap_path, *args]
+    ssl_args: list[str] = []
+    if ssl_keylog_path and Path(ssl_keylog_path).exists():
+        ssl_args = ["-o", f"tls.keylog_file:{ssl_keylog_path}"]
+    cmd = ["tshark", *ssl_args, "-r", pcap_path, *args]
     return subprocess.run(
         cmd,
         capture_output=True,
@@ -2286,7 +2290,7 @@ def _run_tshark(
     )
 
 
-def _pcap_summary(pcap_path: str, max_packets: int) -> str:
+def _pcap_summary(pcap_path: str, max_packets: int, ssl_keylog_path: str | None = None) -> str:
     """Capture statistics via capinfos + protocol hierarchy via tshark."""
     parts: list[str] = []
 
@@ -2306,7 +2310,12 @@ def _pcap_summary(pcap_path: str, max_packets: int) -> str:
             parts.append("capinfos timed out")
 
     try:
-        proc = _run_tshark(["-q", "-z", "io,phs", "-c", str(max_packets)], pcap_path, timeout=120)
+        proc = _run_tshark(
+            ["-q", "-z", "io,phs", "-c", str(max_packets)],
+            pcap_path,
+            timeout=120,
+            ssl_keylog_path=ssl_keylog_path,
+        )
         if proc.stdout.strip():
             parts.append("=== Protocol Hierarchy ===\n" + proc.stdout.strip())
     except subprocess.TimeoutExpired:
@@ -2315,7 +2324,9 @@ def _pcap_summary(pcap_path: str, max_packets: int) -> str:
     return "\n\n".join(parts)
 
 
-def _pcap_conversations(pcap_path: str, max_packets: int) -> str:
+def _pcap_conversations(
+    pcap_path: str, max_packets: int, ssl_keylog_path: str | None = None
+) -> str:
     """IP and TCP conversation tables."""
     parts: list[str] = []
     for conv_type in ("ip", "tcp"):
@@ -2323,6 +2334,7 @@ def _pcap_conversations(pcap_path: str, max_packets: int) -> str:
             proc = _run_tshark(
                 ["-q", "-z", f"conv,{conv_type}", "-c", str(max_packets)],
                 pcap_path,
+                ssl_keylog_path=ssl_keylog_path,
             )
             if proc.stdout.strip():
                 parts.append(f"=== {conv_type.upper()} Conversations ===\n" + proc.stdout.strip())
@@ -2331,7 +2343,7 @@ def _pcap_conversations(pcap_path: str, max_packets: int) -> str:
     return "\n\n".join(parts)
 
 
-def _pcap_dns(pcap_path: str, max_packets: int) -> str:
+def _pcap_dns(pcap_path: str, max_packets: int, ssl_keylog_path: str | None = None) -> str:
     """Extract DNS queries and responses."""
     try:
         proc = _run_tshark(
@@ -2358,13 +2370,14 @@ def _pcap_dns(pcap_path: str, max_packets: int) -> str:
                 str(max_packets),
             ],
             pcap_path,
+            ssl_keylog_path=ssl_keylog_path,
         )
         return proc.stdout.strip()
     except subprocess.TimeoutExpired:
         return "tshark DNS extraction timed out"
 
 
-def _pcap_http(pcap_path: str, max_packets: int) -> str:
+def _pcap_http(pcap_path: str, max_packets: int, ssl_keylog_path: str | None = None) -> str:
     """Extract HTTP requests and responses."""
     try:
         proc = _run_tshark(
@@ -2395,13 +2408,14 @@ def _pcap_http(pcap_path: str, max_packets: int) -> str:
                 str(max_packets),
             ],
             pcap_path,
+            ssl_keylog_path=ssl_keylog_path,
         )
         return proc.stdout.strip()
     except subprocess.TimeoutExpired:
         return "tshark HTTP extraction timed out"
 
 
-def _pcap_smtp(pcap_path: str, max_packets: int) -> str:
+def _pcap_smtp(pcap_path: str, max_packets: int, ssl_keylog_path: str | None = None) -> str:
     """Extract SMTP email transactions (sender, recipient, subject)."""
     try:
         proc = _run_tshark(
@@ -2428,13 +2442,14 @@ def _pcap_smtp(pcap_path: str, max_packets: int) -> str:
                 str(max_packets),
             ],
             pcap_path,
+            ssl_keylog_path=ssl_keylog_path,
         )
         return proc.stdout.strip()
     except subprocess.TimeoutExpired:
         return "tshark SMTP extraction timed out"
 
 
-def _pcap_tls(pcap_path: str, max_packets: int) -> str:
+def _pcap_tls(pcap_path: str, max_packets: int, ssl_keylog_path: str | None = None) -> str:
     """Extract TLS handshake info (server names, certificate subjects)."""
     try:
         proc = _run_tshark(
@@ -2463,25 +2478,29 @@ def _pcap_tls(pcap_path: str, max_packets: int) -> str:
                 str(max_packets),
             ],
             pcap_path,
+            ssl_keylog_path=ssl_keylog_path,
         )
         return proc.stdout.strip()
     except subprocess.TimeoutExpired:
         return "tshark TLS extraction timed out"
 
 
-def _pcap_custom(pcap_path: str, display_filter: str, max_packets: int) -> str:
+def _pcap_custom(
+    pcap_path: str, display_filter: str, max_packets: int, ssl_keylog_path: str | None = None
+) -> str:
     """Apply a custom tshark display filter."""
     try:
         proc = _run_tshark(
             ["-Y", display_filter, "-c", str(max_packets)],
             pcap_path,
+            ssl_keylog_path=ssl_keylog_path,
         )
         return proc.stdout.strip()
     except subprocess.TimeoutExpired:
         return f"tshark custom filter '{display_filter}' timed out"
 
 
-def _pcap_beaconing(pcap_path: str, max_packets: int) -> str:
+def _pcap_beaconing(pcap_path: str, max_packets: int, ssl_keylog_path: str | None = None) -> str:
     """Detect C2 beaconing by analyzing inter-arrival timing per destination."""
     import math
 
@@ -2506,6 +2525,7 @@ def _pcap_beaconing(pcap_path: str, max_packets: int) -> str:
                 str(max_packets),
             ],
             pcap_path,
+            ssl_keylog_path=ssl_keylog_path,
         )
     except subprocess.TimeoutExpired:
         return "tshark beaconing extraction timed out"
@@ -2565,7 +2585,7 @@ def _pcap_beaconing(pcap_path: str, max_packets: int) -> str:
     return "\n".join(results)
 
 
-def _pcap_tunneling(pcap_path: str, max_packets: int) -> str:
+def _pcap_tunneling(pcap_path: str, max_packets: int, ssl_keylog_path: str | None = None) -> str:
     """Detect DNS tunneling and ICMP covert channels."""
     import math
 
@@ -2592,6 +2612,7 @@ def _pcap_tunneling(pcap_path: str, max_packets: int) -> str:
                 str(max_packets),
             ],
             pcap_path,
+            ssl_keylog_path=ssl_keylog_path,
         )
         dns_lines = proc.stdout.strip().splitlines()
     except subprocess.TimeoutExpired:
@@ -2684,6 +2705,7 @@ def _pcap_tunneling(pcap_path: str, max_packets: int) -> str:
                 str(max_packets),
             ],
             pcap_path,
+            ssl_keylog_path=ssl_keylog_path,
         )
         icmp_lines = icmp_proc.stdout.strip().splitlines()
         if len(icmp_lines) > 1:
@@ -2706,6 +2728,7 @@ def run_pcap_analysis(
     mode: str = "summary",
     display_filter: str | None = None,
     max_packets: int = 10000,
+    ssl_keylog_path: str | None = None,
 ) -> dict[str, object]:
     """Analyze a PCAP or PCAPng network capture file using tshark.
 
@@ -2728,6 +2751,10 @@ def run_pcap_analysis(
             e.g. "ip.addr == 10.0.0.5 && tcp.port == 4444").
         max_packets: Maximum packets to process (default 10000).  Caps
             tshark's -c flag to prevent unbounded output on large captures.
+        ssl_keylog_path: Optional path to an NSS key log file (SSLKEYLOGFILE
+            format) for decrypting TLS traffic.  When provided, tshark uses
+            it to decrypt encrypted sessions, revealing HTTP, SMTP, and other
+            application-layer data inside TLS.
     """
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
@@ -2736,6 +2763,7 @@ def run_pcap_analysis(
         "mode": mode,
         "display_filter": display_filter,
         "max_packets": max_packets,
+        "ssl_keylog_path": ssl_keylog_path,
     }
 
     if mode not in _PCAP_MODES:
@@ -2775,20 +2803,30 @@ def run_pcap_analysis(
             error_type="invalid_argument",
         )
 
+    if ssl_keylog_path and not Path(ssl_keylog_path).exists():
+        return error_response(
+            tc_id,
+            "run_pcap_analysis",
+            params,
+            f"SSL keylog file not found: {ssl_keylog_path}",
+            error_type="file_not_found",
+        )
+
+    _ssl = ssl_keylog_path
     results: list[object] = []
 
     mode_map: dict[str, tuple[str, Callable[[], str]]] = {
-        "summary": ("pcap.summary", lambda: _pcap_summary(pcap_path, max_packets)),
+        "summary": ("pcap.summary", lambda: _pcap_summary(pcap_path, max_packets, _ssl)),
         "conversations": (
             "pcap.conversations",
-            lambda: _pcap_conversations(pcap_path, max_packets),
+            lambda: _pcap_conversations(pcap_path, max_packets, _ssl),
         ),
-        "dns": ("pcap.dns", lambda: _pcap_dns(pcap_path, max_packets)),
-        "http": ("pcap.http", lambda: _pcap_http(pcap_path, max_packets)),
-        "smtp": ("pcap.smtp", lambda: _pcap_smtp(pcap_path, max_packets)),
-        "tls": ("pcap.tls", lambda: _pcap_tls(pcap_path, max_packets)),
-        "beaconing": ("pcap.beaconing", lambda: _pcap_beaconing(pcap_path, max_packets)),
-        "tunneling": ("pcap.tunneling", lambda: _pcap_tunneling(pcap_path, max_packets)),
+        "dns": ("pcap.dns", lambda: _pcap_dns(pcap_path, max_packets, _ssl)),
+        "http": ("pcap.http", lambda: _pcap_http(pcap_path, max_packets, _ssl)),
+        "smtp": ("pcap.smtp", lambda: _pcap_smtp(pcap_path, max_packets, _ssl)),
+        "tls": ("pcap.tls", lambda: _pcap_tls(pcap_path, max_packets, _ssl)),
+        "beaconing": ("pcap.beaconing", lambda: _pcap_beaconing(pcap_path, max_packets, _ssl)),
+        "tunneling": ("pcap.tunneling", lambda: _pcap_tunneling(pcap_path, max_packets, _ssl)),
     }
 
     if mode == "all":
@@ -2810,7 +2848,7 @@ def run_pcap_analysis(
     for m in modes_to_run:
         if m == "custom":
             assert display_filter is not None
-            output = _pcap_custom(pcap_path, display_filter, max_packets)
+            output = _pcap_custom(pcap_path, display_filter, max_packets, _ssl)
             source_name = "pcap.filtered"
         else:
             source_name, fn = mode_map[m]
@@ -3274,3 +3312,467 @@ def run_chkrootkit(target_path: str | None = None) -> dict[str, object]:
     )
     elapsed = (time.monotonic() - t0) * 1000
     return tool_response(tc_id, "run_chkrootkit", params, summary, "chkrootkit.scan", elapsed)
+
+
+# ---------------------------------------------------------------------------
+# radare2, tcpflow, tcpxtract, dislocker, bdeinfo, fvdeinfo, cyberchef
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def run_radare2(
+    target_path: str,
+    commands: str = "iI;iS;iz;afl",
+) -> dict[str, object]:
+    """Analyze a binary executable using radare2 for malware triage.
+
+    Runs radare2 in batch mode (non-interactive) with the given
+    commands.  Default commands extract: binary info (iI), sections (iS),
+    strings (iz), and function list (afl).
+
+    Args:
+        target_path: Path to the binary to analyze.
+        commands: Semicolon-separated r2 commands to run (batch mode).
+    """
+    tc_id = make_tool_call_id()
+    t0 = time.monotonic()
+    params: dict[str, object] = {"target_path": target_path, "commands": commands}
+
+    if not _require_binary("r2"):
+        return error_response(
+            tc_id,
+            "run_radare2",
+            params,
+            "r2 (radare2) not found on PATH",
+            error_type="binary_missing",
+        )
+
+    if not Path(target_path).exists():
+        return error_response(
+            tc_id,
+            "run_radare2",
+            params,
+            f"File not found: {target_path}",
+            error_type="file_not_found",
+        )
+
+    try:
+        proc = subprocess.run(
+            ["r2", "-q", "-c", commands, target_path],
+            capture_output=True,
+            text=True,
+            timeout=_TOOL_TIMEOUT,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return error_response(
+            tc_id,
+            "run_radare2",
+            params,
+            "radare2 timed out",
+            error_type="timeout",
+        )
+
+    summary = extract_and_index(
+        proc.stdout.strip(),
+        "radare2.analysis",
+        target_path,
+        "radare2",
+    )
+    elapsed = (time.monotonic() - t0) * 1000
+    return tool_response(tc_id, "run_radare2", params, summary, "radare2.analysis", elapsed)
+
+
+@mcp.tool()
+def run_tcpflow(pcap_path: str) -> dict[str, object]:
+    """Reconstruct TCP streams from a PCAP file using tcpflow.
+
+    Reassembles TCP connections into individual stream files, making it
+    easy to examine HTTP transactions, file transfers, and other
+    application-layer data extracted from network captures.
+
+    Args:
+        pcap_path: Path to the PCAP/PCAPNG file.
+    """
+    tc_id = make_tool_call_id()
+    t0 = time.monotonic()
+    params: dict[str, object] = {"pcap_path": pcap_path}
+
+    if not _require_binary("tcpflow"):
+        return error_response(
+            tc_id,
+            "run_tcpflow",
+            params,
+            "tcpflow not found on PATH",
+            error_type="binary_missing",
+        )
+
+    if not Path(pcap_path).exists():
+        return error_response(
+            tc_id,
+            "run_tcpflow",
+            params,
+            f"File not found: {pcap_path}",
+            error_type="file_not_found",
+        )
+
+    with tempfile.TemporaryDirectory(prefix="mulder_tcpflow_") as tmpdir:
+        try:
+            subprocess.run(
+                ["tcpflow", "-r", pcap_path, "-o", tmpdir],
+                capture_output=True,
+                text=True,
+                timeout=_TOOL_TIMEOUT,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return error_response(
+                tc_id,
+                "run_tcpflow",
+                params,
+                "tcpflow timed out",
+                error_type="timeout",
+            )
+
+        parts: list[str] = []
+        for stream_file in sorted(Path(tmpdir).iterdir()):
+            if stream_file.is_file() and stream_file.stat().st_size > 0:
+                with contextlib.suppress(OSError):
+                    preview = stream_file.read_text(
+                        encoding="utf-8",
+                        errors="replace",
+                    )[:4096]
+                    parts.append(
+                        f"=== {stream_file.name} "
+                        f"({stream_file.stat().st_size} bytes) ===\n{preview}"
+                    )
+
+        combined = "\n\n".join(parts) if parts else "No TCP streams reconstructed"
+
+    summary = extract_and_index(combined, "tcpflow.streams", pcap_path, "tcpflow")
+    summary["stream_count"] = len(parts)
+    elapsed = (time.monotonic() - t0) * 1000
+    return tool_response(tc_id, "run_tcpflow", params, summary, "tcpflow.streams", elapsed)
+
+
+@mcp.tool()
+def run_tcpxtract(pcap_path: str) -> dict[str, object]:
+    """Extract files from TCP streams in a PCAP using tcpxtract.
+
+    Carves files from network traffic based on file signatures, similar
+    to foremost but for network captures.  Useful for recovering
+    transferred documents, images, and executables.
+
+    Args:
+        pcap_path: Path to the PCAP file.
+    """
+    tc_id = make_tool_call_id()
+    t0 = time.monotonic()
+    params: dict[str, object] = {"pcap_path": pcap_path}
+
+    if not _require_binary("tcpxtract"):
+        return error_response(
+            tc_id,
+            "run_tcpxtract",
+            params,
+            "tcpxtract not found on PATH",
+            error_type="binary_missing",
+        )
+
+    if not Path(pcap_path).exists():
+        return error_response(
+            tc_id,
+            "run_tcpxtract",
+            params,
+            f"File not found: {pcap_path}",
+            error_type="file_not_found",
+        )
+
+    with tempfile.TemporaryDirectory(prefix="mulder_tcpxtract_") as tmpdir:
+        try:
+            proc = subprocess.run(
+                ["tcpxtract", "-f", pcap_path, "-o", tmpdir],
+                capture_output=True,
+                text=True,
+                timeout=_TOOL_TIMEOUT,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return error_response(
+                tc_id,
+                "run_tcpxtract",
+                params,
+                "tcpxtract timed out",
+                error_type="timeout",
+            )
+
+        parts: list[str] = []
+        for carved in sorted(Path(tmpdir).iterdir()):
+            if carved.is_file():
+                parts.append(f"{carved.name}  {carved.stat().st_size} bytes")
+
+        inventory = "\n".join(parts) if parts else proc.stdout.strip()
+
+    summary = extract_and_index(inventory, "tcpxtract.carved", pcap_path, "tcpxtract")
+    summary["files_carved"] = len(parts)
+    elapsed = (time.monotonic() - t0) * 1000
+    return tool_response(tc_id, "run_tcpxtract", params, summary, "tcpxtract.carved", elapsed)
+
+
+@mcp.tool()
+def run_dislocker(
+    image_path: str,
+    recovery_key: str = "",
+    password: str = "",
+) -> dict[str, object]:
+    """Inspect or decrypt a BitLocker-encrypted volume.
+
+    Without credentials, returns BitLocker metadata (encryption method,
+    protector types, volume ID).  With a recovery key or password,
+    decrypts the volume to a FUSE mountpoint for subsequent TSK analysis.
+
+    Args:
+        image_path: Path to the BitLocker-encrypted partition/image.
+        recovery_key: BitLocker 48-digit recovery key (optional).
+        password: BitLocker password (optional).
+    """
+    tc_id = make_tool_call_id()
+    t0 = time.monotonic()
+    params: dict[str, object] = {
+        "image_path": image_path,
+        "recovery_key": "***" if recovery_key else "",
+        "password": "***" if password else "",
+    }
+
+    if not Path(image_path).exists():
+        return error_response(
+            tc_id,
+            "run_dislocker",
+            params,
+            f"File not found: {image_path}",
+            error_type="file_not_found",
+        )
+
+    if not recovery_key and not password:
+        if not _require_binary("dislocker-metadata"):
+            return error_response(
+                tc_id,
+                "run_dislocker",
+                params,
+                "dislocker-metadata not found on PATH",
+                error_type="binary_missing",
+            )
+        try:
+            proc = subprocess.run(
+                ["dislocker-metadata", "-V", image_path],
+                capture_output=True,
+                text=True,
+                timeout=_TOOL_TIMEOUT,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return error_response(
+                tc_id,
+                "run_dislocker",
+                params,
+                "dislocker-metadata timed out",
+                error_type="timeout",
+            )
+        summary = extract_and_index(
+            proc.stdout.strip(),
+            "dislocker.metadata",
+            image_path,
+            "dislocker",
+        )
+        elapsed = (time.monotonic() - t0) * 1000
+        return tool_response(
+            tc_id,
+            "run_dislocker",
+            params,
+            summary,
+            "dislocker.metadata",
+            elapsed,
+        )
+
+    if not _require_binary("dislocker-fuse"):
+        return error_response(
+            tc_id,
+            "run_dislocker",
+            params,
+            "dislocker-fuse not found on PATH",
+            error_type="binary_missing",
+        )
+
+    mount_point = tempfile.mkdtemp(prefix="mulder_dislocker_")
+    cmd = ["dislocker-fuse"]
+    if recovery_key:
+        cmd.extend(["-p", recovery_key])
+    elif password:
+        cmd.extend(["-u", password])
+    cmd.extend(["--", image_path, mount_point])
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=_TOOL_TIMEOUT,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return error_response(
+            tc_id,
+            "run_dislocker",
+            params,
+            "dislocker-fuse timed out",
+            error_type="timeout",
+        )
+
+    if proc.returncode != 0:
+        return error_response(
+            tc_id,
+            "run_dislocker",
+            params,
+            f"dislocker-fuse failed: {proc.stderr.strip()[:500]}",
+        )
+
+    result_text = (
+        f"BitLocker volume decrypted and mounted at: {mount_point}\n"
+        f"Decrypted image: {mount_point}/dislocker-file\n"
+        f"Use this path with run_fls or run_mmls for filesystem analysis."
+    )
+    summary = extract_and_index(
+        result_text,
+        "dislocker.decrypted",
+        image_path,
+        "dislocker",
+    )
+    summary["mount_point"] = mount_point
+    summary["decrypted_path"] = f"{mount_point}/dislocker-file"
+    elapsed = (time.monotonic() - t0) * 1000
+    return tool_response(
+        tc_id,
+        "run_dislocker",
+        params,
+        summary,
+        "dislocker.decrypted",
+        elapsed,
+    )
+
+
+@mcp.tool()
+def run_bdeinfo(image_path: str) -> dict[str, object]:
+    """Extract metadata from a BitLocker-encrypted volume using libbde.
+
+    Returns encryption method, volume identifier, protector types, and
+    creation timestamps without requiring the decryption key.
+
+    Args:
+        image_path: Path to the BitLocker-encrypted partition/image.
+    """
+    tc_id = make_tool_call_id()
+    t0 = time.monotonic()
+    params: dict[str, object] = {"image_path": image_path}
+
+    if not _require_binary("bdeinfo"):
+        return error_response(
+            tc_id,
+            "run_bdeinfo",
+            params,
+            "bdeinfo not found on PATH",
+            error_type="binary_missing",
+        )
+
+    if not Path(image_path).exists():
+        return error_response(
+            tc_id,
+            "run_bdeinfo",
+            params,
+            f"File not found: {image_path}",
+            error_type="file_not_found",
+        )
+
+    try:
+        proc = subprocess.run(
+            ["bdeinfo", image_path],
+            capture_output=True,
+            text=True,
+            timeout=_TOOL_TIMEOUT,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return error_response(
+            tc_id,
+            "run_bdeinfo",
+            params,
+            "bdeinfo timed out",
+            error_type="timeout",
+        )
+
+    summary = extract_and_index(
+        proc.stdout.strip(),
+        "bde.info",
+        image_path,
+        "bdeinfo",
+    )
+    elapsed = (time.monotonic() - t0) * 1000
+    return tool_response(tc_id, "run_bdeinfo", params, summary, "bde.info", elapsed)
+
+
+@mcp.tool()
+def run_fvdeinfo(image_path: str) -> dict[str, object]:
+    """Extract metadata from a FileVault-encrypted macOS volume.
+
+    Returns encryption type, volume UUID, and protector information
+    without requiring the decryption passphrase.
+
+    Args:
+        image_path: Path to the FileVault-encrypted volume image.
+    """
+    tc_id = make_tool_call_id()
+    t0 = time.monotonic()
+    params: dict[str, object] = {"image_path": image_path}
+
+    if not _require_binary("fvdeinfo"):
+        return error_response(
+            tc_id,
+            "run_fvdeinfo",
+            params,
+            "fvdeinfo not found on PATH",
+            error_type="binary_missing",
+        )
+
+    if not Path(image_path).exists():
+        return error_response(
+            tc_id,
+            "run_fvdeinfo",
+            params,
+            f"File not found: {image_path}",
+            error_type="file_not_found",
+        )
+
+    try:
+        proc = subprocess.run(
+            ["fvdeinfo", image_path],
+            capture_output=True,
+            text=True,
+            timeout=_TOOL_TIMEOUT,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return error_response(
+            tc_id,
+            "run_fvdeinfo",
+            params,
+            "fvdeinfo timed out",
+            error_type="timeout",
+        )
+
+    summary = extract_and_index(
+        proc.stdout.strip(),
+        "fvde.info",
+        image_path,
+        "fvdeinfo",
+    )
+    elapsed = (time.monotonic() - t0) * 1000
+    return tool_response(tc_id, "run_fvdeinfo", params, summary, "fvde.info", elapsed)

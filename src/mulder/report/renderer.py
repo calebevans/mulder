@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections import defaultdict
 from collections.abc import Sequence
@@ -16,7 +17,12 @@ import markdown
 
 from mulder.models import AuditSummary, CaseMetadataRow, Finding, SourceRow
 
+logger = logging.getLogger(__name__)
+
 _SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+
+_ATTACK_TACTICS_PATH = Path(__file__).resolve().parent / "data" / "attack_tactics.json"
+_attack_tactics_cache: dict[str, Any] | None = None
 
 _IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _IP_PORT_RE = re.compile(r"\b((?:\d{1,3}\.){3}\d{1,3}):(\d+)\b")
@@ -27,6 +33,10 @@ _PATH_RE = re.compile(
 )
 _HASH_RE = re.compile(r"\b(?:SHA1|SHA256|MD5)[:\s]+([a-fA-F0-9]{32,64})\b")
 _EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b")
+_FILE_EXT_AFTER_EMAIL = re.compile(
+    r"\.(ost|tmp|xml|json|log|bak|dat|db|cfg|old|pst|eml|msg|mbox|csv|txt|ini)$",
+    re.IGNORECASE,
+)
 _SKIP_IPS = {"0.0.0.0", "127.0.0.1", "255.255.255.255"}
 _PRIVATE_RANGES = (
     "10.",
@@ -121,6 +131,11 @@ def _extract_iocs(
 
         for m in _EMAIL_RE.finditer(text):
             addr = m.group().lower()
+            after = text[m.end() : m.end() + 5]
+            if after and after[0] == ".":
+                continue
+            if _FILE_EXT_AFTER_EMAIL.search(addr):
+                continue
             if addr not in seen_email:
                 seen_email.add(addr)
                 email_iocs.append({"type": "Email", "value": addr, "context": f.title[:80]})
@@ -261,105 +276,95 @@ def _build_executive_summary(
     evidence_integrity_status: str = "",
     tool_call_counts: dict[str, int] | None = None,
 ) -> str:
-    """Generate a multi-paragraph HTML executive summary."""
+    """Generate a structured HTML executive summary.
+
+    The HTML report already renders stat cards below the summary, so
+    this focuses on the narrative and key threats rather than repeating
+    raw numbers.
+    """
     duration_str = _format_duration(total_duration_ms)
     mem_count, disk_count, other_count = _classify_sources(sources_list)
 
-    # -- Para 1: Case overview --
     scope_parts: list[str] = []
     if mem_count:
-        scope_parts.append(f"{mem_count} memory{'s' if mem_count != 1 else ''}")
+        scope_parts.append(f"{mem_count} memory")
     if disk_count:
         scope_parts.append(f"{disk_count} disk")
     if other_count:
         scope_parts.append(f"{other_count} other")
     scope_str = " (" + ", ".join(scope_parts) + ")" if scope_parts else ""
 
-    p1 = (
-        f"This automated investigation of case <strong>{case_id}</strong> "
-        f"analyzed <strong>{sources_count}</strong> evidence sources{scope_str} "
-        f"over <strong>{duration_str}</strong> of processing, "
-        f"executing <strong>{total_tool_calls}</strong> tool calls. "
-        f"The analysis identified <strong>{finding_count}</strong> findings"
-    )
     sev_parts: list[str] = []
     if critical_count:
-        sev_parts.append(f"<strong>{critical_count} critical</strong>")
+        sev_parts.append(f"{critical_count} critical")
     if high_count:
-        sev_parts.append(f"<strong>{high_count} high</strong>")
-    if sev_parts:
-        p1 += ", including " + " and ".join(sev_parts) + " severity items"
-    p1 += "."
-    if confirmed_count or inference_count:
-        p1 += (
-            f" Of these, <strong>{confirmed_count}</strong> were corroborated "
-            f"by multiple sources (confirmed) and <strong>{inference_count}</strong> "
-            f"remain single-source inferences."
+        sev_parts.append(f"{high_count} high")
+    sev_str = " (" + ", ".join(sev_parts) + ")" if sev_parts else ""
+
+    sections: list[str] = []
+
+    def _pill(icon: str, label: str, value: str) -> str:
+        return (
+            f'<div class="exec-pill">'
+            f'<span class="ep-icon">{icon}</span>'
+            f'<span class="ep-val">{value}</span> {label}'
+            f"</div>"
         )
 
-    # -- Para 2: Attack narrative from timeline --
-    p2 = ""
+    pills = [
+        _pill("\U0001f4c2", f"sources{scope_str}", str(sources_count)),
+        _pill("\U0001f50d", "tool calls", str(total_tool_calls)),
+        _pill("\u23f1\ufe0f", "elapsed", duration_str),
+        _pill("\U0001f6a8", f"findings{sev_str}", str(finding_count)),
+        _pill("\u2705", "confirmed", str(confirmed_count)),
+        _pill("\U0001f914", "inference", str(inference_count)),
+    ]
+    if negative_count:
+        noun = "hypothesis" if negative_count == 1 else "hypotheses"
+        pills.append(_pill("\u274c", f"{noun} ruled out", str(negative_count)))
+    if evidence_integrity_status == "hashes_recorded":
+        pills.append(_pill("\U0001f512", "SHA-256 hashes", "\u2713"))
+    sections.append('<div class="exec-meta">' + "".join(pills) + "</div>")
+
     tl = list(timeline_findings or [])
     if tl:
         earliest, latest = _timeline_date_range(tl)
-        date_span = (
-            f"from <strong>{earliest}</strong> to <strong>{latest}</strong>"
-            if earliest != latest
-            else f"on <strong>{earliest}</strong>"
-        )
-        p2 = f"The attack timeline spans {date_span}. "
-        first_event = _get_attr(tl[0], "title")
-        p2 += f"The earliest observed activity was <em>{first_event}</em>"
-        first_ts = _get_attr(tl[0], "event_time_start")
-        if first_ts:
-            p2 += f" ({first_ts[:19]})"
-        p2 += ". "
+        if earliest and latest:
+            first_event = _get_attr(tl[0], "title")
+            first_ts = _get_attr(tl[0], "event_time_start")
+            narrative = f"The attack timeline spans <strong>{earliest}</strong>"
+            if earliest != latest:
+                narrative += f" to <strong>{latest}</strong>"
+            narrative += f". The earliest activity was <em>{first_event}</em>"
+            if first_ts:
+                narrative += f" ({first_ts[:10]})"
+            narrative += "."
 
-        crit_tl = [f for f in tl if _get_attr(f, "severity") == "critical"]
-        if len(crit_tl) > 1:
-            mid_titles = [_get_attr(f, "title") for f in crit_tl[1:4]]
-            p2 += (
-                "The investigation subsequently uncovered "
-                + "; ".join(f"<em>{t}</em>" for t in mid_titles)
-                + ". "
-            )
+            crit_tl = [f for f in tl if _get_attr(f, "severity") == "critical"]
+            if len(crit_tl) > 1:
+                mid_titles = [_get_attr(f, "title") for f in crit_tl[1:4]]
+                narrative += (
+                    " The investigation subsequently uncovered "
+                    + "; ".join(f"<em>{t}</em>" for t in mid_titles)
+                    + "."
+                )
 
-        last_event = _get_attr(tl[-1], "title")
-        if len(tl) > 1 and last_event != first_event:
-            p2 += f"The most recent activity was <em>{last_event}</em>"
-            last_ts = _get_attr(tl[-1], "event_time_start")
-            if last_ts:
-                p2 += f" ({last_ts[:19]})"
-            p2 += "."
+            last_event = _get_attr(tl[-1], "title")
+            if len(tl) > 1 and last_event != first_event:
+                last_ts = _get_attr(tl[-1], "event_time_start")
+                narrative += f" The most recent activity was <em>{last_event}</em>"
+                if last_ts:
+                    narrative += f" ({last_ts[:10]})"
+                narrative += "."
+            sections.append(f"<p>{narrative}</p>")
 
-    # -- Para 3: Key threat summary --
-    p3 = ""
     if critical_findings:
-        p3 = "Key threats identified: "
-        threat_items = []
-        for f in critical_findings[:5]:
-            title = _get_attr(f, "title")
-            threat_items.append(f"<strong>{title}</strong>")
-        p3 += "; ".join(threat_items) + "."
-    if negative_count:
-        p3 += (
-            f" Additionally, <strong>{negative_count}</strong> "
-            f"{'hypothesis was' if negative_count == 1 else 'hypotheses were'} "
-            f"explicitly tested and ruled out, demonstrating investigative rigour."
+        items = "".join(f"<li>{_get_attr(f, 'title')}</li>" for f in critical_findings[:5])
+        sections.append(
+            f'<div class="exec-threats"><strong>Key Threats</strong><ul>{items}</ul></div>'
         )
 
-    # -- Para 4: Methodology --
-    p4 = ""
-    if tool_call_counts:
-        top_tools = sorted(tool_call_counts.items(), key=lambda x: x[1], reverse=True)[:5]
-        tool_str = ", ".join(f"{name} ({count})" for name, count in top_tools)
-        p4 = f"Primary analysis tools: {tool_str}."
-    if evidence_integrity_status == "hashes_recorded":
-        label = "SHA-256 hashes recorded for all evidence files at ingestion."
-        p4 += f" {label}" if p4 else label
-
-    paras = [p for p in (p1, p2, p3, p4) if p]
-    return "</p><p>".join(paras)
+    return "\n".join(sections)
 
 
 def _build_executive_summary_md(
@@ -379,7 +384,7 @@ def _build_executive_summary_md(
     evidence_integrity_status: str = "",
     tool_call_counts: dict[str, int] | None = None,
 ) -> str:
-    """Generate a multi-paragraph plaintext/markdown executive summary."""
+    """Generate a structured markdown executive summary."""
     duration_str = _format_duration(total_duration_ms)
     mem_count, disk_count, other_count = _classify_sources(sources_list)
 
@@ -392,86 +397,78 @@ def _build_executive_summary_md(
         scope_parts.append(f"{other_count} other")
     scope_str = " (" + ", ".join(scope_parts) + ")" if scope_parts else ""
 
-    p1 = (
-        f"This automated investigation of case **{case_id}** "
-        f"analyzed **{sources_count}** evidence sources{scope_str} "
-        f"over **{duration_str}** of processing, "
-        f"executing **{total_tool_calls}** tool calls. "
-        f"The analysis identified **{finding_count}** findings"
+    lines: list[str] = []
+
+    lines.append(
+        f"**Scope:** {sources_count} evidence sources{scope_str} "
+        f"| {total_tool_calls} tool calls | {duration_str}"
     )
+
     sev_parts: list[str] = []
     if critical_count:
-        sev_parts.append(f"**{critical_count} critical**")
+        sev_parts.append(f"{critical_count} critical")
     if high_count:
-        sev_parts.append(f"**{high_count} high**")
-    if sev_parts:
-        p1 += ", including " + " and ".join(sev_parts) + " severity items"
-    p1 += "."
-    if confirmed_count or inference_count:
-        p1 += (
-            f" Of these, **{confirmed_count}** were corroborated "
-            f"by multiple sources (confirmed) and **{inference_count}** "
-            f"remain single-source inferences."
-        )
+        sev_parts.append(f"{high_count} high")
+    sev_str = " (" + ", ".join(sev_parts) + ")" if sev_parts else ""
 
-    p2 = ""
+    results_line = f"**Results:** {finding_count} findings{sev_str}"
+    results_line += f" -- {confirmed_count} confirmed, {inference_count} inference"
+    if negative_count:
+        results_line += (
+            f" | {negative_count} "
+            f"{'hypothesis' if negative_count == 1 else 'hypotheses'} ruled out"
+        )
+    lines.append(results_line)
+
     tl = list(timeline_findings or [])
     if tl:
         earliest, latest = _timeline_date_range(tl)
-        date_span = (
-            f"from **{earliest}** to **{latest}**" if earliest != latest else f"on **{earliest}**"
-        )
-        p2 = f"The attack timeline spans {date_span}. "
+        if earliest and latest:
+            span = earliest if earliest == latest else f"{earliest} to {latest}"
+            lines.append(f"**Timeline:** {span}")
+
+    if critical_findings:
+        lines.append("")
+        lines.append("**Key Threats:**")
+        for f in critical_findings[:5]:
+            title = _get_attr(f, "title")
+            lines.append(f"- {title}")
+
+    if tl:
+        lines.append("")
         first_event = _get_attr(tl[0], "title")
-        p2 += f'The earliest observed activity was "{first_event}"'
         first_ts = _get_attr(tl[0], "event_time_start")
+        narrative = f'**Narrative:** The earliest activity was "{first_event}"'
         if first_ts:
-            p2 += f" ({first_ts[:19]})"
-        p2 += ". "
+            narrative += f" ({first_ts[:10]})"
+        narrative += "."
 
         crit_tl = [f for f in tl if _get_attr(f, "severity") == "critical"]
         if len(crit_tl) > 1:
-            mid_titles = [_get_attr(f, "title") for f in crit_tl[1:4]]
-            p2 += (
-                "The investigation subsequently uncovered "
-                + "; ".join(f'"{t}"' for t in mid_titles)
-                + ". "
-            )
+            mid_titles = [f'"{_get_attr(f, "title")}"' for f in crit_tl[1:4]]
+            narrative += " The investigation subsequently uncovered " + "; ".join(mid_titles) + "."
 
         last_event = _get_attr(tl[-1], "title")
         if len(tl) > 1 and last_event != first_event:
-            p2 += f'The most recent activity was "{last_event}"'
             last_ts = _get_attr(tl[-1], "event_time_start")
+            narrative += f' The most recent activity was "{last_event}"'
             if last_ts:
-                p2 += f" ({last_ts[:19]})"
-            p2 += "."
+                narrative += f" ({last_ts[:10]})"
+            narrative += "."
+        lines.append(narrative)
 
-    p3 = ""
-    if critical_findings:
-        p3 = "Key threats identified: "
-        threat_items = []
-        for f in critical_findings[:5]:
-            title = _get_attr(f, "title")
-            threat_items.append(f"**{title}**")
-        p3 += "; ".join(threat_items) + "."
-    if negative_count:
-        p3 += (
-            f" Additionally, **{negative_count}** "
-            f"{'hypothesis was' if negative_count == 1 else 'hypotheses were'} "
-            f"explicitly tested and ruled out, demonstrating investigative rigour."
-        )
-
-    p4 = ""
+    tool_parts: list[str] = []
     if tool_call_counts:
         top_tools = sorted(tool_call_counts.items(), key=lambda x: x[1], reverse=True)[:5]
         tool_str = ", ".join(f"{name} ({count})" for name, count in top_tools)
-        p4 = f"Primary analysis tools: {tool_str}."
+        tool_parts.append(tool_str)
     if evidence_integrity_status == "hashes_recorded":
-        label = "SHA-256 hashes recorded for all evidence files at ingestion."
-        p4 += f" {label}" if p4 else label
+        tool_parts.append("SHA-256 hashes recorded for all evidence")
+    if tool_parts:
+        lines.append("")
+        lines.append("**Tools:** " + ". ".join(tool_parts) + ".")
 
-    paras = [p for p in (p1, p2, p3, p4) if p]
-    return "\n\n".join(paras)
+    return "\n".join(lines)
 
 
 def _build_related_findings(
@@ -516,6 +513,7 @@ def _build_related_titles(
 
 def _build_mitre_techniques(
     findings: Sequence[Finding | dict[str, Any]],
+    attack_data: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Aggregate MITRE ATT&CK technique IDs across all findings."""
     tech_map: dict[str, list[dict[str, str]]] = defaultdict(list)
@@ -528,17 +526,116 @@ def _build_mitre_techniques(
         for tid in attack_ids:
             tech_map[tid].append({"finding_id": fid, "title": title})
 
+    tech_lookup = attack_data.get("techniques", {}) if attack_data else {}
+
     result: list[dict[str, Any]] = []
     for tid in sorted(tech_map):
+        name = ""
+        info = tech_lookup.get(tid) or tech_lookup.get(tid.split(".")[0])
+        if info:
+            name = info.get("name", "")
         result.append(
             {
                 "id": tid,
+                "name": name,
                 "url": _attack_id_to_url(tid),
                 "finding_count": len(tech_map[tid]),
                 "findings": tech_map[tid],
             }
         )
     return result
+
+
+def _load_attack_tactics() -> dict[str, Any] | None:
+    """Load the pre-extracted ATT&CK tactic mapping from package data.
+
+    Returns ``None`` when the data file is missing (e.g. bare PyPI install
+    without the extraction step).
+    """
+    global _attack_tactics_cache  # noqa: PLW0603
+    if _attack_tactics_cache is not None:
+        return _attack_tactics_cache
+    if not _ATTACK_TACTICS_PATH.exists():
+        logger.debug(
+            "ATT&CK tactic data not found at %s; skipping tactic grouping", _ATTACK_TACTICS_PATH
+        )
+        return None
+    try:
+        _attack_tactics_cache = json.loads(_ATTACK_TACTICS_PATH.read_text(encoding="utf-8"))
+        return _attack_tactics_cache
+    except Exception:
+        logger.warning("Failed to parse %s", _ATTACK_TACTICS_PATH, exc_info=True)
+        return None
+
+
+def _build_mitre_tactic_groups(
+    mitre_techniques: list[dict[str, Any]],
+    attack_data: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Group techniques by ATT&CK tactic using pre-extracted STIX data.
+
+    Returns ``(all_tactics, active_tactic_groups)`` where *all_tactics* is
+    the full ordered tactic list (each with an ``active`` flag and counts),
+    and *active_tactic_groups* contains only tactics that have findings,
+    each with a ``techniques`` list attached.
+    """
+    tech_lookup = attack_data.get("techniques", {})
+
+    tactic_techs: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    tactic_findings: dict[str, int] = defaultdict(int)
+
+    for tech in mitre_techniques:
+        tid = tech["id"]
+        parent_tid = tid.split(".")[0]
+        info = tech_lookup.get(tid) or tech_lookup.get(parent_tid)
+        if info and info.get("tactics"):
+            for tactic_id in info["tactics"]:
+                tactic_techs[tactic_id].append(tech)
+                tactic_findings[tactic_id] += tech["finding_count"]
+        else:
+            tactic_techs["_unknown"].append(tech)
+            tactic_findings["_unknown"] += tech["finding_count"]
+
+    ordered_tactics = sorted(attack_data.get("tactics", []), key=lambda t: t.get("order", 99))
+
+    all_tactics: list[dict[str, Any]] = []
+    active_groups: list[dict[str, Any]] = []
+
+    for tactic in ordered_tactics:
+        tid = tactic["id"]
+        is_active = tid in tactic_techs
+        entry = {
+            "id": tid,
+            "name": tactic["name"],
+            "shortname": tactic.get("shortname", ""),
+            "order": tactic.get("order", 99),
+            "active": is_active,
+            "technique_count": len(tactic_techs.get(tid, [])),
+            "finding_count": tactic_findings.get(tid, 0),
+        }
+        all_tactics.append(entry)
+        if is_active:
+            active_groups.append(
+                {
+                    **entry,
+                    "techniques": tactic_techs[tid],
+                }
+            )
+
+    if "_unknown" in tactic_techs:
+        unknown = {
+            "id": "_unknown",
+            "name": "Other",
+            "shortname": "other",
+            "order": 999,
+            "active": True,
+            "technique_count": len(tactic_techs["_unknown"]),
+            "finding_count": tactic_findings["_unknown"],
+            "techniques": tactic_techs["_unknown"],
+        }
+        active_groups.append(unknown)
+
+    return all_tactics, active_groups
 
 
 def _attack_id_to_url(tid: str) -> str:
@@ -652,7 +749,7 @@ class ReportRenderer:
             high_count=high_count,
             sources_count=len(all_sources),
             total_tool_calls=audit_summary.total_tool_calls,
-            total_duration_ms=audit_summary.total_duration_ms,
+            total_duration_ms=audit_summary.wall_clock_ms or audit_summary.total_duration_ms,
             critical_findings=critical_findings,
             timeline_findings=timeline_findings,
             confirmed_count=confirmed,
@@ -667,7 +764,14 @@ class ReportRenderer:
 
         related_findings = _build_related_findings(sorted_findings)
         related_titles = _build_related_titles(sorted_findings, related_findings)
-        mitre_techniques = _build_mitre_techniques(positive_findings)
+        attack_data = _load_attack_tactics()
+        mitre_techniques = _build_mitre_techniques(positive_findings, attack_data)
+        if attack_data and mitre_techniques:
+            all_tactics, active_tactic_groups = _build_mitre_tactic_groups(
+                mitre_techniques, attack_data
+            )
+        else:
+            all_tactics, active_tactic_groups = [], []
 
         return {
             "case_id": case_metadata.case_id,
@@ -705,12 +809,22 @@ class ReportRenderer:
             "related_findings": related_findings,
             "estimated_input_tokens": audit_summary.estimated_input_tokens,
             "estimated_output_tokens": audit_summary.estimated_output_tokens,
-            "estimated_cost_usd": audit_summary.estimated_cost_usd,
             "evidence_integrity": evidence_integrity or [],
             "evidence_integrity_status": _compute_integrity_status(evidence_integrity),
             "related_titles": related_titles,
             "mitre_techniques": mitre_techniques,
+            "mitre_all_tactics": all_tactics,
+            "mitre_tactic_groups": active_tactic_groups,
             "source_windows": source_windows or {},
+            "narrative": case_metadata.narrative or "",
+            "narrative_html": (
+                markdown.markdown(
+                    case_metadata.narrative,
+                    extensions=["fenced_code", "tables", "nl2br"],
+                )
+                if case_metadata.narrative
+                else ""
+            ),
         }
 
     def render(
