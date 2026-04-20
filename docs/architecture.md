@@ -48,7 +48,10 @@ src/mulder/
     ├── tools_phone.py            # Mobile forensics (Android, iOS, SQLCipher)
     ├── tools_artifacts.py        # Browser history, plist, SQLite from image, steganography
     ├── tools_attack.py           # MITRE ATT&CK technique lookup
-    └── tools_jobs.py             # Extraction batch management
+    ├── tools_jobs.py             # Extraction batch management
+    ├── tools_hindsight.py        # Hindsight Chrome/Chromium browser forensics
+
+    └── tools_mvt.py              # MVT mobile spyware detection (Android, iOS)
 ```
 
 ## High-Level Architecture
@@ -298,6 +301,13 @@ Additional tools invoked directly from `tools_extract.py` without a dedicated ex
 | `regripper` | Windows registry hive parsing |
 | `pasco` | Internet Explorer index.dat parsing |
 | `stegdetect` / `steghide` | Steganography detection and extraction |
+| `radare2` (`r2`) | Binary analysis and reverse engineering for malware triage |
+| `tcpflow` / `tcpxtract` | TCP stream reconstruction and file extraction from PCAPs |
+| `dislocker` / `bdeinfo` | BitLocker volume decryption and metadata extraction |
+| `fvdeinfo` | Apple FileVault encryption metadata extraction |
+| `hindsight` | Chrome/Chromium browser forensics (via `tools_hindsight.py`) |
+
+| `mvt-android` / `mvt-ios` | Mobile Verification Toolkit for spyware detection (via `tools_mvt.py`) |
 
 ## Audit and Provenance
 

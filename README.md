@@ -2,6 +2,10 @@
 
 Mulder is an [MCP](https://modelcontextprotocol.io/) server for digital forensics on [SANS SIFT](https://www.sans.org/tools/sift-workstation/) workstations. It gives an AI agent the ability to create investigation cases, run forensic tools (Volatility 3, Sleuthkit, Plaso, Hayabusa, YARA, and more), index evidence into a searchable SQLite database, submit provenance-tracked findings, and generate investigation reports.
 
+<p align="center">
+  <img src="docs/photos/report-demo.gif" alt="Mulder report demo" width="800">
+</p>
+
 ## Features
 
 - **MCP protocol** for connecting to any compatible AI client (Claude Desktop, Cursor, Claude Code, etc.)
@@ -153,6 +157,13 @@ Reads `{case_id}.db` and `{case_id}.audit.jsonl` from the database directory and
 | [steghide](https://steghide.sourceforge.net/) / stegdetect | Steganography detection and extraction |
 | [strings](https://man7.org/linux/man-pages/man1/strings.1.html) | Extract printable strings from binary files |
 | [pasco](https://www.mcafee.com/enterprise/en-us/downloads/free-tools.html) | Internet Explorer history parsing |
+| [Hindsight](https://github.com/obsidianforensics/hindsight) | Chrome/Chromium browser forensics (history, cookies, downloads, cache) |
+
+| [MVT](https://github.com/mvt-project/mvt) | Mobile Verification Toolkit for spyware detection (Pegasus, Predator) |
+| [radare2](https://github.com/radareorg/radare2) | Binary analysis and reverse engineering for malware triage |
+| [dislocker](https://github.com/Aorimn/dislocker) / [libbde](https://github.com/libyal/libbde) | BitLocker volume decryption and metadata extraction |
+| [libfvde](https://github.com/libyal/libfvde) | Apple FileVault encryption metadata extraction |
+| [tcpflow](https://github.com/simsong/tcpflow) / [tcpxtract](https://tcpxtract.sourceforge.net/) | TCP stream reconstruction and file extraction from PCAPs |
 
 ## Report Generation
 
