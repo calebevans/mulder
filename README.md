@@ -58,7 +58,7 @@ See [examples/](examples/) for reports from multiple forensic datasets with grou
 The Docker image comes with all forensic tools, dependencies, and [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview) pre-installed. Mulder is already registered as an MCP server in the container, so Claude Code can use it immediately.
 
 ```bash
-docker pull ghcr.io/calebevans/mulder:latest
+docker pull ghcr.io/calebevans/mulder:1.0
 ```
 
 #### Running the Container
@@ -81,7 +81,7 @@ docker run -it --privileged \
   -v ~/mulder-cases:/root/.mulder/cases        `# case DBs, audit logs, reports` \
   -v ~/.claude:/root/.claude                   `# Claude Code config and sessions` \
   -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
-  ghcr.io/calebevans/mulder:latest
+  ghcr.io/calebevans/mulder:1.0
 ```
 
 **With Google Cloud Vertex AI:**
@@ -98,7 +98,7 @@ docker run -it --privileged \
   -e ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project-id \
   -e GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcloud-creds.json \
   -v ~/.config/gcloud/application_default_credentials.json:/tmp/gcloud-creds.json:ro `# GCP credentials` \
-  ghcr.io/calebevans/mulder:latest
+  ghcr.io/calebevans/mulder:1.0
 ```
 
 **With Amazon Bedrock:**
@@ -114,7 +114,7 @@ docker run -it --privileged \
   -e AWS_REGION=us-east-1 \
   -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
   -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
-  ghcr.io/calebevans/mulder:latest
+  ghcr.io/calebevans/mulder:1.0
 ```
 
 The container starts Claude Code directly. Once inside, tell it to scan your evidence and begin the investigation. Case databases and reports are written to the mounted `~/mulder-cases` directory on the host.
