@@ -268,7 +268,7 @@ COPY --from=radare2-fetch /tmp/radare2.deb /tmp/radare2.deb
 RUN dpkg -i /tmp/radare2.deb || apt-get install -yf --no-install-recommends \
     && rm /tmp/radare2.deb
 ENV PATH="/opt/hayabusa:${PATH}"
-RUN ldconfig
+RUN ldconfig || true
 
 # Install Python forensic packages that require C compilation, then purge build deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
