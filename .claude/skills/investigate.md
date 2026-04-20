@@ -605,26 +605,7 @@ evidence item, either:
 **Step 5: Negative findings.**
 Submit `[NEGATIVE]` findings for all tested hypotheses with no evidence.
 
-**Step 6: Write the narrative report.**
-Call `submit_narrative()` with a long-form incident report in markdown.
-Structure it with these sections:
-- **Background:** What organization/systems are involved, what prompted
-  the investigation
-- **Incident Timeline:** Chronological narrative of what happened, told
-  as a story with cause and effect
-- **Key Findings:** Detailed discussion of each major finding and how
-  they connect to each other
-- **Impact Assessment:** What data was compromised, what systems were
-  affected, business impact
-- **Recommendations:** Specific actions to prevent recurrence (technical
-  controls, policy changes, monitoring improvements)
-- **Conclusion:** Summary of the investigation outcome
-
-Write in full paragraphs. This is for executives and legal -- not a
-technical audience. Do NOT repeat raw tool output. Synthesize findings
-into a coherent narrative that tells the story of what happened and why.
-
-Only after Steps 0-6 are complete may you proceed to Phase 4.5.
+Only after Steps 0-5 are complete may you proceed to Phase 4.5.
 
 ### Phase 4.5 -- Self-Correction Audit
 
@@ -667,7 +648,34 @@ For each `[NEGATIVE]` finding you submitted:
   before confirming the negative
 - If the negative still holds after this review, leave it as-is
 
-Only after Steps 1-3 are complete may you call `finalize_report()`.
+Only after Steps 1-3 are complete may you proceed to Phase 5.
+
+### Phase 5 -- Write the Narrative Report
+
+**THIS IS THE LAST STEP BEFORE `finalize_report()`.** All evidence must
+be fully processed, all findings submitted, all self-correction gaps
+closed, and all hypotheses tested before writing the narrative. The
+narrative must reflect the COMPLETE investigation, not a partial view.
+
+Call `submit_narrative()` with a long-form incident report in markdown.
+Structure it with these sections:
+- **Background:** What organization/systems are involved, what prompted
+  the investigation
+- **Incident Timeline:** Chronological narrative of what happened, told
+  as a story with cause and effect
+- **Key Findings:** Detailed discussion of each major finding and how
+  they connect to each other
+- **Impact Assessment:** What data was compromised, what systems were
+  affected, business impact
+- **Recommendations:** Specific actions to prevent recurrence (technical
+  controls, policy changes, monitoring improvements)
+- **Conclusion:** Summary of the investigation outcome
+
+Write in full paragraphs. This is for executives and legal -- not a
+technical audience. Do NOT repeat raw tool output. Synthesize findings
+into a coherent narrative that tells the story of what happened and why.
+
+After the narrative is submitted, call `finalize_report()`.
 
 ---
 
@@ -711,13 +719,13 @@ Only after Steps 1-3 are complete may you call `finalize_report()`.
       diversity, time window gaps, unexplained connections)
 - [ ] Second narrative found and submitted OR [NEGATIVE] finding submitted
 
-**Phase 4 -- Narrative and Negative Findings:**
-- [ ] `submit_narrative()` -- long-form investigation report written
-
 **Phase 4.5 -- Self-Correction Audit:**
 - [ ] `audit_evidence_coverage()` -- all uncited sources with content reviewed
 - [ ] `audit_tool_coverage()` -- all tool gaps addressed or skipped with reason
 - [ ] Ruled-out hypotheses re-checked against uncited evidence
+
+**Phase 5 -- Narrative Report (after ALL evidence processed and gaps closed):**
+- [ ] `submit_narrative()` -- long-form investigation report written
 
 **Timestamps:**
 - [ ] Every finding has `event_time_start` set (or documented reason why not)

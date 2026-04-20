@@ -388,12 +388,7 @@ one cannot be determined.
 
 **Step 5:** Submit [NEGATIVE] findings for tested hypotheses with no evidence.
 
-**Step 6:** Call `submit_narrative()` with a long-form incident report in
-markdown. Sections: Background, Incident Timeline, Key Findings, Impact
-Assessment, Recommendations, Conclusion. Write in full paragraphs for
-executives and legal. Synthesize findings into a coherent narrative.
-
-Only after Steps 0-6 may you proceed to Phase 4.5.
+Only after Steps 0-5 may you proceed to Phase 4.5.
 
 ### Phase 4.5 -- Self-Correction Audit
 
@@ -417,7 +412,19 @@ For each `[NEGATIVE]` finding, check whether uncited evidence from Step 1
 could change the conclusion. If a contact, email, or account from the
 negative appears in uncited sources, investigate further.
 
-Only after Steps 1-3 are complete may you call `finalize_report()`.
+Only after Steps 1-3 are complete may you proceed to Phase 5.
+
+### Phase 5 -- Write the Narrative Report
+
+**THIS IS THE LAST STEP.** All evidence must be fully processed, all
+findings submitted, and all self-correction gaps closed before writing.
+
+Call `submit_narrative()` with a long-form incident report in markdown.
+Sections: Background, Incident Timeline, Key Findings, Impact Assessment,
+Recommendations, Conclusion. Write in full paragraphs for executives and
+legal. Synthesize findings into a coherent narrative.
+
+After the narrative is submitted, call `finalize_report()`.
 
 ## Pre-Finalize Checklist
 
@@ -448,13 +455,13 @@ Only after Steps 1-3 are complete may you call `finalize_report()`.
       diversity, time window gaps, unexplained connections)
 - [ ] Second narrative found and submitted OR [NEGATIVE] finding submitted
 
-**Phase 4 -- Narrative and Negative Findings:**
-- [ ] `submit_narrative()` -- long-form investigation report written
-
 **Phase 4.5 -- Self-Correction Audit:**
 - [ ] `audit_evidence_coverage()` -- all uncited sources with content reviewed
 - [ ] `audit_tool_coverage()` -- all tool gaps addressed or skipped with reason
 - [ ] Ruled-out hypotheses re-checked against uncited evidence
+
+**Phase 5 -- Narrative Report (after ALL evidence processed and gaps closed):**
+- [ ] `submit_narrative()` -- long-form investigation report written
 
 **Timestamps:**
 - [ ] Every finding has `event_time_start` set (or documented reason why not)

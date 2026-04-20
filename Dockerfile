@@ -84,8 +84,8 @@ RUN mkdir -p /opt/zimmermantools && cd /opt/zimmermantools \
         && rm "/tmp/${tool}.zip"; \
     done
 
-# Volatility 3 symbol tables
-FROM ubuntu:22.04 AS symbols-fetch
+# Volatility 3 symbol tables (data-only; pin to build platform to avoid QEMU)
+FROM --platform=$BUILDPLATFORM ubuntu:22.04 AS symbols-fetch
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -98,8 +98,8 @@ RUN mkdir -p /opt/vol-symbols \
     && wget -q https://downloads.volatilityfoundation.org/volatility3/symbols/linux.zip \
         -O /opt/vol-symbols/linux.zip
 
-# YARA rule libraries (signature-base + community rules)
-FROM ubuntu:22.04 AS yara-fetch
+# YARA rule libraries (data-only; pin to build platform to avoid QEMU)
+FROM --platform=$BUILDPLATFORM ubuntu:22.04 AS yara-fetch
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -122,13 +122,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl unzip \
     && rm -rf /var/lib/apt/lists/*
 
+ARG TARGETARCH
 ARG HAYABUSA_VERSION=3.8.1
-RUN curl -fsSL "https://github.com/Yamato-Security/hayabusa/releases/download/v${HAYABUSA_VERSION}/hayabusa-${HAYABUSA_VERSION}-lin-x64-musl.zip" \
+RUN case "${TARGETARCH}" in \
+        arm64) HAYABUSA_VARIANT="aarch64-gnu" ;; \
+        *)     HAYABUSA_VARIANT="x64-musl" ;; \
+    esac \
+    && curl -fsSL "https://github.com/Yamato-Security/hayabusa/releases/download/v${HAYABUSA_VERSION}/hayabusa-${HAYABUSA_VERSION}-lin-${HAYABUSA_VARIANT}.zip" \
         -o /tmp/hayabusa.zip \
     && mkdir -p /opt/hayabusa \
     && unzip /tmp/hayabusa.zip -d /opt/hayabusa \
-    && chmod +x /opt/hayabusa/hayabusa-${HAYABUSA_VERSION}-lin-x64-musl \
-    && ln -s /opt/hayabusa/hayabusa-${HAYABUSA_VERSION}-lin-x64-musl /opt/hayabusa/hayabusa \
+    && chmod +x /opt/hayabusa/hayabusa-${HAYABUSA_VERSION}-lin-${HAYABUSA_VARIANT} \
+    && ln -s /opt/hayabusa/hayabusa-${HAYABUSA_VERSION}-lin-${HAYABUSA_VARIANT} /opt/hayabusa/hayabusa \
     && rm /tmp/hayabusa.zip
 
 # radare2: fetch release .deb from GitHub (not in Ubuntu 22.04 repos)
@@ -145,8 +150,8 @@ RUN ARCH="$(dpkg --print-architecture)" \
     && curl -fsSL "https://github.com/radareorg/radare2/releases/download/${RADARE2_VERSION}/radare2_${RADARE2_VERSION}_${ARCH}.deb" \
         -o /tmp/radare2.deb
 
-# MITRE ATT&CK Enterprise + ICS STIX data
-FROM ubuntu:22.04 AS attack-fetch
+# MITRE ATT&CK Enterprise + ICS STIX data (data-only; pin to build platform to avoid QEMU)
+FROM --platform=$BUILDPLATFORM ubuntu:22.04 AS attack-fetch
 
 ENV DEBIAN_FRONTEND=noninteractive
 
