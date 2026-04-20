@@ -18,6 +18,14 @@
 
 {% endfor %}
 {% endif %}
+{% if narrative %}
+
+---
+
+## Investigation Report
+
+{{ narrative }}
+{% endif %}
 
 ---
 
@@ -124,11 +132,25 @@ These hypotheses were explicitly tested and no supporting evidence was found.
 ## MITRE ATT&CK Coverage
 
 {{ mitre_techniques | length }} techniques identified across findings.
+{% if mitre_tactic_groups %}
+
+**Kill Chain Coverage:** {% for grp in mitre_tactic_groups %}{{ grp.name }} ({{ grp.technique_count }}){% if not loop.last %} &#8594; {% endif %}{% endfor %}
+
+{% for grp in mitre_tactic_groups %}
+### {{ grp.name }}
+
+| Technique | Name | Findings |
+|-----------|------|----------|
+{% for t in grp.techniques %}| [{{ t.id }}]({{ t.url }}) | {{ t.name }} | {% for af in t.findings %}{{ af.title | truncate(50) }}{% if not loop.last %}; {% endif %}{% endfor %} |
+{% endfor %}
+{% endfor %}
+{% else %}
 
 | Technique | Findings |
 |-----------|----------|
 {% for t in mitre_techniques %}| [{{ t.id }}]({{ t.url }}) | {% for af in t.findings %}{{ af.title | truncate(50) }}{% if not loop.last %}; {% endif %}{% endfor %} |
 {% endfor %}
+{% endif %}
 {% endif %}
 
 ---

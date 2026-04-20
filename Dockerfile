@@ -131,7 +131,21 @@ RUN curl -fsSL "https://github.com/Yamato-Security/hayabusa/releases/download/v$
     && ln -s /opt/hayabusa/hayabusa-${HAYABUSA_VERSION}-lin-x64-musl /opt/hayabusa/hayabusa \
     && rm /tmp/hayabusa.zip
 
-# MITRE ATT&CK Enterprise STIX data
+# radare2: fetch release .deb from GitHub (not in Ubuntu 22.04 repos)
+FROM ubuntu:22.04 AS radare2-fetch
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG RADARE2_VERSION=5.9.8
+RUN ARCH="$(dpkg --print-architecture)" \
+    && curl -fsSL "https://github.com/radareorg/radare2/releases/download/${RADARE2_VERSION}/radare2_${RADARE2_VERSION}_${ARCH}.deb" \
+        -o /tmp/radare2.deb
+
+# MITRE ATT&CK Enterprise + ICS STIX data
 FROM ubuntu:22.04 AS attack-fetch
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -141,7 +155,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 
 RUN mkdir -p /opt/attack \
     && curl -fsSL https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/enterprise-attack/enterprise-attack.json \
-        -o /opt/attack/enterprise-attack.json
+        -o /opt/attack/enterprise-attack.json \
+    && curl -fsSL https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/ics-attack/ics-attack.json \
+        -o /opt/attack/ics-attack.json
 
 # stegdetect: build from source
 FROM ubuntu:22.04 AS stegdetect-builder
@@ -183,6 +199,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
         git \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
         afflib-tools \
         sleuthkit \
         yara \
@@ -199,6 +218,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libvshadow-utils \
         libbde-utils \
         libfvde-utils \
+        tcpflow \
+        tcpxtract \
+        dislocker \
         dc3dd \
         libguestfs-tools \
         pasco \
@@ -212,15 +234,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         outguess \
         libheif-examples \
         p7zip-full \
-    && (freshclam --quiet || true) \
-    && add-apt-repository -y ppa:deadsnakes/ppa \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends \
         python3.12 \
         python3.12-dev \
         python3.12-venv \
         libsqlite3-dev \
         libffi-dev \
+    && (freshclam --quiet || true) \
     && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1 \
     && update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1 \
     && apt-get clean \
@@ -243,7 +262,11 @@ COPY --from=stegdetect-builder /opt/stegdetect/bin/stegbreak /usr/local/bin/steg
 COPY --from=yara-fetch /opt/yara-rules /opt/yara-rules
 COPY --from=yara-fetch /opt/signature-base /opt/signature-base
 COPY --from=attack-fetch /opt/attack/enterprise-attack.json /opt/attack/enterprise-attack.json
+COPY --from=attack-fetch /opt/attack/ics-attack.json /opt/attack/ics-attack.json
 COPY --from=hayabusa-fetch /opt/hayabusa /opt/hayabusa
+COPY --from=radare2-fetch /tmp/radare2.deb /tmp/radare2.deb
+RUN dpkg -i /tmp/radare2.deb || apt-get install -yf --no-install-recommends \
+    && rm /tmp/radare2.deb
 ENV PATH="/opt/hayabusa:${PATH}"
 RUN ldconfig
 
@@ -251,7 +274,7 @@ RUN ldconfig
 RUN apt-get update && apt-get install -y --no-install-recommends \
         gcc g++ make pkg-config python3.12-dev \
         zlib1g-dev libbz2-dev libssl-dev libsqlcipher-dev \
-    && uv pip install --system --no-cache volatility3 plaso mvt pysqlcipher3 \
+    && uv pip install --system --no-cache volatility3 plaso mvt pysqlcipher3 pyhindsight \
     && apt-get purge -y \
         gcc g++ make pkg-config python3.12-dev \
         zlib1g-dev libbz2-dev libssl-dev libsqlcipher-dev \

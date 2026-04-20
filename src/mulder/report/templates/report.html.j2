@@ -246,6 +246,27 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
 .exec-summary p:last-child { margin-bottom: 0; }
 .exec-summary strong { color: var(--text); }
 .exec-summary em { color: var(--accent); font-style: normal; }
+.exec-meta { display: flex; flex-wrap: wrap; gap: 0.45rem; margin-bottom: 1rem; padding-bottom: 0.9rem; border-bottom: 1px solid var(--border); }
+.exec-pill { display: inline-flex; align-items: center; gap: 0.35em; font-size: 0.78rem; padding: 0.3em 0.7em; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); color: var(--text-muted); white-space: nowrap; line-height: 1.4; }
+.exec-pill .ep-icon { font-size: 0.85em; flex-shrink: 0; }
+.exec-pill .ep-val { font-weight: 600; color: var(--text); }
+.exec-threats { margin-top: 0.5rem; }
+.exec-threats strong { display: block; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent); margin-bottom: 0.4rem; }
+.exec-threats ul { margin: 0; padding-left: 1.2rem; }
+.exec-threats li { font-size: 0.88rem; line-height: 1.6; color: var(--text-muted); }
+
+/* ===================== NARRATIVE REPORT ===================== */
+.report-narrative { max-width: 800px; line-height: 1.85; color: var(--text-muted); font-size: 0.92rem; }
+.report-narrative h1, .report-narrative h2, .report-narrative h3, .report-narrative h4 { color: var(--text); margin-top: 1.8rem; margin-bottom: 0.6rem; line-height: 1.3; }
+.report-narrative h3 { font-size: 1.15rem; font-weight: 700; border-bottom: 1px solid var(--border); padding-bottom: 0.4rem; }
+.report-narrative h4 { font-size: 0.98rem; font-weight: 600; }
+.report-narrative p { margin: 0 0 1rem 0; }
+.report-narrative ul, .report-narrative ol { margin: 0 0 1rem 0; padding-left: 1.4rem; }
+.report-narrative li { margin-bottom: 0.35rem; }
+.report-narrative strong { color: var(--text); }
+.report-narrative em { color: var(--accent); font-style: italic; }
+.report-narrative code { background: var(--code-bg); padding: 0.15em 0.4em; border-radius: 4px; font-size: 0.85em; font-family: var(--mono); }
+.report-narrative blockquote { border-left: 3px solid var(--accent); padding: 0.5rem 1rem; margin: 0 0 1rem 0; background: var(--accent-dim); border-radius: 0 var(--radius) var(--radius) 0; }
 
 /* ===================== DASHBOARD ===================== */
 .severity-bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; margin-top: 0.5rem; background: var(--surface2); }
@@ -418,18 +439,44 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
 .ioc-lookup:hover { opacity: 1; }
 
 /* ===================== ATT&CK PAGE ===================== */
+.tactic-strip { display: flex; align-items: center; gap: 0; overflow-x: auto; padding: 0.75rem 0; margin-bottom: 1.5rem; scrollbar-width: thin; }
+.tactic-strip::-webkit-scrollbar { height: 4px; }
+.tactic-strip::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.tactic-cell { flex-shrink: 0; padding: 0.45rem 0.7rem; border-radius: 6px; font-size: 0.68rem; font-weight: 600; white-space: nowrap; border: 1px solid var(--border); color: var(--text-dim); background: var(--surface); transition: all 0.2s; position: relative; letter-spacing: 0.01em; }
+.tactic-cell.active { background: var(--info-dim); color: var(--info); border-color: var(--info-border); cursor: pointer; }
+.tactic-cell.active:hover { border-color: var(--info); box-shadow: 0 0 12px var(--info-dim); transform: translateY(-1px); }
+.tactic-cell .tactic-badge { display: inline-block; background: var(--info); color: #fff; font-size: 0.58rem; font-weight: 700; border-radius: 9px; padding: 0.05em 0.45em; margin-left: 0.4em; vertical-align: middle; line-height: 1.4; }
+.tactic-chevron { flex-shrink: 0; width: 18px; text-align: center; color: var(--text-dim); font-size: 0.6rem; opacity: 0.5; }
+.tactic-chevron.active-link { opacity: 1; color: var(--info); }
+
+.tactic-columns { display: flex; gap: 1rem; overflow-x: auto; padding-bottom: 0.5rem; align-items: flex-start; }
+.tactic-col { flex: 1 1 200px; min-width: 180px; max-width: 320px; }
+.tactic-col-header { padding: 0.65rem 0.85rem; background: var(--info-dim); border: 1px solid var(--info-border); border-radius: var(--radius) var(--radius) 0 0; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.tactic-col-name { font-size: 0.78rem; font-weight: 700; color: var(--info); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tactic-col-meta { font-size: 0.62rem; color: var(--text-muted); white-space: nowrap; font-family: var(--mono); }
+.tactic-col-body { border: 1px solid var(--border); border-top: none; border-radius: 0 0 var(--radius) var(--radius); padding: 0.5rem; display: flex; flex-direction: column; gap: 0.4rem; background: var(--surface); }
+
 .attack-grid { display: flex; flex-wrap: wrap; gap: 0.5rem; }
-.attack-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.75rem 1rem; min-width: 140px; cursor: pointer; transition: all var(--transition); position: relative; overflow: hidden; }
-.attack-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: var(--info); opacity: 0; transition: opacity 0.2s; }
-.attack-card:hover { border-color: var(--info); transform: translateY(-2px); box-shadow: var(--shadow); }
+.attack-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem 0.75rem; cursor: pointer; transition: all var(--transition); position: relative; overflow: hidden; width: 100%; }
+.attack-card::before { content: ''; position: absolute; top: 0; left: 0; bottom: 0; width: 3px; background: var(--info); opacity: 0; transition: opacity 0.2s; }
+.attack-card:hover { border-color: var(--info); box-shadow: var(--shadow); }
 .attack-card:hover::before { opacity: 1; }
 .attack-card.open { border-color: var(--info); }
-.attack-card-id { font-family: var(--mono); font-size: 0.82rem; font-weight: 700; color: var(--info); }
-.attack-card-count { font-size: 0.68rem; color: var(--text-muted); margin-top: 0.2rem; }
+.attack-card.open::before { opacity: 1; }
+.attack-card-id { font-family: var(--mono); font-size: 0.78rem; font-weight: 700; color: var(--info); }
+.attack-card-name { font-size: 0.68rem; color: var(--text-muted); margin-top: 0.15rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attack-card-count { font-size: 0.62rem; color: var(--text-dim); margin-top: 0.15rem; }
 .attack-card-findings { display: none; margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px solid var(--border); }
 .attack-card.open .attack-card-findings { display: block; }
 .attack-card-finding { font-size: 0.72rem; padding: 0.2rem 0; color: var(--text-muted); cursor: pointer; transition: color 0.15s; }
 .attack-card-finding:hover { color: var(--accent); }
+
+.tactic-ministrip { display: flex; gap: 2px; flex-wrap: wrap; padding: 0.4rem 0; }
+.tactic-minicell { width: 18px; height: 18px; border-radius: 3px; border: 1px solid var(--border); background: var(--surface); position: relative; }
+.tactic-minicell.active { background: var(--info-dim); border-color: var(--info-border); }
+.tactic-minicell .mini-tooltip { display: none; position: absolute; bottom: calc(100% + 4px); left: 50%; transform: translateX(-50%); background: var(--bg2); border: 1px solid var(--border); border-radius: 5px; padding: 0.25rem 0.5rem; font-size: 0.62rem; white-space: nowrap; z-index: 10; pointer-events: none; color: var(--text-muted); box-shadow: var(--shadow); }
+.tactic-minicell:hover .mini-tooltip { display: block; }
+.tactic-minicell.active .mini-tooltip { color: var(--info); }
 
 /* ===================== EVIDENCE DRAWER ===================== */
 .evidence-drawer-overlay { display: none; position: fixed; inset: 0; background: var(--overlay-light); backdrop-filter: blur(4px); z-index: 300; }
@@ -489,7 +536,7 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
   .page { display: block !important; padding: 1rem 0; break-inside: avoid; opacity: 1 !important; transform: none !important; }
   .finding-body, .prov-body, .tab-pane, .tl-detail-panel { display: block !important; }
   body { background: #fff; color: #111; font-size: 11px; }
-  .card, .stat, .finding-card, .tl-item, .prov-finding, .exec-summary, .attack-card { border-color: #ddd; background: #fafafa !important; backdrop-filter: none; }
+  .card, .stat, .finding-card, .tl-item, .prov-finding, .exec-summary, .attack-card, .tactic-col-header, .tactic-col-body, .tactic-cell, .exec-pill { border-color: #ddd; background: #fafafa !important; backdrop-filter: none; }
   .stat-value, .badge, .nav-item { color: #111 !important; -webkit-text-fill-color: #111 !important; }
   .page-header h2 { -webkit-text-fill-color: #111 !important; }
   .exec-summary::before { background: #333; }
@@ -507,7 +554,7 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
 <!-- SIDEBAR -->
 <aside class="sidebar" id="sidebar">
   <div class="sidebar-brand">
-    <h1><span>Mulder</span> Report</h1>
+    <h1><span>Mulder</span></h1>
     <div class="case-id">{{ case_id }}</div>
   </div>
   <nav class="sidebar-nav">
@@ -515,6 +562,9 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
     <a class="nav-item active" onclick="navigate('dashboard')" data-page="dashboard">
       <span class="nav-icon">&#9673;</span> Dashboard
     </a>
+    {% if narrative_html %}<a class="nav-item" onclick="navigate('report')" data-page="report">
+      <span class="nav-icon">&#9998;</span> Report
+    </a>{% endif %}
     <a class="nav-item" onclick="navigate('timeline')" data-page="timeline">
       <span class="nav-icon">&#8614;</span> Timeline
       <span class="nav-badge">{{ timeline_findings | length }}</span>
@@ -627,9 +677,18 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
     <div class="card">
       <div class="card-header">&#9876; MITRE ATT&amp;CK Coverage</div>
       <div class="card-body">
+        {% if mitre_all_tactics %}
+        <div class="tactic-ministrip">
+          {% for tac in mitre_all_tactics %}<div class="tactic-minicell{% if tac.active %} active{% endif %}" onclick="navigate('attack')"><span class="mini-tooltip">{{ tac.name }}{% if tac.active %} ({{ tac.technique_count }}){% endif %}</span></div>{% endfor %}
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:0.3rem;margin-top:0.5rem;">
+          {% for grp in mitre_tactic_groups %}<span class="widget-tech" onclick="navigate('attack')" style="cursor:pointer;">{{ grp.name }} <span style="opacity:0.7">({{ grp.technique_count }})</span></span>{% endfor %}
+        </div>
+        {% else %}
         <div class="widget-grid">
           {% for t in mitre_techniques %}<a class="widget-tech" href="{{ t.url }}" target="_blank" rel="noopener" title="{{ t.finding_count }} finding{{ 's' if t.finding_count != 1 }}">{{ t.id }}</a>{% endfor %}
         </div>
+        {% endif %}
         <div class="text-dim" style="font-size:0.72rem;margin-top:0.5rem;">{{ mitre_techniques | length }} technique{{ 's' if mitre_techniques | length != 1 }} across {{ finding_count }} findings</div>
       </div>
     </div>
@@ -693,6 +752,19 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
         {% endfor %}
       </tbody>
     </table>
+  </div>
+</div>
+{% endif %}
+
+<!-- ==================== NARRATIVE REPORT ==================== -->
+{% if narrative_html %}
+<div class="page" id="page-report">
+  <div class="page-header">
+    <h2>Investigation Report</h2>
+    <div class="subtitle">Case <span class="mono">{{ case_id }}</span></div>
+  </div>
+  <div class="report-narrative">
+    {{ narrative_html }}
   </div>
 </div>
 {% endif %}
@@ -848,12 +920,43 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
   </div>
   <div class="stats-grid stagger-in" style="margin-bottom:1.5rem;">
     <div class="stat"><div class="stat-value" data-count="{{ mitre_techniques | length }}">0</div><div class="stat-label">Techniques</div></div>
+    {% if mitre_tactic_groups %}<div class="stat"><div class="stat-value" data-count="{{ mitre_tactic_groups | length }}">0</div><div class="stat-label">Tactics</div></div>{% endif %}
     <div class="stat"><div class="stat-value" data-count="{{ finding_count }}">0</div><div class="stat-label">Findings Mapped</div></div>
   </div>
+  {% if mitre_all_tactics %}
+  <div class="tactic-strip">
+    {% for tac in mitre_all_tactics %}{% if not loop.first %}<div class="tactic-chevron{% if mitre_all_tactics[loop.index0 - 1].active and tac.active %} active-link{% endif %}">&#9654;</div>{% endif %}<div class="tactic-cell{% if tac.active %} active{% endif %}"{% if tac.active %} onclick="scrollToTactic('tactic-col-{{ tac.id }}')"{% endif %}>{{ tac.name }}{% if tac.active %}<span class="tactic-badge">{{ tac.technique_count }}</span>{% endif %}</div>{% endfor %}
+  </div>
+  <div class="tactic-columns">
+    {% for grp in mitre_tactic_groups %}
+    <div class="tactic-col" id="tactic-col-{{ grp.id }}">
+      <div class="tactic-col-header">
+        <div class="tactic-col-name">{{ grp.name }}</div>
+        <div class="tactic-col-meta">{{ grp.technique_count }}T / {{ grp.finding_count }}F</div>
+      </div>
+      <div class="tactic-col-body">
+        {% for t in grp.techniques %}
+        <div class="attack-card" onclick="this.classList.toggle('open')">
+          <div class="attack-card-id"><a href="{{ t.url }}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;" onclick="event.stopPropagation()">{{ t.id }}</a></div>
+          {% if t.name %}<div class="attack-card-name">{{ t.name }}</div>{% endif %}
+          <div class="attack-card-count">{{ t.finding_count }} finding{{ 's' if t.finding_count != 1 }}</div>
+          <div class="attack-card-findings">
+            {% for af in t.findings %}
+            <div class="attack-card-finding" onclick="event.stopPropagation();navigateToFinding('{{ af.finding_id }}')">{{ af.title | truncate(60) }}</div>
+            {% endfor %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
   <div class="attack-grid">
     {% for t in mitre_techniques %}
     <div class="attack-card" onclick="this.classList.toggle('open')">
       <div class="attack-card-id"><a href="{{ t.url }}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;" onclick="event.stopPropagation()">{{ t.id }}</a></div>
+      {% if t.name %}<div class="attack-card-name">{{ t.name }}</div>{% endif %}
       <div class="attack-card-count">{{ t.finding_count }} finding{{ 's' if t.finding_count != 1 }}</div>
       <div class="attack-card-findings">
         {% for af in t.findings %}
@@ -863,6 +966,7 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
     </div>
     {% endfor %}
   </div>
+  {% endif %}
 </div>
 {% endif %}
 
@@ -1019,14 +1123,13 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
 <div class="page" id="page-performance">
   <div class="page-header">
     <h2>Investigation Performance</h2>
-    <div class="subtitle">Tool usage, processing time, and cost estimates</div>
+    <div class="subtitle">Tool usage, processing time, and token estimates</div>
   </div>
   <div class="stats-grid stagger-in">
     <div class="stat"><div class="stat-value" data-count="{{ total_tool_calls }}">0</div><div class="stat-label">Tool Calls</div></div>
     <div class="stat"><div class="stat-value" data-count="{{ tool_call_counts | length }}">0</div><div class="stat-label">Unique Tools</div></div>
     <div class="stat"><div class="stat-value">{{ "%.1f" | format(total_duration_ms / 1000) if total_duration_ms else '0' }}s</div><div class="stat-label">Processing Time</div></div>
     <div class="stat"><div class="stat-value">~{{ "%.0f" | format((estimated_input_tokens + estimated_output_tokens) / 1000) }}k</div><div class="stat-label">Est. Tokens</div></div>
-    <div class="stat"><div class="stat-value">${{ "%.2f" | format(estimated_cost_usd) }}</div><div class="stat-label">Est. Cost</div></div>
   </div>
   <div class="perf-grid">
     <div class="card">
@@ -1041,7 +1144,6 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
             <tr><td style="color:var(--text-muted)">Input Tokens (est.)</td><td class="mono" style="text-align:right;">{{ "{:,}".format(estimated_input_tokens) }}</td></tr>
             <tr><td style="color:var(--text-muted)">Output Tokens (est.)</td><td class="mono" style="text-align:right;">{{ "{:,}".format(estimated_output_tokens) }}</td></tr>
             <tr><td style="color:var(--text-muted)">Total Tokens (est.)</td><td class="mono" style="text-align:right;font-weight:700;">{{ "{:,}".format(estimated_input_tokens + estimated_output_tokens) }}</td></tr>
-            <tr><td style="color:var(--text-muted)">Estimated Cost</td><td class="mono" style="text-align:right;color:var(--accent);font-weight:700;">${{ "%.4f" | format(estimated_cost_usd) }}</td></tr>
           </tbody>
         </table>
       </div>
@@ -1052,17 +1154,21 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
     <div class="card-body"><div class="sparkline-container" id="sparklineContainer"></div></div>
   </div>
   <div class="card mb-2">
-    <div class="card-header">Tool Calls by Duration</div>
+    <div class="card-header">Avg Processing Time by Tool</div>
     <div class="card-body">
       {% if tool_call_counts %}
-      {% set max_dur = tool_durations.values() | max if tool_durations else 1 %}
+      {% set ns = namespace(max_avg=0.001) %}
+      {% for tool_name, count in tool_call_counts.items() %}
+        {% set avg = tool_durations.get(tool_name, 0) / count %}
+        {% if avg > ns.max_avg %}{% set ns.max_avg = avg %}{% endif %}
+      {% endfor %}
       <div class="audit-bar-chart">
         {% for tool_name, count in tool_call_counts | dictsort(by='value', reverse=true) %}
-        {% set dur = tool_durations.get(tool_name, 0) %}
+        {% set avg = tool_durations.get(tool_name, 0) / count %}
         <div class="bar-row">
           <div class="bar-label" title="{{ tool_name }}">{{ tool_name }}</div>
-          <div class="bar-track"><div class="bar-fill" style="width:{{ (dur / max_dur * 100) | round(1) }}%;background:linear-gradient(90deg,var(--accent),var(--accent2));"></div></div>
-          <div class="bar-count">{{ count }}x &middot; {{ "%.1f" | format(dur / 1000) }}s</div>
+          <div class="bar-track"><div class="bar-fill" style="width:{{ (avg / ns.max_avg * 100) | round(1) }}%;background:linear-gradient(90deg,var(--accent),var(--accent2));"></div></div>
+          <div class="bar-count">{{ "%.1f" | format(avg / 1000) }}s avg &middot; {{ count }}x</div>
         </div>
         {% endfor %}
       </div>
@@ -1241,6 +1347,11 @@ function navigate(page, skipHash) {
   if (page === 'performance') { renderDonut(); renderSparkline(); }
   if (page === 'evidence') buildEvSourceTree();
   if (page === 'timeline') renderMinimap();
+}
+
+function scrollToTactic(elementId) {
+  var el = document.getElementById(elementId);
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
 }
 
 function navigateToFinding(findingId) {
@@ -1478,6 +1589,7 @@ var cmdItems = [], cmdSelected = 0;
 function buildCmdIndex() {
   cmdItems = [];
   cmdItems.push({type:'page',label:'Dashboard',action:function(){navigate('dashboard');}});
+  {% if narrative_html %}cmdItems.push({type:'page',label:'Investigation Report',action:function(){navigate('report');}});{% endif %}
   cmdItems.push({type:'page',label:'Timeline',action:function(){navigate('timeline');}});
   cmdItems.push({type:'page',label:'Findings',action:function(){navigate('findings');}});
   cmdItems.push({type:'page',label:'ATT&CK Coverage',action:function(){navigate('attack');}});

@@ -184,9 +184,29 @@ else
         chkrootkit \
         outguess \
         libheif-examples \
-        p7zip-full
+        p7zip-full \
+        tcpflow \
+        tcpxtract \
+        dislocker
 
-    # libyal forensic libraries: SIFT/GIFT PPA uses different names than
+    # radare2: install from GitHub release .deb (not in Ubuntu repos).
+    if ! command_exists r2; then
+        _R2_VERSION="5.9.8"
+        _R2_ARCH="$(dpkg --print-architecture)"
+        _R2_DEB="radare2_${_R2_VERSION}_${_R2_ARCH}.deb"
+        _R2_URL="https://github.com/radareorg/radare2/releases/download/${_R2_VERSION}/${_R2_DEB}"
+        log_info "Downloading radare2 v${_R2_VERSION}..."
+        if curl -fsSL "$_R2_URL" -o "${BUILD_DIR}/${_R2_DEB}"; then
+            dpkg -i "${BUILD_DIR}/${_R2_DEB}" || apt-get install -yf --no-install-recommends
+            log_ok "radare2 v${_R2_VERSION} installed"
+        else
+            log_warn "radare2 download failed (non-fatal)"
+        fi
+    else
+        log_ok "radare2 already installed"
+    fi
+
+    # libyal forensic libraries: GIFT PPA uses different names than
     # Ubuntu universe (e.g. libbde-tools vs libbde-utils).
     for _pair in "libbde-tools:libbde-utils" "libfvde-tools:libfvde-utils" "libvshadow-tools:libvshadow-utils"; do
         _gift="${_pair%%:*}"
@@ -458,13 +478,15 @@ if $IS_SIFT; then
     uv pip install --system --no-cache \
         mvt \
         pysqlcipher3 \
+        pyhindsight \
         2>/dev/null || log_warn "Some Python packages failed (non-fatal if already present via SIFT)"
 else
     uv pip install --system --no-cache \
         volatility3 \
         plaso \
         mvt \
-        pysqlcipher3
+        pysqlcipher3 \
+        pyhindsight
 fi
 
 log_ok "Python forensic packages installed"
@@ -616,6 +638,11 @@ _check "chkrootkit"        "chkrootkit"
 _check "guestmount"        "guestmount"
 _check "dc3dd"             "dc3dd"
 _check "mvt"               "mvt-android"
+_check "radare2"           "r2"
+_check "tcpflow"           "tcpflow"
+_check "tcpxtract"         "tcpxtract"
+_check "dislocker"         "dislocker-metadata"
+_check "hindsight"         "hindsight.py"
 
 printf "\n"
 
