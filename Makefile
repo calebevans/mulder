@@ -1,6 +1,15 @@
 .DEFAULT_GOAL := all
 
-.PHONY: all install lint format typecheck test precommit build docker clean
+CONTAINER_ENGINE ?= $(shell \
+	if command -v docker >/dev/null 2>&1; then echo docker; \
+	elif command -v podman >/dev/null 2>&1; then echo podman; \
+	elif command -v container >/dev/null 2>&1; then echo container; \
+	else echo docker; fi)
+
+IMAGE_NAME ?= mulder
+IMAGE_TAG  ?= dev
+
+.PHONY: all install lint format typecheck test precommit container-build container-run clean
 
 install:
 	uv pip install -e ".[dev]"
@@ -20,8 +29,14 @@ test:
 precommit:
 	pre-commit run --all-files
 
-build:
-	python -m build
+container-build:
+	$(CONTAINER_ENGINE) build -t $(IMAGE_NAME):$(IMAGE_TAG) .
+
+container-run:
+	$(CONTAINER_ENGINE) run -it --privileged \
+		-v $(EVIDENCE_DIR):/evidence:ro \
+		-v $(CASE_DIR):/root/.mulder/cases \
+		$(IMAGE_NAME):$(IMAGE_TAG)
 
 clean:
 	rm -rf dist/ build/ *.egg-info .pytest_cache .mypy_cache

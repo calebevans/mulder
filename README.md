@@ -2,7 +2,6 @@
 
 # mulder
 
-[![PyPI - Version](https://img.shields.io/pypi/v/mulder-mcp)](https://pypi.org/project/mulder-mcp/)
 
 </div>
 
@@ -59,9 +58,9 @@ See [examples/](examples/) for reports from multiple forensic datasets with grou
 
 ## Getting Started
 
-### Docker (recommended)
+### Docker/Podman
 
-The Docker image comes with all forensic tools, dependencies, and [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview) pre-installed. Mulder is already registered as an MCP server in the container, so Claude Code can use it immediately.
+The container image comes with all forensic tools, dependencies, and [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview) pre-installed. Mulder is already registered as an MCP server in the container, so Claude Code can use it immediately.
 
 ```bash
 docker pull ghcr.io/calebevans/mulder:1.0
@@ -132,27 +131,6 @@ The container starts Claude Code directly. Once inside, use the `/investigate` s
 Point it at the directory where your evidence is mounted. The directory can contain archives (zip, 7z, gz, tar, tar.gz, etc.) — the agent will automatically extract them into a temporary directory and read from there.
 
 Case databases and reports are written to the mounted `~/mulder-cases` directory on the host.
-
-### Bare-Metal Install
-
-The `install.sh` script handles a full installation on Debian/Ubuntu: Python 3.12, all forensic tool dependencies, the `mulder` Python package, and the MCP client configuration for Claude Code. It detects existing SIFT installations and skips packages that are already present.
-
-```bash
-sudo ./install.sh
-```
-
-### Python Package Only
-
-If you already have the forensic tools installed on your system (e.g. on an existing SIFT workstation), you can install just the Python package:
-
-```bash
-uv pip install mulder-mcp
-
-# or with pip
-pip install mulder-mcp
-```
-
-> **Note:** The Python package provides the `mulder` CLI and MCP server, but the forensic tools it wraps (vol3, fls, log2timeline, hayabusa, yara, etc.) must be installed separately. Use `install.sh` or Docker to get everything in one step.
 
 ## CLI Reference
 
