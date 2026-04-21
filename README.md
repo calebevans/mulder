@@ -123,7 +123,15 @@ docker run -it --privileged \
   ghcr.io/calebevans/mulder:1.0
 ```
 
-The container starts Claude Code directly. Once inside, tell it to scan your evidence and begin the investigation. Case databases and reports are written to the mounted `~/mulder-cases` directory on the host.
+The container starts Claude Code directly. Once inside, use the `/investigate` slash command to begin:
+
+```
+/investigate /evidence/case-2025-001
+```
+
+Point it at the directory where your evidence is mounted. The directory can contain archives (zip, 7z, gz, tar, tar.gz, etc.) — the agent will automatically extract them into a temporary directory and read from there.
+
+Case databases and reports are written to the mounted `~/mulder-cases` directory on the host.
 
 ### Bare-Metal Install
 
