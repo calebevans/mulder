@@ -17,7 +17,7 @@ The [2012 National Gallery DC scenario](https://digitalcorpora.org/corpora/scena
 
 ## Model Comparison
 
-This scenario was run with two different models to compare investigative approaches.
+This scenario was run with two different models to compare investigative approaches. Sonnet run used Sonnet 4.6 (1M context, max effort) via Claude Code v2.1.114.
 
 | Metric | Opus | Sonnet |
 |--------|------|--------|
@@ -31,26 +31,26 @@ This scenario was run with two different models to compare investigative approac
 | VirtualBox + "VMs" email | Not connected | Connected Perry's email to VBox download |
 | Narrative style | Conservative, evidence-focused | Analytical, intelligence-assessment style |
 
-**Opus** was faster and more conservative -- fewer findings, all tightly evidence-backed, minimal inference. Good for legal proceedings where every claim must be defensible.
+**Opus** was faster and more conservative -- fewer findings, all tightly evidence-backed, minimal inference.
 
-**Sonnet** was more thorough and analytical -- nearly 2x the tool calls, more willing to draw inferences (Gravelly Point as a dead drop, Greece GPS as foreign contact, m57.biz as possible foreign entity). Better for intelligence assessment where connecting dots matters more than prosecutorial certainty.
+**Sonnet** was more thorough and analytical -- nearly 2x the tool calls, more willing to draw inferences (Gravelly Point as a dead drop, Greece GPS as foreign contact, m57.biz as possible foreign entity).
 
 ## Ground Truth Comparison
 
 The scenario narrative is [published on Digital Corpora](https://digitalcorpora.org/corpora/scenarios/national-gallery-dc-2012-attack/). Community write-ups are available from [Medium](https://medium.com/@brsdncr/the-2012-national-gallery-dc-scenario-phase-ii-d6781b4aba4f) and [GitHub](https://github.com/jilek/iPhone_Forensics).
 
-The published scenario describes three intertwined storylines: (1) an artwork-defacement plot (Alex, a Krasnovian planner, working through Carry), (2) a stamp-theft conspiracy (Tracy, her brother Pat, and Carry/Coral), and (3) unauthorized surveillance via Joe's keylogger. Both models fully reconstructed (2) and (3). Sonnet came closer to surfacing (1) by identifying intelligence tradecraft (steganography, dead drops, foreign GPS data) but did not explicitly name the defacement plot or Alex's role as orchestrator.
+The published scenario describes three intertwined storylines: (1) an artwork-defacement plot (Alex, a Krasnovian planner, working through Carry), (2) a stamp-theft conspiracy (Tracy, her brother Pat, and Carry/Coral), and (3) unauthorized surveillance via Joe's keylogger. Both models largely reconstructed (2) and (3). Sonnet came closer to surfacing (1) by identifying intelligence tradecraft (steganography, dead drops, foreign GPS data) but did not explicitly name the defacement plot or Alex's role as orchestrator.
 
 ## Output Files
 
 ### Opus
 
+- [HTML report](https://calebevans.github.io/mulder/examples/ngdc/opus/ngdc.report.html)
 - [`opus/ngdc.report.md`](opus/ngdc.report.md) -- Markdown report
-- [`opus/ngdc.report.html`](opus/ngdc.report.html) -- HTML report
 - [`opus/claude.log`](opus/claude.log) -- Claude Code session log
 
 ### Sonnet
 
+- [HTML report](https://calebevans.github.io/mulder/examples/ngdc/sonnet/ngdc.report.html)
 - [`sonnet/ngdc.report.md`](sonnet/ngdc.report.md) -- Markdown report
-- [`sonnet/ngdc.report.html`](sonnet/ngdc.report.html) -- HTML report
 - [`sonnet/claude.log`](sonnet/claude.log) -- Claude Code session log

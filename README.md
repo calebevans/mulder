@@ -5,22 +5,27 @@
 
 </div>
 
-Mulder is an [MCP](https://modelcontextprotocol.io/) server for digital forensics on [SANS SIFT](https://www.sans.org/tools/sift-workstation/) workstations. It gives an AI agent the ability to create investigation cases, run forensic tools (Volatility 3, Sleuthkit, Plaso, Hayabusa, YARA, and more), index evidence into a searchable SQLite database, submit provenance-tracked findings, and generate investigation reports.
+Mulder is an [MCP](https://modelcontextprotocol.io/) server for digital forensics. It gives an AI agent the ability to create investigation cases, run forensic tools (Volatility 3, Sleuthkit, Plaso, Hayabusa, YARA, and more), index evidence into a searchable SQLite database, submit provenance-tracked findings, and generate investigation reports.
 
 <p align="center">
   <img src="docs/photos/report-demo.gif" alt="Mulder report demo" width="800">
 </p>
 
+<p align="center">
+  <b>Example reports:</b>&nbsp;
+  <a href="https://calebevans.github.io/mulder/examples/nist-data-leakage/sonnet/nist-data-leakage.report.html">NIST Data Leakage</a> · <a href="https://calebevans.github.io/mulder/examples/ngdc/sonnet/ngdc.report.html">National Gallery DC</a>
+</p>
+
 ## Features
 
-- **MCP protocol** for connecting to any compatible AI client (Claude Desktop, Cursor, Claude Code, etc.)
-- **40+ forensic tools** exposed as MCP tool calls covering memory, disk, timeline, Windows event logs, YARA, network capture, mobile, and more
-- **Per-case SQLite database** with FTS5 full-text search across all indexed evidence
-- **Append-only audit log** that records every tool invocation; findings must cite real tool call IDs to prevent hallucinated evidence
-- **Cross-source correlation** to join evidence from different artifact types within a time range
-- **Report generation** producing both Markdown and styled HTML reports with IOC tables, MITRE ATT&CK coverage, and full audit trails
-- **Resource throttling** with configurable memory and CPU limits so extractions do not overwhelm the host
-- **Parallel extraction** with a configurable worker pool and a `run_parallel` meta-tool for batch dispatch
+- 🔌 **MCP protocol** for connecting to AI clients (tested with Claude Code; should work with any MCP-compatible client)
+- 🧰 **80+ forensic tools** exposed as MCP tool calls covering memory, disk, timeline, Windows event logs, YARA, network capture, mobile, and more
+- 🗄️ **Per-case SQLite database** with FTS5 full-text search across all indexed evidence
+- 📜 **Append-only audit log** that records every tool invocation; findings must cite real tool call IDs to prevent hallucinated evidence citations
+- 🔗 **Cross-source correlation** to join evidence from different artifact types within a time range
+- 📊 **Report generation** producing both Markdown and styled HTML reports with IOC tables, MITRE ATT&CK coverage, and full audit trails
+- ⚙️ **Resource throttling** with configurable memory and CPU limits so extractions do not overwhelm the host
+- ⚡ **Parallel extraction** with a configurable worker pool and a `run_parallel` meta-tool for batch dispatch
 
 ### Example Output
 
@@ -52,11 +57,11 @@ From the agent's live terminal during a [NIST insider threat investigation](exam
   This is the server where the secret project files were stored!
 ```
 
-14 findings, 9 critical, 34 minutes. Full report with narrative, IOCs, and MITRE ATT&CK mappings generated automatically.
+From a single Sonnet run: 14 findings, 9 critical, 34 minutes. Report with narrative, IOCs, and MITRE ATT&CK mappings generated automatically.
 
 See [examples/](examples/) for reports from multiple forensic datasets with ground truth comparisons, including runs on both Opus and Sonnet.
 
-## Getting Started
+## 🚀 Getting Started
 
 ### Docker/Podman
 
@@ -157,7 +162,7 @@ Generates reports offline without starting the MCP server.
 
 Reads `{case_id}.db` and `{case_id}.audit.jsonl` from the database directory and writes `{case_id}.report.md` and `{case_id}.report.html` alongside them.
 
-## Supported Forensic Tools
+## 🔬 Supported Forensic Tools
 
 | Tool | Description |
 |------|-------------|
@@ -190,7 +195,7 @@ Reads `{case_id}.db` and `{case_id}.audit.jsonl` from the database directory and
 | [libfvde](https://github.com/libyal/libfvde) | Apple FileVault encryption metadata extraction |
 | [tcpflow](https://github.com/simsong/tcpflow) / [tcpxtract](https://tcpxtract.sourceforge.net/) | TCP stream reconstruction and file extraction from PCAPs |
 
-## Report Generation
+## 📄 Report Generation
 
 Mulder generates two report formats from the case database and audit log:
 
@@ -204,7 +209,7 @@ Reports can be generated in two ways:
 1. **MCP tool**: call `finalize_report` while a case is loaded in the server
 2. **CLI**: run `mulder report <case_id>` offline without starting the server
 
-## Architecture
+## 🏗️ Architecture
 
 See [docs/architecture.md](docs/architecture.md) for a detailed technical overview of the server internals, data model, tool execution model, and evidence pipeline.
 

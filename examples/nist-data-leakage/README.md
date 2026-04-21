@@ -17,6 +17,8 @@ The [NIST CFReDS Data Leakage Case](https://cfreds.nist.gov/all/NIST/DataLeakage
 
 ## Model Comparison
 
+Sonnet run used Sonnet 4.5 via Claude Code v2.1.114.
+
 | Metric | Opus | Sonnet |
 |--------|------|--------|
 | Findings | 15 (6 crit, 7 high) | 14 (9 crit, 4 high) |
@@ -31,7 +33,7 @@ The [NIST CFReDS Data Leakage Case](https://cfreds.nist.gov/all/NIST/DataLeakage
 
 **Opus** was faster and identified more total findings (15 vs 14), including the shared content between RM2 and RM3 as a dedicated finding. Conservative and thorough on tool-level artifacts.
 
-**Sonnet** found deeper temporal evidence (December 2014 data staging, February 2015 first USB access), produced a more detailed anti-forensic timeline, and caught that Google Drive Sync executed *after* the cleanup tools -- meaning cloud exfiltration may have continued even as local evidence was being destroyed. The narrative reads like a professional forensic examiner's report with minute-by-minute chronology.
+**Sonnet** found deeper temporal evidence (December 2014 data staging, February 2015 first USB access), produced a more detailed anti-forensic timeline, and caught that Google Drive Sync executed *after* the cleanup tools -- meaning cloud exfiltration may have continued even as local evidence was being destroyed. The narrative includes a minute-by-minute chronology of the March 25 cleanup session.
 
 ## Ground Truth Comparison
 
@@ -41,7 +43,7 @@ The CFReDS Data Leakage Case has a [published answer key](https://cfreds-archive
 - Complete exfiltration chain: network share -> USB -> cloud storage -> CD-R
 - All four evidence images analyzed with relevant artifacts extracted
 - Anti-forensic tool usage (Eraser, CCleaner) with Prefetch timestamps
-- Premeditation established through search history analysis (900+ queries)
+- Premeditation established through search history analysis (hundreds of queries)
 - Suspect identity (Iaman Informant, iaman.informant@nist.gov)
 - Network share source (\\10.11.11.128\SECURED_DRIVE)
 - Multiple exfiltration vectors (USB, CD-R, Google Drive, iCloud)
@@ -64,12 +66,12 @@ The CFReDS Data Leakage Case has a [published answer key](https://cfreds-archive
 
 ### Opus
 
+- [HTML report](https://calebevans.github.io/mulder/examples/nist-data-leakage/opus/nist-data-leakage.report.html)
 - [`opus/nist-data-leakage.report.md`](opus/nist-data-leakage.report.md) -- Markdown report
-- [`opus/nist-data-leakage.report.html`](opus/nist-data-leakage.report.html) -- HTML report
 - [`opus/claude.log`](opus/claude.log) -- Claude Code session log
 
 ### Sonnet
 
+- [HTML report](https://calebevans.github.io/mulder/examples/nist-data-leakage/sonnet/nist-data-leakage.report.html)
 - [`sonnet/nist-data-leakage.report.md`](sonnet/nist-data-leakage.report.md) -- Markdown report
-- [`sonnet/nist-data-leakage.report.html`](sonnet/nist-data-leakage.report.html) -- HTML report
 - [`sonnet/claude.log`](sonnet/claude.log) -- Claude Code session log

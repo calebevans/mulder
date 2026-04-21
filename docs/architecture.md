@@ -2,7 +2,7 @@
 
 Mulder is an MCP (Model Context Protocol) server that exposes digital forensic tooling to AI agents. It wraps dozens of external forensic binaries and Python libraries behind a uniform MCP tool interface, indexes all extracted evidence into a per-case SQLite database with full-text search, maintains an append-only audit log for provenance, and generates structured investigation reports.
 
-## Project Structure
+## 📁 Project Structure
 
 ```
 src/mulder/
@@ -12,33 +12,40 @@ src/mulder/
 ├── models.py                     # Pydantic models (WindowRow, Finding, AuditSummary, etc.)
 ├── audit.py                      # Append-only JSONL audit log
 ├── extractors/
+│   ├── __init__.py
 │   ├── classifier.py             # Evidence directory scanner and artifact type detection
-│   ├── base.py                   # Base extractor interface
+│   ├── base.py                   # Extractor Protocol, ExtractionResult, ExtractorRegistry
 │   ├── volatility.py             # Volatility 3 wrapper
 │   ├── sleuthkit.py              # Sleuthkit (fls, icat, mmls) wrapper
 │   ├── plaso.py                  # Plaso (log2timeline) wrapper
 │   ├── bulk.py                   # bulk_extractor wrapper
-│   ├── disk.py                   # Disk image helpers
+│   ├── disk.py                   # Disk image helpers (mount, walk, EVTX/prefetch extraction)
 │   ├── logs.py                   # Log file ingestion
 │   └── eztools.py                # Eric Zimmerman tools wrapper
 ├── index/
+│   ├── __init__.py
 │   └── correlator.py             # Cross-source time-range joins
 ├── report/
+│   ├── __init__.py
 │   ├── renderer.py               # Jinja2 report builder, IOC extraction, MITRE rollups
 │   ├── redactor.py               # Sensitive data redaction helpers
+│   ├── data/
+│   │   └── attack_tactics.json   # MITRE ATT&CK technique-to-tactic mapping data
 │   └── templates/
 │       ├── report.md.j2          # Markdown report template
 │       └── report.html.j2        # HTML report template (dark/light, sidebar nav)
 └── server/
+    ├── __init__.py
     ├── app.py                    # FastMCP instance, init, concurrency wrappers, run_parallel
     ├── helpers.py                # Shared helpers (hashing, batch IDs, output formatting)
     ├── jobs.py                   # Background JobStore for async extraction batches
-    ├── extract_helpers.py        # Common extraction utilities
-    ├── tools_case.py             # scan_evidence, open_case, list_cases, extract_archive
+    ├── extract_helpers.py        # Common extraction utilities (extract_and_index, mount_disk_image)
+    ├── tools_case.py             # scan_evidence, open_case, list_cases, verify_evidence_integrity, extract_archive
     ├── tools_extract.py          # Volatility, Sleuthkit, Plaso, EVTX, Registry, bulk_extractor, etc.
-    ├── tools_core.py             # search, correlate, process queries, decode_payload
+    ├── tools_core.py             # search, correlate, list_sources, process/memory queries, decode_payload
     ├── tools_composite.py        # Multi-source hunting (persistence, lateral movement, exfil, etc.)
-    ├── tools_findings.py         # submit_finding, get_findings, finalize_report
+    ├── tools_findings.py         # submit_finding, submit_narrative, get_findings, finalize_report
+    ├── tools_review.py           # Pre-report self-review (audit_evidence_coverage, audit_tool_coverage)
     ├── tools_plaso.py            # Plaso timeline filtering and export
     ├── tools_hayabusa.py         # Hayabusa Windows event log analysis
     ├── tools_yara.py             # YARA scanning (files, memory, Volatility integration)
@@ -50,11 +57,10 @@ src/mulder/
     ├── tools_attack.py           # MITRE ATT&CK technique lookup
     ├── tools_jobs.py             # Extraction batch management
     ├── tools_hindsight.py        # Hindsight Chrome/Chromium browser forensics
-
     └── tools_mvt.py              # MVT mobile spyware detection (Android, iOS)
 ```
 
-## High-Level Architecture
+## 🏗️ High-Level Architecture
 
 ```mermaid
 flowchart TB
@@ -81,7 +87,7 @@ flowchart TB
     Reports -.->|"reads"| AuditLog
 ```
 
-## Server Lifecycle
+## 🔄 Server Lifecycle
 
 ### Startup
 
@@ -130,7 +136,7 @@ sequenceDiagram
     Server-->>Agent: Extraction results + tool_call_id
 ```
 
-## Tool Execution Model
+## ⚙️ Tool Execution Model
 
 ### Sync-to-Async Wrapping
 
@@ -168,7 +174,7 @@ Two variants exist:
 
 The `run_parallel` meta-tool accepts a list of `{tool, args}` objects and executes them concurrently in an `anyio` task group. Tools listed in `_SEQUENTIAL_ONLY` (currently just `run_bulk_extractor`) are run sequentially after the parallel batch completes, to avoid overwhelming system resources.
 
-## Data Model
+## 🗄️ Data Model
 
 ```mermaid
 erDiagram
@@ -177,6 +183,7 @@ erDiagram
         text ingested_at
         text evidence_root
         text extractor_versions
+        text narrative
     }
 
     sources {
@@ -233,14 +240,14 @@ erDiagram
 
 ### Tables
 
-- **case_metadata**: one row per case, storing the evidence root path and extractor version info
+- **case_metadata**: one row per case, storing the evidence root path, extractor version info, and an optional long-form investigation narrative (set via `submit_narrative`)
 - **sources**: one row per ingested evidence source (a Volatility plugin output, a disk image FLS listing, etc.), keyed to a case
 - **windows**: line-oriented text chunks from extractor output, each belonging to a source. The primary unit of searchable evidence.
 - **windows_fts**: an FTS5 virtual table that mirrors `windows.raw_text` for full-text search
 - **findings**: agent-submitted investigation findings with severity, confidence, MITRE ATT&CK IDs, and evidence references
 - **evidence_registry**: SHA-256 chain-of-custody records for original evidence files
 
-## Evidence Pipeline
+## 🔬 Evidence Pipeline
 
 ```mermaid
 flowchart TD
@@ -270,7 +277,7 @@ flowchart TD
 
 The key design choice is that the agent controls which extractions run. `scan_evidence` only classifies files by type (memory dump, disk image, EVTX, PCAP, etc.); it does not automatically run any extractors. The agent then selectively calls Tier 2 extraction tools to populate the database.
 
-## Extractors
+## 🧰 Extractors
 
 Each extractor module wraps one or more external forensic tools and normalizes their output into `WindowRow` objects for database insertion.
 
@@ -280,7 +287,7 @@ Each extractor module wraps one or more external forensic tools and normalizes t
 | `sleuthkit.py` | Sleuthkit (`fls`, `icat`, `mmls`, `fsstat`, `mactime`) | Disk images (.e01, .dd, .img) |
 | `plaso.py` | Plaso (`log2timeline`, `psort`) | Super-timeline from any supported format |
 | `bulk.py` | `bulk_extractor` | Carved IOCs (emails, URLs, credit cards, etc.) |
-| `eztools.py` | Eric Zimmerman .NET tools (`PECmd`, `AmcacheParser`, `AppCompatCacheParser`, `JLECmd`, `LECmd`, `SBECmd`, `SrumECmd`, `MFTECmd`) | Windows artifacts (prefetch, amcache, shimcache, jump lists, LNK, shellbags, SRUM, MFT, USN journal) |
+| `eztools.py` | Eric Zimmerman .NET tools (`PECmd`, `AmcacheParser`, `AppCompatCacheParser`, `EvtxECmd`, `JLECmd`, `LECmd`, `MFTECmd`, `RBCmd`, `RECmd`, `SBECmd`, `SrumECmd`) | Windows artifacts (prefetch, amcache, shimcache, EVTX, jump lists, LNK, MFT, recycle bin, registry, shellbags, SRUM, USN journal) |
 | `logs.py` | None (Python native) | Plain text log files |
 | `disk.py` | Sleuthkit utilities | Disk image metadata and file extraction |
 
@@ -309,17 +316,26 @@ Additional tools invoked directly from `tools_extract.py` without a dedicated ex
 
 | `mvt-android` / `mvt-ios` | Mobile Verification Toolkit for spyware detection (via `tools_mvt.py`) |
 
-## Audit and Provenance
+## 📜 Audit and Provenance
 
 ### Audit Log
 
 Each case has an append-only JSONL file (`{case_id}.audit.jsonl`) that records three entry types:
 
-1. **tool_call**: every MCP tool invocation, with `tool_call_id`, parameters, SHA-256 hash of the output, timestamp, and duration
+1. **tool_call**: every MCP tool invocation, with `tool_call_id`, parameters, SHA-256 hash of the output, timestamp, duration, and optional `batch_id` (set when the call was dispatched via `run_parallel`)
 2. **ingestion**: each source extraction, recording source path, hash, extractor name, window count, and duration
 3. **finding**: each finding submission, recording the finding ID and its evidence references
 
 The log is append-only and never modified after writing. An in-memory index of all `tool_call_id` values is maintained for fast lookups.
+
+### Audit Summary
+
+The `AuditLog.summary()` method produces an `AuditSummary` with aggregate statistics used in reports:
+
+- **tool_call_counts**: per-tool invocation counts
+- **tool_durations**: per-tool cumulative execution time
+- **total_duration_ms** / **wall_clock_ms**: total tool execution time and wall-clock investigation duration
+- **estimated_input_tokens**, **estimated_output_tokens**, **estimated_cost_usd**: API cost estimates derived from the session log
 
 ### Anti-Hallucination Guardrail
 
@@ -335,30 +351,57 @@ The `get_provenance_chain()` method traces a finding back through:
 
 This produces a full chain from finding to tool invocation to original evidence file.
 
-## Cross-Source Correlation
+## 🔗 Cross-Source Correlation
 
 The `Correlator` class in `index/correlator.py` performs time-bounded joins across evidence sources. Given a time range and an optional list of source names, it queries the `windows` table for each source and returns all matching windows grouped by source.
 
 This lets the agent answer questions like "at timestamp T, what did each artifact type observe?" by pulling memory analysis, disk timeline, event logs, and network captures into a single correlated view.
 
-## Report Generation
+## 📄 Report Generation
 
 The `ReportRenderer` in `report/renderer.py` uses Jinja2 templates to produce Markdown and HTML reports.
+
+### Narrative
+
+The agent can call `submit_narrative` to store a long-form incident report (markdown) in the `case_metadata.narrative` column. This narrative is rendered as a dedicated "Report" page in the HTML output and as a top-level section in the Markdown output. It can be called multiple times; each call replaces the previous narrative.
 
 ### Rendering Pipeline
 
 1. **Aggregate findings** sorted by severity (critical, high, medium, low, info)
 2. **Extract IOCs** from finding descriptions using regex patterns for IP addresses, ports, file paths, hashes, and email addresses
-3. **Build MITRE ATT&CK rollups** mapping technique IDs to findings
-4. **Generate executive summary** text from findings counts and severity distribution
-5. **Render template** with case metadata, findings, IOC tables, audit summary, evidence integrity records, and source listings
+3. **Build MITRE ATT&CK rollups** using `report/data/attack_tactics.json` (a packaged lookup table mapping technique IDs to tactic names, generated from MITRE ATT&CK STIX data by `scripts/extract_attack_tactics.py`)
+4. **Convert finding descriptions** from markdown to HTML (for the HTML report) using the `markdown` library
+5. **Generate executive summary** text from findings counts and severity distribution
+6. **Render template** with case metadata, narrative, findings, IOC tables, audit summary, evidence integrity records, and source listings
 
 ### Templates
 
 - **`report.md.j2`**: Markdown report with sections for executive summary, severity overview, evidence integrity, attack timeline, detailed findings, ruled-out findings, IOC tables, MITRE coverage, audit metrics, and sources appendix
 - **`report.html.j2`**: Self-contained HTML page (~1500 lines) with dark/light theme toggle, sidebar navigation, and the same content sections. Source window samples are capped at 50 per source to keep file size manageable.
 
-## Concurrency and Write Safety
+## 🔍 Self-Review Tools
+
+The `tools_review.py` module exposes two MCP tools designed to be called before `finalize_report` as a quality gate. They help the agent identify blind spots in its investigation.
+
+### audit_evidence_coverage
+
+Compares the set of indexed evidence sources against the sources cited by submitted findings. Returns:
+
+- A list of **uncited sources** (extracted and indexed but never referenced in any finding), each with sample content so the agent can assess relevance
+- Coverage percentage and counts
+
+The agent is expected to either submit additional findings for overlooked sources or document why they are not relevant.
+
+### audit_tool_coverage
+
+Re-runs the `EvidenceClassifier` on the original evidence directory and cross-references the applicable tools for each artifact type (defined in `_EVIDENCE_TOOL_MAP`) against the tools actually invoked during the session (from the audit log). Returns:
+
+- Per-evidence-item lists of tools that were run vs. not run
+- Total gap count
+
+The agent is expected to either run the missing tools or justify their omission before finalizing.
+
+## 🔒 Concurrency and Write Safety
 
 ### WriteQueue
 

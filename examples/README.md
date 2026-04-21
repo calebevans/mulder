@@ -4,5 +4,5 @@ This directory contains sample outputs from Mulder investigations run against we
 
 | Scenario | Source | Evidence Types | Findings | Coverage |
 |----------|--------|---------------|----------|----------|
-| [ngdc](ngdc/) | [Digital Corpora -- National Gallery DC 2012](https://digitalcorpora.org/corpora/scenarios/national-gallery-dc-2012-attack/) | Disk images, mobile devices, PCAPs, email logs | 12 (7 critical, 3 high) | Stamp-theft chain + keylogger fully reconstructed; artwork defacement plot not surfaced |
-| [nist-data-leakage](nist-data-leakage/) | [NIST CFReDS Data Leakage Case](https://cfreds.nist.gov/all/NIST/DataLeakageCase) | PC disk image, 2 USB images, CD-R image | 10 (5 critical, 5 high) | Full exfiltration chain, premeditation, and cleanup session reconstructed |
+| [ngdc](ngdc/) | [Digital Corpora -- National Gallery DC 2012](https://digitalcorpora.org/corpora/scenarios/national-gallery-dc-2012-attack/) | Disk images, mobile devices, PCAPs, email logs | Opus: 12 (7 crit, 3 high); Sonnet: 19 (11 crit, 5 high) | Stamp-theft chain + keylogger largely reconstructed; artwork defacement plot not surfaced |
+| [nist-data-leakage](nist-data-leakage/) | [NIST CFReDS Data Leakage Case](https://cfreds.nist.gov/all/NIST/DataLeakageCase) | PC disk image, 2 USB images, CD-R image | Opus: 15 (6 crit, 7 high); Sonnet: 14 (9 crit, 4 high) | Exfiltration chain, premeditation, and cleanup session reconstructed |
