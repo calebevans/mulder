@@ -5,7 +5,6 @@ Tier 1 tools: help the agent orient before running any extractions.
 
 from __future__ import annotations
 
-import json
 import logging
 import shutil
 import subprocess
@@ -35,7 +34,7 @@ def scan_evidence(
     evidence_path: str,
     case_id: str | None = None,
     replace: bool = False,
-) -> str:
+) -> dict[str, object]:
     """Scan an evidence directory and create a new case for investigation.
 
     Walks the evidence directory recursively, classifies files by type
@@ -57,7 +56,7 @@ def scan_evidence(
     ev_path = Path(evidence_path).expanduser().resolve()
 
     if not ev_path.exists():
-        return json.dumps({"error": f"Evidence path does not exist: {ev_path}"})
+        return {"error": f"Evidence path does not exist: {ev_path}"}
 
     if case_id is None:
         case_id = slugify(ev_path.name)
@@ -66,7 +65,7 @@ def scan_evidence(
         return _scan_evidence_inner(ev_path, case_id, replace)
     except Exception as exc:
         logger.exception("scan_evidence failed for %s", ev_path)
-        return json.dumps({"error": f"scan_evidence failed: {exc}"})
+        return {"error": f"scan_evidence failed: {exc}"}
 
 
 def _hash_and_register_evidence(manifest: list[dict[str, object]]) -> None:
@@ -101,7 +100,7 @@ def _hash_and_register_evidence(manifest: list[dict[str, object]]) -> None:
             logger.debug("Failed to hash %s", fp, exc_info=True)
 
 
-def _scan_evidence_inner(ev_path: Path, case_id: str, replace: bool) -> str:
+def _scan_evidence_inner(ev_path: Path, case_id: str, replace: bool) -> dict[str, object]:
     """Inner implementation of scan_evidence with full error propagation."""
     from mulder.extractors.classifier import ClassifierConfig, EvidenceClassifier
 
@@ -147,7 +146,7 @@ def _scan_evidence_inner(ev_path: Path, case_id: str, replace: bool) -> str:
         result["evidence_tree"] = "\n".join(tree_lines)
         result["type_summary"] = type_counts
         result["total_items"] = len(manifest)
-        return json.dumps(result)
+        return result
 
     threading.Thread(
         target=_hash_and_register_evidence,
@@ -168,21 +167,19 @@ def _scan_evidence_inner(ev_path: Path, case_id: str, replace: bool) -> str:
             "then scan_evidence() on the extracted directory."
         )
 
-    return json.dumps(
-        {
-            "status": "success",
-            "case_id": case_id,
-            "evidence_path": str(ev_path),
-            "evidence_tree": "\n".join(tree_lines),
-            "type_summary": type_counts,
-            "total_items": len(manifest),
-            "message": message,
-        }
-    )
+    return {
+        "status": "success",
+        "case_id": case_id,
+        "evidence_path": str(ev_path),
+        "evidence_tree": "\n".join(tree_lines),
+        "type_summary": type_counts,
+        "total_items": len(manifest),
+        "message": message,
+    }
 
 
 @mcp.tool()
-def list_cases() -> str:
+def list_cases() -> dict[str, object]:
     """List all cases in the database directory.
 
     Returns case IDs, evidence paths, source counts, and creation dates
@@ -216,17 +213,15 @@ def list_cases() -> str:
     if has_ctx():
         active = get_ctx().case_id
 
-    return json.dumps(
-        {
-            "cases": cases,
-            "active_case": active,
-            "total": len(cases),
-        }
-    )
+    return {
+        "cases": cases,
+        "active_case": active,
+        "total": len(cases),
+    }
 
 
 @mcp.tool()
-def open_case(case_id: str) -> str:
+def open_case(case_id: str) -> dict[str, object]:
     """Switch the active case to an already-existing case.
 
     All subsequent tool calls will operate on this case.
@@ -238,23 +233,19 @@ def open_case(case_id: str) -> str:
     db_path = cfg.db_dir / f"{case_id}.db"
 
     if not db_path.exists():
-        return json.dumps(
-            {
-                "error": f"Case '{case_id}' not found. Use list_cases() to see available cases, "
-                f"or scan_evidence() to create a new one.",
-            }
-        )
+        return {
+            "error": f"Case '{case_id}' not found. Use list_cases() to see available cases, "
+            f"or scan_evidence() to create a new one.",
+        }
 
     ctx = load_case(case_id)
     source_count = ctx.db.get_source_count()
 
-    return json.dumps(
-        {
-            "status": "success",
-            "case_id": case_id,
-            "source_count": source_count,
-        }
-    )
+    return {
+        "status": "success",
+        "case_id": case_id,
+        "source_count": source_count,
+    }
 
 
 def _human_size(nbytes: int) -> str:
@@ -268,7 +259,7 @@ def _human_size(nbytes: int) -> str:
 
 
 @mcp.tool()
-def verify_evidence_integrity() -> str:
+def verify_evidence_integrity() -> dict[str, object]:
     """Verify the integrity of all registered evidence files.
 
     Re-computes SHA-256 hashes for every evidence file registered at the
@@ -296,17 +287,15 @@ def verify_evidence_integrity() -> str:
     else:
         status = "all_verified"
 
-    return json.dumps(
-        {
-            "status": status,
-            "total_files": total,
-            "verified_count": verified,
-            "modified_count": modified,
-            "missing_count": missing,
-            "files": results,
-            "elapsed_ms": round(elapsed_ms, 1),
-        }
-    )
+    return {
+        "status": status,
+        "total_files": total,
+        "verified_count": verified,
+        "modified_count": modified,
+        "missing_count": missing,
+        "files": results,
+        "elapsed_ms": round(elapsed_ms, 1),
+    }
 
 
 def _extract_zip(archive: Path, dest: Path) -> list[str]:
@@ -359,7 +348,7 @@ def _extract_7z(archive: Path, dest: Path) -> list[str]:
 def extract_archive(
     archive_path: str,
     extract_to: str | None = None,
-) -> str:
+) -> dict[str, object]:
     """Extract a compressed evidence archive (zip, tar, gz, bz2, 7z, rar).
 
     Extracts the archive contents so that evidence files inside become
@@ -378,7 +367,7 @@ def extract_archive(
     archive = Path(archive_path).expanduser().resolve()
 
     if not archive.exists():
-        return json.dumps({"error": f"Archive not found: {archive}"})
+        return {"error": f"Archive not found: {archive}"}
 
     if extract_to:
         dest = Path(extract_to).expanduser().resolve()
@@ -402,36 +391,30 @@ def extract_archive(
             files = _extract_tar(archive, dest)
         elif ext in (".7z", ".rar"):
             if not shutil.which("7z"):
-                return json.dumps(
-                    {
-                        "error": "7z not found on PATH. Install p7zip-full.",
-                    }
-                )
+                return {
+                    "error": "7z not found on PATH. Install p7zip-full.",
+                }
             files = _extract_7z(archive, dest)
         else:
-            return json.dumps(
-                {
-                    "error": f"Unsupported archive format: {ext}",
-                    "supported": [
-                        ".zip",
-                        ".tar",
-                        ".tar.gz",
-                        ".tar.bz2",
-                        ".tgz",
-                        ".gz",
-                        ".bz2",
-                        ".7z",
-                        ".rar",
-                    ],
-                }
-            )
-    except Exception as exc:
-        return json.dumps(
-            {
-                "error": f"Extraction failed: {exc}",
-                "archive": str(archive),
+            return {
+                "error": f"Unsupported archive format: {ext}",
+                "supported": [
+                    ".zip",
+                    ".tar",
+                    ".tar.gz",
+                    ".tar.bz2",
+                    ".tgz",
+                    ".gz",
+                    ".bz2",
+                    ".7z",
+                    ".rar",
+                ],
             }
-        )
+    except Exception as exc:
+        return {
+            "error": f"Extraction failed: {exc}",
+            "archive": str(archive),
+        }
 
     from mulder.extractors.classifier import ClassifierConfig, EvidenceClassifier
 
@@ -458,19 +441,17 @@ def extract_archive(
         t = str(mi["artifact_type"])
         type_counts[t] = type_counts.get(t, 0) + 1
 
-    return json.dumps(
-        {
-            "status": "success",
-            "archive": str(archive),
-            "extracted_to": str(dest),
-            "total_files_extracted": len(files),
-            "type_summary": type_counts,
-            "total_evidence_items": len(manifest),
-            "message": (
-                f"Extracted {len(files)} file(s) to {dest}. "
-                f"Found {len(manifest)} evidence item(s). "
-                "Use scan_evidence on the extracted directory to create a case, "
-                "or run extraction tools directly on the evidence files."
-            ),
-        }
-    )
+    return {
+        "status": "success",
+        "archive": str(archive),
+        "extracted_to": str(dest),
+        "total_files_extracted": len(files),
+        "type_summary": type_counts,
+        "total_evidence_items": len(manifest),
+        "message": (
+            f"Extracted {len(files)} file(s) to {dest}. "
+            f"Found {len(manifest)} evidence item(s). "
+            "Use scan_evidence on the extracted directory to create a case, "
+            "or run extraction tools directly on the evidence files."
+        ),
+    }
