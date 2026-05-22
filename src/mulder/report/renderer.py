@@ -19,6 +19,21 @@ from mulder.models import AuditSummary, CaseMetadataRow, Finding, SourceRow
 
 logger = logging.getLogger(__name__)
 
+
+def _normalize_finding(f: Finding | dict[str, Any]) -> Finding:
+    """Convert a dict to a Finding, or return as-is if already a Finding."""
+    if isinstance(f, Finding):
+        return f
+    return Finding(**f)
+
+
+def _normalize_source(s: SourceRow | dict[str, Any]) -> SourceRow:
+    """Convert a dict to a SourceRow, or return as-is if already a SourceRow."""
+    if isinstance(s, SourceRow):
+        return s
+    return SourceRow(**s)
+
+
 _SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
 _ATTACK_TACTICS_PATH = Path(__file__).resolve().parent / "data" / "attack_tactics.json"
@@ -152,7 +167,7 @@ def _parse_audit_log(audit_log_path: Path | str) -> list[dict[str, Any]]:
 
 
 def _build_provenance_chains(
-    findings: Sequence[Finding | dict[str, Any]],
+    findings: Sequence[Finding],
     audit_entries: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """For each finding, resolve evidence_refs to their audit log entries."""
@@ -163,11 +178,8 @@ def _build_provenance_chains(
 
     chains: list[dict[str, Any]] = []
     for f in findings:
-        refs = f.evidence_refs if hasattr(f, "evidence_refs") else f.get("evidence_refs", [])
-        fid = f.finding_id if hasattr(f, "finding_id") else f.get("finding_id", "")
-        title = f.title if hasattr(f, "title") else f.get("title", "")
         resolved: list[dict[str, Any]] = []
-        for ref in refs:
+        for ref in f.evidence_refs:
             if ref in tc_index:
                 entry = tc_index[ref]
                 resolved.append(
@@ -191,7 +203,7 @@ def _build_provenance_chains(
                         "output_hash": "",
                     }
                 )
-        chains.append({"finding_id": fid, "title": title, "evidence": resolved})
+        chains.append({"finding_id": f.finding_id, "title": f.title, "evidence": resolved})
     return chains
 
 
@@ -205,16 +217,14 @@ def _format_duration(total_duration_ms: float) -> str:
 
 
 def _classify_sources(
-    sources_list: Sequence[SourceRow | dict[str, Any]] | None,
+    sources_list: Sequence[SourceRow] | None,
 ) -> tuple[int, int, int]:
     """Classify sources into memory dumps, disk images, and other counts."""
     mem, disk, other = 0, 0, 0
     if not sources_list:
         return mem, disk, other
     for s in sources_list:
-        name = s.source_name if hasattr(s, "source_name") else s.get("source_name", "")
-        ext = s.extractor if hasattr(s, "extractor") else s.get("extractor", "")
-        lower_name = (name + " " + ext).lower()
+        lower_name = (s.source_name + " " + s.extractor).lower()
         if any(k in lower_name for k in ("memory", "volatility", ".img", ".vmem", ".dmp")):
             mem += 1
         elif any(k in lower_name for k in ("tsk", "disk", ".e01", ".dd", "bulk", "sleuthkit")):
@@ -225,29 +235,22 @@ def _classify_sources(
 
 
 def _timeline_date_range(
-    timeline_findings: Sequence[Finding | dict[str, Any]],
+    timeline_findings: Sequence[Finding],
 ) -> tuple[str, str]:
     """Return (earliest_date, latest_date) from timeline findings as YYYY-MM-DD."""
     starts: list[str] = []
     ends: list[str] = []
     for f in timeline_findings:
-        ts = f.event_time_start if hasattr(f, "event_time_start") else f.get("event_time_start")
-        te = f.event_time_end if hasattr(f, "event_time_end") else f.get("event_time_end")
-        if ts:
-            starts.append(ts)
-        if te:
-            ends.append(te)
+        if f.event_time_start:
+            starts.append(f.event_time_start)
+        if f.event_time_end:
+            ends.append(f.event_time_end)
     all_ts = starts + ends
     if not all_ts:
         return "", ""
     earliest = min(all_ts)[:10]
     latest = max(all_ts)[:10]
     return earliest, latest
-
-
-def _get_attr(obj: Any, attr: str, default: Any = "") -> Any:
-    """Read *attr* from an object or dict, falling back to *default*."""
-    return getattr(obj, attr) if hasattr(obj, attr) else obj.get(attr, default)
 
 
 def _build_executive_summary(
@@ -258,12 +261,12 @@ def _build_executive_summary(
     sources_count: int,
     total_tool_calls: int,
     total_duration_ms: float,
-    critical_findings: Sequence[Finding | dict[str, Any]],
-    timeline_findings: Sequence[Finding | dict[str, Any]] | None = None,
+    critical_findings: Sequence[Finding],
+    timeline_findings: Sequence[Finding] | None = None,
     confirmed_count: int = 0,
     inference_count: int = 0,
     negative_count: int = 0,
-    sources_list: Sequence[SourceRow | dict[str, Any]] | None = None,
+    sources_list: Sequence[SourceRow] | None = None,
     evidence_integrity_status: str = "",
     tool_call_counts: dict[str, int] | None = None,
 ) -> str:
@@ -321,8 +324,8 @@ def _build_executive_summary(
     if tl:
         earliest, latest = _timeline_date_range(tl)
         if earliest and latest:
-            first_event = _get_attr(tl[0], "title")
-            first_ts = _get_attr(tl[0], "event_time_start")
+            first_event = tl[0].title
+            first_ts = tl[0].event_time_start
             narrative = f"The attack timeline spans <strong>{earliest}</strong>"
             if earliest != latest:
                 narrative += f" to <strong>{latest}</strong>"
@@ -331,18 +334,18 @@ def _build_executive_summary(
                 narrative += f" ({first_ts[:10]})"
             narrative += "."
 
-            crit_tl = [f for f in tl if _get_attr(f, "severity") == "critical"]
+            crit_tl = [f for f in tl if f.severity == "critical"]
             if len(crit_tl) > 1:
-                mid_titles = [_get_attr(f, "title") for f in crit_tl[1:4]]
+                mid_titles = [f.title for f in crit_tl[1:4]]
                 narrative += (
                     " The investigation subsequently uncovered "
                     + "; ".join(f"<em>{t}</em>" for t in mid_titles)
                     + "."
                 )
 
-            last_event = _get_attr(tl[-1], "title")
+            last_event = tl[-1].title
             if len(tl) > 1 and last_event != first_event:
-                last_ts = _get_attr(tl[-1], "event_time_start")
+                last_ts = tl[-1].event_time_start
                 narrative += f" The most recent activity was <em>{last_event}</em>"
                 if last_ts:
                     narrative += f" ({last_ts[:10]})"
@@ -350,7 +353,7 @@ def _build_executive_summary(
             sections.append(f"<p>{narrative}</p>")
 
     if critical_findings:
-        items = "".join(f"<li>{_get_attr(f, 'title')}</li>" for f in critical_findings[:5])
+        items = "".join(f"<li>{f.title}</li>" for f in critical_findings[:5])
         sections.append(
             f'<div class="exec-threats"><strong>Key Threats</strong><ul>{items}</ul></div>'
         )
@@ -366,12 +369,12 @@ def _build_executive_summary_md(
     sources_count: int,
     total_tool_calls: int,
     total_duration_ms: float,
-    critical_findings: Sequence[Finding | dict[str, Any]],
-    timeline_findings: Sequence[Finding | dict[str, Any]] | None = None,
+    critical_findings: Sequence[Finding],
+    timeline_findings: Sequence[Finding] | None = None,
     confirmed_count: int = 0,
     inference_count: int = 0,
     negative_count: int = 0,
-    sources_list: Sequence[SourceRow | dict[str, Any]] | None = None,
+    sources_list: Sequence[SourceRow] | None = None,
     evidence_integrity_status: str = "",
     tool_call_counts: dict[str, int] | None = None,
 ) -> str:
@@ -422,26 +425,25 @@ def _build_executive_summary_md(
         lines.append("")
         lines.append("**Key Threats:**")
         for f in critical_findings[:5]:
-            title = _get_attr(f, "title")
-            lines.append(f"- {title}")
+            lines.append(f"- {f.title}")
 
     if tl:
         lines.append("")
-        first_event = _get_attr(tl[0], "title")
-        first_ts = _get_attr(tl[0], "event_time_start")
+        first_event = tl[0].title
+        first_ts = tl[0].event_time_start
         narrative = f'**Narrative:** The earliest activity was "{first_event}"'
         if first_ts:
             narrative += f" ({first_ts[:10]})"
         narrative += "."
 
-        crit_tl = [f for f in tl if _get_attr(f, "severity") == "critical"]
+        crit_tl = [f for f in tl if f.severity == "critical"]
         if len(crit_tl) > 1:
-            mid_titles = [f'"{_get_attr(f, "title")}"' for f in crit_tl[1:4]]
+            mid_titles = [f'"{f.title}"' for f in crit_tl[1:4]]
             narrative += " The investigation subsequently uncovered " + "; ".join(mid_titles) + "."
 
-        last_event = _get_attr(tl[-1], "title")
+        last_event = tl[-1].title
         if len(tl) > 1 and last_event != first_event:
-            last_ts = _get_attr(tl[-1], "event_time_start")
+            last_ts = tl[-1].event_time_start
             narrative += f' The most recent activity was "{last_event}"'
             if last_ts:
                 narrative += f" ({last_ts[:10]})"
@@ -463,15 +465,13 @@ def _build_executive_summary_md(
 
 
 def _build_related_findings(
-    findings: Sequence[Finding | dict[str, Any]],
+    findings: Sequence[Finding],
 ) -> dict[str, list[str]]:
     """Map each finding_id to IDs of findings sharing evidence refs."""
     ref_to_fids: dict[str, list[str]] = defaultdict(list)
     for f in findings:
-        fid = f.finding_id if hasattr(f, "finding_id") else f.get("finding_id", "")
-        refs = f.evidence_refs if hasattr(f, "evidence_refs") else f.get("evidence_refs", [])
-        for ref in refs:
-            ref_to_fids[ref].append(fid)
+        for ref in f.evidence_refs:
+            ref_to_fids[ref].append(f.finding_id)
 
     related: dict[str, list[str]] = defaultdict(list)
     for fids in ref_to_fids.values():
@@ -484,15 +484,11 @@ def _build_related_findings(
 
 
 def _build_related_titles(
-    findings: Sequence[Finding | dict[str, Any]],
+    findings: Sequence[Finding],
     related_findings: dict[str, list[str]],
 ) -> dict[str, list[dict[str, str]]]:
     """Precompute related finding titles so the template avoids O(n^2) loops."""
-    title_map: dict[str, str] = {}
-    for f in findings:
-        fid = f.finding_id if hasattr(f, "finding_id") else f.get("finding_id", "")
-        title = f.title if hasattr(f, "title") else f.get("title", "")
-        title_map[fid] = title
+    title_map: dict[str, str] = {f.finding_id: f.title for f in findings}
 
     result: dict[str, list[dict[str, str]]] = {}
     for fid, related_ids in related_findings.items():
@@ -503,19 +499,14 @@ def _build_related_titles(
 
 
 def _build_mitre_techniques(
-    findings: Sequence[Finding | dict[str, Any]],
+    findings: Sequence[Finding],
     attack_data: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Aggregate MITRE ATT&CK technique IDs across all findings."""
     tech_map: dict[str, list[dict[str, str]]] = defaultdict(list)
     for f in findings:
-        fid = f.finding_id if hasattr(f, "finding_id") else f.get("finding_id", "")
-        title = f.title if hasattr(f, "title") else f.get("title", "")
-        attack_ids = (
-            f.mitre_attack_ids if hasattr(f, "mitre_attack_ids") else f.get("mitre_attack_ids", [])
-        )
-        for tid in attack_ids:
-            tech_map[tid].append({"finding_id": fid, "title": title})
+        for tid in f.mitre_attack_ids:
+            tech_map[tid].append({"finding_id": f.finding_id, "title": f.title})
 
     tech_lookup = attack_data.get("techniques", {}) if attack_data else {}
 
@@ -673,18 +664,22 @@ class ReportRenderer:
     def _build_context(
         self,
         case_metadata: CaseMetadataRow,
-        findings: list[Finding],
+        findings: Sequence[Finding | dict[str, Any]],
         audit_summary: AuditSummary,
         audit_log_path: Path | str,
         audit_entries: list[dict[str, Any]] | None = None,
-        sources_list: list[SourceRow] | None = None,
+        sources_list: Sequence[SourceRow | dict[str, Any]] | None = None,
         evidence_integrity: list[dict[str, object]] | None = None,
         source_windows: dict[str, list[dict[str, Any]]] | None = None,
     ) -> dict[str, Any]:
         """Assemble template variables from case metadata, findings, audit trail, and sources."""
+        normalized_findings: list[Finding] = [_normalize_finding(f) for f in findings]
+        normalized_sources: list[SourceRow] | None = (
+            [_normalize_source(s) for s in sources_list] if sources_list else None
+        )
         _NEG_PREFIX = "[NEGATIVE]"
-        positive_findings = [f for f in findings if not f.title.startswith(_NEG_PREFIX)]
-        negative_findings = [f for f in findings if f.title.startswith(_NEG_PREFIX)]
+        positive_findings = [f for f in normalized_findings if not f.title.startswith(_NEG_PREFIX)]
+        negative_findings = [f for f in normalized_findings if f.title.startswith(_NEG_PREFIX)]
 
         sorted_findings = sorted(
             positive_findings, key=lambda f: _SEVERITY_ORDER.get(f.severity, 99)
@@ -703,11 +698,11 @@ class ReportRenderer:
             key=lambda f: f.event_time_start or "",
         )
 
-        all_sources = set()
-        for f in findings:
+        all_sources: set[str] = set()
+        for f in normalized_findings:
             all_sources.update(f.sources)
 
-        network_iocs, file_iocs, email_iocs = _extract_iocs(findings)
+        network_iocs, file_iocs, email_iocs = _extract_iocs(normalized_findings)
 
         if audit_entries is None:
             audit_entries = _parse_audit_log(audit_log_path)
@@ -721,12 +716,12 @@ class ReportRenderer:
         provenance_chains = _build_provenance_chains(sorted_findings, audit_entries)
 
         sources_data: list[dict[str, Any]] = []
-        if sources_list:
-            for s in sources_list:
-                d = s.model_dump() if hasattr(s, "model_dump") else vars(s)
+        if normalized_sources:
+            for s in normalized_sources:
+                d = s.model_dump()
                 referencing = [
                     f.title
-                    for f in findings
+                    for f in normalized_findings
                     if s.source_name in f.sources
                     or any(s.source_name.startswith(src) for src in f.sources)
                 ]
@@ -746,7 +741,7 @@ class ReportRenderer:
             confirmed_count=confirmed,
             inference_count=inference,
             negative_count=len(negative_findings),
-            sources_list=sources_list,
+            sources_list=normalized_sources,
             evidence_integrity_status=_compute_integrity_status(evidence_integrity),
             tool_call_counts=audit_summary.tool_call_counts,
         )
@@ -867,7 +862,7 @@ class ReportRenderer:
         md_extensions = ["fenced_code", "tables", "nl2br"]
         html_findings = []
         for f in ctx["findings"]:
-            fd = f.model_dump() if hasattr(f, "model_dump") else vars(f)
+            fd = f.model_dump()
             fd["description_html"] = markdown.markdown(
                 fd.get("description", ""), extensions=md_extensions
             )
@@ -876,12 +871,8 @@ class ReportRenderer:
 
         for f in ctx.get("critical_findings", []):
             if not hasattr(f, "description_html"):
-                fd = f.model_dump() if hasattr(f, "model_dump") else vars(f)
-                fd["description_html"] = ""
                 ctx["critical_findings"] = [
                     SimpleNamespace(**g.model_dump(), description_html="")
-                    if hasattr(g, "model_dump")
-                    else g
                     for g in ctx["critical_findings"]
                 ]
                 break
@@ -890,8 +881,6 @@ class ReportRenderer:
             if not hasattr(f, "description_html"):
                 ctx["timeline_findings"] = [
                     SimpleNamespace(**g.model_dump(), description_html="")
-                    if hasattr(g, "model_dump")
-                    else g
                     for g in ctx["timeline_findings"]
                 ]
                 break

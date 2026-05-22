@@ -8,10 +8,10 @@ import logging
 import re
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, ParamSpec, TypeVar
 
 import anyio
 from mcp.server.fastmcp import FastMCP
@@ -30,6 +30,9 @@ mcp = FastMCP("Mulder")
 # pool so that the MCP SDK's task-group dispatch can execute them in parallel.
 # ---------------------------------------------------------------------------
 
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+
 _tool_limiter: anyio.CapacityLimiter | None = None
 
 
@@ -39,7 +42,7 @@ def _get_tool_limiter() -> anyio.CapacityLimiter:
     return _tool_limiter
 
 
-def _wrap_sync_tool(fn: Callable[..., Any]) -> Callable[..., Any]:
+def _wrap_sync_tool(fn: Callable[_P, _R]) -> Callable[_P, Awaitable[_R]]:
     """Return an async wrapper that runs *fn* in a worker thread.
 
     Resource throttling happens on the event loop via
@@ -51,7 +54,7 @@ def _wrap_sync_tool(fn: Callable[..., Any]) -> Callable[..., Any]:
     tool_name = getattr(fn, "__name__", "unknown")
 
     @functools.wraps(fn)
-    async def wrapper(*args: Any, **kwargs: Any) -> Any:
+    async def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
         """Async bridge that throttles then dispatches *fn* in a thread."""
         await async_wait_for_resources(tool_name)
         return await anyio.to_thread.run_sync(
