@@ -237,6 +237,159 @@ def _render_treegrid_to_text(treegrid: Any) -> str:
     return "\n".join(lines)
 
 
+def _build_volatility_context(memory_path: str) -> tuple[Any, Any, dict[str, Any]]:
+    """Build the Volatility 3 framework context for batch plugin execution.
+
+    Imports the Volatility 3 library, initializes a fresh context configured
+    for the target memory image, runs automagic module discovery, and collects
+    available plugins.
+
+    Args:
+        memory_path: Path to the memory dump file.
+
+    Returns:
+        Tuple of (context, automagics, plugin_list) where plugin_list maps
+        fully-qualified plugin names to their class objects.
+
+    Raises:
+        ImportError: If the volatility3 library is not installed.
+    """
+    import volatility3.framework
+    import volatility3.plugins
+    from volatility3.framework import automagic, contexts
+    from volatility3.framework.configuration import requirements as vol_reqs
+
+    ctx = contexts.Context()
+    volatility3.framework.import_files(volatility3.plugins, True)
+    automagics = automagic.available(ctx)
+    plugin_list = volatility3.framework.list_plugins()
+
+    file_path = Path(memory_path).resolve()
+    single_location = vol_reqs.URIRequirement.location_from_file(str(file_path))
+    ctx.config["automagic.LayerStacker.single_location"] = single_location
+
+    return ctx, automagics, plugin_list
+
+
+def _run_batch_plugin(
+    vol_ctx: Any,
+    automagics: Any,
+    plugin_class: Any,
+    plugin_name: str,
+    memory_path: str,
+) -> dict[str, Any]:
+    """Execute a single Volatility plugin within an existing batch context.
+
+    Constructs the plugin against the shared context, runs it, renders
+    the TreeGrid output to text, and indexes the result.
+
+    Args:
+        vol_ctx: Pre-built Volatility context.
+        automagics: Automagic modules for the context.
+        plugin_class: The resolved plugin class to execute.
+        plugin_name: Fully-qualified plugin name (e.g. "windows.pslist.PsList").
+        memory_path: Path to the memory dump file (for indexing metadata).
+
+    Returns:
+        Result dict with plugin output summary on success, or a status dict
+        indicating empty output.
+
+    Raises:
+        Exception: Propagates any exception from plugin construction or execution.
+    """
+    from volatility3.framework import plugins as vol_plugins
+
+    short = _plugin_short_name(plugin_name)
+    base_path = f"plugins.batch.{short}"
+    constructed = vol_plugins.construct_plugin(
+        vol_ctx,
+        automagics,
+        plugin_class,
+        base_path,
+        None,
+        None,
+    )
+    treegrid = constructed.run()
+    output = _render_treegrid_to_text(treegrid)
+
+    if output.strip():
+        summary = extract_and_index(
+            raw_output=output,
+            source_name=f"volatility.{short}",
+            source_path=memory_path,
+            extractor_name="volatility3",
+        )
+        summary["plugin"] = plugin_name
+        return summary
+
+    return {
+        "plugin": plugin_name,
+        "status": "empty",
+        "source_name": f"volatility.{short}",
+        "error_message": "Plugin produced no output",
+    }
+
+
+def _run_netscan_fallback_batch(
+    vol_ctx: Any,
+    automagics: Any,
+    memory_path: str,
+    plugin_list: dict[str, Any],
+    original_plugin: str,
+) -> dict[str, Any] | None:
+    """Attempt ConnScan/SockScan as fallback when netscan is unsupported.
+
+    Tries each fallback plugin (connscan, sockscan) against the shared
+    context. Returns the first successful result, or None if all fail.
+
+    Args:
+        vol_ctx: Pre-built Volatility context.
+        automagics: Automagic modules for the context.
+        memory_path: Path to the memory dump file.
+        plugin_list: Mapping of plugin names to classes.
+        original_plugin: The original netscan plugin name that failed.
+
+    Returns:
+        Result dict with fallback output on success, or None if all
+        fallback plugins also fail.
+    """
+    from volatility3.framework import plugins as vol_plugins
+
+    for fb_name in ("connscan", "sockscan"):
+        fb_full = _resolve_plugin_name(fb_name)
+        fb_class = plugin_list.get(fb_full)
+        if fb_class is None:
+            continue
+        try:
+            fb_path = f"plugins.batch.{fb_name}"
+            fb_constructed = vol_plugins.construct_plugin(
+                vol_ctx,
+                automagics,
+                fb_class,
+                fb_path,
+                None,
+                None,
+            )
+            fb_grid = fb_constructed.run()
+            fb_output = _render_treegrid_to_text(fb_grid)
+            if fb_output.strip():
+                fb_summary = extract_and_index(
+                    raw_output=fb_output,
+                    source_name=f"volatility.{fb_name}",
+                    source_path=memory_path,
+                    extractor_name="volatility3",
+                )
+                fb_summary["plugin"] = fb_full
+                fb_summary["status"] = "fallback_used"
+                fb_summary["original_plugin"] = original_plugin
+                return fb_summary
+        except Exception:
+            logger.debug("Fallback %s failed", fb_name, exc_info=True)
+            continue
+
+    return None
+
+
 @mcp.tool()
 def run_volatility_batch(
     plugins: list[str],
@@ -276,13 +429,7 @@ def run_volatility_batch(
         )
 
     try:
-        import volatility3.framework
-        import volatility3.plugins
-        from volatility3.framework import automagic, contexts
-        from volatility3.framework import plugins as vol_plugins
-        from volatility3.framework.configuration import (
-            requirements as vol_reqs,
-        )
+        ctx, automagics, plugin_list = _build_volatility_context(memory_path)
     except ImportError as exc:
         return error_response(
             tc_id,
@@ -291,15 +438,6 @@ def run_volatility_batch(
             f"Volatility 3 Python library not available: {exc}",
             error_type="binary_missing",
         )
-
-    ctx = contexts.Context()
-    volatility3.framework.import_files(volatility3.plugins, True)
-    automagics = automagic.available(ctx)
-    plugin_list = volatility3.framework.list_plugins()
-
-    file_path = Path(memory_path).resolve()
-    single_location = vol_reqs.URIRequirement.location_from_file(str(file_path))
-    ctx.config["automagic.LayerStacker.single_location"] = single_location
 
     logger.info(
         "Volatility batch: context built for %r, running %d plugins",
@@ -324,34 +462,9 @@ def run_volatility_batch(
             continue
 
         try:
-            base_path = f"plugins.batch.{short}"
-            constructed = vol_plugins.construct_plugin(
-                ctx,
-                automagics,
-                plugin_class,
-                base_path,
-                None,
-                None,
+            results[plugin_name] = _run_batch_plugin(
+                ctx, automagics, plugin_class, full_name, memory_path
             )
-            treegrid = constructed.run()
-            output = _render_treegrid_to_text(treegrid)
-
-            if output.strip():
-                summary = extract_and_index(
-                    raw_output=output,
-                    source_name=f"volatility.{short}",
-                    source_path=memory_path,
-                    extractor_name="volatility3",
-                )
-                summary["plugin"] = full_name
-                results[plugin_name] = summary
-            else:
-                results[plugin_name] = {
-                    "plugin": full_name,
-                    "status": "empty",
-                    "source_name": f"volatility.{short}",
-                    "error_message": "Plugin produced no output",
-                }
         except Exception as exc:
             err_msg = str(exc)[:300]
             is_netscan = short == "netscan"
@@ -359,39 +472,12 @@ def run_volatility_batch(
             if is_netscan and any(
                 kw in err_msg.lower() for kw in ("unsupported", "not valid", "unable to validate")
             ):
-                for fb_name in ("connscan", "sockscan"):
-                    fb_full = _resolve_plugin_name(fb_name)
-                    fb_class = plugin_list.get(fb_full)
-                    if fb_class is None:
-                        continue
-                    try:
-                        fb_path = f"plugins.batch.{fb_name}"
-                        fb_constructed = vol_plugins.construct_plugin(
-                            ctx,
-                            automagics,
-                            fb_class,
-                            fb_path,
-                            None,
-                            None,
-                        )
-                        fb_grid = fb_constructed.run()
-                        fb_output = _render_treegrid_to_text(fb_grid)
-                        if fb_output.strip():
-                            fb_summary = extract_and_index(
-                                raw_output=fb_output,
-                                source_name=f"volatility.{fb_name}",
-                                source_path=memory_path,
-                                extractor_name="volatility3",
-                            )
-                            fb_summary["plugin"] = fb_full
-                            fb_summary["status"] = "fallback_used"
-                            fb_summary["original_plugin"] = full_name
-                            results[plugin_name] = fb_summary
-                            break
-                    except Exception:
-                        logger.debug("Fallback %s failed", fb_name, exc_info=True)
-                        continue
-                if plugin_name not in results:
+                fallback = _run_netscan_fallback_batch(
+                    ctx, automagics, memory_path, plugin_list, full_name
+                )
+                if fallback:
+                    results[plugin_name] = fallback
+                else:
                     results[plugin_name] = {
                         "plugin": full_name,
                         "status": "error",
