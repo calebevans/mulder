@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
+from typing import cast
 
 from mulder.server.app import mcp
 from mulder.server.extract_helpers import extract_and_index
@@ -74,6 +75,127 @@ def _bulk_page_size() -> int:
     return page
 
 
+_SCANNER_ALIASES: dict[str, str] = {
+    "url": "email",
+    "domain": "net",
+    "ip": "net",
+    "http": "httplogs",
+    "kml": "kml_carved",
+    "vcard": "vcard_carved",
+    "email_lg": "email",
+    "accts_lg": "accts",
+    "gps_lg": "gps",
+    "base16_lg": "base64",
+    "httpheader_lg": "httplogs",
+}
+
+_FEATURE_SOURCE_MAP: dict[str, str] = {
+    "email": "bulk.email",
+    "url": "bulk.url",
+    "domain": "bulk.domain",
+    "ip": "bulk.ip",
+    "telephone": "bulk.telephone",
+    "find": "bulk.find",
+    "pii": "bulk.pii",
+    "elf": "bulk.elf",
+    "exe": "bulk.exe",
+    "json": "bulk.json",
+    "winpe": "bulk.winpe",
+    "winlnk": "bulk.winlnk",
+}
+
+
+def _build_bulk_extractor_cmd(
+    image_path: str,
+    outdir: str,
+    scanners: list[str] | None,
+    depth: int | None,
+) -> list[str]:
+    """Build the bulk_extractor command line.
+
+    Configures thread count from available CPUs, page size from available
+    memory, scanner selection via aliases, and recursion depth.
+
+    Args:
+        image_path: Path to the disk image to scan.
+        outdir: Output directory for feature files.
+        scanners: Scanner names to enable (resolved through aliases).
+            When None, all scanners run.
+        depth: Maximum recursion depth, or None for the default.
+
+    Returns:
+        Complete argument list ready for subprocess.run.
+    """
+    ncpu = os.cpu_count() or 2
+    page_size = _bulk_page_size()
+    cmd = ["bulk_extractor", "-j", str(ncpu), "-G", str(page_size), "-o", outdir]
+
+    if depth is not None:
+        cmd.extend(["-M", str(depth)])
+
+    if scanners:
+        resolved = [_SCANNER_ALIASES.get(s, s) for s in scanners]
+        deduped = list(dict.fromkeys(resolved))
+        cmd.extend(["-E", deduped[0]])
+        for s in deduped[1:]:
+            cmd.extend(["-e", s])
+
+    cmd.append(image_path)
+    return cmd
+
+
+def _collect_bulk_feature_texts(outdir: str, features: list[str] | None) -> dict[str, str]:
+    """Read feature files from a bulk_extractor output directory.
+
+    Skips XML metadata, histogram files, and features not in the
+    requested filter list.
+
+    Args:
+        outdir: Directory containing bulk_extractor output files.
+        features: Feature stems to include, or None to include all.
+
+    Returns:
+        Mapping of feature stem to file text content.
+    """
+    feature_texts: dict[str, str] = {}
+    for feature_file in sorted(Path(outdir).iterdir()):
+        if not feature_file.is_file() or feature_file.suffix == ".xml":
+            continue
+        stem = feature_file.stem.replace("_histogram", "").replace("_find", "find")
+        if "histogram" in feature_file.name:
+            continue
+        if features and stem not in features:
+            continue
+
+        try:
+            text = feature_file.read_text(encoding="utf-8", errors="replace").strip()
+            if text:
+                feature_texts[stem] = text
+        except OSError:
+            pass
+    return feature_texts
+
+
+def _index_bulk_features(
+    feature_texts: dict[str, str], image_path: str
+) -> list[dict[str, object]]:
+    """Index each collected feature file into the case database.
+
+    Args:
+        feature_texts: Mapping of feature stem to raw text content.
+        image_path: Disk image path used as the source reference.
+
+    Returns:
+        List of per-feature index summary dicts.
+    """
+    results: list[dict[str, object]] = []
+    for stem, text in feature_texts.items():
+        source_name = _FEATURE_SOURCE_MAP.get(stem, f"bulk.{stem}")
+        summary = extract_and_index(text, source_name, image_path, "bulk_extractor")
+        results.append(summary)
+    return results
+
+
 @mcp.tool()
 def run_bulk_extractor(
     image_path: str,
@@ -129,34 +251,7 @@ def run_bulk_extractor(
         )
 
     with tempfile.TemporaryDirectory(prefix="mulder_bulk_") as tmpdir:
-        ncpu = os.cpu_count() or 2
-        page_size = _bulk_page_size()
-        cmd = ["bulk_extractor", "-j", str(ncpu), "-G", str(page_size), "-o", tmpdir]
-
-        if max_depth is not None:
-            cmd.extend(["-M", str(max_depth)])
-
-        _SCANNER_ALIASES = {
-            "url": "email",
-            "domain": "net",
-            "ip": "net",
-            "http": "httplogs",
-            "kml": "kml_carved",
-            "vcard": "vcard_carved",
-            "email_lg": "email",
-            "accts_lg": "accts",
-            "gps_lg": "gps",
-            "base16_lg": "base64",
-            "httpheader_lg": "httplogs",
-        }
-        if scanners:
-            resolved = [_SCANNER_ALIASES.get(s, s) for s in scanners]
-            deduped = list(dict.fromkeys(resolved))
-            cmd.extend(["-E", deduped[0]])
-            for s in deduped[1:]:
-                cmd.extend(["-e", s])
-
-        cmd.append(image_path)
+        cmd = _build_bulk_extractor_cmd(image_path, tmpdir, scanners, max_depth)
 
         try:
             proc = subprocess.run(
@@ -181,45 +276,12 @@ def run_bulk_extractor(
                 error_type="extraction_failed",
             )
 
-        feature_map = {
-            "email": "bulk.email",
-            "url": "bulk.url",
-            "domain": "bulk.domain",
-            "ip": "bulk.ip",
-            "telephone": "bulk.telephone",
-            "find": "bulk.find",
-            "pii": "bulk.pii",
-            "elf": "bulk.elf",
-            "exe": "bulk.exe",
-            "json": "bulk.json",
-            "winpe": "bulk.winpe",
-            "winlnk": "bulk.winlnk",
-        }
+        feature_texts = _collect_bulk_feature_texts(tmpdir, features)
+        results = _index_bulk_features(feature_texts, image_path)
 
-        results: list[object] = []
-        for feature_file in sorted(Path(tmpdir).iterdir()):
-            if not feature_file.is_file() or feature_file.suffix == ".xml":
-                continue
-            stem = feature_file.stem.replace("_histogram", "").replace("_find", "find")
-            if "histogram" in feature_file.name:
-                continue
-            if features and stem not in features:
-                continue
-
-            source_name = feature_map.get(stem, f"bulk.{stem}")
-            try:
-                text = feature_file.read_text(encoding="utf-8", errors="replace").strip()
-                if text:
-                    results.append(
-                        extract_and_index(text, source_name, image_path, "bulk_extractor")
-                    )
-            except OSError:
-                pass
-
-    total_windows = sum(r.get("windows_indexed", 0) for r in results if isinstance(r, dict))
+    total_windows = sum(cast(int, r.get("windows_indexed", 0)) for r in results)
     for r in results:
-        if isinstance(r, dict):
-            r.pop("source_id", None)
+        r.pop("source_id", None)
 
     elapsed = (time.monotonic() - t0) * 1000
     return tool_response(

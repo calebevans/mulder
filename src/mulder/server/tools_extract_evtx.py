@@ -139,6 +139,120 @@ def _cleanup_temp_dirs() -> None:
 
 atexit.register(_cleanup_temp_dirs)
 
+_HIGH_PRIORITY_KEYWORDS = (
+    "security.evtx",
+    "system.evtx",
+    "powershell",
+    "sysmon",
+    "taskscheduler",
+    "winrm",
+    "rdp",
+)
+
+
+def _build_evtx_priority_manifest(evtx_files: list[Path]) -> list[dict[str, object]]:
+    """Score EVTX files by forensic priority and build a manifest.
+
+    Files matching known forensic sources (Security, System, PowerShell,
+    Sysmon, TaskScheduler, WinRM, RDP) are scored HIGH. Files over 1 MB
+    are MEDIUM; the rest are LOW. Results are sorted by size descending.
+
+    Args:
+        evtx_files: Extracted EVTX file paths to evaluate.
+
+    Returns:
+        Manifest entries with filename, size, human-readable size,
+        and priority.
+    """
+    manifest: list[dict[str, object]] = []
+    for ef in sorted(evtx_files, key=lambda p: p.stat().st_size, reverse=True):
+        size = ef.stat().st_size
+        name = ef.name
+        priority = (
+            "HIGH"
+            if any(k in name.lower() for k in _HIGH_PRIORITY_KEYWORDS)
+            else "MEDIUM"
+            if size > 1_000_000
+            else "LOW"
+        )
+        manifest.append(
+            {
+                "filename": name,
+                "size_bytes": size,
+                "size_human": f"{size / 1_048_576:.1f} MB"
+                if size > 1_048_576
+                else f"{size / 1024:.0f} KB",
+                "priority": priority,
+            }
+        )
+    return manifest
+
+
+def _parse_evtx_with_eztools(evtx_path: str, evtx_dir: str | None) -> dict[str, object] | None:
+    """Parse EVTX files using EZTools EvtxECmd.
+
+    Attempts to locate EvtxECmd.dll and the dotnet runtime. If available,
+    runs EvtxECmd to produce CSV output and indexes the combined result.
+
+    Args:
+        evtx_path: Path to a single EVTX file (used when evtx_dir is None).
+        evtx_dir: Path to a directory of EVTX files, or None for single file.
+
+    Returns:
+        Indexed summary dict on success, or None if EZTools is unavailable
+        or produces no output.
+
+    Raises:
+        subprocess.TimeoutExpired: If EvtxECmd exceeds the timeout.
+    """
+    dll = _find_ez_tool("EvtxECmd.dll")
+    if not (dll and _require_binary(_DOTNET)):
+        return None
+
+    with tempfile.TemporaryDirectory(prefix="mulder_evtx_csv_") as csv_dir:
+        if evtx_dir:
+            cmd = [_DOTNET, dll, "-d", evtx_dir, "--csv", csv_dir]
+        else:
+            cmd = [_DOTNET, dll, "-f", evtx_path, "--csv", csv_dir]
+
+        subprocess.run(cmd, capture_output=True, text=True, timeout=_TOOL_TIMEOUT * 4, check=False)
+
+        combined = ""
+        for csv_file in sorted(Path(csv_dir).glob("*.csv")):
+            with contextlib.suppress(OSError):
+                combined += csv_file.read_text(encoding="utf-8", errors="replace")
+
+        if combined:
+            return extract_and_index(combined, "ez.evtx", evtx_path, "eztools")
+    return None
+
+
+def _parse_evtx_with_python_fallback(evtx_path: str, evtx_dir: str | None) -> list[object]:
+    """Parse EVTX files using the pure-Python python-evtx library.
+
+    Used as a fallback when EZTools is unavailable or produces no output.
+
+    Args:
+        evtx_path: Path to a single EVTX file (used when evtx_dir is None).
+        evtx_dir: Path to a directory of EVTX files, or None for single file.
+
+    Returns:
+        List of indexed summary dicts, one per successfully parsed file.
+
+    Raises:
+        ImportError: If python-evtx is not installed.
+    """
+    from mulder.extractors.disk import _parse_evtx_file
+
+    results: list[object] = []
+    files = sorted(Path(evtx_dir).rglob("*.evtx")) if evtx_dir else [Path(evtx_path)]
+    for ef in files:
+        channel, text = _parse_evtx_file(ef)
+        if text:
+            summary = extract_and_index(text, f"evtx.{channel}", str(ef), "python-evtx")
+            results.append(summary)
+    return results
+
 
 @mcp.tool()
 def run_evtx_parser(evtx_path: str) -> dict[str, object]:
@@ -187,39 +301,7 @@ def run_evtx_parser(evtx_path: str) -> dict[str, object]:
                 "which can carve EVTX fragments even when fls fails.",
             )
 
-        manifest: list[dict[str, object]] = []
-        for ef in sorted(evtx_files, key=lambda p: p.stat().st_size, reverse=True):
-            size = ef.stat().st_size
-            name = ef.name
-            priority = (
-                "HIGH"
-                if any(
-                    k in name.lower()
-                    for k in (
-                        "security.evtx",
-                        "system.evtx",
-                        "powershell",
-                        "sysmon",
-                        "taskscheduler",
-                        "winrm",
-                        "rdp",
-                    )
-                )
-                else "MEDIUM"
-                if size > 1_000_000
-                else "LOW"
-            )
-            manifest.append(
-                {
-                    "filename": name,
-                    "size_bytes": size,
-                    "size_human": f"{size / 1_048_576:.1f} MB"
-                    if size > 1_048_576
-                    else f"{size / 1024:.0f} KB",
-                    "priority": priority,
-                }
-            )
-
+        manifest = _build_evtx_priority_manifest(evtx_files)
         high_count = sum(1 for m in manifest if m["priority"] == "HIGH")
         total_size: int = sum(cast(int, m["size_bytes"]) for m in manifest)
 
@@ -244,43 +326,18 @@ def run_evtx_parser(evtx_path: str) -> dict[str, object]:
 
     evtx_dir = evtx_path if target.is_dir() else None
 
-    dll = _find_ez_tool("EvtxECmd.dll")
-    if dll and _require_binary(_DOTNET):
-        with tempfile.TemporaryDirectory(prefix="mulder_evtx_csv_") as csv_dir:
-            if evtx_dir:
-                cmd = [_DOTNET, dll, "-d", str(evtx_dir), "--csv", csv_dir]
-            else:
-                cmd = [_DOTNET, dll, "-f", str(target), "--csv", csv_dir]
-
-            try:
-                subprocess.run(
-                    cmd, capture_output=True, text=True, timeout=_TOOL_TIMEOUT * 4, check=False
-                )
-            except subprocess.TimeoutExpired:
-                return error_response(tc_id, "run_evtx_parser", params, "EvtxECmd timed out")
-
-            combined = ""
-            for csv_file in sorted(Path(csv_dir).glob("*.csv")):
-                with contextlib.suppress(OSError):
-                    combined += csv_file.read_text(encoding="utf-8", errors="replace")
-
-            if combined:
-                summary = extract_and_index(combined, "ez.evtx", evtx_path, "eztools")
-                elapsed = (time.monotonic() - t0) * 1000
-                return tool_response(tc_id, "run_evtx_parser", params, summary, "ez.evtx", elapsed)
+    try:
+        ez_result = _parse_evtx_with_eztools(evtx_path, evtx_dir)
+        if ez_result is not None:
+            elapsed = (time.monotonic() - t0) * 1000
+            return tool_response(tc_id, "run_evtx_parser", params, ez_result, "ez.evtx", elapsed)
+    except subprocess.TimeoutExpired:
+        return error_response(tc_id, "run_evtx_parser", params, "EvtxECmd timed out")
 
     try:
-        from mulder.extractors.disk import _parse_evtx_file
+        results = _parse_evtx_with_python_fallback(evtx_path, evtx_dir)
     except ImportError:
         return error_response(tc_id, "run_evtx_parser", params, "No EVTX parser available")
-
-    results: list[object] = []
-    files = sorted(Path(evtx_dir).rglob("*.evtx")) if evtx_dir else [target]
-    for ef in files:
-        channel, text = _parse_evtx_file(ef)
-        if text:
-            summary = extract_and_index(text, f"evtx.{channel}", str(ef), "python-evtx")
-            results.append(summary)
 
     elapsed = (time.monotonic() - t0) * 1000
     return tool_response(tc_id, "run_evtx_parser", params, results, "evtx", elapsed)
