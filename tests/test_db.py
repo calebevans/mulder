@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 
 import pytest
 
-from mulder.db import CaseDB
+from mulder.db import CaseDB, _sanitize_fts5_query
 from mulder.models import Finding, WindowRow
 
 
@@ -134,7 +135,7 @@ class TestWindows:
 
         page1, total = self.db.get_windows_page("src", after_id=0, limit=2)
         assert len(page1) == 2
-        assert total == 100
+        assert total == 5
 
         last_id = page1[-1].window_id
         assert last_id is not None
@@ -186,9 +187,165 @@ class TestEvidenceIntegrity:
         results = tmp_case_db.verify_evidence_integrity()
         assert results[0]["status"] == "missing"
 
+    @pytest.mark.skipif(os.getuid() == 0, reason="root can read any file")
+    def test_unreadable_file(self, tmp_case_db: CaseDB, tmp_path: Path) -> None:
+        """Unreadable evidence files should get status 'unreadable', not crash."""
+        evidence = tmp_path / "evidence.dd"
+        evidence.write_bytes(b"forensic data")
+        sha = hashlib.sha256(b"forensic data").hexdigest()
+        tmp_case_db.register_evidence_file(str(evidence), sha, len(b"forensic data"))
+        evidence.chmod(0o000)
+        try:
+            results = tmp_case_db.verify_evidence_integrity()
+            assert len(results) == 1
+            assert results[0]["status"] == "unreadable"
+        finally:
+            evidence.chmod(0o644)
+
     def test_get_evidence_registry(self, tmp_case_db: CaseDB) -> None:
         tmp_case_db.register_evidence_file("/a.dd", "hash_a", 100)
         tmp_case_db.register_evidence_file("/b.dd", "hash_b", 200)
         reg = tmp_case_db.get_evidence_registry()
         assert len(reg) == 2
         assert reg[0]["file_path"] == "/a.dd"
+
+
+class TestFtsBatchDeduplication:
+    """Verify FTS index doesn't duplicate entries across batch inserts."""
+
+    @pytest.fixture(autouse=True)
+    def _setup_source(self, tmp_case_db: CaseDB) -> None:
+        self.db = tmp_case_db
+        self.sid = tmp_case_db.register_source("src", "/p", "h", "ext", 100)
+
+    def test_no_fts_duplicates_across_batches(self) -> None:
+        """Two sequential insert_windows calls must not create duplicate FTS rows."""
+        batch1 = [
+            WindowRow(
+                source_id=self.sid,
+                line_start=i * 10,
+                line_end=(i + 1) * 10,
+                event_time=None,
+                raw_text=f"unique_marker process_{i}",
+            )
+            for i in range(3)
+        ]
+        self.db.insert_windows(self.sid, batch1)
+
+        batch2 = [
+            WindowRow(
+                source_id=self.sid,
+                line_start=30 + i * 10,
+                line_end=40 + i * 10,
+                event_time=None,
+                raw_text=f"other_data item_{i}",
+            )
+            for i in range(3)
+        ]
+        self.db.insert_windows(self.sid, batch2)
+
+        results = self.db.search_windows("unique_marker")
+        assert len(results) == 3, f"Expected 3 results, got {len(results)} (FTS duplicates?)"
+
+
+class TestSanitizeFts5Query:
+    """Unit tests for the _sanitize_fts5_query helper."""
+
+    def test_special_chars_quoted(self) -> None:
+        """Tokens with FTS5 special chars should be double-quoted."""
+        result = _sanitize_fts5_query("file.exe")
+        assert '"file.exe"' in result
+
+    def test_preserves_operators(self) -> None:
+        """Boolean operators AND/OR/NOT/NEAR should pass through unquoted."""
+        result = _sanitize_fts5_query("malware AND trojan")
+        assert "AND" in result
+        assert "malware" in result
+        assert "trojan" in result
+
+    def test_already_quoted_preserved(self) -> None:
+        """Already-quoted phrases should not be re-quoted."""
+        result = _sanitize_fts5_query('"exact phrase"')
+        assert '"exact phrase"' in result
+
+    def test_plain_words_unchanged(self) -> None:
+        """Plain alphanumeric tokens should not be modified."""
+        result = _sanitize_fts5_query("simple query")
+        assert result == "simple query"
+
+
+class TestMigrations:
+    """Verify migration idempotency."""
+
+    def test_migration_tolerates_duplicate_column(self, tmp_case_db: CaseDB) -> None:
+        """Running migrations twice should not raise (duplicate column is tolerated)."""
+        db_path = tmp_case_db.db_path
+        tmp_case_db.close()
+        db2 = CaseDB(db_path)
+        meta = db2.get_case_metadata()
+        assert meta.case_id == "test-case"
+        db2.close()
+
+
+class TestWindowsByTimeRange:
+    """Tests for get_windows_by_time_range grouping and filtering."""
+
+    def test_groups_by_source(self, tmp_case_db: CaseDB) -> None:
+        """Windows from different sources should be grouped by source_name."""
+        sid1 = tmp_case_db.register_source("src1", "/p1", "h1", "ext", 10)
+        sid2 = tmp_case_db.register_source("src2", "/p2", "h2", "ext", 10)
+
+        wins1 = [
+            WindowRow(
+                source_id=sid1,
+                line_start=0,
+                line_end=5,
+                event_time="2025-01-15T12:00:00Z",
+                raw_text="event in src1",
+            )
+        ]
+        wins2 = [
+            WindowRow(
+                source_id=sid2,
+                line_start=0,
+                line_end=5,
+                event_time="2025-01-15T12:30:00Z",
+                raw_text="event in src2",
+            )
+        ]
+        tmp_case_db.insert_windows(sid1, wins1)
+        tmp_case_db.insert_windows(sid2, wins2)
+
+        result = tmp_case_db.get_windows_by_time_range(
+            "2025-01-15T11:00:00Z", "2025-01-15T13:00:00Z"
+        )
+        assert "src1" in result
+        assert "src2" in result
+        assert len(result["src1"]) == 1
+        assert len(result["src2"]) == 1
+
+    def test_excludes_outside_range(self, tmp_case_db: CaseDB) -> None:
+        """Windows outside the queried time range should not appear."""
+        sid = tmp_case_db.register_source("src", "/p", "h", "ext", 10)
+        wins = [
+            WindowRow(
+                source_id=sid,
+                line_start=0,
+                line_end=5,
+                event_time="2025-01-15T06:00:00Z",
+                raw_text="early event",
+            ),
+            WindowRow(
+                source_id=sid,
+                line_start=5,
+                line_end=10,
+                event_time="2025-01-15T18:00:00Z",
+                raw_text="late event",
+            ),
+        ]
+        tmp_case_db.insert_windows(sid, wins)
+
+        result = tmp_case_db.get_windows_by_time_range(
+            "2025-01-15T10:00:00Z", "2025-01-15T14:00:00Z"
+        )
+        assert result == {}
