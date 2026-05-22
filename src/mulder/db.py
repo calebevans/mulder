@@ -7,9 +7,10 @@ import logging
 import queue
 import re
 import threading
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar, cast
 
 from sqlalchemy import (
     Column,
@@ -27,11 +28,13 @@ from sqlalchemy import (
     text,
     update,
 )
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import DatabaseError, OperationalError
 from sqlalchemy.pool import NullPool
 
 from mulder.models import CaseMetadataRow, Finding, SourceRow, WindowRow
+
+_T = TypeVar("_T")
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +163,7 @@ def _make_engine(db_path: Path) -> Engine:
     return engine
 
 
-def _migrate_add_mitre_attack_ids(conn: Any) -> None:
+def _migrate_add_mitre_attack_ids(conn: Connection) -> None:
     """Add the mitre_attack_ids column if it doesn't exist yet."""
     try:
         conn.execute(text("ALTER TABLE findings ADD COLUMN mitre_attack_ids TEXT"))
@@ -171,7 +174,7 @@ def _migrate_add_mitre_attack_ids(conn: Any) -> None:
             raise
 
 
-def _migrate_add_narrative(conn: Any) -> None:
+def _migrate_add_narrative(conn: Connection) -> None:
     """Add the narrative column to case_metadata if it doesn't exist yet."""
     try:
         conn.execute(text("ALTER TABLE case_metadata ADD COLUMN narrative TEXT"))
@@ -182,7 +185,7 @@ def _migrate_add_narrative(conn: Any) -> None:
             raise
 
 
-def _migrate_add_evidence_registry(conn: Any) -> None:
+def _migrate_add_evidence_registry(conn: Connection) -> None:
     """Create the evidence_registry table if it doesn't exist yet."""
     conn.execute(
         text(
@@ -199,6 +202,10 @@ def _migrate_add_evidence_registry(conn: Any) -> None:
 
 _SENTINEL = object()
 
+_QueueItem = tuple[
+    Callable[..., object], tuple[object, ...], dict[str, object], list[object], threading.Event
+]
+
 
 class _WriteQueue:
     """Single-writer thread that serialises all DB write operations.
@@ -209,7 +216,7 @@ class _WriteQueue:
     """
 
     def __init__(self) -> None:
-        self._queue: queue.Queue[Any] = queue.Queue()
+        self._queue: queue.Queue[_QueueItem | object] = queue.Queue()
         self._thread = threading.Thread(target=self._writer_loop, name="db-writer", daemon=True)
         self._thread.start()
 
@@ -220,7 +227,8 @@ class _WriteQueue:
             if item is _SENTINEL:
                 self._queue.task_done()
                 return
-            fn, args, kwargs, result_holder, done_event = item
+            qi = cast(_QueueItem, item)
+            fn, args, kwargs, result_holder, done_event = qi
             try:
                 result_holder[0] = fn(*args, **kwargs)
             except Exception as exc:
@@ -229,19 +237,19 @@ class _WriteQueue:
                 done_event.set()
                 self._queue.task_done()
 
-    def submit(self, fn: Any, *args: Any, **kwargs: Any) -> Any:
+    def submit(self, fn: Callable[..., _T], *args: object, **kwargs: object) -> _T:
         """Submit *fn* to the writer thread and block until it completes.
 
         Returns the result of ``fn(*args, **kwargs)`` or re-raises its
         exception in the calling thread.
         """
-        result_holder: list[Any] = [None, None]
+        result_holder: list[object] = [None, None]
         done_event = threading.Event()
         self._queue.put((fn, args, kwargs, result_holder, done_event))
         done_event.wait()
         if result_holder[1] is not None:
-            raise result_holder[1]
-        return result_holder[0]
+            raise result_holder[1]  # type: ignore[misc]
+        return result_holder[0]  # type: ignore[return-value]
 
     def shutdown(self) -> None:
         """Signal the writer thread to exit and wait for it."""
