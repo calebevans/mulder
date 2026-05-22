@@ -9,7 +9,6 @@ import re
 import threading
 import time
 from collections.abc import Callable
-from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -35,11 +34,8 @@ _tool_limiter: anyio.CapacityLimiter | None = None
 
 
 def _get_tool_limiter() -> anyio.CapacityLimiter:
-    """Return a shared CapacityLimiter bounded by ``max_workers``."""
-    global _tool_limiter  # noqa: PLW0603
-    if _tool_limiter is None:
-        workers = get_cfg().max_workers if _cfg is not None else 4
-        _tool_limiter = anyio.CapacityLimiter(workers)
+    """Return the shared CapacityLimiter initialized by init_server."""
+    assert _tool_limiter is not None, "init_server() must be called first"
     return _tool_limiter
 
 
@@ -285,7 +281,7 @@ def init_server(
 
     Called by ``cli.py`` before ``mcp.run()``.
     """
-    global _cfg, _job_store  # noqa: PLW0603
+    global _cfg, _job_store, _tool_limiter  # noqa: PLW0603
 
     _cfg = ServerConfig(
         db_dir=db_dir,
@@ -293,6 +289,8 @@ def init_server(
         mem_percent_limit=mem_percent_limit,
         cpu_percent_limit=cpu_percent_limit,
     )
+
+    _tool_limiter = anyio.CapacityLimiter(max_workers)
 
     _job_store = JobStore(
         max_workers=max_workers,
@@ -310,8 +308,11 @@ def _close_current_ctx() -> None:
     global _ctx  # noqa: PLW0603
     with _ctx_lock:
         if _ctx is not None and _ctx.db is not None:
-            with suppress(Exception):
+            try:
                 _ctx.db.close()
+            except Exception:
+                logger.warning("Error closing case DB", exc_info=True)
+        _ctx = None
 
 
 def _build_context(case_id: str, db: CaseDB) -> ServerContext:
@@ -366,10 +367,14 @@ def create_case(
             meta = existing.get_case_metadata()
             source_count = existing.get_source_count()
         except Exception:
-            logger.exception("Failed to open existing case '%s'; loading anyway", case_id)
-            existing = CaseDB.open(case_id, cfg.db_dir)
-            meta = existing.get_case_metadata()
-            source_count = existing.get_source_count()
+            logger.exception("Failed to open existing case '%s'", case_id)
+            return {
+                "status": "error",
+                "case_id": case_id,
+                "error_message": (
+                    "Existing case database is corrupted. Use replace=true to recreate."
+                ),
+            }
 
         _build_context(case_id, existing)
         return {
@@ -427,7 +432,8 @@ def _slim_result(result: Any) -> Any:
             slimmed["results_total"] = len(full)
 
     if isinstance(slimmed.get("results"), dict):
-        inner = slimmed["results"]
+        inner = dict(slimmed["results"])
+        slimmed["results"] = inner
         for k, v in inner.items():
             if isinstance(v, str) and len(v) > _PARALLEL_TEXT_CAP:
                 inner[k] = v[:_PARALLEL_TEXT_CAP]
@@ -481,8 +487,17 @@ async def run_parallel(tasks: list[dict[str, Any]]) -> dict[str, Any]:
         finally:
             current_batch_id.reset(token)
 
-    parallel_tasks = [(i, t) for i, t in enumerate(tasks) if t["tool"] not in _SEQUENTIAL_ONLY]
-    sequential_tasks = [(i, t) for i, t in enumerate(tasks) if t["tool"] in _SEQUENTIAL_ONLY]
+    for i, task in enumerate(tasks):
+        if not isinstance(task, dict) or "tool" not in task:
+            results[i] = {"error": f"Task {i} missing required 'tool' key"}
+
+    valid_tasks = [
+        (i, t)
+        for i, t in enumerate(tasks)
+        if results[i] is None and isinstance(t, dict) and "tool" in t
+    ]
+    parallel_tasks = [(i, t) for i, t in valid_tasks if t["tool"] not in _SEQUENTIAL_ONLY]
+    sequential_tasks = [(i, t) for i, t in valid_tasks if t["tool"] in _SEQUENTIAL_ONLY]
 
     t0 = time.monotonic()
 
