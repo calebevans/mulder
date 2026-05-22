@@ -1,0 +1,375 @@
+"""Process anomaly detection composite MCP tool."""
+
+from __future__ import annotations
+
+import time
+from typing import Any
+
+from mulder.models import WindowRow
+from mulder.server.app import get_ctx, mcp
+from mulder.server.helpers import (
+    _HINT_CHAR_LIMIT,
+    extract_pids_from_windows,
+    hash_output,
+    make_tool_call_id,
+    slim_window,
+)
+from mulder.server.tools_composite_core import (
+    _EXE_CMD,
+    _EXE_POWERSHELL,
+    _LATERAL_PORTS,
+    _SRC_CMDLINE,
+    _SRC_DLLLIST,
+    _SRC_ENVARS,
+    _SRC_NETSCAN,
+    _SRC_PSSCAN,
+    _SRC_PSLIST,
+    _SRC_PSTREE,
+    _SRC_PRIVS,
+    _UNUSUAL_DLL_PATHS,
+    _build_pid_metadata,
+    _check_missing_sources,
+    _extract_ports,
+    _extract_process_name,
+    _query_source,
+    _score_and_sort_results,
+    _source_exists,
+    _strip_source_windows,
+)
+
+__all__ = ["find_suspicious_processes"]
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+_LOLBINS: set[str] = {
+    "certutil.exe",
+    "mshta.exe",
+    "regsvr32.exe",
+    "rundll32.exe",
+    "wmic.exe",
+    "msbuild.exe",
+    "cscript.exe",
+    "wscript.exe",
+    _EXE_POWERSHELL,
+    _EXE_CMD,
+    "bitsadmin.exe",
+    "msiexec.exe",
+    "installutil.exe",
+    "cmstp.exe",
+}
+
+_ENCODED_PS_PATTERNS: list[str] = [
+    "-enc ",
+    "-encodedcommand ",
+    "frombase64string",
+    "-e ",
+    "iex(",
+    "invoke-expression",
+    "downloadstring",
+    "downloadfile",
+    "net.webclient",
+    "bitstransfer",
+]
+
+_DANGEROUS_PRIVILEGES: set[str] = {"sedebugprivilege", "setcbprivilege"}
+
+_SUSPICIOUS_PARENTS: set[str] = {
+    "svchost.exe",
+    "services.exe",
+    "lsass.exe",
+    "winlogon.exe",
+}
+_SUSPICIOUS_CHILDREN: set[str] = {
+    _EXE_CMD,
+    _EXE_POWERSHELL,
+    "wscript.exe",
+    "cscript.exe",
+    "mshta.exe",
+}
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _has_encoded_powershell(cmdline: str) -> bool:
+    """Return True if *cmdline* contains encoded/obfuscated PowerShell patterns."""
+    lower = cmdline.lower()
+    return any(pat in lower for pat in _ENCODED_PS_PATTERNS)
+
+
+def _is_lolbin(proc_name: str) -> bool:
+    """Return True if *proc_name* is a known living-off-the-land binary."""
+    return proc_name.lower() in _LOLBINS
+
+
+def _check_hidden_process(
+    pid: int,
+    pslist_pids: dict[int, list[WindowRow]] | None,
+    psscan_pids: dict[int, list[WindowRow]] | None,
+    reasons: list[str],
+    source_windows: list[dict[str, Any]],
+) -> None:
+    """Flag PID if present in psscan but missing from pslist (unlinked/hidden)."""
+    if psscan_pids is None or pslist_pids is None:
+        return
+    if pid in psscan_pids and pid not in pslist_pids:
+        reasons.append("hidden_process")
+        source_windows.extend(slim_window(w) for w in psscan_pids[pid])
+
+
+def _check_dangerous_privileges(
+    pid: int,
+    privs_pids: dict[int, list[WindowRow]] | None,
+    reasons: list[str],
+    source_windows: list[dict[str, Any]],
+) -> None:
+    """Flag PID holding SeDebugPrivilege or SeTcbPrivilege."""
+    if privs_pids is None or pid not in privs_pids:
+        return
+    priv_text = " ".join(w.raw_text.lower() for w in privs_pids[pid])
+    if any(priv in priv_text for priv in _DANGEROUS_PRIVILEGES):
+        reasons.append("dangerous_privilege")
+        source_windows.extend(slim_window(w) for w in privs_pids[pid])
+
+
+def _check_suspicious_environment(
+    pid: int,
+    envars_pids: dict[int, list[WindowRow]] | None,
+    reasons: list[str],
+    source_windows: list[dict[str, Any]],
+) -> None:
+    """Flag PID with anomalous environment variables (e.g. overridden COMSPEC)."""
+    if envars_pids is None or pid not in envars_pids:
+        return
+    env_text = " ".join(w.raw_text.lower() for w in envars_pids[pid])
+    if "comspec" in env_text or ("temp" in env_text and "\\appdata\\" not in env_text):
+        reasons.append("suspicious_environment")
+        source_windows.extend(slim_window(w) for w in envars_pids[pid])
+
+
+def _check_dll_anomalies(
+    pid: int,
+    dlllist_pids: dict[int, list[WindowRow]] | None,
+    reasons: list[str],
+    source_windows: list[dict[str, Any]],
+) -> None:
+    """Flag PID loading DLLs from unusual filesystem locations."""
+    if dlllist_pids is None or pid not in dlllist_pids:
+        return
+    for w in dlllist_pids[pid]:
+        path_lower = w.raw_text.lower()
+        if any(pat in path_lower for pat in _UNUSUAL_DLL_PATHS):
+            reasons.append("unusual_dll_path")
+            source_windows.extend(slim_window(w) for w in dlllist_pids[pid])
+            return
+
+
+def _netscan_has_external(windows: list[WindowRow]) -> bool:
+    """Check if any netscan window shows a connection on a non-standard high port."""
+    for w in windows:
+        ports = _extract_ports(w.raw_text)
+        if any(p not in _LATERAL_PORTS and p > 1024 for p in ports):
+            return True
+    return False
+
+
+def _analyze_pid(
+    pid: int,
+    *,
+    pid_names: dict[int, str],
+    parent_map: dict[int, int],
+    malfind_pids: dict[int, list[WindowRow]],
+    cmdline_pids: dict[int, list[WindowRow]],
+    netscan_pids: dict[int, list[WindowRow]],
+    pstree_pids: dict[int, list[WindowRow]],
+    pslist_pids: dict[int, list[WindowRow]] | None = None,
+    psscan_pids: dict[int, list[WindowRow]] | None = None,
+    privs_pids: dict[int, list[WindowRow]] | None = None,
+    envars_pids: dict[int, list[WindowRow]] | None = None,
+    dlllist_pids: dict[int, list[WindowRow]] | None = None,
+) -> dict[str, Any] | None:
+    """Evaluate a single PID for suspicion indicators. Returns None if benign."""
+    reasons: list[str] = []
+    source_windows: list[dict[str, Any]] = []
+    connections: list[str] = []
+    name = pid_names.get(pid, "unknown")
+    parent_pid = parent_map.get(pid)
+    parent_name = pid_names.get(parent_pid, "unknown") if parent_pid else "unknown"
+
+    _check_hidden_process(pid, pslist_pids, psscan_pids, reasons, source_windows)
+
+    if pid in malfind_pids:
+        reasons.append("malfind_injection")
+        source_windows.extend(slim_window(w) for w in malfind_pids[pid])
+
+    if pid in cmdline_pids:
+        cmdline_text = " ".join(w.raw_text for w in cmdline_pids[pid])
+        if _has_encoded_powershell(cmdline_text):
+            reasons.append("encoded_powershell")
+        source_windows.extend(slim_window(w) for w in cmdline_pids[pid])
+
+    if _is_lolbin(name):
+        reasons.append("lolbin_execution")
+
+    if pid in netscan_pids:
+        for w in netscan_pids[pid]:
+            connections.append(w.raw_text.strip())
+        if _netscan_has_external(netscan_pids[pid]):
+            reasons.append("external_network_connection")
+        source_windows.extend(slim_window(w) for w in netscan_pids[pid])
+
+    if parent_name.lower() in _SUSPICIOUS_PARENTS and name.lower() in _SUSPICIOUS_CHILDREN:
+        reasons.append("suspicious_parent")
+
+    _check_dangerous_privileges(pid, privs_pids, reasons, source_windows)
+    _check_suspicious_environment(pid, envars_pids, reasons, source_windows)
+    _check_dll_anomalies(pid, dlllist_pids, reasons, source_windows)
+
+    if pid in pstree_pids:
+        source_windows.extend(slim_window(w) for w in pstree_pids[pid])
+
+    if not reasons:
+        return None
+
+    cmdline_full = " ".join(w.raw_text.strip() for w in cmdline_pids.get(pid, []))
+    cmdline_out = (cmdline_full[:300] + "...") if len(cmdline_full) > 300 else cmdline_full
+    capped_conns = [c[:_HINT_CHAR_LIMIT] for c in connections[:5]]
+
+    return {
+        "pid": pid,
+        "name": name,
+        "parent_pid": parent_pid,
+        "parent_name": parent_name,
+        "cmdline": cmdline_out,
+        "malfind_hit": pid in malfind_pids,
+        "network_connections": capped_conns,
+        "suspicion_reasons": reasons,
+        "source_windows": source_windows,
+        "window_count": len(source_windows),
+    }
+
+
+# ---------------------------------------------------------------------------
+# MCP tool handler
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def find_suspicious_processes() -> dict[str, object]:
+    """Identify suspicious processes by cross-referencing memory forensics artifacts.
+
+    Joins data from Volatility malfind (code injection), cmdline (command
+    arguments), netscan (network connections), pstree (parent-child
+    relationships), psscan (hidden process detection), privs (privilege
+    escalation), envars (environment anomalies), and dlllist (DLLs loaded
+    from unusual filesystem paths).  Read-only.
+    """
+    ctx = get_ctx()
+    composite_id = make_tool_call_id()
+    t0 = time.monotonic()
+    sub_call_ids: list[str] = []
+
+    malfind_wins, tc1 = _query_source("volatility.malfind", "find_suspicious_processes")
+    sub_call_ids.append(tc1)
+
+    cmdline_wins, tc2 = _query_source(_SRC_CMDLINE, "find_suspicious_processes")
+    sub_call_ids.append(tc2)
+
+    netscan_wins, tc3 = _query_source(_SRC_NETSCAN, "find_suspicious_processes")
+    sub_call_ids.append(tc3)
+
+    pstree_wins, tc4 = _query_source(_SRC_PSTREE, "find_suspicious_processes")
+    sub_call_ids.append(tc4)
+
+    pslist_wins: list[WindowRow] = []
+    psscan_wins: list[WindowRow] = []
+    if _source_exists(_SRC_PSSCAN):
+        psscan_wins, tc_ps = _query_source(_SRC_PSSCAN, "find_suspicious_processes")
+        sub_call_ids.append(tc_ps)
+        pslist_wins, tc_pl = _query_source(_SRC_PSLIST, "find_suspicious_processes")
+        sub_call_ids.append(tc_pl)
+
+    privs_wins: list[WindowRow] = []
+    if _source_exists(_SRC_PRIVS):
+        privs_wins, tc_priv = _query_source(_SRC_PRIVS, "find_suspicious_processes")
+        sub_call_ids.append(tc_priv)
+
+    envars_wins: list[WindowRow] = []
+    if _source_exists(_SRC_ENVARS):
+        envars_wins, tc_env = _query_source(_SRC_ENVARS, "find_suspicious_processes")
+        sub_call_ids.append(tc_env)
+
+    dlllist_wins: list[WindowRow] = []
+    if _source_exists(_SRC_DLLLIST):
+        dlllist_wins, tc_dll = _query_source(_SRC_DLLLIST, "find_suspicious_processes")
+        sub_call_ids.append(tc_dll)
+
+    malfind_pids = extract_pids_from_windows(malfind_wins)
+    cmdline_pids = extract_pids_from_windows(cmdline_wins)
+    netscan_pids = extract_pids_from_windows(netscan_wins)
+    pstree_pids = extract_pids_from_windows(pstree_wins)
+
+    pslist_pids = extract_pids_from_windows(pslist_wins) if pslist_wins else None
+    psscan_pids = extract_pids_from_windows(psscan_wins) if psscan_wins else None
+    privs_pids = extract_pids_from_windows(privs_wins) if privs_wins else None
+    envars_pids = extract_pids_from_windows(envars_wins) if envars_wins else None
+    dlllist_pids = extract_pids_from_windows(dlllist_wins) if dlllist_wins else None
+
+    all_pids = set(malfind_pids) | set(cmdline_pids) | set(netscan_pids) | set(pstree_pids)
+    if psscan_pids:
+        all_pids |= set(psscan_pids)
+    parent_map, pid_names = _build_pid_metadata(pstree_wins, cmdline_wins)
+
+    suspicious: list[dict[str, Any]] = []
+    for pid in sorted(all_pids):
+        entry = _analyze_pid(
+            pid,
+            pid_names=pid_names,
+            parent_map=parent_map,
+            malfind_pids=malfind_pids,
+            cmdline_pids=cmdline_pids,
+            netscan_pids=netscan_pids,
+            pstree_pids=pstree_pids,
+            pslist_pids=pslist_pids,
+            psscan_pids=psscan_pids,
+            privs_pids=privs_pids,
+            envars_pids=envars_pids,
+            dlllist_pids=dlllist_pids,
+        )
+        if entry is not None:
+            suspicious.append(entry)
+
+    missing = _check_missing_sources(
+        [
+            ("volatility.malfind", "run_volatility('malfind', '<memory_path>')"),
+            ("volatility.cmdline", "run_volatility('cmdline', '<memory_path>')"),
+            ("volatility.netscan", "run_volatility('netscan', '<memory_path>')"),
+            ("volatility.pstree", "run_volatility('pstree', '<memory_path>')"),
+        ]
+    )
+
+    elapsed = (time.monotonic() - t0) * 1000
+    ctx.audit.log_tool_call(
+        tool_call_id=composite_id,
+        tool_name="find_suspicious_processes",
+        params={},
+        output_hash=hash_output(suspicious),
+        duration_ms=elapsed,
+        sub_calls=sub_call_ids,
+    )
+    _score_and_sort_results(suspicious)
+    _strip_source_windows(suspicious)
+
+    result: dict[str, object] = {
+        "tool_call_id": composite_id,
+        "status": "success",
+        "results": suspicious,
+        "source": None,
+        "result_count": len(suspicious),
+    }
+    if missing:
+        result["missing_sources"] = missing
+    return result
