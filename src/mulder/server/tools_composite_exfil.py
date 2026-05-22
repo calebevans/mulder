@@ -5,7 +5,6 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from mulder.models import WindowRow
 from mulder.server.app import get_ctx, mcp
 from mulder.server.helpers import (
     _PREVIEW_CHAR_LIMIT,

@@ -5,7 +5,6 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from mulder.models import WindowRow
 from mulder.server.app import get_ctx, mcp
 from mulder.server.helpers import (
     _PREVIEW_CHAR_LIMIT,
@@ -16,10 +15,10 @@ from mulder.server.helpers import (
 from mulder.server.tools_composite_core import (
     _EXE_CMD,
     _EXE_POWERSHELL,
+    _SRC_EVTX_SYSTEM,
     _SRC_EZ_AMCACHE,
     _SRC_EZ_PREFETCH,
     _SRC_EZ_SHIMCACHE,
-    _SRC_EVTX_SYSTEM,
     _SRC_PLASO,
     _SRC_TSK_FILELIST,
     _check_missing_sources,

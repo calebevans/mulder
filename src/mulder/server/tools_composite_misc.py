@@ -31,15 +31,15 @@ from mulder.server.tools_composite_core import (
     _SRC_EZ_PREFETCH,
     _SRC_EZ_SHIMCACHE,
     _SRC_EZ_USNJRNL,
-    _SRC_MODULES,
     _SRC_MODSCAN,
+    _SRC_MODULES,
     _SRC_NETSCAN,
     _SRC_PCAP_CONVERSATIONS,
     _SRC_PCAP_DNS,
     _SRC_PCAP_HTTP,
     _SRC_PLASO,
-    _SRC_PSSCAN,
     _SRC_PSLIST,
+    _SRC_PSSCAN,
     _SRC_PSTREE,
     _SRC_TSK_FILELIST,
     _UNUSUAL_DLL_PATHS,
@@ -393,6 +393,89 @@ def _walk_chain(nodes: dict[int, dict[str, Any]], root_pid: int) -> list[dict[st
 
 
 # ---------------------------------------------------------------------------
+# PCAP correlation helpers
+# ---------------------------------------------------------------------------
+
+
+def _extract_pcap_indicators(
+    pcap_sources: list[str],
+    caller_name: str,
+    sub_call_ids: list[str],
+) -> tuple[set[str], set[int]]:
+    """Extract unique IP addresses and ports from PCAP source windows.
+
+    Args:
+        pcap_sources: Source names to query (e.g. pcap.conversations, pcap.dns).
+        caller_name: Tool name for audit trail.
+        sub_call_ids: Mutable list; appended with IDs from sub-queries.
+
+    Returns:
+        Tuple of (IP address set, port number set) extracted from all PCAP windows.
+    """
+    pcap_ips: set[str] = set()
+    pcap_ports: set[int] = set()
+    ip_re = _IP_RE
+    port_re = _PORT_RE
+
+    for pcap_src in pcap_sources:
+        if not _source_exists(pcap_src):
+            continue
+        wins, tc_id = _query_source(pcap_src, caller_name)
+        sub_call_ids.append(tc_id)
+        for w in wins:
+            for m in ip_re.finditer(w.raw_text):
+                pcap_ips.add(m.group())
+            for m in port_re.finditer(w.raw_text):
+                pcap_ports.add(int(m.group(1)))
+
+    return pcap_ips, pcap_ports
+
+
+def _correlate_with_netscan(
+    pcap_ips: set[str],
+    pcap_ports: set[int],
+    caller_name: str,
+    sub_call_ids: list[str],
+) -> list[dict[str, Any]]:
+    """Match PCAP IP indicators against Volatility netscan connections.
+
+    Args:
+        pcap_ips: Set of IP addresses observed in PCAP data.
+        pcap_ports: Set of port numbers observed in PCAP data.
+        caller_name: Tool name for audit trail.
+        sub_call_ids: Mutable list; appended with IDs from sub-queries.
+
+    Returns:
+        List of correlation dicts for each netscan entry with overlapping IPs.
+    """
+    correlations: list[dict[str, Any]] = []
+    if not _source_exists(_SRC_NETSCAN):
+        return correlations
+
+    netscan_wins, tc_net = _query_source(_SRC_NETSCAN, caller_name)
+    sub_call_ids.append(tc_net)
+    ip_re = _IP_RE
+
+    for w in netscan_wins:
+        netscan_ips = {m.group() for m in ip_re.finditer(w.raw_text)}
+        overlap = netscan_ips & pcap_ips
+        if overlap:
+            pid = extract_pid(w.raw_text)
+            proc_name = _extract_process_name(w.raw_text)
+            correlations.append(
+                {
+                    "type": "pcap_netscan_ip_match",
+                    "matched_ips": sorted(overlap),
+                    "pid": pid,
+                    "process": proc_name,
+                    "netscan_text": w.raw_text.strip()[:300],
+                }
+            )
+
+    return correlations
+
+
+# ---------------------------------------------------------------------------
 # MCP tool handlers
 # ---------------------------------------------------------------------------
 
@@ -689,43 +772,16 @@ def correlate_pcap_with_host(
     composite_id = make_tool_call_id()
     t0 = time.monotonic()
     sub_call_ids: list[str] = []
-    correlations: list[dict[str, Any]] = []
 
-    pcap_ips: set[str] = set()
-    pcap_ports: set[int] = set()
+    pcap_ips, pcap_ports = _extract_pcap_indicators(
+        [_SRC_PCAP_CONVERSATIONS, _SRC_PCAP_DNS, _SRC_PCAP_HTTP],
+        "correlate_pcap_with_host",
+        sub_call_ids,
+    )
 
-    ip_re = _IP_RE
-    port_re = _PORT_RE
-
-    for pcap_src in (_SRC_PCAP_CONVERSATIONS, _SRC_PCAP_DNS, _SRC_PCAP_HTTP):
-        if not _source_exists(pcap_src):
-            continue
-        wins, tc_id = _query_source(pcap_src, "correlate_pcap_with_host")
-        sub_call_ids.append(tc_id)
-        for w in wins:
-            for m in ip_re.finditer(w.raw_text):
-                pcap_ips.add(m.group())
-            for m in port_re.finditer(w.raw_text):
-                pcap_ports.add(int(m.group(1)))
-
-    if _source_exists(_SRC_NETSCAN):
-        netscan_wins, tc_net = _query_source(_SRC_NETSCAN, "correlate_pcap_with_host")
-        sub_call_ids.append(tc_net)
-        for w in netscan_wins:
-            netscan_ips = {m.group() for m in ip_re.finditer(w.raw_text)}
-            overlap = netscan_ips & pcap_ips
-            if overlap:
-                pid = extract_pid(w.raw_text)
-                proc_name = _extract_process_name(w.raw_text)
-                correlations.append(
-                    {
-                        "type": "pcap_netscan_ip_match",
-                        "matched_ips": sorted(overlap),
-                        "pid": pid,
-                        "process": proc_name,
-                        "netscan_text": w.raw_text.strip()[:300],
-                    }
-                )
+    correlations = _correlate_with_netscan(
+        pcap_ips, pcap_ports, "correlate_pcap_with_host", sub_call_ids
+    )
 
     if t_start and t_end:
         evtx_src = (
@@ -740,7 +796,7 @@ def correlate_pcap_with_host(
             )
             sub_call_ids.append(tc_evtx)
             for w in evtx_wins:
-                evtx_ips = {m.group() for m in ip_re.finditer(w.raw_text)}
+                evtx_ips = {m.group() for m in _IP_RE.finditer(w.raw_text)}
                 overlap = evtx_ips & pcap_ips
                 if overlap:
                     correlations.append(
