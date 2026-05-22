@@ -22,8 +22,7 @@ from mulder.models import WindowRow
 
 logger = logging.getLogger(__name__)
 
-_WINDOW_SIZE = 4
-_WINDOW_CHAR_CAP = 4096
+_WINDOW_CHAR_BUDGET = 4096
 
 _ISO_RE = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}")
 _PLASO_DATE_RE = re.compile(r"(\d{2})/(\d{2})/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})")
@@ -148,33 +147,30 @@ def extract_and_index(
         line_count=original_line_count,
     )
 
-    all_lines = raw_output.splitlines()
-    del raw_output
-
     total_indexed = 0
     batch: list[WindowRow] = []
+    budget = _WINDOW_CHAR_BUDGET
 
-    for i in range(0, len(all_lines), _WINDOW_SIZE):
-        block = all_lines[i : i + _WINDOW_SIZE]
-        raw = "\n".join(block)
-        if len(raw) > _WINDOW_CHAR_CAP:
-            raw = raw[:_WINDOW_CHAR_CAP]
-        if not raw.strip():
+    for offset in range(0, len(raw_output), budget):
+        chunk = raw_output[offset : offset + budget]
+        if not chunk.strip():
             continue
-        event_time = _parse_timestamp(raw)
+        event_time = _parse_timestamp(chunk)
         batch.append(
             WindowRow(
                 source_id=source_id,
-                line_start=i + 1,
-                line_end=i + len(block),
+                line_start=offset,
+                line_end=offset + len(chunk),
                 event_time=event_time,
-                raw_text=raw,
+                raw_text=chunk,
             )
         )
         if len(batch) >= _INSERT_BATCH_SIZE:
             ctx.db.insert_windows(source_id, batch)
             total_indexed += len(batch)
             batch = []
+
+    del raw_output
 
     if batch:
         ctx.db.insert_windows(source_id, batch)

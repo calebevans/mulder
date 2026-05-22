@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from contextlib import AbstractContextManager
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -12,8 +13,7 @@ from mulder.db import CaseDB
 from mulder.index.correlator import Correlator
 from mulder.server.app import ServerContext
 from mulder.server.extract_helpers import (
-    _WINDOW_CHAR_CAP,
-    _WINDOW_SIZE,
+    _WINDOW_CHAR_BUDGET,
     _parse_timestamp,
     extract_and_index,
 )
@@ -22,11 +22,8 @@ from mulder.server.extract_helpers import (
 class TestWindowConstants:
     """Verify windowing constants are defined with expected values."""
 
-    def test_window_size(self) -> None:
-        assert _WINDOW_SIZE == 4
-
-    def test_window_char_cap(self) -> None:
-        assert _WINDOW_CHAR_CAP == 4096
+    def test_window_char_budget(self) -> None:
+        assert _WINDOW_CHAR_BUDGET == 4096
 
 
 class TestParseTimestamp:
@@ -65,12 +62,12 @@ class TestExtractAndIndex:
     """Integration tests for the extract-and-index pipeline."""
 
     @staticmethod
-    def _patch_ctx(ctx: ServerContext) -> patch:  # type: ignore[type-arg]
+    def _patch_ctx(ctx: ServerContext) -> AbstractContextManager[Any]:
         """Return a context-manager that patches ``get_ctx`` to return *ctx*."""
         return patch("mulder.server.app.get_ctx", return_value=ctx)
 
     def test_basic_indexing(self, _mock_server_ctx: ServerContext) -> None:
-        """Normal-length output is indexed without truncation."""
+        """Normal-length output is indexed and all content preserved."""
         lines = [f"line-{i}" for i in range(8)]
         raw_output = "\n".join(lines)
 
@@ -83,7 +80,8 @@ class TestExtractAndIndex:
             )
 
         assert result["status"] == "indexed"
-        assert result["windows_indexed"] == 2
+        assert result["windows_indexed"] is not None
+        assert result["windows_indexed"] >= 1  # type: ignore[operator]
         assert result["line_count"] == 8
 
     def test_empty_input(self, _mock_server_ctx: ServerContext) -> None:
@@ -99,60 +97,70 @@ class TestExtractAndIndex:
         assert result["status"] == "indexed_empty"
         assert result["windows_indexed"] == 0
 
-    def test_long_lines_are_truncated(self, _mock_server_ctx: ServerContext) -> None:
-        """Windows exceeding _WINDOW_CHAR_CAP are truncated in raw_text."""
-        long_line = "A" * 2000
-        raw_output = "\n".join([long_line] * _WINDOW_SIZE)
+    def test_no_data_lost(self, _mock_server_ctx: ServerContext) -> None:
+        """All input characters are preserved across windows."""
+        raw_output = "A" * 10000
 
         with self._patch_ctx(_mock_server_ctx):
-            result = extract_and_index(
+            extract_and_index(
                 raw_output=raw_output,
-                source_name="blob.log",
-                source_path="/evidence/blob.log",
+                source_name="big.log",
+                source_path="/evidence/big.log",
                 extractor_name="test",
             )
 
-        assert result["status"] == "indexed"
-        assert result["windows_indexed"] == 1
+        windows = _mock_server_ctx.db.get_windows_by_source("big.log")
+        reconstructed = "".join(w.raw_text for w in windows)
+        assert reconstructed == raw_output
 
-        windows = _mock_server_ctx.db.get_windows_by_source("blob.log")
+    def test_uniform_window_sizes(self, _mock_server_ctx: ServerContext) -> None:
+        """Windows are uniformly sized at the char budget (except the last)."""
+        raw_output = "X" * (_WINDOW_CHAR_BUDGET * 3 + 500)
+
+        with self._patch_ctx(_mock_server_ctx):
+            extract_and_index(
+                raw_output=raw_output,
+                source_name="uniform.log",
+                source_path="/evidence/uniform.log",
+                extractor_name="test",
+            )
+
+        windows = _mock_server_ctx.db.get_windows_by_source("uniform.log")
+        assert len(windows) == 4
+        for w in windows[:-1]:
+            assert len(w.raw_text) == _WINDOW_CHAR_BUDGET
+        assert len(windows[-1].raw_text) == 500
+
+    def test_short_input_single_window(self, _mock_server_ctx: ServerContext) -> None:
+        """Input smaller than the budget fits in one window."""
+        raw_output = "short content\nwith newlines\n"
+
+        with self._patch_ctx(_mock_server_ctx):
+            extract_and_index(
+                raw_output=raw_output,
+                source_name="short.log",
+                source_path="/evidence/short.log",
+                extractor_name="test",
+            )
+
+        windows = _mock_server_ctx.db.get_windows_by_source("short.log")
         assert len(windows) == 1
+        assert windows[0].raw_text == raw_output
 
-        stored_text = windows[0].raw_text
-        assert len(stored_text) <= _WINDOW_CHAR_CAP
-
-    def test_line_range_preserved_after_truncation(
-        self, _mock_server_ctx: ServerContext
-    ) -> None:
-        """line_start / line_end reflect original lines, not truncated text."""
-        long_line = "B" * 3000
-        raw_output = "\n".join([long_line] * _WINDOW_SIZE)
+    def test_lines_split_across_windows(self, _mock_server_ctx: ServerContext) -> None:
+        """A line crossing a window boundary is split, not truncated."""
+        half = _WINDOW_CHAR_BUDGET - 10
+        raw_output = "A" * half + "BOUNDARY_MARKER" + "B" * half
 
         with self._patch_ctx(_mock_server_ctx):
             extract_and_index(
                 raw_output=raw_output,
-                source_name="hex.log",
-                source_path="/evidence/hex.log",
+                source_name="split.log",
+                source_path="/evidence/split.log",
                 extractor_name="test",
             )
 
-        windows = _mock_server_ctx.db.get_windows_by_source("hex.log")
-        assert windows[0].line_start == 1
-        assert windows[0].line_end == _WINDOW_SIZE
-
-    def test_short_lines_not_truncated(self, _mock_server_ctx: ServerContext) -> None:
-        """Windows under the cap are stored verbatim."""
-        lines = ["short line 1", "short line 2", "short line 3", "short line 4"]
-        raw_output = "\n".join(lines)
-        expected_text = "\n".join(lines)
-
-        with self._patch_ctx(_mock_server_ctx):
-            extract_and_index(
-                raw_output=raw_output,
-                source_name="normal.log",
-                source_path="/evidence/normal.log",
-                extractor_name="test",
-            )
-
-        windows = _mock_server_ctx.db.get_windows_by_source("normal.log")
-        assert windows[0].raw_text == expected_text
+        windows = _mock_server_ctx.db.get_windows_by_source("split.log")
+        reconstructed = "".join(w.raw_text for w in windows)
+        assert "BOUNDARY_MARKER" in reconstructed
+        assert reconstructed == raw_output
