@@ -7,7 +7,14 @@ import json
 import re
 
 from mulder.models import WindowRow
-from mulder.server.helpers import hash_output, make_tool_call_id, serialize_windows, slim_window
+from mulder.server.helpers import (
+    extract_module_names,
+    extract_pid,
+    hash_output,
+    make_tool_call_id,
+    serialize_windows,
+    slim_window,
+)
 
 
 class TestHashOutput:
@@ -26,7 +33,7 @@ class TestHashOutput:
         assert result == expected
 
     def test_large_dict_summary_hash(self) -> None:
-        data = {f"k{i}": "x" * 1000 for i in range(20)}
+        data = {f"k{i}": "x" * 100 for i in range(150)}
         result = hash_output(data)
         full_json = json.dumps(data, sort_keys=True, default=str)
         full_hash = "blake2b:" + hashlib.blake2b(full_json.encode(), digest_size=32).hexdigest()
@@ -34,7 +41,7 @@ class TestHashOutput:
         assert result.startswith("blake2b:")
 
     def test_large_list_summary_hash(self) -> None:
-        data = ["x" * 500 for _ in range(30)]
+        data = ["x" * 50 for _ in range(250)]
         result = hash_output(data)
         full_json = json.dumps(data, sort_keys=True, default=str)
         full_hash = "blake2b:" + hashlib.blake2b(full_json.encode(), digest_size=32).hexdigest()
@@ -90,6 +97,66 @@ class TestSlimWindow:
         assert "raw_text" not in result
         assert result["source_id"] == 1
         assert result["event_time"] == "2025-01-01"
+
+
+class TestHashOutputHeuristic:
+    """Test the heuristic size-check that skips full JSON serialization."""
+
+    def test_large_list_uses_length_hash(self) -> None:
+        """Lists with >200 items use a length summary, not full serialization."""
+        data = list(range(250))
+        h1 = hash_output(data)
+        data_different_content = list(range(250, 500))
+        h2 = hash_output(data_different_content)
+        assert h1 == h2
+
+    def test_large_dict_uses_keys_hash(self) -> None:
+        """Dicts with >100 keys use a keys summary, not full serialization."""
+        data = {f"k{i}": "value_a" for i in range(150)}
+        h1 = hash_output(data)
+        data_different_values = {f"k{i}": "value_b" for i in range(150)}
+        h2 = hash_output(data_different_values)
+        assert h1 == h2
+
+
+class TestExtractPid:
+    def test_extracts_pid_from_volatility_output(self) -> None:
+        text = "svchost.exe\t1234\t456\t..."
+        result = extract_pid(text)
+        assert result == 1234
+
+    def test_returns_none_for_no_match(self) -> None:
+        result = extract_pid("no numeric pid here")
+        assert result is None
+
+    def test_extracts_first_pid(self) -> None:
+        text = "process\t999\t0"
+        result = extract_pid(text)
+        assert result == 999
+
+    def test_returns_none_for_zero_pid(self) -> None:
+        text = "idle\t0\t0"
+        result = extract_pid(text)
+        assert result is None
+
+
+class TestExtractModuleNames:
+    def _make_window(self, text: str) -> WindowRow:
+        return WindowRow(source_id=1, line_start=0, line_end=1, event_time=None, raw_text=text)
+
+    def test_extracts_sys_names(self) -> None:
+        windows = [
+            self._make_window("ntoskrnl.sys\t0x00\tkernel"),
+            self._make_window("tcpip.sys\t0x01\tnetwork"),
+        ]
+        result = extract_module_names(windows)
+        assert "ntoskrnl.sys" in result
+        assert "tcpip.sys" in result
+
+    def test_returns_empty_for_no_modules(self) -> None:
+        windows = [self._make_window("no module names here")]
+        result = extract_module_names(windows)
+        assert result == {}
 
 
 class TestMakeToolCallId:

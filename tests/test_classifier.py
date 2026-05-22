@@ -175,3 +175,13 @@ class TestAutoExcludeDirs:
         results = classifier.classify(evidence_dir)
         assert len(results) == 1
         assert results[0].path == evidence_dir / "real.mem"
+
+
+class TestDiskImageExts:
+    def test_disk_image_exts_defined(self) -> None:
+        from mulder.extractors import DISK_IMAGE_EXTS
+
+        assert ".e01" in DISK_IMAGE_EXTS
+        assert ".dd" in DISK_IMAGE_EXTS
+        assert ".img" in DISK_IMAGE_EXTS
+        assert isinstance(DISK_IMAGE_EXTS, frozenset)
