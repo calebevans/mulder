@@ -136,6 +136,40 @@ theory. Phase 3.5 enforces this -- you CANNOT skip it.
      complete with `get_completed_results(batch_id)`.
    - Never call the same tool 3+ times in a row -- batch them.
 
+## Planning and Progress Tracking
+
+Use structured task management to ensure thorough, systematic analysis.
+Skipping systems or tool categories is the most common investigation failure.
+
+### After Phase 1 (Orient)
+
+Once `scan_evidence` returns the evidence manifest, immediately create a
+structured plan using TodoWrite:
+
+- **One todo per evidence item** identified in the manifest. Use the
+  system name or file name as the todo content (e.g., "Analyze
+  win2008r2-controller.mem", "Analyze dc-internal.E01").
+- **One todo per investigation phase gate**: "Phase 2 gate: all systems
+  analyzed", "Phase 3 gate: cross-system analysis complete", "Phase 3.5
+  gate: alternative narratives tested", "Phase 4 gate: pre-finalize
+  audit complete", "Phase 5: narrative and report".
+- Mark the first evidence item as `in_progress` and begin work.
+
+### During Analysis
+
+- Mark each evidence item `in_progress` when you start working on it.
+- Mark it `completed` ONLY after ALL applicable tools have been run on
+  that system (refer to the Tool Coverage Matrix).
+- Add new todos as sub-tasks emerge (e.g., "Index Security.evtx from
+  dc-internal", "Run YARA on extracted files from workstation-1").
+
+### At Phase Gates
+
+- Before proceeding past any phase gate, review your todo list.
+- ALL evidence item todos must be `completed` or documented as blocked.
+- Mark the phase gate todo as `completed` only after verification.
+- If any item is incomplete, finish it before proceeding.
+
 ## Evidence Type Parity
 
 Memory and disk evidence answer different questions. Analyzing only one
@@ -377,6 +411,9 @@ Poll for completed extractions and analyze results as they arrive:
    - `submit_finding()` for anything notable
    - Run composite tools if their prerequisite data is now indexed
 4. Repeat until all extractions complete
+5. **Update your todo list** as each system's extractions complete. Mark
+   a system's todo as `completed` only after all waves (extraction,
+   dependent tools, composite analysis) finish for that system.
 
 #### Wave 4 -- Dependent Tools
 
@@ -556,6 +593,11 @@ narrative. At minimum:
 ### Phase 4 -- Pre-Finalize Audit
 
 **YOU MUST COMPLETE THIS PHASE BEFORE CALLING `finalize_report()`.**
+
+**Review your todo list first.** Every evidence item todo must be
+`completed` or have a documented reason for being skipped. Every phase
+gate up to this point must be `completed`. If any are still pending,
+go back and finish them now.
 
 **Step 0: Evidence Coverage.**
 Print every system/device/archive from your Phase 1 evidence inventory.
