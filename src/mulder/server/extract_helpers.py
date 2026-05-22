@@ -11,14 +11,13 @@ import hashlib
 import logging
 import re
 import shutil
-import subprocess
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from datetime import datetime
 from pathlib import Path
 
-from mulder.extractors.disk import _detect_mount_offset
+from mulder.extractors.disk import _mount_image, _unmount_image
 from mulder.models import WindowRow
 
 logger = logging.getLogger(__name__)
@@ -181,97 +180,6 @@ def extract_and_index(
     }
 
 
-def _unmount_path(path: Path) -> None:
-    """Best-effort unmount via umount or fusermount."""
-    for cmd in (["umount", str(path)], ["fusermount", "-u", str(path)]):
-        try:
-            subprocess.run(cmd, capture_output=True, timeout=30, check=True)
-            return
-        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
-            continue
-    logger.warning("Could not unmount %s", path)
-
-
-def _mount_e01(image_path: Path, mount_point: Path) -> bool:
-    """Mount an E01 image via ewfmount -> mount."""
-    if not shutil.which("ewfmount"):
-        logger.error("ewfmount not found -- cannot mount E01 images")
-        return False
-
-    ewf_mount = mount_point / "_ewf"
-    ewf_mount.mkdir(parents=True, exist_ok=True)
-
-    try:
-        subprocess.run(
-            ["ewfmount", str(image_path), str(ewf_mount)],
-            capture_output=True,
-            timeout=60,
-            check=True,
-        )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        logger.error("ewfmount failed on %s: %s", image_path, exc)
-        return False
-
-    raw_device = ewf_mount / "ewf1"
-    if not raw_device.exists():
-        logger.error("ewfmount did not produce ewf1 device in %s", ewf_mount)
-        _unmount_path(ewf_mount)
-        return False
-
-    offset_bytes = _detect_mount_offset(str(image_path))
-    mount_opts = "ro,loop,noexec,nodev"
-    if offset_bytes > 0:
-        mount_opts += f",offset={offset_bytes}"
-
-    try:
-        subprocess.run(
-            ["mount", "-o", mount_opts, str(raw_device), str(mount_point)],
-            capture_output=True,
-            timeout=60,
-            check=True,
-        )
-        return True
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        logger.error("Failed to mount ewf device %s: %s", raw_device, exc)
-        _unmount_path(ewf_mount)
-        return False
-
-
-def _mount_raw(image_path: Path, mount_point: Path) -> bool:
-    """Mount a raw / dd image read-only."""
-    offset_bytes = _detect_mount_offset(str(image_path))
-    mount_opts = "ro,loop,noexec,nodev"
-    if offset_bytes > 0:
-        mount_opts += f",offset={offset_bytes}"
-
-    try:
-        subprocess.run(
-            ["mount", "-o", mount_opts, str(image_path), str(mount_point)],
-            capture_output=True,
-            timeout=60,
-            check=True,
-        )
-        return True
-    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
-        pass
-
-    # guestmount handles partitions natively via -i
-    if shutil.which("guestmount"):
-        try:
-            subprocess.run(
-                ["guestmount", "-a", str(image_path), "-i", "--ro", str(mount_point)],
-                capture_output=True,
-                timeout=120,
-                check=True,
-            )
-            return True
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            pass
-
-    logger.error("Could not mount %s -- tried mount and guestmount", image_path)
-    return False
-
-
 @contextmanager
 def mount_disk_image(image_path: str) -> Iterator[str]:
     """Mount a disk image (E01 or raw) read-only and yield the mount point.
@@ -284,8 +192,7 @@ def mount_disk_image(image_path: str) -> Iterator[str]:
     mounted = False
 
     try:
-        ext = img.suffix.lower()
-        mounted = _mount_e01(img, mount_dir) if ext == ".e01" else _mount_raw(img, mount_dir)
+        mounted = _mount_image(img, mount_dir)
 
         if not mounted:
             raise RuntimeError(f"Failed to mount disk image: {image_path}")
@@ -293,9 +200,6 @@ def mount_disk_image(image_path: str) -> Iterator[str]:
         yield str(mount_dir)
     finally:
         if mounted:
-            _unmount_path(mount_dir)
-            ewf_sub = mount_dir / "_ewf"
-            if ewf_sub.exists():
-                _unmount_path(ewf_sub)
+            _unmount_image(mount_dir)
         with suppress(OSError):
             shutil.rmtree(mount_dir, ignore_errors=True)
