@@ -317,7 +317,11 @@ def _extract_zip(archive: Path, dest: Path) -> list[str]:
     """
     try:
         with zipfile.ZipFile(archive, "r") as zf:
-            zf.extractall(dest)
+            for member in zf.namelist():
+                if member.startswith("/") or ".." in member:
+                    logger.warning("Skipping unsafe zip entry: %s", member)
+                    continue
+                zf.extract(member, dest)
     except (NotImplementedError, zipfile.BadZipFile):
         if not shutil.which("7z"):
             raise
@@ -329,8 +333,11 @@ def _safe_tar_filter(member: tarfile.TarInfo, path: str) -> tarfile.TarInfo | No
     """Allow extraction but neutralize absolute symlinks and path traversal."""
     if member.name.startswith("/") or ".." in member.name:
         return None
-    if (member.issym() or member.islnk()) and member.linkname.startswith("/"):
-        member.linkname = member.linkname.lstrip("/")
+    if member.issym() or member.islnk():
+        if ".." in member.linkname:
+            return None
+        if member.linkname.startswith("/"):
+            member.linkname = member.linkname.lstrip("/")
     return member
 
 

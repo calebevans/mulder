@@ -179,6 +179,8 @@ def _build_rules_args(
                 return [], False
             idx, cleanup = _build_index_file(dir_rules)
             return ([idx], cleanup) if idx else ([], False)
+        if re.search(r"^\s*include\s+", stripped, re.MULTILINE | re.IGNORECASE):
+            return [], False
         fd, tmp_path = tempfile.mkstemp(suffix=".yar", prefix="mulder_yara_")
         with os.fdopen(fd, "w") as fh:
             fh.write(stripped)
@@ -324,6 +326,26 @@ def yara_scan_files(
         if cleanup:
             _cleanup(rules_args[0])
         error_msg = f"yara timed out after {_YARA_FILE_TIMEOUT}s scanning {target_path}"
+        elapsed = (time.monotonic() - t0) * 1000
+        ctx.audit.log_tool_call(
+            tool_call_id=tc_id,
+            tool_name="yara_scan_files",
+            params={"target_path": target_path, "rules": rules is not None},
+            output_hash=hash_output({"error": error_msg}),
+            duration_ms=elapsed,
+        )
+        return {
+            "tool_call_id": tc_id,
+            "status": "error",
+            "error_message": error_msg,
+            "results": [],
+            "source": _SRC_FILE_SCAN,
+            "result_count": 0,
+        }
+    except OSError as exc:
+        if cleanup:
+            _cleanup(rules_args[0])
+        error_msg = f"Failed to run yara: {exc}"
         elapsed = (time.monotonic() - t0) * 1000
         ctx.audit.log_tool_call(
             tool_call_id=tc_id,
@@ -509,6 +531,26 @@ def yara_scan_memory(
             "source": _SRC_MEMORY_SCAN,
             "result_count": 0,
         }
+    except OSError as exc:
+        if cleanup:
+            _cleanup(rules_args[0])
+        error_msg = f"Failed to run yara: {exc}"
+        elapsed = (time.monotonic() - t0) * 1000
+        ctx.audit.log_tool_call(
+            tool_call_id=tc_id,
+            tool_name="yara_scan_memory",
+            params={"rules": rules is not None},
+            output_hash=hash_output({"error": error_msg}),
+            duration_ms=elapsed,
+        )
+        return {
+            "tool_call_id": tc_id,
+            "status": "error",
+            "error_message": error_msg,
+            "results": [],
+            "source": _SRC_MEMORY_SCAN,
+            "result_count": 0,
+        }
 
     if cleanup:
         _cleanup(rules_args[0])
@@ -664,6 +706,26 @@ def yara_scan_with_volatility(
         if cleanup:
             _cleanup(rules_path)
         error_msg = f"Volatility vadyarascan timed out after {_YARA_VOL_TIMEOUT}s"
+        elapsed = (time.monotonic() - t0) * 1000
+        ctx.audit.log_tool_call(
+            tool_call_id=tc_id,
+            tool_name="yara_scan_with_volatility",
+            params={"pid": pid, "rules": rules is not None},
+            output_hash=hash_output({"error": error_msg}),
+            duration_ms=elapsed,
+        )
+        return {
+            "tool_call_id": tc_id,
+            "status": "error",
+            "error_message": error_msg,
+            "results": [],
+            "source": _SRC_VOL_SCAN,
+            "result_count": 0,
+        }
+    except OSError as exc:
+        if cleanup:
+            _cleanup(rules_path)
+        error_msg = f"Failed to run Volatility: {exc}"
         elapsed = (time.monotonic() - t0) * 1000
         ctx.audit.log_tool_call(
             tool_call_id=tc_id,

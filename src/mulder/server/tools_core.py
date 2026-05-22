@@ -159,6 +159,15 @@ def search(
     t0 = time.monotonic()
 
     if regex:
+        _MAX_REGEX_LEN = 500
+        if len(query) > _MAX_REGEX_LEN:
+            return {
+                "tool_call_id": tc_id,
+                "status": "error",
+                "error_message": f"Regex pattern too long (max {_MAX_REGEX_LEN} chars)",
+                "results": [],
+                "result_count": 0,
+            }
         try:
             pattern = _re.compile(query, _re.IGNORECASE)
         except _re.error as exc:

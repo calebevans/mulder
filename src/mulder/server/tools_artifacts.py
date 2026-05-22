@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import plistlib
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -17,11 +18,46 @@ import tempfile
 import time
 from pathlib import Path
 
-from mulder.server.app import get_ctx, mcp
+from mulder.server.app import get_cfg, get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import hash_output, make_tool_call_id
 
 logger = logging.getLogger(__name__)
+
+_ALLOWED_SQLITE_OPS: frozenset[int] = frozenset(
+    {
+        sqlite3.SQLITE_SELECT,
+        sqlite3.SQLITE_READ,
+        sqlite3.SQLITE_FUNCTION,
+    }
+)
+
+
+def _readonly_authorizer(
+    action: int, arg1: object, arg2: object, db_name: object, trigger: object
+) -> int:
+    """SQLite authorizer that only permits read operations."""
+    if action in _ALLOWED_SQLITE_OPS:
+        return sqlite3.SQLITE_OK
+    return sqlite3.SQLITE_DENY
+
+
+def _validate_path_access(target: Path) -> str | None:
+    """Return an error message if the path is not under an allowed root, else None."""
+    try:
+        resolved = target.resolve()
+    except OSError:
+        return f"Cannot resolve path: {target}"
+    cfg = get_cfg()
+    allowed_roots = [Path(cfg.db_dir).resolve()]
+    ctx = get_ctx()
+    meta = ctx.db.get_case_metadata()
+    if meta and meta.evidence_root:
+        allowed_roots.append(Path(meta.evidence_root).resolve())
+    if not any(str(resolved).startswith(str(root)) for root in allowed_roots):
+        return "Access denied: path is outside allowed directories"
+    return None
+
 
 _TOOL_TIMEOUT = 120
 
@@ -56,7 +92,6 @@ def _resolve_image_and_offset() -> tuple[str, int]:
     if part_src:
         image_path = part_src.source_path
         windows = ctx.db.get_windows_by_source("tsk.partitions")
-        import re
 
         mmls_text = "\n".join(w.raw_text for w in windows)
         row_re = re.compile(r"^\d+:\d+\s+(\d+)\s+\d+\s+(\d+)\s+(.+)$", re.MULTILINE)
@@ -76,8 +111,6 @@ def _find_inodes_by_pattern(pattern: str) -> list[tuple[str, str]]:
 
     Returns list of (inode_str, relative_path) tuples.
     """
-    import re
-
     ctx = get_ctx()
     windows = ctx.db.get_windows_by_source("tsk.filelist")
     pat = re.compile(pattern, re.IGNORECASE | re.MULTILINE)
@@ -218,7 +251,8 @@ def parse_plist(plist_filter: str | None = None) -> dict[str, object]:
         return {"tool_call_id": tc_id, "status": "error", "error_message": "No disk image indexed"}
 
     if plist_filter:
-        pattern = rf"[rd]/[rd*]\s+(\d+(?:-\d+-\d+)?):\s+(.*?{plist_filter}.*?\.plist)\s*$"
+        escaped_filter = re.escape(plist_filter)
+        pattern = rf"[rd]/[rd*]\s+(\d+(?:-\d+-\d+)?):\s+(.*?{escaped_filter}.*?\.plist)\s*$"
     else:
         pattern = (
             r"[rd]/[rd*]\s+(\d+(?:-\d+-\d+)?):\s+"
@@ -299,6 +333,13 @@ def query_sqlite_from_image(inode: int, query: str, description: str = "") -> di
             "error_message": "Only SELECT queries are allowed (read-only)",
         }
 
+    if ";" in query:
+        return {
+            "tool_call_id": tc_id,
+            "status": "error",
+            "error_message": "Multi-statement queries are not allowed",
+        }
+
     with tempfile.TemporaryDirectory(prefix="mulder_sqlite_") as tmpdir:
         db_path = Path(tmpdir) / f"inode_{inode}.sqlite"
         if not _icat_extract(image_path, offset, str(inode), db_path):
@@ -311,6 +352,8 @@ def query_sqlite_from_image(inode: int, query: str, description: str = "") -> di
 
         try:
             conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            conn.execute("PRAGMA trusted_schema=OFF")
+            conn.set_authorizer(_readonly_authorizer)
             conn.row_factory = sqlite3.Row
             rows = conn.execute(query).fetchall()
             conn.close()
@@ -372,6 +415,15 @@ def list_directory(
     t0 = time.monotonic()
 
     target = Path(path)
+    path_err = _validate_path_access(target)
+    if path_err:
+        return {
+            "tool_call_id": tc_id,
+            "status": "error",
+            "error_message": path_err,
+            "results": [],
+            "result_count": 0,
+        }
     if not target.exists():
         elapsed = (time.monotonic() - t0) * 1000
         ctx.audit.log_tool_call(
@@ -458,6 +510,13 @@ def read_evidence_file(
     params = {"file_path": file_path, "max_bytes": max_bytes}
 
     target = Path(file_path)
+    path_err = _validate_path_access(target)
+    if path_err:
+        return {
+            "tool_call_id": tc_id,
+            "status": "error",
+            "error_message": path_err,
+        }
     if not target.exists():
         elapsed = (time.monotonic() - t0) * 1000
         ctx.audit.log_tool_call(
