@@ -46,8 +46,14 @@ _SYSLOG_MONTHS = {
 }
 
 
-def _parse_timestamp(text: str) -> str | None:
-    """Best-effort timestamp extraction from a text window."""
+def _parse_timestamp(text: str, reference_year: int | None = None) -> str | None:
+    """Best-effort timestamp extraction from a text window.
+
+    Args:
+        text: Raw text window to search for a recognizable timestamp.
+        reference_year: Year to assume for syslog timestamps that omit a
+            year field.  Falls back to the current year when *None*.
+    """
     m = _ISO_RE.search(text)
     if m:
         try:
@@ -60,7 +66,7 @@ def _parse_timestamp(text: str) -> str | None:
         month_str, day, hour, minute, second = m.groups()
         try:
             dt = datetime(
-                year=datetime.now().year,
+                year=reference_year or datetime.now().year,
                 month=_SYSLOG_MONTHS[month_str],
                 day=int(day),
                 hour=int(hour),
