@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import re
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from datetime import datetime, timedelta
 from typing import Any
 
-from mulder.models import WindowRow
+from mulder.models import SourceRow, WindowRow
 from mulder.server.app import get_ctx, mcp
 from mulder.server.helpers import hash_output, make_tool_call_id, slim_window
 
@@ -201,6 +201,9 @@ _PID_RE = re.compile(r"(?:^|\t)(\d{1,6})(?:\t|$)", re.MULTILINE)
 # Port extraction from netscan output (e.g. "192.168.1.1:445" or ":3389")
 _PORT_RE = re.compile(r":(\d{1,5})(?:\s|$)")
 
+# IPv4 address extraction
+_IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+
 # Process name extraction (first non-empty tab-separated column that looks like a name)
 _PROC_NAME_RE = re.compile(r"^([^\t]+\.exe)", re.MULTILINE | re.IGNORECASE)
 
@@ -208,25 +211,33 @@ _PROC_NAME_RE = re.compile(r"^([^\t]+\.exe)", re.MULTILINE | re.IGNORECASE)
 _PPID_RE = re.compile(r"(?:^|\t)(\d{1,6})\t(\d{1,6})(?:\t|$)", re.MULTILINE)
 
 
-def _source_exists(source_prefix: str) -> bool:
-    """Return True if any indexed source matches *source_prefix* exactly or as a prefix.
+_sources_cache: list[SourceRow] | None = None
+_sources_cache_case_id: str | None = None
 
-    Matches ``volatility.malfind`` against both ``volatility.malfind`` (exact)
-    and ``volatility.malfind.win2008r2-controller`` (per-system suffix).
-    """
+
+def _get_cached_sources() -> list[SourceRow]:
+    """Return cached sources for the current case, refreshing if case changed."""
+    global _sources_cache, _sources_cache_case_id
     ctx = get_ctx()
+    if _sources_cache is None or _sources_cache_case_id != ctx.case_id:
+        _sources_cache = ctx.db.get_sources()
+        _sources_cache_case_id = ctx.case_id
+    return _sources_cache
+
+
+def _source_exists(source_prefix: str) -> bool:
+    """Return True if any indexed source matches *source_prefix* exactly or as a prefix."""
     return any(
         s.source_name == source_prefix or s.source_name.startswith(source_prefix + ".")
-        for s in ctx.db.get_sources()
+        for s in _get_cached_sources()
     )
 
 
 def _find_matching_sources(source_prefix: str) -> list[str]:
     """Return all source names that match *source_prefix* exactly or as a prefix."""
-    ctx = get_ctx()
     return [
         s.source_name
-        for s in ctx.db.get_sources()
+        for s in _get_cached_sources()
         if s.source_name == source_prefix or s.source_name.startswith(source_prefix + ".")
     ]
 
@@ -1963,10 +1974,10 @@ def _extract_chains(nodes: dict[int, dict[str, Any]]) -> list[list[dict[str, Any
 def _walk_chain(nodes: dict[int, dict[str, Any]], root_pid: int) -> list[dict[str, Any]]:
     """BFS walk from root_pid through children."""
     chain: list[dict[str, Any]] = []
-    queue = [root_pid]
+    queue: deque[int] = deque([root_pid])
     visited: set[int] = set()
     while queue:
-        pid = queue.pop(0)
+        pid = queue.popleft()
         if pid in visited:
             continue
         visited.add(pid)
@@ -2232,8 +2243,8 @@ def correlate_pcap_with_host(
     pcap_ips: set[str] = set()
     pcap_ports: set[int] = set()
 
-    ip_re = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
-    port_re = re.compile(r":(\d{1,5})(?:\s|$)")
+    ip_re = _IP_RE
+    port_re = _PORT_RE
 
     for pcap_src in (_SRC_PCAP_CONVERSATIONS, _SRC_PCAP_DNS, _SRC_PCAP_HTTP):
         if not _source_exists(pcap_src):
