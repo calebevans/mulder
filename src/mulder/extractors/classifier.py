@@ -7,10 +7,11 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from mulder.extractors import DISK_IMAGE_EXTS
+
 logger = logging.getLogger(__name__)
 
 _MEMORY_DUMP_EXTS = {".mem", ".vmem", ".dmp", ".001"}
-_DISK_IMAGE_EXTS = {".e01", ".dd", ".img"}
 _NETWORK_CAPTURE_EXTS = {".pcap", ".pcapng", ".cap"}
 _ARCHIVE_EXTS = {".zip", ".gz", ".tar", ".bz2", ".7z", ".rar", ".tgz"}
 _EVTX_EXTS = {".evtx"}
@@ -114,7 +115,7 @@ _SKIP_EXTENSIONS: set[str] = {
 }
 
 
-_ALL_EVIDENCE_EXTS = _MEMORY_DUMP_EXTS | _DISK_IMAGE_EXTS | {".raw"}
+_ALL_EVIDENCE_EXTS = _MEMORY_DUMP_EXTS | DISK_IMAGE_EXTS | {".raw"}
 
 
 def _is_evidence_sidecar(path: Path) -> bool:
@@ -235,7 +236,7 @@ class EvidenceClassifier:
         if ext == ".raw":
             return ClassifiedEvidence(path=path, artifact_type="memory_dump")
 
-        if ext in _DISK_IMAGE_EXTS:
+        if ext in DISK_IMAGE_EXTS:
             return ClassifiedEvidence(path=path, artifact_type="disk_image")
 
         if ext in _PHONE_DUMP_EXTS:

@@ -23,6 +23,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, cast
 
+from mulder.extractors.volatility import _find_vol_binary, _plugin_short_name
 from mulder.server.app import get_cfg, get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index, mount_disk_image
 from mulder.server.helpers import error_response, make_tool_call_id, tool_response
@@ -38,24 +39,6 @@ _TOOL_TIMEOUT = 600
 def _require_binary(name: str) -> str | None:
     """Return the binary path if found, else None."""
     return shutil.which(name)
-
-
-def _find_vol_binary() -> list[str]:
-    """Locate the Volatility 3 CLI binary."""
-    for name in ("vol", "vol3"):
-        if shutil.which(name):
-            return [name]
-    try:
-        subprocess.run(
-            ["python3", "-m", "volatility3", "--help"],
-            capture_output=True,
-            timeout=15,
-            check=False,
-        )
-        return ["python3", "-m", "volatility3"]
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
-    raise RuntimeError("Volatility 3 not found on PATH")
 
 
 _VOL_PLUGIN_MAP: dict[str, str] = {
@@ -96,12 +79,6 @@ def _resolve_plugin_name(plugin: str) -> str:
     if lower in _VOL_PLUGIN_MAP:
         return _VOL_PLUGIN_MAP[lower]
     return f"windows.{lower}.{plugin}"
-
-
-def _plugin_short_name(full_name: str) -> str:
-    """Extract the short name (e.g. 'pslist') from a dotted plugin path."""
-    parts = full_name.split(".")
-    return parts[-2] if len(parts) >= 2 else parts[-1].lower()
 
 
 def _is_xp_unsupported_error(stderr: str) -> bool:

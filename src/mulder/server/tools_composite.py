@@ -9,13 +9,20 @@ from __future__ import annotations
 
 import re
 import time
-from collections import defaultdict, deque
+from collections import deque
 from datetime import datetime, timedelta
 from typing import Any
 
 from mulder.models import SourceRow, WindowRow
 from mulder.server.app import get_ctx, mcp
-from mulder.server.helpers import hash_output, make_tool_call_id, slim_window
+from mulder.server.helpers import (
+    extract_module_names,
+    extract_pid,
+    extract_pids_from_windows,
+    hash_output,
+    make_tool_call_id,
+    slim_window,
+)
 
 
 def _strip_source_windows(items: list[Any] | Any) -> None:
@@ -192,12 +199,6 @@ _SECURITY_PROCESSES: set[str] = {
     "cyoptics.exe",
 }
 
-_MODULE_NAME_RE = re.compile(r"^([^\t]+\.sys)", re.MULTILINE | re.IGNORECASE)
-
-# PID extraction: matches a column of digits that looks like a PID
-# in Volatility tab-separated output (typically 2nd or 3rd column).
-_PID_RE = re.compile(r"(?:^|\t)(\d{1,6})(?:\t|$)", re.MULTILINE)
-
 # Port extraction from netscan output (e.g. "192.168.1.1:445" or ":3389")
 _PORT_RE = re.compile(r":(\d{1,5})(?:\s|$)")
 
@@ -345,26 +346,6 @@ def _keyword_sub_query(
         duration_ms=elapsed,
     )
     return windows, tc_id
-
-
-def extract_pid(text: str) -> int | None:
-    """Parse the first PID value from a Volatility output line."""
-    m = _PID_RE.search(text)
-    if m:
-        val = int(m.group(1))
-        if val > 0:
-            return val
-    return None
-
-
-def _extract_pids_from_windows(windows: list[WindowRow]) -> dict[int, list[WindowRow]]:
-    """Group windows by the PID found in their text."""
-    pid_map: dict[int, list[WindowRow]] = defaultdict(list)
-    for w in windows:
-        pid = extract_pid(w.raw_text)
-        if pid is not None:
-            pid_map[pid].append(w)
-    return dict(pid_map)
 
 
 def _extract_process_name(text: str) -> str:
@@ -632,16 +613,16 @@ def find_suspicious_processes() -> dict[str, object]:
         dlllist_wins, tc_dll = _query_source(_SRC_DLLLIST, "find_suspicious_processes")
         sub_call_ids.append(tc_dll)
 
-    malfind_pids = _extract_pids_from_windows(malfind_wins)
-    cmdline_pids = _extract_pids_from_windows(cmdline_wins)
-    netscan_pids = _extract_pids_from_windows(netscan_wins)
-    pstree_pids = _extract_pids_from_windows(pstree_wins)
+    malfind_pids = extract_pids_from_windows(malfind_wins)
+    cmdline_pids = extract_pids_from_windows(cmdline_wins)
+    netscan_pids = extract_pids_from_windows(netscan_wins)
+    pstree_pids = extract_pids_from_windows(pstree_wins)
 
-    pslist_pids = _extract_pids_from_windows(pslist_wins) if pslist_wins else None
-    psscan_pids = _extract_pids_from_windows(psscan_wins) if psscan_wins else None
-    privs_pids = _extract_pids_from_windows(privs_wins) if privs_wins else None
-    envars_pids = _extract_pids_from_windows(envars_wins) if envars_wins else None
-    dlllist_pids = _extract_pids_from_windows(dlllist_wins) if dlllist_wins else None
+    pslist_pids = extract_pids_from_windows(pslist_wins) if pslist_wins else None
+    psscan_pids = extract_pids_from_windows(psscan_wins) if psscan_wins else None
+    privs_pids = extract_pids_from_windows(privs_wins) if privs_wins else None
+    envars_pids = extract_pids_from_windows(envars_wins) if envars_wins else None
+    dlllist_pids = extract_pids_from_windows(dlllist_wins) if dlllist_wins else None
 
     all_pids = set(malfind_pids) | set(cmdline_pids) | set(netscan_pids) | set(pstree_pids)
     if psscan_pids:
@@ -1643,17 +1624,6 @@ def find_execution_evidence() -> dict[str, object]:
     return result
 
 
-def _extract_module_names(windows: list[WindowRow]) -> dict[str, list[WindowRow]]:
-    """Group windows by the kernel module name found in their text."""
-    mod_map: dict[str, list[WindowRow]] = defaultdict(list)
-    for w in windows:
-        m = _MODULE_NAME_RE.search(w.raw_text)
-        if m:
-            name = m.group(1).strip().lower()
-            mod_map[name].append(w)
-    return dict(mod_map)
-
-
 def _check_timestomping(
     indicators: list[dict[str, Any]],
     sub_call_ids: list[str],
@@ -1735,8 +1705,8 @@ def _check_hidden_processes_defense(
     pslist_wins, tc_pl = _query_source(_SRC_PSLIST, "find_defense_evasion")
     sub_call_ids.append(tc_pl)
 
-    psscan_pids = _extract_pids_from_windows(psscan_wins)
-    pslist_pids = _extract_pids_from_windows(pslist_wins)
+    psscan_pids = extract_pids_from_windows(psscan_wins)
+    pslist_pids = extract_pids_from_windows(pslist_wins)
     hidden = set(psscan_pids) - set(pslist_pids)
 
     for pid in sorted(hidden):
@@ -1764,8 +1734,8 @@ def _check_hidden_kernel_modules(
     modscan_wins, tc_ms = _query_source(_SRC_MODSCAN, "find_defense_evasion")
     sub_call_ids.append(tc_ms)
 
-    linked = _extract_module_names(modules_wins)
-    scanned = _extract_module_names(modscan_wins)
+    linked = extract_module_names(modules_wins)
+    scanned = extract_module_names(modscan_wins)
     hidden = set(scanned) - set(linked)
 
     for name in sorted(hidden):
@@ -2018,10 +1988,10 @@ def reconstruct_execution_chains() -> dict[str, object]:
         dlllist_wins, tc_dll = _query_source(_SRC_DLLLIST, "reconstruct_execution_chains")
         sub_call_ids.append(tc_dll)
 
-    cmdline_pids = _extract_pids_from_windows(cmdline_wins)
-    netscan_pids = _extract_pids_from_windows(netscan_wins)
-    malfind_pids = _extract_pids_from_windows(malfind_wins)
-    dlllist_pids = _extract_pids_from_windows(dlllist_wins) if dlllist_wins else None
+    cmdline_pids = extract_pids_from_windows(cmdline_wins)
+    netscan_pids = extract_pids_from_windows(netscan_wins)
+    malfind_pids = extract_pids_from_windows(malfind_wins)
+    dlllist_pids = extract_pids_from_windows(dlllist_wins) if dlllist_wins else None
 
     nodes = _build_process_graph(
         pstree_wins, cmdline_pids, netscan_pids, dlllist_pids, malfind_pids

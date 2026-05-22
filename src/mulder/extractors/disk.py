@@ -20,11 +20,10 @@ import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from mulder.extractors import DISK_IMAGE_EXTS
 from mulder.extractors.base import ExtractionResult
 
 logger = logging.getLogger(__name__)
-
-_DISK_IMAGE_EXTS = frozenset({".e01", ".dd", ".img"})
 _EVTX_EXTS = frozenset({".evtx"})
 _REGISTRY_HIVES = frozenset({"system", "software", "sam", "ntuser.dat", "security", "default"})
 _PREFETCH_EXT = ".pf"
@@ -435,7 +434,7 @@ class DiskImageExtractor:
     def can_handle(self, path: Path) -> bool:
         """Return True for disk images (.E01/.dd/.img) and standalone .evtx files."""
         ext = path.suffix.lower()
-        if ext in _DISK_IMAGE_EXTS:
+        if ext in DISK_IMAGE_EXTS:
             return True
         return ext in _EVTX_EXTS
 

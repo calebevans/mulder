@@ -15,6 +15,9 @@ from typing import Any
 
 from mulder.server.app import get_ctx, mcp
 from mulder.server.helpers import (
+    extract_module_names,
+    extract_pid,
+    extract_pids_from_windows,
     hash_output,
     make_tool_call_id,
     serialize_windows,
@@ -57,41 +60,6 @@ _SRC_MODULES = "volatility.modules"
 _SRC_MODSCAN = "volatility.modscan"
 _SRC_USERASSIST = "volatility.userassist"
 _SRC_FILESCAN = "volatility.filescan"
-
-_PID_RE = re.compile(r"(?:^|\t)(\d{1,6})(?:\t|$)", re.MULTILINE)
-
-_MODULE_NAME_RE = re.compile(r"^([^\t]+\.sys)", re.MULTILINE | re.IGNORECASE)
-
-
-def _extract_pid(text: str) -> int | None:
-    """Parse the first PID value from a Volatility output line."""
-    m = _PID_RE.search(text)
-    if m:
-        val = int(m.group(1))
-        if val > 0:
-            return val
-    return None
-
-
-def _extract_pids_from_windows(windows: list[Any]) -> dict[int, list[Any]]:
-    """Group windows by the PID found in their text."""
-    pid_map: dict[int, list[Any]] = {}
-    for w in windows:
-        pid = _extract_pid(w.raw_text)
-        if pid is not None:
-            pid_map.setdefault(pid, []).append(w)
-    return pid_map
-
-
-def _extract_module_names(windows: list[Any]) -> dict[str, list[Any]]:
-    """Group windows by the kernel module name found in their text."""
-    mod_map: dict[str, list[Any]] = {}
-    for w in windows:
-        m = _MODULE_NAME_RE.search(w.raw_text)
-        if m:
-            name = m.group(1).strip().lower()
-            mod_map.setdefault(name, []).append(w)
-    return mod_map
 
 
 @mcp.tool()
@@ -442,8 +410,8 @@ def scan_hidden_processes() -> dict[str, object]:
     psscan_wins = ctx.db.get_windows_by_source(_SRC_PSSCAN)
     pslist_wins = ctx.db.get_windows_by_source(_SRC_PSLIST)
 
-    psscan_pids = _extract_pids_from_windows(psscan_wins)
-    pslist_pids = _extract_pids_from_windows(pslist_wins)
+    psscan_pids = extract_pids_from_windows(psscan_wins)
+    pslist_pids = extract_pids_from_windows(pslist_wins)
 
     hidden_pids = set(psscan_pids) - set(pslist_pids)
     results = [
@@ -486,7 +454,7 @@ def get_process_environment(pid: int) -> dict[str, object]:
 
     pid_str = str(pid)
     search_results = ctx.db.search_windows(pid_str, source_name=_SRC_ENVARS)
-    matching = [row[0] for row in search_results if _extract_pid(row[0].raw_text) == pid]
+    matching = [row[0] for row in search_results if extract_pid(row[0].raw_text) == pid]
     elapsed = (time.monotonic() - t0) * 1000
     return windowed_response(
         tc_id, matching, _SRC_ENVARS, "get_process_environment", {"pid": pid}, elapsed
@@ -507,7 +475,7 @@ def get_process_privileges(pid: int) -> dict[str, object]:
 
     pid_str = str(pid)
     search_results = ctx.db.search_windows(pid_str, source_name=_SRC_PRIVS)
-    matching = [row[0] for row in search_results if _extract_pid(row[0].raw_text) == pid]
+    matching = [row[0] for row in search_results if extract_pid(row[0].raw_text) == pid]
     elapsed = (time.monotonic() - t0) * 1000
     return windowed_response(
         tc_id, matching, _SRC_PRIVS, "get_process_privileges", {"pid": pid}, elapsed
@@ -529,8 +497,8 @@ def scan_kernel_modules() -> dict[str, object]:
     modules_wins = ctx.db.get_windows_by_source(_SRC_MODULES)
     modscan_wins = ctx.db.get_windows_by_source(_SRC_MODSCAN)
 
-    linked_mods = _extract_module_names(modules_wins)
-    scanned_mods = _extract_module_names(modscan_wins)
+    linked_mods = extract_module_names(modules_wins)
+    scanned_mods = extract_module_names(modscan_wins)
 
     hidden_names = set(scanned_mods) - set(linked_mods)
     results = [

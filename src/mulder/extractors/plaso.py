@@ -19,11 +19,10 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from mulder.extractors import DISK_IMAGE_EXTS
 from mulder.extractors.base import ExtractionResult
 
 logger = logging.getLogger(__name__)
-
-_DISK_IMAGE_EXTS = frozenset({".e01", ".dd", ".img"})
 
 
 def _find_bin(*names: str) -> str:
@@ -130,7 +129,7 @@ class PlasoExtractor:
 
     def can_handle(self, path: Path) -> bool:
         """Return True for disk images (.e01/.dd/.img) or mounted filesystems."""
-        if path.suffix.lower() in _DISK_IMAGE_EXTS:
+        if path.suffix.lower() in DISK_IMAGE_EXTS:
             return True
         return _looks_like_mounted_fs(path)
 

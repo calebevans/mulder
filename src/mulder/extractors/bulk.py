@@ -15,11 +15,10 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from mulder.extractors import DISK_IMAGE_EXTS
 from mulder.extractors.base import ExtractionResult
 
 logger = logging.getLogger(__name__)
-
-_DISK_IMAGE_EXTS = frozenset({".e01", ".dd", ".img"})
 _BULK_EXTRACTOR_BIN = "bulk_extractor"
 _BULK_EXTRACTOR_TIMEOUT = 3600  # 1 hour -- full-image scans are slow
 
@@ -62,7 +61,7 @@ class BulkExtractorExtractor:
 
     def can_handle(self, path: Path) -> bool:
         """Return True for disk image files (.e01/.dd/.img)."""
-        return path.suffix.lower() in _DISK_IMAGE_EXTS
+        return path.suffix.lower() in DISK_IMAGE_EXTS
 
     def extract(self, path: Path, case_id: str) -> list[ExtractionResult]:
         """Run bulk_extractor on *path* and return one result per non-empty feature file."""

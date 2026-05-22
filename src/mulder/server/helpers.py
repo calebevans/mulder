@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
 from typing import Any
@@ -170,3 +172,38 @@ def error_response(
     if suggestion:
         result["suggestion"] = suggestion
     return result
+
+
+_PID_RE = re.compile(r"(?:^|\t)(\d{1,6})(?:\t|$)", re.MULTILINE)
+_MODULE_NAME_RE = re.compile(r"^([^\t]+\.sys)", re.MULTILINE | re.IGNORECASE)
+
+
+def extract_pid(text: str) -> int | None:
+    """Parse the first PID value from a Volatility output line."""
+    m = _PID_RE.search(text)
+    if m:
+        val = int(m.group(1))
+        if val > 0:
+            return val
+    return None
+
+
+def extract_pids_from_windows(windows: Sequence[Any]) -> dict[int, list[Any]]:
+    """Group windows by the PID found in their text."""
+    pid_map: dict[int, list[Any]] = defaultdict(list)
+    for w in windows:
+        pid = extract_pid(w.raw_text)
+        if pid is not None:
+            pid_map[pid].append(w)
+    return dict(pid_map)
+
+
+def extract_module_names(windows: Sequence[Any]) -> dict[str, list[Any]]:
+    """Group windows by the kernel module name found in their text."""
+    mod_map: dict[str, list[Any]] = defaultdict(list)
+    for w in windows:
+        m = _MODULE_NAME_RE.search(w.raw_text)
+        if m:
+            name = m.group(1).strip().lower()
+            mod_map[name].append(w)
+    return dict(mod_map)

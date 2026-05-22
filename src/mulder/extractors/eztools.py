@@ -20,12 +20,11 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from mulder.extractors import DISK_IMAGE_EXTS
 from mulder.extractors.base import ExtractionResult
 from mulder.extractors.disk import _mount_image, _unmount_image
 
 logger = logging.getLogger(__name__)
-
-_DISK_IMAGE_EXTS = frozenset({".e01", ".dd", ".img"})
 _EZ_TOOLS_DIR = Path("/opt/zimmermantools")
 
 _TOOL_TIMEOUT = 600
@@ -191,7 +190,7 @@ class EZToolsExtractor:
 
     def can_handle(self, path: Path) -> bool:
         """Return True for disk image formats (.E01/.dd/.img)."""
-        return path.suffix.lower() in _DISK_IMAGE_EXTS
+        return path.suffix.lower() in DISK_IMAGE_EXTS
 
     def extract(self, path: Path, case_id: str) -> list[ExtractionResult]:
         """Mount the image and run all EZ tool parsers against it."""

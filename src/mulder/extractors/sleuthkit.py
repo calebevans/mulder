@@ -15,11 +15,10 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from mulder.extractors import DISK_IMAGE_EXTS
 from mulder.extractors.base import ExtractionResult
 
 logger = logging.getLogger(__name__)
-
-_DISK_IMAGE_EXTS = frozenset({".e01", ".dd", ".img"})
 
 _MMLS_TIMEOUT = 60
 _FLS_TIMEOUT = 600
@@ -80,7 +79,7 @@ class SleuthKitExtractor:
 
     def can_handle(self, path: Path) -> bool:
         """Return True for disk image files (.e01/.dd/.img)."""
-        return path.suffix.lower() in _DISK_IMAGE_EXTS
+        return path.suffix.lower() in DISK_IMAGE_EXTS
 
     def extract(self, path: Path, _case_id: str) -> list[ExtractionResult]:
         """Run TSK tools (mmls, fls, mactime, fsstat) and return filesystem metadata."""
