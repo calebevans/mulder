@@ -779,7 +779,7 @@ class CaseDB:
                 )
                 continue
             except OSError as exc:
-                logger.warning("Cannot read evidence file %s: %s", fp, exc)
+                logger.warning("Cannot read evidence file %r: %s", fp, exc)
                 results.append(
                     {
                         "file_path": str(fp),

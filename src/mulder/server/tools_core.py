@@ -15,6 +15,9 @@ from typing import Any
 
 from mulder.server.app import get_ctx, mcp
 from mulder.server.helpers import (
+    _DEFAULT_SEARCH_LIMIT,
+    _HINT_CHAR_LIMIT,
+    _PREVIEW_CHAR_LIMIT,
     extract_module_names,
     extract_pid,
     extract_pids_from_windows,
@@ -564,7 +567,7 @@ def scan_files_in_memory() -> dict[str, object]:
 def get_raw_output(
     source_name: str,
     after_id: int = 0,
-    limit: int = 500,
+    limit: int = _DEFAULT_SEARCH_LIMIT,
 ) -> dict[str, object]:
     """Retrieve raw extraction output for a source, with cursor pagination.
 
@@ -582,7 +585,7 @@ def get_raw_output(
         after_id: Cursor -- return windows with ID > this value.
             Use 0 for the first page, then pass ``next_after_id`` from
             the response to get subsequent pages.
-        limit: Maximum number of windows to return (default 500).
+        limit: Maximum number of windows to return.
     """
     ctx = get_ctx()
     tc_id = make_tool_call_id()
@@ -725,7 +728,7 @@ def decode_payload(
         try:
             raw_bytes = binascii.unhexlify(data)
             decoded = _safe_decode_bytes(raw_bytes)
-            layers.append({"encoding": "hex", "preview": decoded[:200]})
+            layers.append({"encoding": "hex", "preview": decoded[:_HINT_CHAR_LIMIT]})
         except (binascii.Error, ValueError) as exc:
             decoded = f"[hex decode failed: {exc}]"
 
@@ -734,14 +737,22 @@ def decode_payload(
             raw_bytes = base64.b64decode(data)
             decoded = raw_bytes.decode("utf-16-le", errors="replace").rstrip("\x00")
             layers.append(
-                {"encoding": "utf16le (PowerShell -EncodedCommand)", "preview": decoded[:500]}
+                {
+                    "encoding": "utf16le (PowerShell -EncodedCommand)",
+                    "preview": decoded[:_PREVIEW_CHAR_LIMIT],
+                }
             )
         except Exception as exc:
             decoded = f"[utf16le decode failed: {exc}]"
 
     elif detected_encoding == "pickle":
         decoded = _inspect_pickle(data)
-        layers.append({"encoding": "pickle (inspected, NOT executed)", "preview": decoded[:500]})
+        layers.append(
+            {
+                "encoding": "pickle (inspected, NOT executed)",
+                "preview": decoded[:_PREVIEW_CHAR_LIMIT],
+            }
+        )
 
     elif detected_encoding == "base64":
         try:
@@ -754,7 +765,10 @@ def decode_payload(
                 layers.append({"encoding": "base64", "preview": "(binary -> pickle detected)"})
                 decoded = _inspect_pickle_bytes(raw_bytes)
                 layers.append(
-                    {"encoding": "pickle (inspected, NOT executed)", "preview": decoded[:500]}
+                    {
+                        "encoding": "pickle (inspected, NOT executed)",
+                        "preview": decoded[:_PREVIEW_CHAR_LIMIT],
+                    }
                 )
             elif raw_bytes[:2] == b"\x1f\x8b":
                 import gzip
@@ -764,13 +778,13 @@ def decode_payload(
                     decompressed = gzip.GzipFile(fileobj=io.BytesIO(raw_bytes)).read()
                     decoded = _safe_decode_bytes(decompressed)
                     layers.append({"encoding": "base64", "preview": "(binary -> gzip detected)"})
-                    layers.append({"encoding": "gzip", "preview": decoded[:500]})
+                    layers.append({"encoding": "gzip", "preview": decoded[:_PREVIEW_CHAR_LIMIT]})
                 except Exception:
                     decoded = _safe_decode_bytes(raw_bytes)
-                    layers.append({"encoding": "base64", "preview": decoded[:200]})
+                    layers.append({"encoding": "base64", "preview": decoded[:_HINT_CHAR_LIMIT]})
             else:
                 decoded = _safe_decode_bytes(raw_bytes)
-                layers.append({"encoding": "base64", "preview": decoded[:200]})
+                layers.append({"encoding": "base64", "preview": decoded[:_HINT_CHAR_LIMIT]})
                 inner = _detect_encoding(decoded)
                 if inner != "base64" and inner != "unknown":
                     inner_result = decode_payload(decoded, encoding=inner)

@@ -201,7 +201,7 @@ def parse_browser_history() -> dict[str, object]:
                         all_results.append("\n".join(lines))
 
                 except (sqlite3.Error, OSError) as exc:
-                    logger.debug("Browser DB parse error for %s: %s", rel_path, exc)
+                    logger.debug("Browser DB parse error for %r: %s", rel_path, exc)
 
     combined = "\n\n".join(all_results) if all_results else ""
     if combined:
@@ -276,7 +276,7 @@ def parse_plist(plist_filter: str | None = None) -> dict[str, object]:
                 text += json.dumps(data, indent=2, default=str, ensure_ascii=False)
                 all_results.append(text)
             except Exception as exc:
-                logger.debug("Plist parse error for %s: %s", rel_path, exc)
+                logger.debug("Plist parse error for %r: %s", rel_path, exc)
 
     combined = "\n\n".join(all_results) if all_results else ""
     if combined:
@@ -358,11 +358,12 @@ def query_sqlite_from_image(inode: int, query: str, description: str = "") -> di
             rows = conn.execute(query).fetchall()
             conn.close()
         except sqlite3.Error as exc:
+            logger.error("SQLite query failed on inode %d: %s", inode, exc)
             elapsed = (time.monotonic() - t0) * 1000
             return {
                 "tool_call_id": tc_id,
                 "status": "error",
-                "error_message": f"SQLite error: {exc}",
+                "error_message": "SQLite query failed",
             }
 
     if rows:
@@ -557,15 +558,16 @@ def read_evidence_file(
             content = raw.decode("utf-8", errors="replace")
             is_binary = any(b < 0x20 and b not in (0x09, 0x0A, 0x0D) for b in raw[:512])
     except OSError as exc:
+        logger.error("Failed to read evidence file %r: %s", file_path, exc)
         elapsed = (time.monotonic() - t0) * 1000
         ctx.audit.log_tool_call(
             tool_call_id=tc_id,
             tool_name="read_evidence_file",
             params=params,
-            output_hash=hash_output({"error": str(exc)}),
+            output_hash=hash_output({"error": "read_failed"}),
             duration_ms=elapsed,
         )
-        return {"tool_call_id": tc_id, "status": "error", "error_message": f"Read error: {exc}"}
+        return {"tool_call_id": tc_id, "status": "error", "error_message": "Failed to read file"}
 
     file_size = target.stat().st_size
     truncated = file_size > max_bytes

@@ -19,7 +19,12 @@ from pathlib import Path
 
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
-from mulder.server.helpers import error_response, hash_output, make_tool_call_id
+from mulder.server.helpers import (
+    _PREVIEW_CHAR_LIMIT,
+    error_response,
+    hash_output,
+    make_tool_call_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -163,7 +168,7 @@ def run_hayabusa(
         )
 
     if proc.returncode != 0 and not Path(out_path).exists():
-        stderr_preview = (proc.stderr or "")[:500]
+        stderr_preview = (proc.stderr or "")[:_PREVIEW_CHAR_LIMIT]
         return error_response(
             tc_id,
             tool_name,

@@ -21,6 +21,11 @@ def make_tool_call_id() -> str:
     return f"tc_{uuid4().hex[:8]}"
 
 
+_PREVIEW_CHAR_LIMIT = 500
+_HINT_CHAR_LIMIT = 200
+_DEFAULT_SEARCH_LIMIT = 500
+_FILE_LIST_CAP = 500
+
 _HASH_SIZE_THRESHOLD = 10000
 _HASH_PREFIX = "blake2b:"
 _HASH_DIGEST_SIZE = 32

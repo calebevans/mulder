@@ -20,7 +20,7 @@ from pathlib import Path
 
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
-from mulder.server.helpers import hash_output, make_tool_call_id
+from mulder.server.helpers import _PREVIEW_CHAR_LIMIT, hash_output, make_tool_call_id
 
 logger = logging.getLogger(__name__)
 
@@ -397,7 +397,7 @@ def yara_scan_files(
 
     if proc.returncode != 0 and not proc.stdout.strip():
         error_msg = f"yara exited {proc.returncode}"
-        stderr_text = (proc.stderr or "")[:500]
+        stderr_text = (proc.stderr or "")[:_PREVIEW_CHAR_LIMIT]
         elapsed = (time.monotonic() - t0) * 1000
         ctx.audit.log_tool_call(
             tool_call_id=tc_id,
@@ -586,7 +586,7 @@ def yara_scan_memory(
 
     if proc.returncode != 0 and not proc.stdout.strip():
         error_msg = f"yara exited {proc.returncode}"
-        stderr_text = (proc.stderr or "")[:500]
+        stderr_text = (proc.stderr or "")[:_PREVIEW_CHAR_LIMIT]
         elapsed = (time.monotonic() - t0) * 1000
         ctx.audit.log_tool_call(
             tool_call_id=tc_id,
@@ -777,7 +777,7 @@ def yara_scan_with_volatility(
 
     if proc.returncode != 0 and not proc.stdout.strip():
         error_msg = f"Volatility vadyarascan exited {proc.returncode}"
-        stderr_text = (proc.stderr or "")[:500]
+        stderr_text = (proc.stderr or "")[:_PREVIEW_CHAR_LIMIT]
         elapsed = (time.monotonic() - t0) * 1000
         ctx.audit.log_tool_call(
             tool_call_id=tc_id,

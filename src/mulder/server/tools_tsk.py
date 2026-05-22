@@ -17,6 +17,7 @@ import time
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
+    _PREVIEW_CHAR_LIMIT,
     hash_output,
     make_tool_call_id,
     windowed_response,
@@ -338,7 +339,7 @@ def extract_file_by_inode(inode: int, filesystem_type: str | None = None) -> dic
     raw = proc.stdout
     if proc.returncode != 0:
         error_msg = f"icat exited {proc.returncode}"
-        stderr_text = (proc.stderr or b"").decode("utf-8", errors="replace")[:500]
+        stderr_text = (proc.stderr or b"").decode("utf-8", errors="replace")[:_PREVIEW_CHAR_LIMIT]
         elapsed = (time.monotonic() - t0) * 1000
         ctx.audit.log_tool_call(
             tool_call_id=tc_id,
@@ -465,7 +466,7 @@ def get_file_metadata(inode: int, filesystem_type: str | None = None) -> dict[st
 
     if proc.returncode != 0:
         error_msg = f"istat exited {proc.returncode}"
-        stderr_text = (proc.stderr or "")[:500]
+        stderr_text = (proc.stderr or "")[:_PREVIEW_CHAR_LIMIT]
         elapsed = (time.monotonic() - t0) * 1000
         ctx.audit.log_tool_call(
             tool_call_id=tc_id,

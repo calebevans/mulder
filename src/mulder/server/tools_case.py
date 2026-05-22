@@ -63,9 +63,9 @@ def scan_evidence(
 
     try:
         return _scan_evidence_inner(ev_path, case_id, replace)
-    except Exception as exc:
-        logger.exception("scan_evidence failed for %s", ev_path)
-        return {"error": f"scan_evidence failed: {exc}"}
+    except Exception:
+        logger.exception("scan_evidence failed for %r", ev_path)
+        return {"error": "scan_evidence failed"}
 
 
 def _hash_and_register_evidence(manifest: list[dict[str, object]]) -> None:
@@ -97,7 +97,7 @@ def _hash_and_register_evidence(manifest: list[dict[str, object]]) -> None:
                 size_bytes=size,
             )
         except Exception:
-            logger.debug("Failed to hash %s", fp, exc_info=True)
+            logger.debug("Failed to hash %r", fp, exc_info=True)
 
 
 def _scan_evidence_inner(ev_path: Path, case_id: str, replace: bool) -> dict[str, object]:
@@ -308,7 +308,7 @@ def _extract_zip(archive: Path, dest: Path) -> list[str]:
         with zipfile.ZipFile(archive, "r") as zf:
             for member in zf.namelist():
                 if member.startswith("/") or ".." in member:
-                    logger.warning("Skipping unsafe zip entry: %s", member)
+                    logger.warning("Skipping unsafe zip entry: %r", member)
                     continue
                 zf.extract(member, dest)
     except (NotImplementedError, zipfile.BadZipFile):
@@ -411,8 +411,9 @@ def extract_archive(
                 ],
             }
     except Exception as exc:
+        logger.error("Archive extraction failed for %r: %s", archive, exc)
         return {
-            "error": f"Extraction failed: {exc}",
+            "error": "Extraction failed",
             "archive": str(archive),
         }
 

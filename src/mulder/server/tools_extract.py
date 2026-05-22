@@ -26,7 +26,14 @@ from typing import Any, cast
 from mulder.extractors.volatility import _find_vol_binary, _plugin_short_name
 from mulder.server.app import get_cfg, get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index, mount_disk_image
-from mulder.server.helpers import error_response, make_tool_call_id, tool_response
+from mulder.server.helpers import (
+    _FILE_LIST_CAP,
+    _HINT_CHAR_LIMIT,
+    _PREVIEW_CHAR_LIMIT,
+    error_response,
+    make_tool_call_id,
+    tool_response,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -314,7 +321,7 @@ def run_volatility_batch(
     ctx.config["automagic.LayerStacker.single_location"] = single_location
 
     logger.info(
-        "Volatility batch: context built for %s, running %d plugins",
+        "Volatility batch: context built for %r, running %d plugins",
         memory_path,
         len(plugins),
     )
@@ -566,7 +573,7 @@ def run_fls(image_path: str, partition_offset: int | None = None) -> dict[str, o
     stderr_text = (proc.stderr or b"").decode("utf-8", errors="replace")
 
     if proc.returncode != 0:
-        stderr_hint = stderr_text[:200].strip()
+        stderr_hint = stderr_text[:_HINT_CHAR_LIMIT].strip()
         return error_response(
             tc_id,
             "run_fls",
@@ -759,7 +766,7 @@ def run_plaso(
             )
 
         if proc.returncode != 0 and not plaso_file.exists():
-            stderr = (proc.stderr or "")[:500]
+            stderr = (proc.stderr or "")[:_PREVIEW_CHAR_LIMIT]
             return error_response(tc_id, "run_plaso", params, f"log2timeline failed: {stderr}")
 
         persistent_plaso = cfg.db_dir / f"{ctx.case_id}.plaso"
@@ -1644,7 +1651,7 @@ def run_registry_parser(image_path: str, hive: str | None = None) -> dict[str, o
                                     extract_and_index(combined, source_name, image_path, "eztools")
                                 )
                                 continue
-                            stderr_hint = (proc.stderr or "")[:200].strip()
+                            stderr_hint = (proc.stderr or "")[:_HINT_CHAR_LIMIT].strip()
                             hive_status = (
                                 f"recmd_empty_output ({stderr_hint})"
                                 if stderr_hint
@@ -1668,7 +1675,7 @@ def run_registry_parser(image_path: str, hive: str | None = None) -> dict[str, o
                                 )
                             )
                             continue
-                        stderr_hint = (proc.stderr or "")[:200].strip()
+                        stderr_hint = (proc.stderr or "")[:_HINT_CHAR_LIMIT].strip()
                         hive_status = (
                             f"regripper_empty_output ({stderr_hint})"
                             if stderr_hint
@@ -1763,7 +1770,7 @@ def run_registry_parser(image_path: str, hive: str | None = None) -> dict[str, o
                             extract_and_index(combined, source_name, image_path, "eztools")
                         )
                         continue
-                    stderr_hint = (proc.stderr or "")[:200].strip()
+                    stderr_hint = (proc.stderr or "")[:_HINT_CHAR_LIMIT].strip()
                     fb_status = (
                         f"recmd_empty_output ({stderr_hint})"
                         if stderr_hint
@@ -1787,7 +1794,7 @@ def run_registry_parser(image_path: str, hive: str | None = None) -> dict[str, o
                         )
                     )
                     continue
-                stderr_hint = (proc.stderr or "")[:200].strip()
+                stderr_hint = (proc.stderr or "")[:_HINT_CHAR_LIMIT].strip()
                 fb_status = (
                     f"regripper_empty_output ({stderr_hint})"
                     if stderr_hint
@@ -1956,8 +1963,8 @@ def run_bulk_extractor(
             )
 
         if proc.returncode != 0:
-            stderr_hint = (proc.stderr or "")[:500].strip()
-            logger.error("bulk_extractor exited %d: %s", proc.returncode, stderr_hint)
+            stderr_hint = (proc.stderr or "")[:_PREVIEW_CHAR_LIMIT].strip()
+            logger.error("bulk_extractor exited %d: %r", proc.returncode, stderr_hint)
             return error_response(
                 tc_id,
                 "run_bulk_extractor",
@@ -3116,10 +3123,10 @@ def run_photorec(image_path: str) -> dict[str, object]:
             recovered = list(Path(tmpdir).rglob("*"))
             file_list = [str(f.relative_to(tmpdir)) for f in recovered if f.is_file()]
             report_text = f"PhotoRec recovered {len(file_list)} file(s):\n" + "\n".join(
-                file_list[:500]
+                file_list[:_FILE_LIST_CAP]
             )
-            if len(file_list) > 500:
-                report_text += f"\n... and {len(file_list) - 500} more"
+            if len(file_list) > _FILE_LIST_CAP:
+                report_text += f"\n... and {len(file_list) - _FILE_LIST_CAP} more"
 
         summary = extract_and_index(report_text, "photorec.report", image_path, "photorec")
 
@@ -3628,7 +3635,7 @@ def run_dislocker(
             tc_id,
             "run_dislocker",
             params,
-            f"dislocker-fuse failed: {proc.stderr.strip()[:500]}",
+            f"dislocker-fuse failed: {proc.stderr.strip()[:_PREVIEW_CHAR_LIMIT]}",
         )
 
     result_text = (

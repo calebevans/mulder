@@ -16,7 +16,12 @@ from pathlib import Path
 
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
-from mulder.server.helpers import hash_output, make_tool_call_id, windowed_response
+from mulder.server.helpers import (
+    _PREVIEW_CHAR_LIMIT,
+    hash_output,
+    make_tool_call_id,
+    windowed_response,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -164,7 +169,7 @@ def filter_timeline(
 
     output = proc.stdout.strip()
     if proc.returncode != 0:
-        stderr_preview = (proc.stderr or "")[:500]
+        stderr_preview = (proc.stderr or "")[:_PREVIEW_CHAR_LIMIT]
         return _error_response(
             tc_id,
             "filter_timeline",
@@ -252,7 +257,7 @@ def export_timeline_slice(timestamp: str) -> dict[str, object]:
 
     output = proc.stdout.strip()
     if proc.returncode != 0:
-        stderr_preview = (proc.stderr or "")[:500]
+        stderr_preview = (proc.stderr or "")[:_PREVIEW_CHAR_LIMIT]
         return _error_response(
             tc_id,
             "export_timeline_slice",

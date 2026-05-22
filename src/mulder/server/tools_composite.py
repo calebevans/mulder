@@ -16,6 +16,8 @@ from typing import Any
 from mulder.models import SourceRow, WindowRow
 from mulder.server.app import get_ctx, mcp
 from mulder.server.helpers import (
+    _HINT_CHAR_LIMIT,
+    _PREVIEW_CHAR_LIMIT,
     extract_module_names,
     extract_pid,
     extract_pids_from_windows,
@@ -538,7 +540,7 @@ def _analyze_pid(
 
     cmdline_full = " ".join(w.raw_text.strip() for w in cmdline_pids.get(pid, []))
     cmdline_out = (cmdline_full[:300] + "...") if len(cmdline_full) > 300 else cmdline_full
-    capped_conns = [c[:200] for c in connections[:5]]
+    capped_conns = [c[:_HINT_CHAR_LIMIT] for c in connections[:5]]
 
     return {
         "pid": pid,
@@ -701,7 +703,7 @@ def _collect_registry_persistence(
                         "type": "registry_autorun",
                         "key_pattern": matched_key,
                         "source": reg_source,
-                        "evidence_text": w.raw_text.strip()[:500],
+                        "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
                         "source_window": slim_window(w),
                     }
                 )
@@ -719,7 +721,7 @@ def _collect_service_persistence(
             {
                 "type": "installed_service",
                 "source": "volatility.svcscan",
-                "evidence_text": w.raw_text.strip()[:500],
+                "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
                 "source_window": slim_window(w),
             }
         )
@@ -743,7 +745,7 @@ def _collect_evtx_service_installs(
                 {
                     "type": "service_install_event",
                     "source": _SRC_EVTX_SYSTEM,
-                    "evidence_text": w.raw_text.strip()[:500],
+                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
                     "source_window": slim_window(w),
                 }
             )
@@ -768,7 +770,7 @@ def _collect_startup_dir_modifications(
                 {
                     "type": "startup_directory_modification",
                     "source": _SRC_PLASO,
-                    "evidence_text": w.raw_text.strip()[:500],
+                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
                     "source_window": slim_window(w),
                 }
             )
@@ -801,7 +803,7 @@ def _collect_ez_execution_persistence(
                         "type": mech_type,
                         "executable": matched_exe,
                         "source": src,
-                        "evidence_text": w.raw_text.strip()[:500],
+                        "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
                         "source_window": slim_window(w),
                     }
                 )
@@ -826,7 +828,7 @@ def _collect_scheduled_task_persistence(
                 {
                     "type": "scheduled_task",
                     "source": _SRC_EVTX_SYSTEM,
-                    "evidence_text": text.strip()[:500],
+                    "evidence_text": text.strip()[:_PREVIEW_CHAR_LIMIT],
                     "source_window": slim_window(w),
                 }
             )
@@ -848,7 +850,7 @@ def _collect_startup_files(
                 {
                     "type": "startup_directory_file",
                     "source": _SRC_TSK_FILELIST,
-                    "evidence_text": w.raw_text.strip()[:500],
+                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
                     "source_window": slim_window(w),
                 }
             )
@@ -933,7 +935,7 @@ def _classify_logon_windows(
                 "logon_type": logon_type,
                 "source": _SRC_EVTX_SECURITY,
                 "event_time": w.event_time,
-                "evidence_text": w.raw_text.strip()[:500],
+                "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
                 "source_window": slim_window(w),
             }
         )
@@ -945,7 +947,7 @@ def _classify_logon_windows(
                     "type": "failed_logon",
                     "source": _SRC_EVTX_SECURITY,
                     "event_time": w.event_time,
-                    "evidence_text": w.raw_text.strip()[:500],
+                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
                     "source_window": slim_window(w),
                 }
             )
@@ -957,7 +959,7 @@ def _classify_logon_windows(
                     "type": "explicit_credentials",
                     "source": _SRC_EVTX_SECURITY,
                     "event_time": w.event_time,
-                    "evidence_text": w.raw_text.strip()[:500],
+                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
                     "source_window": slim_window(w),
                 }
             )
@@ -977,7 +979,7 @@ def _collect_netscan_lateral(
                 "ports": matching_ports,
                 "source": _SRC_NETSCAN,
                 "event_time": w.event_time,
-                "evidence_text": w.raw_text.strip()[:500],
+                "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
                 "source_window": slim_window(w),
             }
             indicators.append(entry)
@@ -998,7 +1000,7 @@ def _collect_rdp_artifacts(
                     "type": "rdp_artifact",
                     "source": _SRC_PLASO,
                     "event_time": w.event_time,
-                    "evidence_text": w.raw_text.strip()[:500],
+                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
                     "source_window": slim_window(w),
                 }
             )
@@ -1019,7 +1021,7 @@ def _collect_rdp_artifacts(
                         "type": "rdp_logon",
                         "source": _SRC_EZ_EVTX_SECURITY,
                         "event_time": w.event_time,
-                        "evidence_text": w.raw_text.strip()[:500],
+                        "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
                         "source_window": slim_window(w),
                     }
                 )
@@ -1039,7 +1041,7 @@ def _collect_rdp_artifacts(
                     "type": "rdp_terminal_services",
                     "source": _SRC_EVTX_SYSTEM,
                     "event_time": w.event_time,
-                    "evidence_text": w.raw_text.strip()[:500],
+                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
                     "source_window": slim_window(w),
                 }
             )
@@ -1066,7 +1068,7 @@ def _collect_winrm_indicators(sub_call_ids: list[str]) -> list[dict[str, Any]]:
                     "type": "winrm_connection",
                     "source": _SRC_EVTX_SYSTEM,
                     "event_time": w.event_time,
-                    "evidence_text": text.strip()[:500],
+                    "evidence_text": text.strip()[:_PREVIEW_CHAR_LIMIT],
                     "source_window": slim_window(w),
                 }
             )
@@ -1092,7 +1094,7 @@ def _collect_srum_network_anomalies(sub_call_ids: list[str]) -> list[dict[str, A
                     "type": "srum_network_anomaly",
                     "source": _SRC_EZ_SRUM,
                     "event_time": w.event_time,
-                    "evidence_text": w.raw_text.strip()[:500],
+                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
                     "source_window": slim_window(w),
                 }
             )
@@ -1115,7 +1117,7 @@ def _collect_pcap_lateral(sub_call_ids: list[str]) -> list[dict[str, Any]]:
                     "ports": matching_ports,
                     "source": _SRC_PCAP_CONVERSATIONS,
                     "event_time": w.event_time,
-                    "evidence_text": w.raw_text.strip()[:500],
+                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
                     "source_window": slim_window(w),
                 }
             )
@@ -1142,7 +1144,7 @@ def _collect_pcap_exfil_dns(sub_call_ids: list[str]) -> list[dict[str, Any]]:
                     "domain": matched_svc,
                     "source": _SRC_PCAP_DNS,
                     "event_time": w.event_time,
-                    "evidence_text": w.raw_text.strip()[:500],
+                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
                     "source_window": slim_window(w),
                 }
             )
@@ -1169,7 +1171,7 @@ def _collect_pcap_exfil_http(sub_call_ids: list[str]) -> list[dict[str, Any]]:
                     "service": matched_svc,
                     "source": _SRC_PCAP_HTTP,
                     "event_time": w.event_time,
-                    "evidence_text": w.raw_text.strip()[:500],
+                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
                     "source_window": slim_window(w),
                 }
             )
@@ -1333,7 +1335,7 @@ def _collect_exfil_urls(sub_call_ids: list[str]) -> list[dict[str, Any]]:
                     "service": matched_svc,
                     "source": _SRC_BULK_URL,
                     "event_time": w.event_time,
-                    "evidence_text": w.raw_text.strip()[:500],
+                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
                     "source_window": slim_window(w),
                 }
             )
@@ -1354,7 +1356,7 @@ def _collect_exfil_emails(sub_call_ids: list[str]) -> list[dict[str, Any]]:
                     "type": "exfil_email",
                     "source": _SRC_BULK_EMAIL,
                     "event_time": w.event_time,
-                    "evidence_text": w.raw_text.strip()[:500],
+                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
                     "source_window": slim_window(w),
                 }
             )
@@ -1381,7 +1383,7 @@ def _collect_exfil_domains(sub_call_ids: list[str]) -> list[dict[str, Any]]:
                     "domain": matched_svc,
                     "source": _SRC_BULK_DOMAIN,
                     "event_time": w.event_time,
-                    "evidence_text": w.raw_text.strip()[:500],
+                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
                     "source_window": slim_window(w),
                 }
             )
@@ -1420,7 +1422,7 @@ def _collect_high_port_connections(sub_call_ids: list[str]) -> list[dict[str, An
                     "ports": unusual,
                     "source": _SRC_NETSCAN,
                     "event_time": w.event_time,
-                    "evidence_text": w.raw_text.strip()[:500],
+                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
                     "source_window": slim_window(w),
                 }
             )
@@ -1445,7 +1447,7 @@ def _collect_large_file_access(sub_call_ids: list[str]) -> list[dict[str, Any]]:
                     "type": "large_file_access",
                     "source": _SRC_PLASO,
                     "event_time": w.event_time,
-                    "evidence_text": w.raw_text.strip()[:500],
+                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
                     "source_window": slim_window(w),
                 }
             )
@@ -1653,7 +1655,7 @@ def _check_timestomping(
                     "type": "potential_timestomping",
                     "source": w.raw_text[:20],
                     "event_time": w.event_time,
-                    "evidence_text": w.raw_text.strip()[:500],
+                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
                     "source_window": slim_window(w),
                 }
             )
@@ -1687,7 +1689,7 @@ def _check_log_clearing(
                 {
                     "type": "log_clearing",
                     "event_time": w.event_time,
-                    "evidence_text": text.strip()[:500],
+                    "evidence_text": text.strip()[:_PREVIEW_CHAR_LIMIT],
                     "source_window": slim_window(w),
                 }
             )
@@ -1777,7 +1779,7 @@ def _check_disabled_security(
                     "matched_process": matched,
                     "source": _SRC_PLASO,
                     "event_time": w.event_time,
-                    "evidence_text": w.raw_text.strip()[:500],
+                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
                     "source_window": slim_window(w),
                 }
             )
@@ -1800,7 +1802,7 @@ def _check_disabled_security(
                         "matched_process": matched,
                         "source": "volatility.cmdline",
                         "event_time": w.event_time,
-                        "evidence_text": w.raw_text.strip()[:500],
+                        "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
                         "source_window": slim_window(w),
                     }
                 )
@@ -1898,14 +1900,14 @@ def _build_process_graph(
             for w in dlllist_pids[pid]:
                 path_lower = w.raw_text.lower()
                 if any(pat in path_lower for pat in _UNUSUAL_DLL_PATHS):
-                    dll_anomalies.append(w.raw_text.strip()[:200])
+                    dll_anomalies.append(w.raw_text.strip()[:_HINT_CHAR_LIMIT])
 
         nodes[pid] = {
             "pid": pid,
             "name": name,
             "parent_pid": parent_map.get(pid),
             "parent_name": pid_names.get(parent_map.get(pid, -1), "unknown"),
-            "cmdline": cmdline[:500],
+            "cmdline": cmdline[:_PREVIEW_CHAR_LIMIT],
             "network_connections": connections[:10],
             "dll_anomalies": dll_anomalies[:5],
             "malfind_hit": pid in malfind_pids,
@@ -2005,7 +2007,10 @@ def reconstruct_execution_chains() -> dict[str, object]:
         for w in pf_wins:
             exe = _extract_exe_name(w.raw_text)
             if exe and exe not in prefetch_data:
-                prefetch_data[exe] = {"event_time": w.event_time, "text": w.raw_text[:200]}
+                prefetch_data[exe] = {
+                    "event_time": w.event_time,
+                    "text": w.raw_text[:_HINT_CHAR_LIMIT],
+                }
 
     for chain in chains:
         for node in chain:
@@ -2139,7 +2144,7 @@ def assess_recovery() -> dict[str, object]:
                 usnjrnl_deletions.append(
                     {
                         "event_time": w.event_time,
-                        "evidence_text": w.raw_text.strip()[:200],
+                        "evidence_text": w.raw_text.strip()[:_HINT_CHAR_LIMIT],
                     }
                 )
 
