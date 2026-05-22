@@ -15,6 +15,7 @@ Thread safety:
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import threading
 import time
@@ -103,7 +104,8 @@ class JobStore:
             self._delivered[batch_id] = set()
 
         for job_id in job_ids:
-            self._executor.submit(self._run_job, job_id)
+            ctx = contextvars.copy_context()
+            self._executor.submit(ctx.run, self._run_job, job_id)
 
         logger.info(
             "Submitted batch %s with %d jobs: %s",
