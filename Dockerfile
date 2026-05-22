@@ -193,6 +193,7 @@ FROM ubuntu:22.04 AS runtime
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    DISABLE_AUTOUPDATE=1 \
     DOTNET_ROOT=/usr/local/share/dotnet \
     PATH="/usr/local/share/dotnet:${PATH}"
 
