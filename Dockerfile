@@ -260,8 +260,8 @@ COPY --from=bulk-builder /opt/bulk_extractor /usr/local
 COPY --from=libewf-builder /opt/libewf /usr/local
 COPY --from=eztools-fetch /opt/dotnet /usr/local/share/dotnet
 COPY --from=eztools-fetch /opt/zimmermantools /opt/zimmermantools
-COPY --from=symbols-fetch /opt/vol-symbols/windows.zip /root/.cache/volatility3/symbols/windows.zip
-COPY --from=symbols-fetch /opt/vol-symbols/linux.zip /root/.cache/volatility3/symbols/linux.zip
+COPY --from=symbols-fetch /opt/vol-symbols/windows.zip /home/mulder/.cache/volatility3/symbols/windows.zip
+COPY --from=symbols-fetch /opt/vol-symbols/linux.zip /home/mulder/.cache/volatility3/symbols/linux.zip
 COPY --from=stegdetect-builder /opt/stegdetect/bin/stegdetect /usr/local/bin/stegdetect
 COPY --from=stegdetect-builder /opt/stegdetect/bin/stegbreak /usr/local/bin/stegbreak
 COPY --from=yara-fetch /opt/yara-rules /opt/yara-rules
@@ -290,6 +290,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN python3 -c "import pyewf; print('libewf-python', pyewf.get_version())"
 
+RUN useradd -m -s /bin/bash mulder
+
 COPY . /app
 RUN uv pip install --system --no-cache -e /app
 
@@ -298,7 +300,12 @@ RUN mkdir -p /workspace/.claude/commands /workspace/.claude/skills \
     && cp /app/.claude/skills/investigate.md /workspace/.claude/skills/investigate.md \
     && cp /app/.claude/commands/investigate.md /workspace/.claude/commands/investigate.md
 
-VOLUME /root/.mulder/cases
+RUN chown -R mulder:mulder /home/mulder /workspace
+
+# NOTE: disk image mount operations (mount, ewfmount, guestmount) require
+# --cap-add SYS_ADMIN when running this container.
+VOLUME /home/mulder/.mulder/cases
 
 WORKDIR /workspace
+USER mulder
 ENTRYPOINT ["claude"]
