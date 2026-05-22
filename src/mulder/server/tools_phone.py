@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import mmap
+import re as _re
 import shutil
 import sqlite3
 import subprocess
@@ -720,20 +721,8 @@ def _extract_strings_from_file(file_path: Path, min_length: int = 8) -> list[str
     except OSError:
         return []
 
-    current: list[int] = []
-    strings: list[str] = []
-    for byte in data:
-        if 32 <= byte < 127:
-            current.append(byte)
-        else:
-            if len(current) >= min_length:
-                strings.append(bytes(current).decode("ascii"))
-            current = []
-            if len(strings) >= 200:
-                break
-    if len(current) >= min_length and len(strings) < 200:
-        strings.append(bytes(current).decode("ascii"))
-    return strings
+    raw_strings = _re.findall(rb"[\x20-\x7e]{%d,}" % min_length, data)
+    return [s.decode("ascii") for s in raw_strings[:200]]
 
 
 @mcp.tool()

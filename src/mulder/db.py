@@ -805,6 +805,40 @@ class CaseDB:
         self._case_id_cache: str = str(row[0])
         return self._case_id_cache
 
+    def get_windows_by_time_range(
+        self,
+        time_start: str,
+        time_end: str,
+    ) -> dict[str, list[WindowRow]]:
+        """Fetch all windows in a time range, grouped by source_name."""
+        j = windows_t.join(sources_t, windows_t.c.source_id == sources_t.c.source_id)
+        stmt = (
+            select(windows_t, sources_t.c.source_name)
+            .select_from(j)
+            .where(
+                windows_t.c.event_time.isnot(None),
+                windows_t.c.event_time >= time_start,
+                windows_t.c.event_time <= time_end,
+            )
+            .order_by(windows_t.c.event_time)
+        )
+        with self._engine.connect() as conn:
+            rows = conn.execute(stmt).fetchall()
+
+        result: dict[str, list[WindowRow]] = {}
+        for row in rows:
+            sname = row.source_name
+            w = WindowRow(
+                window_id=row.window_id,
+                source_id=row.source_id,
+                line_start=row.line_start,
+                line_end=row.line_end,
+                event_time=row.event_time,
+                raw_text=row.raw_text,
+            )
+            result.setdefault(sname, []).append(w)
+        return result
+
     @property
     def db_path(self) -> Path:
         """Return the database file path."""

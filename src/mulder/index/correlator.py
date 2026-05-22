@@ -34,21 +34,17 @@ class Correlator:
         sources: list[str] | None = None,
     ) -> CorrelationResult:
         """Return time-window rows grouped by source, optionally limited to *sources*."""
-        if sources is None:
-            sources = [s.source_name for s in self._db.get_sources()]
+        windows_by_source = self._db.get_windows_by_time_range(time_start, time_end)
 
-        windows_by_source: dict[str, list[WindowRow]] = {}
-        total = 0
-        for src in sources:
-            wins = self._db.get_windows_by_source(src, time_start, time_end)
-            if wins:
-                windows_by_source[src] = wins
-                total += len(wins)
+        if sources is not None:
+            windows_by_source = {k: v for k, v in windows_by_source.items() if k in sources}
+
+        total = sum(len(v) for v in windows_by_source.values())
 
         return CorrelationResult(
             time_start=time_start,
             time_end=time_end,
-            sources_queried=sources,
+            sources_queried=sources or list(windows_by_source.keys()),
             windows_by_source=windows_by_source,
             total_windows=total,
         )

@@ -110,8 +110,9 @@ _valid_rules_lock = threading.Lock()
 def _validate_rule_files(rule_paths: list[str]) -> list[str]:
     """Return only rule files that compile without errors.
 
-    Caches results so repeated scans don't re-validate.  Uses the
-    YARA binary to test-compile each file individually.
+    Caches results so repeated scans don't re-validate.  Attempts batch
+    validation via a single index file first; falls back to individual
+    compilation if the batch fails.
     """
     cache_key = hash(tuple(sorted(rule_paths)))
     with _valid_rules_lock:
@@ -120,6 +121,29 @@ def _validate_rule_files(rule_paths: list[str]) -> list[str]:
 
     if not shutil.which("yara"):
         return rule_paths
+
+    fd, idx_path = tempfile.mkstemp(suffix=".yar", prefix="mulder_yara_validate_")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            for rp in rule_paths:
+                fh.write(f'include "{rp}"\n')
+        proc = subprocess.run(
+            ["yara", idx_path, "/dev/null"],
+            capture_output=True,
+            timeout=120,
+            check=False,
+        )
+        if proc.returncode == 0:
+            logger.info(
+                "YARA rule validation: %d/%d files valid (batch)", len(rule_paths), len(rule_paths)
+            )
+            with _valid_rules_lock:
+                _valid_rules_cache[cache_key] = rule_paths
+            return rule_paths
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+    finally:
+        os.unlink(idx_path)
 
     valid: list[str] = []
     for rp in rule_paths:

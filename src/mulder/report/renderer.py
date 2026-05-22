@@ -38,31 +38,22 @@ _FILE_EXT_AFTER_EMAIL = re.compile(
     re.IGNORECASE,
 )
 _SKIP_IPS = {"0.0.0.0", "127.0.0.1", "255.255.255.255"}
-_PRIVATE_RANGES = (
-    "10.",
-    "172.16.",
-    "172.17.",
-    "172.18.",
-    "172.19.",
-    "172.20.",
-    "172.21.",
-    "172.22.",
-    "172.23.",
-    "172.24.",
-    "172.25.",
-    "172.26.",
-    "172.27.",
-    "172.28.",
-    "172.29.",
-    "172.30.",
-    "172.31.",
-    "192.168.",
-)
 
 
 def _is_external_ip(ip: str) -> bool:
     """Return True if *ip* is not covered by common private IPv4 prefixes."""
-    return not any(ip.startswith(p) for p in _PRIVATE_RANGES)
+    if ip.startswith("10.") or ip.startswith("192.168.") or ip.startswith("127."):
+        return False
+    if ip.startswith("172."):
+        parts = ip.split(".")
+        if len(parts) >= 2:
+            try:
+                second = int(parts[1])
+                if 16 <= second <= 31:
+                    return False
+            except ValueError:
+                pass
+    return True
 
 
 def _extract_iocs(

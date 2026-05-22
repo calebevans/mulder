@@ -131,10 +131,8 @@ def extract_and_index(
 
     original_line_count = raw_output.count("\n") + 1
 
-    h = hashlib.blake2b(digest_size=32)
-    for i in range(0, len(raw_output), 65536):
-        h.update(raw_output[i : i + 65536].encode())
-    content_hash = "blake2b:" + h.hexdigest()
+    raw_bytes = raw_output.encode()
+    content_hash = "blake2b:" + hashlib.blake2b(raw_bytes, digest_size=32).hexdigest()
 
     source_id = ctx.db.register_source(
         source_name=source_name,

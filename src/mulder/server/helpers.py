@@ -37,14 +37,12 @@ def hash_output(output: object) -> str:
     MCP response.
     """
     if isinstance(output, list | dict):
+        if isinstance(output, list) and len(output) > 200:
+            return _blake2b_hex(f"list:len={len(output)}".encode())
+        if isinstance(output, dict) and len(output) > 100:
+            return _blake2b_hex(f"dict:keys={sorted(output.keys())}".encode())
         probe = json.dumps(output, sort_keys=True, default=str)
-        if len(probe) <= _HASH_SIZE_THRESHOLD:
-            return _blake2b_hex(probe.encode())
-        if isinstance(output, list):
-            summary = f"list:len={len(output)}"
-        else:
-            summary = f"dict:keys={sorted(output.keys())}"
-        return _blake2b_hex(summary.encode())
+        return _blake2b_hex(probe.encode())
     raw = json.dumps(output, sort_keys=True, default=str)
     return _blake2b_hex(raw.encode())
 
