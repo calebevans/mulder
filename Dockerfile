@@ -204,6 +204,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
         git \
+        gosu \
     && add-apt-repository -y ppa:deadsnakes/ppa \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -295,17 +296,21 @@ RUN useradd -m -s /bin/bash mulder
 COPY . /app
 RUN uv pip install --system --no-cache -e /app
 
-RUN mkdir -p /workspace/.claude/commands /workspace/.claude/skills \
-    && cp /app/.mcp.json /workspace/.mcp.json \
-    && cp /app/.claude/skills/investigate.md /workspace/.claude/skills/investigate.md \
-    && cp /app/.claude/commands/investigate.md /workspace/.claude/commands/investigate.md
+RUN mkdir -p /mulder-investigation/.claude/commands /mulder-investigation/.claude/skills \
+    && cp /app/.mcp.json /mulder-investigation/.mcp.json \
+    && cp /app/.claude/settings.json /mulder-investigation/.claude/settings.json \
+    && cp /app/.claude/skills/investigate.md /mulder-investigation/.claude/skills/investigate.md \
+    && cp /app/.claude/commands/investigate.md /mulder-investigation/.claude/commands/investigate.md \
+    && cd /mulder-investigation && git init && git config user.email "mulder@local" && git config user.name "mulder" && git add -A && git commit -m "init"
 
-RUN chown -R mulder:mulder /home/mulder /workspace
+RUN chown -R mulder:mulder /home/mulder /mulder-investigation
+
+COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # NOTE: disk image mount operations (mount, ewfmount, guestmount) require
 # --cap-add SYS_ADMIN when running this container.
-VOLUME /home/mulder/.mulder/cases
 
-WORKDIR /workspace
-USER mulder
-ENTRYPOINT ["claude"]
+WORKDIR /mulder-investigation
+ENTRYPOINT ["entrypoint.sh"]
+CMD ["claude"]
