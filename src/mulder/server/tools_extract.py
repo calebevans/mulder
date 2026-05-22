@@ -10,6 +10,7 @@ read-only on evidence and only write to the case database.
 
 from __future__ import annotations
 
+import atexit
 import contextlib
 import logging
 import os
@@ -904,6 +905,9 @@ def _run_ez_tool(
     return tool_response(tc_id, tool_name, params, summary, source_name, elapsed)
 
 
+_tsk_extract_dirs: list[str] = []
+
+
 def _tsk_extract_files(
     image_path: str,
     path_patterns: list[str],
@@ -939,6 +943,7 @@ def _tsk_extract_files(
     )
 
     extract_dir = Path(tempfile.mkdtemp(prefix="mulder_tsk_extract_"))
+    _tsk_extract_dirs.append(str(extract_dir))
     extracted: list[tuple[str, Path]] = []
     seen: set[str] = set()
 
@@ -1274,6 +1279,19 @@ def _parse_partition_offset(mmls_text: str) -> int:
 
 
 _evtx_extract_dirs: dict[str, str] = {}
+
+
+def _cleanup_temp_dirs() -> None:
+    """Remove all extraction temp directories."""
+    for path in _evtx_extract_dirs.values():
+        shutil.rmtree(path, ignore_errors=True)
+    _evtx_extract_dirs.clear()
+    for path in _tsk_extract_dirs:
+        shutil.rmtree(path, ignore_errors=True)
+    _tsk_extract_dirs.clear()
+
+
+atexit.register(_cleanup_temp_dirs)
 
 
 def _find_carved_evtx(dest_dir: str) -> list[Path]:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
 import queue
@@ -161,14 +160,24 @@ def _make_engine(db_path: Path) -> Engine:
 
 def _migrate_add_mitre_attack_ids(conn: Any) -> None:
     """Add the mitre_attack_ids column if it doesn't exist yet."""
-    with contextlib.suppress(Exception):
+    try:
         conn.execute(text("ALTER TABLE findings ADD COLUMN mitre_attack_ids TEXT"))
+    except Exception as exc:
+        if "duplicate column" in str(exc).lower() or "already exists" in str(exc).lower():
+            pass
+        else:
+            raise
 
 
 def _migrate_add_narrative(conn: Any) -> None:
     """Add the narrative column to case_metadata if it doesn't exist yet."""
-    with contextlib.suppress(Exception):
+    try:
         conn.execute(text("ALTER TABLE case_metadata ADD COLUMN narrative TEXT"))
+    except Exception as exc:
+        if "duplicate column" in str(exc).lower() or "already exists" in str(exc).lower():
+            pass
+        else:
+            raise
 
 
 def _migrate_add_evidence_registry(conn: Any) -> None:
