@@ -548,7 +548,8 @@ def read_evidence_file(
         }
 
     try:
-        raw = target.read_bytes()[:max_bytes]
+        with open(target, "rb") as f:
+            raw = f.read(max_bytes)
         try:
             content = raw.decode("utf-8")
             is_binary = False
@@ -722,27 +723,36 @@ def detect_steganography(target_path: str) -> dict[str, object]:
                 "Using basic EOI/IEND marker check only."
             )
 
+        _STEG_TAIL_SIZE = 8192
+
         for img in (jpgs + pngs)[:200]:
             try:
-                data = img.read_bytes()
-                if img.suffix.lower() in (".jpg", ".jpeg"):
-                    eoi = data.rfind(b"\xff\xd9")
-                    if eoi >= 0 and eoi < len(data) - 2:
-                        trailing = len(data) - eoi - 2
-                        if trailing > 10:
-                            results_text.append(
-                                f"{img.name}: {trailing} bytes after JPEG EOI marker "
-                                "(possible appended data)"
-                            )
-                elif img.suffix.lower() == ".png":
-                    iend = data.rfind(b"IEND")
-                    if iend >= 0 and iend + 12 < len(data):
-                        trailing = len(data) - iend - 12
-                        if trailing > 10:
-                            results_text.append(
-                                f"{img.name}: {trailing} bytes after PNG IEND chunk "
-                                "(possible appended data)"
-                            )
+                file_size = img.stat().st_size
+                with open(img, "rb") as f:
+                    if img.suffix.lower() in (".jpg", ".jpeg"):
+                        tail_offset = max(0, file_size - _STEG_TAIL_SIZE)
+                        f.seek(tail_offset)
+                        tail = f.read()
+                        eoi = tail.rfind(b"\xff\xd9")
+                        if eoi >= 0:
+                            trailing = len(tail) - eoi - 2
+                            if trailing > 10:
+                                results_text.append(
+                                    f"{img.name}: {trailing} bytes after JPEG EOI marker "
+                                    "(possible appended data)"
+                                )
+                    elif img.suffix.lower() == ".png":
+                        tail_offset = max(0, file_size - _STEG_TAIL_SIZE)
+                        f.seek(tail_offset)
+                        tail = f.read()
+                        iend = tail.rfind(b"IEND")
+                        if iend >= 0:
+                            trailing = len(tail) - iend - 12
+                            if trailing > 10:
+                                results_text.append(
+                                    f"{img.name}: {trailing} bytes after PNG IEND chunk "
+                                    "(possible appended data)"
+                                )
             except OSError:
                 continue
 
