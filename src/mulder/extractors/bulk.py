@@ -107,13 +107,21 @@ class BulkExtractorExtractor:
         logger.info("Running bulk_extractor on %s (this may take a while) ...", path)
         logger.debug("bulk_extractor command: %s", " ".join(cmd))
 
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=_BULK_EXTRACTOR_TIMEOUT,
-            check=False,
-        )
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=_BULK_EXTRACTOR_TIMEOUT,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            logger.error(
+                "bulk_extractor timed out after %ds on %s",
+                _BULK_EXTRACTOR_TIMEOUT,
+                path,
+            )
+            return []
 
         if proc.returncode != 0:
             stderr_preview = (proc.stderr or "")[:500]

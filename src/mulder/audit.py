@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from collections import defaultdict
 from collections.abc import Mapping
@@ -19,6 +20,8 @@ from mulder.models import (
 
 if TYPE_CHECKING:
     from mulder.db import CaseDB
+
+logger = logging.getLogger(__name__)
 
 
 class AuditLog:
@@ -42,6 +45,7 @@ class AuditLog:
         """Populate in-memory indexes from an existing JSONL file."""
         if not self._log_path.exists():
             return
+        parse_errors = 0
         with open(self._log_path) as fh:
             for line in fh:
                 line = line.strip()
@@ -50,9 +54,16 @@ class AuditLog:
                 try:
                     entry = json.loads(line)
                 except json.JSONDecodeError:
+                    parse_errors += 1
                     continue
                 if isinstance(entry, dict):
                     self._index_entry(cast(dict[str, object], entry))
+        if parse_errors > 0:
+            logger.warning(
+                "Audit log %s: %d lines failed to parse (possible corruption)",
+                self._log_path,
+                parse_errors,
+            )
 
     def _index_entry(self, entry: dict[str, object]) -> None:
         """Index a parsed audit entry by type (tool_call or finding)."""

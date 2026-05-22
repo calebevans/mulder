@@ -199,6 +199,11 @@ def _find_memory_image() -> str:
     sources = ctx.db.get_sources()
     for s in sources:
         if s.source_name.startswith("volatility."):
+            if not Path(s.source_path).exists():
+                raise RuntimeError(
+                    f"Memory dump file not found: {s.source_path}. "
+                    "Has the evidence been moved or unmounted?"
+                )
             return s.source_path
     raise RuntimeError(
         "No Volatility sources found in this case. "

@@ -127,61 +127,61 @@ def report(case_id: str, db_dir: str) -> None:
 
     click.echo(f"Loading case '{case_id}' from {db_path} ...")
 
-    case_db = CaseDB(db_path)
-    case_metadata = case_db.get_case_metadata()
-    findings = case_db.get_findings()
-    sources_list = case_db.get_sources()
-    evidence_integrity = case_db.get_evidence_registry()
+    with CaseDB(db_path) as case_db:
+        case_metadata = case_db.get_case_metadata()
+        findings = case_db.get_findings()
+        sources_list = case_db.get_sources()
+        evidence_integrity = case_db.get_evidence_registry()
 
-    audit = AuditLog(audit_path)
-    audit_summary = audit.summary()
+        audit = AuditLog(audit_path)
+        audit_summary = audit.summary()
 
-    click.echo(f"  {len(findings)} findings, {len(sources_list)} sources")
+        click.echo(f"  {len(findings)} findings, {len(sources_list)} sources")
 
-    renderer = ReportRenderer()
+        renderer = ReportRenderer()
 
-    md_path = db_dir_path / f"{case_id}.report.md"
-    md_text = renderer.render(
-        case_metadata=case_metadata,
-        findings=findings,
-        audit_summary=audit_summary,
-        audit_log_path=audit_path,
-        sources_list=sources_list,
-        evidence_integrity=evidence_integrity,
-    )
-    md_path.write_text(md_text, encoding="utf-8")
-    click.echo(f"  Markdown: {md_path}")
+        md_path = db_dir_path / f"{case_id}.report.md"
+        md_text = renderer.render(
+            case_metadata=case_metadata,
+            findings=findings,
+            audit_summary=audit_summary,
+            audit_log_path=audit_path,
+            sources_list=sources_list,
+            evidence_integrity=evidence_integrity,
+        )
+        md_path.write_text(md_text, encoding="utf-8")
+        click.echo(f"  Markdown: {md_path}")
 
-    _MAX_WINDOWS = 50
-    source_windows: dict[str, list[dict[str, object]]] = {}
-    for src in sources_list:
-        windows = case_db.get_windows_by_source(src.source_name)
-        total = len(windows)
-        capped = windows[:_MAX_WINDOWS]
-        source_windows[src.source_name] = [
-            {
-                "line_start": w.line_start,
-                "line_end": w.line_end,
-                "event_time": w.event_time,
-                "raw_text": w.raw_text,
-                "total": total,
-                "truncated": total > _MAX_WINDOWS,
-            }
-            for w in capped
-        ]
+        _MAX_WINDOWS = 50
+        source_windows: dict[str, list[dict[str, object]]] = {}
+        for src in sources_list:
+            windows = case_db.get_windows_by_source(src.source_name)
+            total = len(windows)
+            capped = windows[:_MAX_WINDOWS]
+            source_windows[src.source_name] = [
+                {
+                    "line_start": w.line_start,
+                    "line_end": w.line_end,
+                    "event_time": w.event_time,
+                    "raw_text": w.raw_text,
+                    "total": total,
+                    "truncated": total > _MAX_WINDOWS,
+                }
+                for w in capped
+            ]
 
-    html_path = db_dir_path / f"{case_id}.report.html"
-    html_text = renderer.render_html(
-        case_metadata=case_metadata,
-        findings=findings,
-        audit_summary=audit_summary,
-        audit_log_path=audit_path,
-        sources_list=sources_list,
-        evidence_integrity=evidence_integrity,
-        source_windows=source_windows,
-    )
-    html_path.write_text(html_text, encoding="utf-8")
-    click.echo(f"  HTML:     {html_path}")
+        html_path = db_dir_path / f"{case_id}.report.html"
+        html_text = renderer.render_html(
+            case_metadata=case_metadata,
+            findings=findings,
+            audit_summary=audit_summary,
+            audit_log_path=audit_path,
+            sources_list=sources_list,
+            evidence_integrity=evidence_integrity,
+            source_windows=source_windows,
+        )
+        html_path.write_text(html_text, encoding="utf-8")
+        click.echo(f"  HTML:     {html_path}")
 
     click.echo("Done.")
 
