@@ -174,6 +174,18 @@ class TestIsExternalIp:
     def test_private_192(self) -> None:
         assert not _is_external_ip("192.168.1.1")
 
+    def test_private_172_31(self) -> None:
+        assert not _is_external_ip("172.31.255.1")
+
+    def test_public_172_32(self) -> None:
+        assert _is_external_ip("172.32.0.1")
+
+    def test_public_172_15(self) -> None:
+        assert _is_external_ip("172.15.0.1")
+
+    def test_loopback(self) -> None:
+        assert not _is_external_ip("127.0.0.1")
+
 
 class TestComputeIntegrityStatus:
     def test_empty_returns_no_evidence(self) -> None:

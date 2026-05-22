@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -51,6 +52,24 @@ class TestLoadExisting:
         log = AuditLog(log_path)
         assert log.has_tool_call("tc_ok")
         assert log.has_tool_call("tc_ok2")
+
+    def test_corrupt_lines_logged_as_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Corrupt JSONL lines should be counted and logged as a warning."""
+        log_path = tmp_path / "audit.jsonl"
+        log_path.write_text(
+            '{"type":"tool_call","tool_call_id":"tc_good","tool_name":"x","params":{}}\n'
+            "this is not json\n"
+            "also broken {{{{\n"
+            '{"type":"tool_call","tool_call_id":"tc_good2","tool_name":"y","params":{}}\n'
+        )
+        with caplog.at_level(logging.WARNING):
+            log = AuditLog(log_path)
+
+        assert log.has_tool_call("tc_good")
+        assert log.has_tool_call("tc_good2")
+        assert any("2 lines failed to parse" in msg for msg in caplog.messages)
 
 
 class TestProvenance:
