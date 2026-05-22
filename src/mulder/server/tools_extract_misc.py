@@ -14,8 +14,6 @@ from pathlib import Path
 from mulder.server.app import mcp
 from mulder.server.extract_helpers import extract_and_index, mount_disk_image
 from mulder.server.helpers import (
-    _FILE_LIST_CAP,
-    _HINT_CHAR_LIMIT,
     _PREVIEW_CHAR_LIMIT,
     error_response,
     make_tool_call_id,
@@ -1002,81 +1000,85 @@ def run_tcpxtract(pcap_path: str) -> dict[str, object]:
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool()
-def run_dislocker(
+def _run_dislocker_metadata_mode(
     image_path: str,
-    recovery_key: str = "",
-    password: str = "",
+    tc_id: str,
+    params: dict[str, object],
+    t0: float,
 ) -> dict[str, object]:
-    """Inspect or decrypt a BitLocker-encrypted volume.
-
-    Without credentials, returns BitLocker metadata (encryption method,
-    protector types, volume ID).  With a recovery key or password,
-    decrypts the volume to a FUSE mountpoint for subsequent TSK analysis.
+    """Extract BitLocker metadata without decryption credentials.
 
     Args:
         image_path: Path to the BitLocker-encrypted partition/image.
-        recovery_key: BitLocker 48-digit recovery key (optional).
-        password: BitLocker password (optional).
-    """
-    tc_id = make_tool_call_id()
-    t0 = time.monotonic()
-    params: dict[str, object] = {
-        "image_path": image_path,
-        "recovery_key": "***" if recovery_key else "",
-        "password": "***" if password else "",
-    }
+        tc_id: Tool call identifier for response construction.
+        params: Parameters dict for response construction.
+        t0: Start time for elapsed calculation.
 
-    if not Path(image_path).exists():
+    Returns:
+        Tool response dict with metadata or an error response.
+    """
+    if not _require_binary("dislocker-metadata"):
         return error_response(
             tc_id,
             "run_dislocker",
             params,
-            f"File not found: {image_path}",
-            error_type="file_not_found",
+            "dislocker-metadata not found on PATH",
+            error_type="binary_missing",
         )
-
-    if not recovery_key and not password:
-        if not _require_binary("dislocker-metadata"):
-            return error_response(
-                tc_id,
-                "run_dislocker",
-                params,
-                "dislocker-metadata not found on PATH",
-                error_type="binary_missing",
-            )
-        try:
-            proc = subprocess.run(
-                ["dislocker-metadata", "-V", image_path],
-                capture_output=True,
-                text=True,
-                timeout=_TOOL_TIMEOUT,
-                check=False,
-            )
-        except subprocess.TimeoutExpired:
-            return error_response(
-                tc_id,
-                "run_dislocker",
-                params,
-                "dislocker-metadata timed out",
-                error_type="timeout",
-            )
-        summary = extract_and_index(
-            proc.stdout.strip(),
-            "dislocker.metadata",
-            image_path,
-            "dislocker",
+    try:
+        proc = subprocess.run(
+            ["dislocker-metadata", "-V", image_path],
+            capture_output=True,
+            text=True,
+            timeout=_TOOL_TIMEOUT,
+            check=False,
         )
-        elapsed = (time.monotonic() - t0) * 1000
-        return tool_response(
+    except subprocess.TimeoutExpired:
+        return error_response(
             tc_id,
             "run_dislocker",
             params,
-            summary,
-            "dislocker.metadata",
-            elapsed,
+            "dislocker-metadata timed out",
+            error_type="timeout",
         )
+    summary = extract_and_index(
+        proc.stdout.strip(),
+        "dislocker.metadata",
+        image_path,
+        "dislocker",
+    )
+    elapsed = (time.monotonic() - t0) * 1000
+    return tool_response(
+        tc_id,
+        "run_dislocker",
+        params,
+        summary,
+        "dislocker.metadata",
+        elapsed,
+    )
 
+
+def _run_dislocker_decrypt_mode(
+    image_path: str,
+    password: str,
+    recovery_key: str,
+    tc_id: str,
+    params: dict[str, object],
+    t0: float,
+) -> dict[str, object]:
+    """Decrypt a BitLocker volume via FUSE using provided credentials.
+
+    Args:
+        image_path: Path to the BitLocker-encrypted partition/image.
+        password: BitLocker password (may be empty if recovery_key is set).
+        recovery_key: BitLocker 48-digit recovery key (may be empty if password is set).
+        tc_id: Tool call identifier for response construction.
+        params: Parameters dict for response construction.
+        t0: Start time for elapsed calculation.
+
+    Returns:
+        Tool response dict with mount point info or an error response.
+    """
     if not _require_binary("dislocker-fuse"):
         return error_response(
             tc_id,
@@ -1141,6 +1143,46 @@ def run_dislocker(
         "dislocker.decrypted",
         elapsed,
     )
+
+
+@mcp.tool()
+def run_dislocker(
+    image_path: str,
+    recovery_key: str = "",
+    password: str = "",
+) -> dict[str, object]:
+    """Inspect or decrypt a BitLocker-encrypted volume.
+
+    Without credentials, returns BitLocker metadata (encryption method,
+    protector types, volume ID).  With a recovery key or password,
+    decrypts the volume to a FUSE mountpoint for subsequent TSK analysis.
+
+    Args:
+        image_path: Path to the BitLocker-encrypted partition/image.
+        recovery_key: BitLocker 48-digit recovery key (optional).
+        password: BitLocker password (optional).
+    """
+    tc_id = make_tool_call_id()
+    t0 = time.monotonic()
+    params: dict[str, object] = {
+        "image_path": image_path,
+        "recovery_key": "***" if recovery_key else "",
+        "password": "***" if password else "",
+    }
+
+    if not Path(image_path).exists():
+        return error_response(
+            tc_id,
+            "run_dislocker",
+            params,
+            f"File not found: {image_path}",
+            error_type="file_not_found",
+        )
+
+    if not recovery_key and not password:
+        return _run_dislocker_metadata_mode(image_path, tc_id, params, t0)
+
+    return _run_dislocker_decrypt_mode(image_path, password, recovery_key, tc_id, params, t0)
 
 
 @mcp.tool()

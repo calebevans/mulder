@@ -355,61 +355,56 @@ def _pcap_beaconing(pcap_path: str, max_packets: int, ssl_keylog_path: str | Non
     return "\n".join(results)
 
 
-def _pcap_tunneling(pcap_path: str, max_packets: int, ssl_keylog_path: str | None = None) -> str:
-    """Detect DNS tunneling and ICMP covert channels."""
-    output_parts: list[str] = ["DNS TUNNELING / COVERT CHANNEL ANALYSIS", "=" * 50, ""]
+def _collect_dns_tunnel_stats(dns_lines: list[str]) -> dict[str, dict[str, Any]]:
+    """Parse DNS query lines and accumulate per-domain statistics.
 
-    try:
-        proc = _run_tshark(
-            [
-                "-Y",
-                "dns.qry.name",
-                "-T",
-                "fields",
-                "-e",
-                "dns.qry.name",
-                "-e",
-                "dns.qry.type",
-                "-e",
-                "frame.time",
-                "-E",
-                "header=y",
-                "-E",
-                "separator=\t",
-                "-c",
-                str(max_packets),
-            ],
-            pcap_path,
-            ssl_keylog_path=ssl_keylog_path,
-        )
-        dns_lines = proc.stdout.strip().splitlines()
-    except subprocess.TimeoutExpired:
-        dns_lines = []
+    Args:
+        dns_lines: Raw tshark output lines (with header) from DNS query extraction.
 
+    Returns:
+        Mapping of base domain to stats dict containing query_count,
+        subdomain_lengths, and unique subdomains.
+    """
     domain_stats: dict[str, dict[str, Any]] = {}
-    if len(dns_lines) > 1:
-        for line in dns_lines[1:]:
-            parts = line.split("\t")
-            if not parts or not parts[0]:
-                continue
-            qname = parts[0].strip().lower()
-            labels = qname.split(".")
-            if len(labels) < 2:
-                continue
-            base_domain = ".".join(labels[-2:])
-            subdomain = ".".join(labels[:-2]) if len(labels) > 2 else ""
-            if base_domain not in domain_stats:
-                domain_stats[base_domain] = {
-                    "query_count": 0,
-                    "subdomain_lengths": [],
-                    "subdomains": set(),
-                }
-            domain_stats[base_domain]["query_count"] += 1
-            if subdomain:
-                domain_stats[base_domain]["subdomain_lengths"].append(len(subdomain))
-                domain_stats[base_domain]["subdomains"].add(subdomain)
+    if len(dns_lines) <= 1:
+        return domain_stats
 
-    flagged_dns = 0
+    for line in dns_lines[1:]:
+        parts = line.split("\t")
+        if not parts or not parts[0]:
+            continue
+        qname = parts[0].strip().lower()
+        labels = qname.split(".")
+        if len(labels) < 2:
+            continue
+        base_domain = ".".join(labels[-2:])
+        subdomain = ".".join(labels[:-2]) if len(labels) > 2 else ""
+        if base_domain not in domain_stats:
+            domain_stats[base_domain] = {
+                "query_count": 0,
+                "subdomain_lengths": [],
+                "subdomains": set(),
+            }
+        domain_stats[base_domain]["query_count"] += 1
+        if subdomain:
+            domain_stats[base_domain]["subdomain_lengths"].append(len(subdomain))
+            domain_stats[base_domain]["subdomains"].add(subdomain)
+
+    return domain_stats
+
+
+def _score_dns_tunnel_candidates(
+    domain_stats: dict[str, dict[str, Any]],
+) -> list[str]:
+    """Score domains for DNS tunneling suspicion using entropy and length heuristics.
+
+    Args:
+        domain_stats: Per-domain statistics from _collect_dns_tunnel_stats.
+
+    Returns:
+        List of formatted strings describing flagged domains.
+    """
+    flagged_lines: list[str] = []
     for domain, stats in sorted(
         domain_stats.items(), key=lambda x: x[1]["query_count"], reverse=True
     ):
@@ -439,8 +434,7 @@ def _pcap_tunneling(pcap_path: str, max_packets: int, ssl_keylog_path: str | Non
             reasons.append(f"high unique subdomain count ({len(stats['subdomains'])})")
 
         if suspicious:
-            flagged_dns += 1
-            output_parts.append(
+            flagged_lines.append(
                 f"** POTENTIAL DNS TUNNEL: {domain} **\n"
                 f"  Queries: {stats['query_count']}, "
                 f"Unique subdomains: {len(stats['subdomains'])}, "
@@ -448,10 +442,23 @@ def _pcap_tunneling(pcap_path: str, max_packets: int, ssl_keylog_path: str | Non
                 f"  Reasons: {', '.join(reasons)}"
             )
 
-    output_parts.append(
-        f"\nDomains analyzed: {len(domain_stats)}, DNS tunneling suspects: {flagged_dns}"
-    )
+    return flagged_lines
 
+
+def _collect_icmp_payload_signals(
+    pcap_path: str, max_packets: int, ssl_keylog_path: str | None = None
+) -> list[str]:
+    """Detect ICMP packets with unusually large payloads indicating covert channels.
+
+    Args:
+        pcap_path: Path to the PCAP file.
+        max_packets: Maximum packets to process.
+        ssl_keylog_path: Optional SSL keylog file path.
+
+    Returns:
+        List of formatted output lines describing ICMP findings.
+    """
+    output_parts: list[str] = []
     try:
         icmp_proc = _run_tshark(
             [
@@ -487,53 +494,74 @@ def _pcap_tunneling(pcap_path: str, max_packets: int, ssl_keylog_path: str | Non
     except subprocess.TimeoutExpired:
         output_parts.append("\nICMP analysis timed out")
 
+    return output_parts
+
+
+def _pcap_tunneling(pcap_path: str, max_packets: int, ssl_keylog_path: str | None = None) -> str:
+    """Detect DNS tunneling and ICMP covert channels."""
+    output_parts: list[str] = ["DNS TUNNELING / COVERT CHANNEL ANALYSIS", "=" * 50, ""]
+
+    try:
+        proc = _run_tshark(
+            [
+                "-Y",
+                "dns.qry.name",
+                "-T",
+                "fields",
+                "-e",
+                "dns.qry.name",
+                "-e",
+                "dns.qry.type",
+                "-e",
+                "frame.time",
+                "-E",
+                "header=y",
+                "-E",
+                "separator=\t",
+                "-c",
+                str(max_packets),
+            ],
+            pcap_path,
+            ssl_keylog_path=ssl_keylog_path,
+        )
+        dns_lines = proc.stdout.strip().splitlines()
+    except subprocess.TimeoutExpired:
+        dns_lines = []
+
+    domain_stats = _collect_dns_tunnel_stats(dns_lines)
+    flagged_lines = _score_dns_tunnel_candidates(domain_stats)
+    output_parts.extend(flagged_lines)
+
+    output_parts.append(
+        f"\nDomains analyzed: {len(domain_stats)}, DNS tunneling suspects: {len(flagged_lines)}"
+    )
+
+    output_parts.extend(_collect_icmp_payload_signals(pcap_path, max_packets, ssl_keylog_path))
+
     return "\n".join(output_parts)
 
 
-@mcp.tool()
-def run_pcap_analysis(
+def _validate_pcap_params(
+    mode: str,
     pcap_path: str,
-    mode: str = "summary",
-    display_filter: str | None = None,
-    max_packets: int = 10000,
-    ssl_keylog_path: str | None = None,
-) -> dict[str, object]:
-    """Analyze a PCAP or PCAPng network capture file using tshark.
-
-    Extracts network conversations, DNS queries, HTTP traffic, protocol
-    statistics, or applies a custom Wireshark display filter.  Results
-    are indexed into the case database.
+    display_filter: str | None,
+    ssl_keylog_path: str | None,
+    tc_id: str,
+    params: dict[str, object],
+) -> dict[str, object] | None:
+    """Validate inputs for PCAP analysis.
 
     Args:
-        pcap_path: Path to the .pcap or .pcapng file.
-        mode: Analysis mode.  One of:
-            - "summary": capture stats + protocol hierarchy
-            - "conversations": IP and TCP conversation tables
-            - "dns": DNS queries and responses
-            - "http": HTTP requests and responses
-            - "beaconing": detect C2 beaconing via inter-arrival timing
-            - "tunneling": detect DNS tunneling and ICMP covert channels
-            - "custom": apply display_filter (required for this mode)
-            - "all": run all modes (summary through tunneling)
-        display_filter: Wireshark display filter (required when mode="custom",
-            e.g. "ip.addr == 10.0.0.5 && tcp.port == 4444").
-        max_packets: Maximum packets to process (default 10000).  Caps
-            tshark's -c flag to prevent unbounded output on large captures.
-        ssl_keylog_path: Optional path to an NSS key log file (SSLKEYLOGFILE
-            format) for decrypting TLS traffic.  When provided, tshark uses
-            it to decrypt encrypted sessions, revealing HTTP, SMTP, and other
-            application-layer data inside TLS.
-    """
-    tc_id = make_tool_call_id()
-    t0 = time.monotonic()
-    params = {
-        "pcap_path": pcap_path,
-        "mode": mode,
-        "display_filter": display_filter,
-        "max_packets": max_packets,
-        "ssl_keylog_path": ssl_keylog_path,
-    }
+        mode: Requested analysis mode.
+        pcap_path: Path to the PCAP file.
+        display_filter: Optional Wireshark display filter.
+        ssl_keylog_path: Optional SSL keylog file path.
+        tc_id: Tool call identifier for error responses.
+        params: Parameters dict for error responses.
 
+    Returns:
+        An error response dict if validation fails, None if all inputs are valid.
+    """
     if mode not in _PCAP_MODES:
         return error_response(
             tc_id,
@@ -580,22 +608,110 @@ def run_pcap_analysis(
             error_type="file_not_found",
         )
 
-    _ssl = ssl_keylog_path
-    results: list[object] = []
+    return None
 
+
+def _run_pcap_mode(
+    mode: str,
+    pcap_path: str,
+    max_packets: int,
+    ssl_keylog_path: str | None,
+    display_filter: str | None,
+) -> tuple[str, str]:
+    """Dispatch a single PCAP analysis mode and return its output.
+
+    Args:
+        mode: The analysis mode to run.
+        pcap_path: Path to the PCAP file.
+        max_packets: Maximum packets to process.
+        ssl_keylog_path: Optional SSL keylog file path.
+        display_filter: Display filter (used only for "custom" mode).
+
+    Returns:
+        A tuple of (source_name, output_text) for the executed mode.
+    """
     mode_map: dict[str, tuple[str, Callable[[], str]]] = {
-        "summary": ("pcap.summary", lambda: _pcap_summary(pcap_path, max_packets, _ssl)),
+        "summary": (
+            "pcap.summary",
+            lambda: _pcap_summary(pcap_path, max_packets, ssl_keylog_path),
+        ),
         "conversations": (
             "pcap.conversations",
-            lambda: _pcap_conversations(pcap_path, max_packets, _ssl),
+            lambda: _pcap_conversations(pcap_path, max_packets, ssl_keylog_path),
         ),
-        "dns": ("pcap.dns", lambda: _pcap_dns(pcap_path, max_packets, _ssl)),
-        "http": ("pcap.http", lambda: _pcap_http(pcap_path, max_packets, _ssl)),
-        "smtp": ("pcap.smtp", lambda: _pcap_smtp(pcap_path, max_packets, _ssl)),
-        "tls": ("pcap.tls", lambda: _pcap_tls(pcap_path, max_packets, _ssl)),
-        "beaconing": ("pcap.beaconing", lambda: _pcap_beaconing(pcap_path, max_packets, _ssl)),
-        "tunneling": ("pcap.tunneling", lambda: _pcap_tunneling(pcap_path, max_packets, _ssl)),
+        "dns": ("pcap.dns", lambda: _pcap_dns(pcap_path, max_packets, ssl_keylog_path)),
+        "http": ("pcap.http", lambda: _pcap_http(pcap_path, max_packets, ssl_keylog_path)),
+        "smtp": ("pcap.smtp", lambda: _pcap_smtp(pcap_path, max_packets, ssl_keylog_path)),
+        "tls": ("pcap.tls", lambda: _pcap_tls(pcap_path, max_packets, ssl_keylog_path)),
+        "beaconing": (
+            "pcap.beaconing",
+            lambda: _pcap_beaconing(pcap_path, max_packets, ssl_keylog_path),
+        ),
+        "tunneling": (
+            "pcap.tunneling",
+            lambda: _pcap_tunneling(pcap_path, max_packets, ssl_keylog_path),
+        ),
     }
+
+    if mode == "custom":
+        assert display_filter is not None
+        return "pcap.filtered", _pcap_custom(
+            pcap_path, display_filter, max_packets, ssl_keylog_path
+        )
+
+    source_name, fn = mode_map[mode]
+    return source_name, fn()
+
+
+@mcp.tool()
+def run_pcap_analysis(
+    pcap_path: str,
+    mode: str = "summary",
+    display_filter: str | None = None,
+    max_packets: int = 10000,
+    ssl_keylog_path: str | None = None,
+) -> dict[str, object]:
+    """Analyze a PCAP or PCAPng network capture file using tshark.
+
+    Extracts network conversations, DNS queries, HTTP traffic, protocol
+    statistics, or applies a custom Wireshark display filter.  Results
+    are indexed into the case database.
+
+    Args:
+        pcap_path: Path to the .pcap or .pcapng file.
+        mode: Analysis mode.  One of:
+            - "summary": capture stats + protocol hierarchy
+            - "conversations": IP and TCP conversation tables
+            - "dns": DNS queries and responses
+            - "http": HTTP requests and responses
+            - "beaconing": detect C2 beaconing via inter-arrival timing
+            - "tunneling": detect DNS tunneling and ICMP covert channels
+            - "custom": apply display_filter (required for this mode)
+            - "all": run all modes (summary through tunneling)
+        display_filter: Wireshark display filter (required when mode="custom",
+            e.g. "ip.addr == 10.0.0.5 && tcp.port == 4444").
+        max_packets: Maximum packets to process (default 10000).  Caps
+            tshark's -c flag to prevent unbounded output on large captures.
+        ssl_keylog_path: Optional path to an NSS key log file (SSLKEYLOGFILE
+            format) for decrypting TLS traffic.  When provided, tshark uses
+            it to decrypt encrypted sessions, revealing HTTP, SMTP, and other
+            application-layer data inside TLS.
+    """
+    tc_id = make_tool_call_id()
+    t0 = time.monotonic()
+    params: dict[str, object] = {
+        "pcap_path": pcap_path,
+        "mode": mode,
+        "display_filter": display_filter,
+        "max_packets": max_packets,
+        "ssl_keylog_path": ssl_keylog_path,
+    }
+
+    validation_error = _validate_pcap_params(
+        mode, pcap_path, display_filter, ssl_keylog_path, tc_id, params
+    )
+    if validation_error is not None:
+        return validation_error
 
     if mode == "all":
         modes_to_run = [
@@ -613,15 +729,11 @@ def run_pcap_analysis(
     else:
         modes_to_run = [mode]
 
+    results: list[object] = []
     for m in modes_to_run:
-        if m == "custom":
-            assert display_filter is not None
-            output = _pcap_custom(pcap_path, display_filter, max_packets, _ssl)
-            source_name = "pcap.filtered"
-        else:
-            source_name, fn = mode_map[m]
-            output = fn()
-
+        source_name, output = _run_pcap_mode(
+            m, pcap_path, max_packets, ssl_keylog_path, display_filter
+        )
         if output:
             summary = extract_and_index(output, source_name, pcap_path, "tshark")
             results.append(summary)
