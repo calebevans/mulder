@@ -6,6 +6,7 @@ import contextlib
 import json
 import logging
 import queue
+import re
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -106,6 +107,32 @@ _FTS_CREATE = (
 _IX_WINDOWS_SOURCE_LINE = (
     "CREATE INDEX IF NOT EXISTS ix_windows_source_line ON windows (source_id, line_start)"
 )
+
+_FTS5_OPERATORS = frozenset({"AND", "OR", "NOT", "NEAR"})
+_FTS5_SPECIAL = re.compile(r'["./$:^{}()*+\-~]')
+
+
+def _sanitize_fts5_query(query: str) -> str:
+    """Quote tokens that contain FTS5 special characters.
+
+    Preserves FTS5 boolean operators (AND, OR, NOT, NEAR) and
+    already-quoted phrases.  All other tokens containing special
+    characters are wrapped in double quotes so FTS5 treats them
+    as literals.
+    """
+    parts = re.findall(r'"[^"]*"|\S+', query)
+    tokens: list[str] = []
+    for token in parts:
+        if token in _FTS5_OPERATORS:
+            tokens.append(token)
+        elif token.startswith('"') and token.endswith('"'):
+            tokens.append(token)
+        elif _FTS5_SPECIAL.search(token):
+            safe = token.replace('"', '""')
+            tokens.append(f'"{safe}"')
+        else:
+            tokens.append(token)
+    return " ".join(tokens)
 
 
 def _make_engine(db_path: Path) -> Engine:
@@ -376,9 +403,11 @@ class CaseDB:
 
         stmt = stmt.order_by(windows_t.c.line_start).limit(max_results)
 
+        safe_query = _sanitize_fts5_query(query)
+
         with self._engine.connect() as conn:
             try:
-                rows = conn.execute(stmt, {"q": query}).fetchall()
+                rows = conn.execute(stmt, {"q": safe_query}).fetchall()
             except Exception:
                 logger.warning(
                     "FTS5 MATCH failed for query %r, returning empty",
