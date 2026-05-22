@@ -28,6 +28,7 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import DatabaseError, OperationalError
 from sqlalchemy.pool import NullPool
 
 from mulder.models import CaseMetadataRow, Finding, SourceRow, WindowRow
@@ -109,6 +110,7 @@ _IX_WINDOWS_SOURCE_LINE = (
 
 _FTS5_OPERATORS = frozenset({"AND", "OR", "NOT", "NEAR"})
 _FTS5_SPECIAL = re.compile(r'["./$:^{}()*+\-~]')
+_FTS5_TOKEN_RE = re.compile(r'"[^"]*"|\S+')
 
 
 def _sanitize_fts5_query(query: str) -> str:
@@ -119,7 +121,7 @@ def _sanitize_fts5_query(query: str) -> str:
     characters are wrapped in double quotes so FTS5 treats them
     as literals.
     """
-    parts = re.findall(r'"[^"]*"|\S+', query)
+    parts = _FTS5_TOKEN_RE.findall(query)
     tokens: list[str] = []
     for token in parts:
         if token in _FTS5_OPERATORS or token.startswith('"') and token.endswith('"'):
@@ -244,7 +246,11 @@ class _WriteQueue:
     def shutdown(self) -> None:
         """Signal the writer thread to exit and wait for it."""
         self._queue.put(_SENTINEL)
-        self._thread.join(timeout=5)
+        self._thread.join(timeout=10)
+        if self._thread.is_alive():
+            logger.warning(
+                "DB writer thread did not exit within timeout; remaining queue items may be lost"
+            )
 
 
 class CaseDB:
@@ -420,7 +426,7 @@ class CaseDB:
         with self._engine.connect() as conn:
             try:
                 rows = conn.execute(stmt, {"q": safe_query}).fetchall()
-            except Exception:
+            except (OperationalError, DatabaseError):
                 logger.warning(
                     "FTS5 MATCH failed for query %r, returning empty",
                     query,
@@ -538,7 +544,11 @@ class CaseDB:
             sources_t.c.source_name.like(source_prefix + ".%"),
         )
 
-        count_stmt = select(func.sum(sources_t.c.line_count)).where(source_where)
+        count_stmt = (
+            select(func.count())
+            .select_from(windows_t.join(sources_t, windows_t.c.source_id == sources_t.c.source_id))
+            .where(source_where)
+        )
 
         j = windows_t.join(sources_t, windows_t.c.source_id == sources_t.c.source_id)
         page_stmt = (
@@ -739,7 +749,17 @@ class CaseDB:
         for entry in registry:
             fp = Path(str(entry["file_path"]))
             expected = str(entry["sha256"])
-            if not fp.exists():
+            try:
+                h = _hashlib.sha256()
+                with open(fp, "rb") as f:
+                    while True:
+                        chunk = f.read(65536)
+                        if not chunk:
+                            break
+                        h.update(chunk)
+                actual = h.hexdigest()
+                status = "verified" if actual == expected else "modified"
+            except FileNotFoundError:
                 results.append(
                     {
                         "file_path": str(fp),
@@ -750,33 +770,40 @@ class CaseDB:
                     }
                 )
                 continue
-            h = _hashlib.sha256()
-            with open(fp, "rb") as f:
-                while True:
-                    chunk = f.read(65536)
-                    if not chunk:
-                        break
-                    h.update(chunk)
-            actual = h.hexdigest()
+            except OSError as exc:
+                logger.warning("Cannot read evidence file %s: %s", fp, exc)
+                results.append(
+                    {
+                        "file_path": str(fp),
+                        "expected_sha256": expected,
+                        "actual_sha256": None,
+                        "size_bytes": entry["size_bytes"],
+                        "status": "unreadable",
+                    }
+                )
+                continue
             results.append(
                 {
                     "file_path": str(fp),
                     "expected_sha256": expected,
                     "actual_sha256": actual,
                     "size_bytes": entry["size_bytes"],
-                    "status": "verified" if actual == expected else "modified",
+                    "status": status,
                 }
             )
         return results
 
     def _get_case_id(self) -> str:
-        """Read case_id from the case_metadata table."""
+        """Read case_id from the case_metadata table (cached after first call)."""
+        if hasattr(self, "_case_id_cache"):
+            return self._case_id_cache
         stmt = select(case_metadata_t.c.case_id).limit(1)
         with self._engine.connect() as conn:
             row = conn.execute(stmt).fetchone()
         if row is None:
             raise RuntimeError("No case metadata found in database")
-        return str(row[0])
+        self._case_id_cache: str = str(row[0])
+        return self._case_id_cache
 
     @property
     def db_path(self) -> Path:
