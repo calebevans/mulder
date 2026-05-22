@@ -123,9 +123,7 @@ def _sanitize_fts5_query(query: str) -> str:
     parts = re.findall(r'"[^"]*"|\S+', query)
     tokens: list[str] = []
     for token in parts:
-        if token in _FTS5_OPERATORS:
-            tokens.append(token)
-        elif token.startswith('"') and token.endswith('"'):
+        if token in _FTS5_OPERATORS or token.startswith('"') and token.endswith('"'):
             tokens.append(token)
         elif _FTS5_SPECIAL.search(token):
             safe = token.replace('"', '""')
@@ -357,14 +355,19 @@ class CaseDB:
         def _do_insert() -> None:
             """Bulk-insert window rows and sync the FTS index."""
             with self._engine.begin() as conn:
+                last_id_row = conn.execute(
+                    text("SELECT COALESCE(MAX(window_id), 0) FROM windows WHERE source_id = :sid"),
+                    {"sid": source_id},
+                ).fetchone()
+                last_id = last_id_row[0] if last_id_row else 0
                 conn.execute(insert(windows_t), rows)
                 conn.execute(
                     text(
                         "INSERT INTO windows_fts(rowid, raw_text) "
                         "SELECT window_id, raw_text FROM windows "
-                        "WHERE source_id = :sid"
+                        "WHERE source_id = :sid AND window_id > :last_id"
                     ),
-                    {"sid": source_id},
+                    {"sid": source_id, "last_id": last_id},
                 )
 
         self._wq.submit(_do_insert)
