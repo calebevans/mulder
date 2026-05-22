@@ -182,6 +182,7 @@ def search(
         matches: list[dict[str, object]] = []
         cursor = 0
         src_prefix = source or ""
+        source_map: dict[int, str] = {s.source_id: s.source_name for s in ctx.db.get_sources()}
         while len(matches) < max_results:
             chunk, _total = ctx.db.get_windows_page(src_prefix, after_id=cursor, limit=_CHUNK)
             if not chunk:
@@ -191,7 +192,7 @@ def search(
                     matches.append(
                         {
                             "window": _truncated_window(w),
-                            "source_name": source or "unknown",
+                            "source_name": source_map.get(w.source_id, source or "unknown"),
                         }
                     )
                     if len(matches) >= max_results:
@@ -483,8 +484,9 @@ def get_process_environment(pid: int) -> dict[str, object]:
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
-    all_wins = ctx.db.get_windows_by_source(_SRC_ENVARS)
-    matching = [w for w in all_wins if _extract_pid(w.raw_text) == pid]
+    pid_str = str(pid)
+    search_results = ctx.db.search_windows(pid_str, source_name=_SRC_ENVARS)
+    matching = [row[0] for row in search_results if _extract_pid(row[0].raw_text) == pid]
     elapsed = (time.monotonic() - t0) * 1000
     return windowed_response(
         tc_id, matching, _SRC_ENVARS, "get_process_environment", {"pid": pid}, elapsed
@@ -503,8 +505,9 @@ def get_process_privileges(pid: int) -> dict[str, object]:
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
-    all_wins = ctx.db.get_windows_by_source(_SRC_PRIVS)
-    matching = [w for w in all_wins if _extract_pid(w.raw_text) == pid]
+    pid_str = str(pid)
+    search_results = ctx.db.search_windows(pid_str, source_name=_SRC_PRIVS)
+    matching = [row[0] for row in search_results if _extract_pid(row[0].raw_text) == pid]
     elapsed = (time.monotonic() - t0) * 1000
     return windowed_response(
         tc_id, matching, _SRC_PRIVS, "get_process_privileges", {"pid": pid}, elapsed
