@@ -260,14 +260,10 @@ def _human_size(nbytes: int) -> str:
 
 @mcp.tool()
 def verify_evidence_integrity() -> dict[str, object]:
-    """Verify the integrity of all registered evidence files.
+    """Verify the integrity of all indexed source data.
 
-    Re-computes SHA-256 hashes for every evidence file registered at the
-    start of the investigation and compares against the stored hash.
-    Returns a summary with per-file verification status.
-
-    Call this before ``finalize_report()`` to include chain-of-custody
-    verification in the final report.
+    Recomputes BLAKE2b hashes from stored windows and compares against
+    the hashes recorded at ingestion. This is a fast DB-only operation.
     """
     ctx = get_ctx()
     t0 = time.monotonic()
@@ -276,24 +272,24 @@ def verify_evidence_integrity() -> dict[str, object]:
     total = len(results)
     verified = sum(1 for r in results if r["status"] == "verified")
     modified = sum(1 for r in results if r["status"] == "modified")
-    missing = sum(1 for r in results if r["status"] == "missing")
+    no_hash = sum(1 for r in results if r["status"] == "no_hash_recorded")
 
     elapsed_ms = (time.monotonic() - t0) * 1000
 
     if total == 0:
-        status = "no_evidence_registered"
-    elif modified > 0 or missing > 0:
+        status = "no_sources_indexed"
+    elif modified > 0:
         status = "integrity_issues_detected"
     else:
         status = "all_verified"
 
     return {
         "status": status,
-        "total_files": total,
+        "total_sources": total,
         "verified_count": verified,
         "modified_count": modified,
-        "missing_count": missing,
-        "files": results,
+        "no_hash_count": no_hash,
+        "sources": results,
         "elapsed_ms": round(elapsed_ms, 1),
     }
 

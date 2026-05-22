@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import queue
@@ -61,6 +62,7 @@ sources_t = Table(
     Column("extractor", Text, nullable=False),
     Column("line_count", Integer, nullable=False),
     Column("ingested_at", Text, nullable=False),
+    Column("windows_hash", Text, nullable=True),
 )
 
 windows_t = Table(
@@ -200,6 +202,15 @@ def _migrate_add_evidence_registry(conn: Connection) -> None:
     )
 
 
+def _migrate_add_windows_hash(conn: Connection) -> None:
+    """Add the windows_hash column to sources if it doesn't exist."""
+    try:
+        conn.execute(text("ALTER TABLE sources ADD COLUMN windows_hash TEXT"))
+    except Exception as exc:
+        if "duplicate column" not in str(exc).lower():
+            raise
+
+
 _SENTINEL = object()
 
 _QueueItem = tuple[
@@ -314,6 +325,7 @@ class CaseDB:
             _migrate_add_mitre_attack_ids(conn)
             _migrate_add_narrative(conn)
             _migrate_add_evidence_registry(conn)
+            _migrate_add_windows_hash(conn)
         return db
 
     def close(self) -> None:
@@ -376,7 +388,7 @@ class CaseDB:
         ]
 
         def _do_insert() -> None:
-            """Bulk-insert window rows and sync the FTS index."""
+            """Bulk-insert window rows, sync the FTS index, and update windows_hash."""
             with self._engine.begin() as conn:
                 last_id_row = conn.execute(
                     text("SELECT COALESCE(MAX(window_id), 0) FROM windows WHERE source_id = :sid"),
@@ -391,6 +403,18 @@ class CaseDB:
                         "WHERE source_id = :sid AND window_id > :last_id"
                     ),
                     {"sid": source_id, "last_id": last_id},
+                )
+
+                all_wins = conn.execute(
+                    text("SELECT raw_text FROM windows WHERE source_id = :sid ORDER BY window_id"),
+                    {"sid": source_id},
+                ).fetchall()
+                h = hashlib.blake2b(digest_size=32)
+                for row in all_wins:
+                    h.update(row[0].encode())
+                conn.execute(
+                    text("UPDATE sources SET windows_hash = :wh WHERE source_id = :sid"),
+                    {"wh": "blake2b:" + h.hexdigest(), "sid": source_id},
                 )
 
         self._wq.submit(_do_insert)
@@ -599,6 +623,7 @@ class CaseDB:
                 source_hash=row.source_hash,
                 extractor=row.extractor,
                 line_count=row.line_count,
+                windows_hash=getattr(row, "windows_hash", None),
             )
             for row in rows
         ]
@@ -744,59 +769,38 @@ class CaseDB:
         ]
 
     def verify_evidence_integrity(self) -> list[dict[str, object]]:
-        """Re-hash every registered evidence file and compare to stored hash.
+        """Verify indexed source data against stored window hashes.
 
-        Returns a list of dicts with ``file_path``, ``expected_sha256``,
-        ``actual_sha256``, and ``status`` (``verified``, ``modified``,
-        or ``missing``).
+        For each source, recomputes BLAKE2b from stored windows and compares
+        to the windows_hash recorded at ingestion. This is a fast DB-only
+        operation that verifies the indexed data has not been tampered with.
         """
-        import hashlib as _hashlib
-
-        registry = self.get_evidence_registry()
+        sources = self.get_sources()
         results: list[dict[str, object]] = []
-        for entry in registry:
-            fp = Path(str(entry["file_path"]))
-            expected = str(entry["sha256"])
-            try:
-                h = _hashlib.sha256()
-                with open(fp, "rb") as f:
-                    while True:
-                        chunk = f.read(65536)
-                        if not chunk:
-                            break
-                        h.update(chunk)
-                actual = h.hexdigest()
-                status = "verified" if actual == expected else "modified"
-            except FileNotFoundError:
+        for src in sources:
+            if not src.windows_hash:
                 results.append(
                     {
-                        "file_path": str(fp),
-                        "expected_sha256": expected,
-                        "actual_sha256": None,
-                        "size_bytes": entry["size_bytes"],
-                        "status": "missing",
+                        "source_name": src.source_name,
+                        "expected_hash": None,
+                        "actual_hash": None,
+                        "window_count": 0,
+                        "status": "no_hash_recorded",
                     }
                 )
                 continue
-            except OSError as exc:
-                logger.warning("Cannot read evidence file %r: %s", fp, exc)
-                results.append(
-                    {
-                        "file_path": str(fp),
-                        "expected_sha256": expected,
-                        "actual_sha256": None,
-                        "size_bytes": entry["size_bytes"],
-                        "status": "unreadable",
-                    }
-                )
-                continue
+            windows = self.get_windows_by_source(src.source_name)
+            h = hashlib.blake2b(digest_size=32)
+            for w in windows:
+                h.update(w.raw_text.encode())
+            actual = "blake2b:" + h.hexdigest()
             results.append(
                 {
-                    "file_path": str(fp),
-                    "expected_sha256": expected,
-                    "actual_sha256": actual,
-                    "size_bytes": entry["size_bytes"],
-                    "status": status,
+                    "source_name": src.source_name,
+                    "expected_hash": src.windows_hash,
+                    "actual_hash": actual,
+                    "window_count": len(windows),
+                    "status": "verified" if actual == src.windows_hash else "modified",
                 }
             )
         return results

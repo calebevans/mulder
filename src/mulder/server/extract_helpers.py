@@ -23,6 +23,7 @@ from mulder.models import WindowRow
 logger = logging.getLogger(__name__)
 
 _WINDOW_SIZE = 4
+_WINDOW_CHAR_CAP = 4096
 
 _ISO_RE = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}")
 _PLASO_DATE_RE = re.compile(r"(\d{2})/(\d{2})/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})")
@@ -156,6 +157,8 @@ def extract_and_index(
     for i in range(0, len(all_lines), _WINDOW_SIZE):
         block = all_lines[i : i + _WINDOW_SIZE]
         raw = "\n".join(block)
+        if len(raw) > _WINDOW_CHAR_CAP:
+            raw = raw[:_WINDOW_CHAR_CAP]
         if not raw.strip():
             continue
         event_time = _parse_timestamp(raw)

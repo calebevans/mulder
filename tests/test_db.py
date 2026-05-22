@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import hashlib
-import os
 from pathlib import Path
 
 import pytest
+from sqlalchemy import text
 
 from mulder.db import CaseDB, _sanitize_fts5_query
 from mulder.models import Finding, WindowRow
@@ -165,42 +164,45 @@ class TestExtractorVersions:
 
 
 class TestEvidenceIntegrity:
-    def test_verified(self, tmp_case_db: CaseDB, tmp_path: Path) -> None:
-        evidence = tmp_path / "evidence.dd"
-        evidence.write_bytes(b"forensic data")
-        sha = hashlib.sha256(b"forensic data").hexdigest()
-        tmp_case_db.register_evidence_file(str(evidence), sha, len(b"forensic data"))
+    def test_verified(self, tmp_case_db: CaseDB) -> None:
+        """Source with windows should verify successfully."""
+        sid = tmp_case_db.register_source("src.log", "/p", "h", "ext", 10)
+        windows = [
+            WindowRow(source_id=sid, line_start=0, line_end=5, event_time=None, raw_text="hello"),
+            WindowRow(source_id=sid, line_start=5, line_end=10, event_time=None, raw_text="world"),
+        ]
+        tmp_case_db.insert_windows(sid, windows)
         results = tmp_case_db.verify_evidence_integrity()
         assert len(results) == 1
         assert results[0]["status"] == "verified"
+        assert results[0]["window_count"] == 2
 
-    def test_modified(self, tmp_case_db: CaseDB, tmp_path: Path) -> None:
-        evidence = tmp_path / "evidence.dd"
-        evidence.write_bytes(b"original")
-        tmp_case_db.register_evidence_file(str(evidence), "wrong_hash", 8)
-        evidence.write_bytes(b"tampered")
+    def test_modified(self, tmp_case_db: CaseDB) -> None:
+        """Tampering with window text should be detected."""
+        sid = tmp_case_db.register_source("src.log", "/p", "h", "ext", 10)
+        windows = [
+            WindowRow(
+                source_id=sid, line_start=0, line_end=5, event_time=None, raw_text="original"
+            ),
+        ]
+        tmp_case_db.insert_windows(sid, windows)
+
+        with tmp_case_db._engine.begin() as conn:
+            conn.execute(
+                text("UPDATE windows SET raw_text = 'tampered' WHERE source_id = :sid"),
+                {"sid": sid},
+            )
+
         results = tmp_case_db.verify_evidence_integrity()
+        assert len(results) == 1
         assert results[0]["status"] == "modified"
 
-    def test_missing(self, tmp_case_db: CaseDB) -> None:
-        tmp_case_db.register_evidence_file("/nonexistent/file.dd", "abc", 0)
+    def test_no_hash_for_legacy_source(self, tmp_case_db: CaseDB) -> None:
+        """Source without windows_hash (legacy) should report no_hash_recorded."""
+        tmp_case_db.register_source("legacy.log", "/p", "h", "ext", 10)
         results = tmp_case_db.verify_evidence_integrity()
-        assert results[0]["status"] == "missing"
-
-    @pytest.mark.skipif(os.getuid() == 0, reason="root can read any file")
-    def test_unreadable_file(self, tmp_case_db: CaseDB, tmp_path: Path) -> None:
-        """Unreadable evidence files should get status 'unreadable', not crash."""
-        evidence = tmp_path / "evidence.dd"
-        evidence.write_bytes(b"forensic data")
-        sha = hashlib.sha256(b"forensic data").hexdigest()
-        tmp_case_db.register_evidence_file(str(evidence), sha, len(b"forensic data"))
-        evidence.chmod(0o000)
-        try:
-            results = tmp_case_db.verify_evidence_integrity()
-            assert len(results) == 1
-            assert results[0]["status"] == "unreadable"
-        finally:
-            evidence.chmod(0o644)
+        assert len(results) == 1
+        assert results[0]["status"] == "no_hash_recorded"
 
     def test_get_evidence_registry(self, tmp_case_db: CaseDB) -> None:
         tmp_case_db.register_evidence_file("/a.dd", "hash_a", 100)

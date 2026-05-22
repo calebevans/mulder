@@ -24,6 +24,7 @@ class SourceRow(BaseModel):
     source_hash: str
     extractor: str
     line_count: int
+    windows_hash: str | None = None
 
 
 class CaseMetadataRow(BaseModel):
