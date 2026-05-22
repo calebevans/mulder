@@ -251,6 +251,118 @@ def _analyze_pid(
     }
 
 
+def _collect_process_sources(
+    sub_call_ids: list[str],
+) -> dict[str, list[WindowRow]]:
+    """Query all process-related Volatility sources for suspicious process analysis.
+
+    Queries malfind, cmdline, netscan, pstree and conditionally psscan,
+    pslist, privs, envars, and dlllist.  Appends tool-call IDs to
+    *sub_call_ids* for audit tracking.
+
+    Returns:
+        Dict keyed by short source name mapping to the queried window rows.
+    """
+    sources: dict[str, list[WindowRow]] = {}
+
+    sources["malfind"], tc = _query_source("volatility.malfind", "find_suspicious_processes")
+    sub_call_ids.append(tc)
+
+    sources["cmdline"], tc = _query_source(_SRC_CMDLINE, "find_suspicious_processes")
+    sub_call_ids.append(tc)
+
+    sources["netscan"], tc = _query_source(_SRC_NETSCAN, "find_suspicious_processes")
+    sub_call_ids.append(tc)
+
+    sources["pstree"], tc = _query_source(_SRC_PSTREE, "find_suspicious_processes")
+    sub_call_ids.append(tc)
+
+    sources["pslist"] = []
+    sources["psscan"] = []
+    if _source_exists(_SRC_PSSCAN):
+        sources["psscan"], tc = _query_source(_SRC_PSSCAN, "find_suspicious_processes")
+        sub_call_ids.append(tc)
+        sources["pslist"], tc = _query_source(_SRC_PSLIST, "find_suspicious_processes")
+        sub_call_ids.append(tc)
+
+    sources["privs"] = []
+    if _source_exists(_SRC_PRIVS):
+        sources["privs"], tc = _query_source(_SRC_PRIVS, "find_suspicious_processes")
+        sub_call_ids.append(tc)
+
+    sources["envars"] = []
+    if _source_exists(_SRC_ENVARS):
+        sources["envars"], tc = _query_source(_SRC_ENVARS, "find_suspicious_processes")
+        sub_call_ids.append(tc)
+
+    sources["dlllist"] = []
+    if _source_exists(_SRC_DLLLIST):
+        sources["dlllist"], tc = _query_source(_SRC_DLLLIST, "find_suspicious_processes")
+        sub_call_ids.append(tc)
+
+    return sources
+
+
+def _build_candidate_pids(sources: dict[str, list[WindowRow]]) -> set[int]:
+    """Assemble the set of all candidate PIDs from queried process sources.
+
+    Unions PIDs found across malfind, cmdline, netscan, pstree, and
+    (when available) psscan.
+    """
+    all_pids: set[int] = set()
+    for key in ("malfind", "cmdline", "netscan", "pstree"):
+        all_pids |= set(extract_pids_from_windows(sources[key]))
+
+    if sources["psscan"]:
+        all_pids |= set(extract_pids_from_windows(sources["psscan"]))
+
+    return all_pids
+
+
+def _evaluate_and_score_pids(
+    candidate_pids: set[int],
+    sources: dict[str, list[WindowRow]],
+) -> list[dict[str, Any]]:
+    """Evaluate each candidate PID for suspicion indicators.
+
+    Extracts per-source PID indexes, builds process metadata, then
+    calls ``_analyze_pid`` for every candidate.  Only entries with at
+    least one suspicion reason are included in the returned list.
+    """
+    parent_map, pid_names = _build_pid_metadata(sources["pstree"], sources["cmdline"])
+
+    malfind_pids = extract_pids_from_windows(sources["malfind"])
+    cmdline_pids = extract_pids_from_windows(sources["cmdline"])
+    netscan_pids = extract_pids_from_windows(sources["netscan"])
+    pstree_pids = extract_pids_from_windows(sources["pstree"])
+    pslist_pids = extract_pids_from_windows(sources["pslist"]) if sources["pslist"] else None
+    psscan_pids = extract_pids_from_windows(sources["psscan"]) if sources["psscan"] else None
+    privs_pids = extract_pids_from_windows(sources["privs"]) if sources["privs"] else None
+    envars_pids = extract_pids_from_windows(sources["envars"]) if sources["envars"] else None
+    dlllist_pids = extract_pids_from_windows(sources["dlllist"]) if sources["dlllist"] else None
+
+    suspicious: list[dict[str, Any]] = []
+    for pid in sorted(candidate_pids):
+        entry = _analyze_pid(
+            pid,
+            pid_names=pid_names,
+            parent_map=parent_map,
+            malfind_pids=malfind_pids,
+            cmdline_pids=cmdline_pids,
+            netscan_pids=netscan_pids,
+            pstree_pids=pstree_pids,
+            pslist_pids=pslist_pids,
+            psscan_pids=psscan_pids,
+            privs_pids=privs_pids,
+            envars_pids=envars_pids,
+            dlllist_pids=dlllist_pids,
+        )
+        if entry is not None:
+            suspicious.append(entry)
+
+    return suspicious
+
+
 # ---------------------------------------------------------------------------
 # MCP tool handler
 # ---------------------------------------------------------------------------
@@ -271,75 +383,9 @@ def find_suspicious_processes() -> dict[str, object]:
     t0 = time.monotonic()
     sub_call_ids: list[str] = []
 
-    malfind_wins, tc1 = _query_source("volatility.malfind", "find_suspicious_processes")
-    sub_call_ids.append(tc1)
-
-    cmdline_wins, tc2 = _query_source(_SRC_CMDLINE, "find_suspicious_processes")
-    sub_call_ids.append(tc2)
-
-    netscan_wins, tc3 = _query_source(_SRC_NETSCAN, "find_suspicious_processes")
-    sub_call_ids.append(tc3)
-
-    pstree_wins, tc4 = _query_source(_SRC_PSTREE, "find_suspicious_processes")
-    sub_call_ids.append(tc4)
-
-    pslist_wins: list[WindowRow] = []
-    psscan_wins: list[WindowRow] = []
-    if _source_exists(_SRC_PSSCAN):
-        psscan_wins, tc_ps = _query_source(_SRC_PSSCAN, "find_suspicious_processes")
-        sub_call_ids.append(tc_ps)
-        pslist_wins, tc_pl = _query_source(_SRC_PSLIST, "find_suspicious_processes")
-        sub_call_ids.append(tc_pl)
-
-    privs_wins: list[WindowRow] = []
-    if _source_exists(_SRC_PRIVS):
-        privs_wins, tc_priv = _query_source(_SRC_PRIVS, "find_suspicious_processes")
-        sub_call_ids.append(tc_priv)
-
-    envars_wins: list[WindowRow] = []
-    if _source_exists(_SRC_ENVARS):
-        envars_wins, tc_env = _query_source(_SRC_ENVARS, "find_suspicious_processes")
-        sub_call_ids.append(tc_env)
-
-    dlllist_wins: list[WindowRow] = []
-    if _source_exists(_SRC_DLLLIST):
-        dlllist_wins, tc_dll = _query_source(_SRC_DLLLIST, "find_suspicious_processes")
-        sub_call_ids.append(tc_dll)
-
-    malfind_pids = extract_pids_from_windows(malfind_wins)
-    cmdline_pids = extract_pids_from_windows(cmdline_wins)
-    netscan_pids = extract_pids_from_windows(netscan_wins)
-    pstree_pids = extract_pids_from_windows(pstree_wins)
-
-    pslist_pids = extract_pids_from_windows(pslist_wins) if pslist_wins else None
-    psscan_pids = extract_pids_from_windows(psscan_wins) if psscan_wins else None
-    privs_pids = extract_pids_from_windows(privs_wins) if privs_wins else None
-    envars_pids = extract_pids_from_windows(envars_wins) if envars_wins else None
-    dlllist_pids = extract_pids_from_windows(dlllist_wins) if dlllist_wins else None
-
-    all_pids = set(malfind_pids) | set(cmdline_pids) | set(netscan_pids) | set(pstree_pids)
-    if psscan_pids:
-        all_pids |= set(psscan_pids)
-    parent_map, pid_names = _build_pid_metadata(pstree_wins, cmdline_wins)
-
-    suspicious: list[dict[str, Any]] = []
-    for pid in sorted(all_pids):
-        entry = _analyze_pid(
-            pid,
-            pid_names=pid_names,
-            parent_map=parent_map,
-            malfind_pids=malfind_pids,
-            cmdline_pids=cmdline_pids,
-            netscan_pids=netscan_pids,
-            pstree_pids=pstree_pids,
-            pslist_pids=pslist_pids,
-            psscan_pids=psscan_pids,
-            privs_pids=privs_pids,
-            envars_pids=envars_pids,
-            dlllist_pids=dlllist_pids,
-        )
-        if entry is not None:
-            suspicious.append(entry)
+    sources = _collect_process_sources(sub_call_ids)
+    candidate_pids = _build_candidate_pids(sources)
+    suspicious = _evaluate_and_score_pids(candidate_pids, sources)
 
     missing = _check_missing_sources(
         [

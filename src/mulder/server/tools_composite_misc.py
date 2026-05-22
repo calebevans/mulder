@@ -476,6 +476,139 @@ def _correlate_with_netscan(
 
 
 # ---------------------------------------------------------------------------
+# Recovery assessment helpers
+# ---------------------------------------------------------------------------
+
+
+def _collect_deleted_files(sub_call_ids: list[str]) -> int:
+    """Query TSK filelist and return the count of deleted file entries.
+
+    Deleted entries are identified by the ``* `` marker prefix in the
+    raw text produced by ``fls``.
+    """
+    deleted_wins, tc = _query_source(_SRC_TSK_FILELIST, "assess_recovery")
+    sub_call_ids.append(tc)
+    return len([w for w in deleted_wins if "* " in w.raw_text])
+
+
+def _collect_secure_delete_hits(
+    sub_call_ids: list[str],
+) -> list[dict[str, Any]]:
+    """Detect secure-delete tool execution and log clearing as anti-forensics indicators.
+
+    Searches execution artifact sources (prefetch, amcache, shimcache)
+    for known secure-delete utilities and event log sources for log
+    clearing events (Event IDs 104, 1102).
+    """
+    anti_forensics: list[dict[str, Any]] = []
+
+    for src in (_SRC_EZ_PREFETCH, _SRC_EZ_AMCACHE, _SRC_EZ_SHIMCACHE):
+        if not _source_exists(src):
+            continue
+        wins, tc = _query_source(src, "assess_recovery")
+        sub_call_ids.append(tc)
+        for w in wins:
+            text_lower = w.raw_text.lower()
+            matched = next(
+                (tool for tool in _SECURE_DELETE_TOOLS if tool in text_lower),
+                None,
+            )
+            if matched:
+                anti_forensics.append(
+                    {
+                        "type": "secure_delete_tool",
+                        "tool": matched,
+                        "source": src,
+                        "evidence_text": w.raw_text.strip()[:300],
+                    }
+                )
+
+    for evtx_src in (_SRC_EVTX_SECURITY, _SRC_EVTX_SYSTEM):
+        if not _source_exists(evtx_src):
+            continue
+        evtx_wins, tc = _keyword_sub_query(
+            "log cleared event 104 1102 audit log cleared wiped",
+            "assess_recovery",
+            source_name=evtx_src,
+            k=10,
+        )
+        sub_call_ids.append(tc)
+        for w in evtx_wins:
+            text = w.raw_text
+            if "104" in text or "1102" in text or "cleared" in text.lower():
+                anti_forensics.append(
+                    {
+                        "type": "log_clearing",
+                        "source": evtx_src,
+                        "event_time": w.event_time,
+                        "evidence_text": text.strip()[:300],
+                    }
+                )
+
+    return anti_forensics
+
+
+def _collect_usn_deletion_hits(
+    sub_call_ids: list[str],
+) -> list[dict[str, Any]]:
+    """Scan USN journal for file deletion activity.
+
+    Performs a keyword sub-query for FILE_DELETE / CLOSE entries and
+    returns matching evidence snippets.
+    """
+    if not _source_exists(_SRC_EZ_USNJRNL):
+        return []
+
+    usn_wins, tc = _keyword_sub_query(
+        "FILE_DELETE CLOSE rename delete",
+        "assess_recovery",
+        source_name=_SRC_EZ_USNJRNL,
+        k=30,
+    )
+    sub_call_ids.append(tc)
+
+    deletions: list[dict[str, Any]] = []
+    for w in usn_wins:
+        text_lower = w.raw_text.lower()
+        if "delete" in text_lower or "close" in text_lower:
+            deletions.append(
+                {
+                    "event_time": w.event_time,
+                    "evidence_text": w.raw_text.strip()[:_HINT_CHAR_LIMIT],
+                }
+            )
+
+    return deletions
+
+
+def _build_recovery_assessment(
+    total_deleted: int,
+    anti_forensics: list[dict[str, Any]],
+    usnjrnl_deletions: list[dict[str, Any]],
+) -> dict[str, object]:
+    """Build the final recovery assessment from collected evidence sections.
+
+    Combines deleted file counts, anti-forensics indicators, and USN
+    journal deletion samples into a single scored assessment dict.
+    """
+    evidence_gaps: list[str] = []
+    if anti_forensics:
+        evidence_gaps.append(
+            "Secure delete tools detected -- some deleted files may be unrecoverable"
+        )
+    if any(item.get("type") == "log_clearing" for item in anti_forensics):
+        evidence_gaps.append("Event log clearing detected -- some log evidence has been destroyed")
+
+    return {
+        "total_deleted_files": total_deleted,
+        "anti_forensics_detected": anti_forensics,
+        "anti_forensics_count": len(anti_forensics),
+        "usnjrnl_deletions_sampled": usnjrnl_deletions[:20],
+        "evidence_gaps": evidence_gaps,
+    }
+
+
+# ---------------------------------------------------------------------------
 # MCP tool handlers
 # ---------------------------------------------------------------------------
 
@@ -636,92 +769,10 @@ def assess_recovery() -> dict[str, object]:
     t0 = time.monotonic()
     sub_call_ids: list[str] = []
 
-    deleted_wins, tc_del = _query_source(_SRC_TSK_FILELIST, "assess_recovery")
-    sub_call_ids.append(tc_del)
-    deleted_files = [w for w in deleted_wins if "* " in w.raw_text]
-    total_deleted = len(deleted_files)
-
-    anti_forensics: list[dict[str, Any]] = []
-
-    for src in (_SRC_EZ_PREFETCH, _SRC_EZ_AMCACHE, _SRC_EZ_SHIMCACHE):
-        if not _source_exists(src):
-            continue
-        wins, tc_id = _query_source(src, "assess_recovery")
-        sub_call_ids.append(tc_id)
-        for w in wins:
-            text_lower = w.raw_text.lower()
-            matched = next(
-                (tool for tool in _SECURE_DELETE_TOOLS if tool in text_lower),
-                None,
-            )
-            if matched:
-                anti_forensics.append(
-                    {
-                        "type": "secure_delete_tool",
-                        "tool": matched,
-                        "source": src,
-                        "evidence_text": w.raw_text.strip()[:300],
-                    }
-                )
-
-    log_clearing: list[dict[str, Any]] = []
-    for evtx_src in (_SRC_EVTX_SECURITY, _SRC_EVTX_SYSTEM):
-        if not _source_exists(evtx_src):
-            continue
-        evtx_wins, tc_evtx = _keyword_sub_query(
-            "log cleared event 104 1102 audit log cleared wiped",
-            "assess_recovery",
-            source_name=evtx_src,
-            k=10,
-        )
-        sub_call_ids.append(tc_evtx)
-        for w in evtx_wins:
-            text = w.raw_text
-            if "104" in text or "1102" in text or "cleared" in text.lower():
-                log_clearing.append(
-                    {
-                        "type": "log_clearing",
-                        "source": evtx_src,
-                        "event_time": w.event_time,
-                        "evidence_text": text.strip()[:300],
-                    }
-                )
-    anti_forensics.extend(log_clearing)
-
-    usnjrnl_deletions: list[dict[str, Any]] = []
-    if _source_exists(_SRC_EZ_USNJRNL):
-        usn_wins, tc_usn = _keyword_sub_query(
-            "FILE_DELETE CLOSE rename delete",
-            "assess_recovery",
-            source_name=_SRC_EZ_USNJRNL,
-            k=30,
-        )
-        sub_call_ids.append(tc_usn)
-        for w in usn_wins:
-            text_lower = w.raw_text.lower()
-            if "delete" in text_lower or "close" in text_lower:
-                usnjrnl_deletions.append(
-                    {
-                        "event_time": w.event_time,
-                        "evidence_text": w.raw_text.strip()[:_HINT_CHAR_LIMIT],
-                    }
-                )
-
-    evidence_gaps: list[str] = []
-    if anti_forensics:
-        evidence_gaps.append(
-            "Secure delete tools detected -- some deleted files may be unrecoverable"
-        )
-    if log_clearing:
-        evidence_gaps.append("Event log clearing detected -- some log evidence has been destroyed")
-
-    assessment: dict[str, object] = {
-        "total_deleted_files": total_deleted,
-        "anti_forensics_detected": anti_forensics,
-        "anti_forensics_count": len(anti_forensics),
-        "usnjrnl_deletions_sampled": usnjrnl_deletions[:20],
-        "evidence_gaps": evidence_gaps,
-    }
+    total_deleted = _collect_deleted_files(sub_call_ids)
+    anti_forensics = _collect_secure_delete_hits(sub_call_ids)
+    usnjrnl_deletions = _collect_usn_deletion_hits(sub_call_ids)
+    assessment = _build_recovery_assessment(total_deleted, anti_forensics, usnjrnl_deletions)
 
     missing = _check_missing_sources(
         [
