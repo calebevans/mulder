@@ -136,76 +136,6 @@ theory. Phase 3.5 enforces this -- you CANNOT skip it.
      complete with `get_completed_results(batch_id)`.
    - Never call the same tool 3+ times in a row -- batch them.
 
-## Planning and Progress Tracking
-
-**THIS IS MANDATORY. You MUST use TodoWrite to track every step.**
-
-Skipping systems or tool categories is the most common investigation
-failure. The todo list is your contract with yourself. If it is not in
-the todo list, it will not get done.
-
-### After Phase 1 (Orient)
-
-Once `scan_evidence` returns the evidence manifest, IMMEDIATELY call
-TodoWrite to create a detailed plan. Do NOT proceed to analysis until
-the plan is written. The plan must have ALL of the following:
-
-1. **One todo per evidence item** with a unique ID. Use the system or
-   file name. If there are 11 systems, you need 11 todos.
-2. **One todo per investigation phase gate** (Phase 2, 3, 3.5, 4, 4.5, 5).
-3. **One todo per archive** that needs extraction.
-
-**EXAMPLE (you MUST follow this structure):**
-
-If scan_evidence finds 3 memory dumps, 2 disk images, 1 PCAP, and 2
-archives, your TodoWrite call should look EXACTLY like this:
-
-```
-TodoWrite(todos=[
-  {"id": "extract-archive1", "content": "Extract evidence-backup.7z", "status": "pending"},
-  {"id": "extract-archive2", "content": "Extract logs-2024.tar.gz", "status": "pending"},
-  {"id": "sys-dc01-mem", "content": "dc01: Volatility analysis (memory dump)", "status": "pending"},
-  {"id": "sys-dc01-disk", "content": "dc01: Disk analysis (fls, evtx, registry, bulk_extractor)", "status": "pending"},
-  {"id": "sys-ws01-mem", "content": "ws01: Volatility analysis (memory dump)", "status": "pending"},
-  {"id": "sys-ws01-disk", "content": "ws01: Disk analysis (fls, evtx, registry, bulk_extractor)", "status": "pending"},
-  {"id": "sys-filesvr-mem", "content": "fileserver: Volatility analysis (memory dump)", "status": "pending"},
-  {"id": "sys-pcap", "content": "Network capture: PCAP analysis (all modes)", "status": "pending"},
-  {"id": "phase2-gate", "content": "GATE: Phase 2 complete, all per-system analysis done", "status": "pending"},
-  {"id": "phase3-composite", "content": "Phase 3: Run all composite tools (persistence, lateral, exfil, evasion)", "status": "pending"},
-  {"id": "phase3-cross-correlate", "content": "Phase 3: Cross-system correlation and IOC search", "status": "pending"},
-  {"id": "phase35-gate", "content": "GATE: Phase 3.5 alternative narrative discovery", "status": "pending"},
-  {"id": "phase4-gate", "content": "GATE: Phase 4 pre-finalize audit + tool coverage", "status": "pending"},
-  {"id": "phase45-gate", "content": "GATE: Phase 4.5 self-correction audit", "status": "pending"},
-  {"id": "phase5-narrative", "content": "Phase 5: Write narrative and finalize report", "status": "pending"},
-], merge=false)
-```
-
-**If a system has BOTH memory and disk evidence, it gets TWO todos**
-(one for memory analysis, one for disk analysis). Do not combine them.
-
-### During Analysis
-
-- **Mark `in_progress`** when you start working on a todo.
-- **Only ONE todo should be `in_progress` at a time** (except during
-  batch extractions where multiple are running in background).
-- **Mark `completed`** ONLY after ALL applicable tools have run.
-- **Add new todos** with `merge=true` as sub-tasks emerge:
-  - "Index Security.evtx from dc01"
-  - "Run YARA on extracted files from ws01"
-  - "Investigate suspicious user account admin-backup"
-  - "Search for Rar.exe across all systems"
-- **Update todos after every major action.** Do not let the todo list
-  go stale. If you just finished analyzing a system, mark it done NOW.
-
-### At Phase Gates
-
-- Call TodoWrite to review your list before proceeding.
-- **EVERY evidence item todo** must be `completed` or `cancelled` with
-  a reason (e.g., "encrypted, no key available").
-- Mark the gate todo `completed` only after all prerequisites are done.
-- **If ANY item is still pending, finish it before proceeding.**
-- Print a summary: "X of Y systems analyzed, Z findings submitted."
-
 ## Evidence Type Parity
 
 Memory and disk evidence answer different questions. Analyzing only one
@@ -447,9 +377,7 @@ Poll for completed extractions and analyze results as they arrive:
    - `submit_finding()` for anything notable
    - Run composite tools if their prerequisite data is now indexed
 4. Repeat until all extractions complete
-5. **Update your todo list** as each system's extractions complete. Mark
-   a system's todo as `completed` only after all waves (extraction,
-   dependent tools, composite analysis) finish for that system.
+5. Continue polling until all extractions complete.
 
 #### Wave 4 -- Dependent Tools
 
@@ -629,11 +557,6 @@ narrative. At minimum:
 ### Phase 4 -- Pre-Finalize Audit
 
 **YOU MUST COMPLETE THIS PHASE BEFORE CALLING `finalize_report()`.**
-
-**Review your todo list first.** Every evidence item todo must be
-`completed` or have a documented reason for being skipped. Every phase
-gate up to this point must be `completed`. If any are still pending,
-go back and finish them now.
 
 **Step 0: Evidence Coverage.**
 Print every system/device/archive from your Phase 1 evidence inventory.

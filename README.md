@@ -68,18 +68,20 @@ See [examples/](examples/) for reports from multiple forensic datasets with grou
 The container image comes with all forensic tools, dependencies, and [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview) pre-installed. Mulder is already registered as an MCP server in the container, so Claude Code can use it immediately.
 
 ```bash
-docker pull ghcr.io/calebevans/mulder:1.0
+docker pull ghcr.io/calebevans/mulder:1.1
 ```
 
 #### Running the Container
+
+The container runs as a non-root `mulder` user for security. An entrypoint script handles credential copying and permission setup automatically.
 
 The container expects three volume mounts:
 
 | Mount | Purpose |
 |-------|---------|
 | `/evidence` | Your evidence directory (mount read-only with `:ro`) |
-| `/root/.mulder/cases` | Case databases, audit logs, and generated reports (persisted to host) |
-| `/root/.claude` | Claude Code configuration and session data |
+| `/home/mulder/.mulder/cases` | Case databases, audit logs, and generated reports (persisted to host) |
+| `/home/mulder/.claude` | Claude Code configuration and session data |
 
 **With an Anthropic API key:**
 
@@ -87,11 +89,11 @@ The container expects three volume mounts:
 mkdir -p ~/mulder-cases
 
 docker run -it --privileged \
-  -v /path/to/evidence:/evidence:ro            `# evidence directory (read-only)` \
-  -v ~/mulder-cases:/root/.mulder/cases        `# case DBs, audit logs, reports` \
-  -v ~/.claude:/root/.claude                   `# Claude Code config and sessions` \
+  -v /path/to/evidence:/evidence:ro                  `# evidence directory (read-only)` \
+  -v ~/mulder-cases:/home/mulder/.mulder/cases       `# case DBs, audit logs, reports` \
+  -v ~/.claude:/home/mulder/.claude                  `# Claude Code config and sessions` \
   -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
-  ghcr.io/calebevans/mulder:1.0
+  ghcr.io/calebevans/mulder:1.1
 ```
 
 **With Google Cloud Vertex AI:**
@@ -100,15 +102,15 @@ docker run -it --privileged \
 mkdir -p ~/mulder-cases
 
 docker run -it --privileged \
-  -v /path/to/evidence:/evidence:ro            `# evidence directory (read-only)` \
-  -v ~/mulder-cases:/root/.mulder/cases        `# case DBs, audit logs, reports` \
-  -v ~/.claude:/root/.claude                   `# Claude Code config and sessions` \
+  -v /path/to/evidence:/evidence:ro                  `# evidence directory (read-only)` \
+  -v ~/mulder-cases:/home/mulder/.mulder/cases       `# case DBs, audit logs, reports` \
+  -v ~/.claude:/home/mulder/.claude                  `# Claude Code config and sessions` \
   -e CLAUDE_CODE_USE_VERTEX=1 \
   -e CLOUD_ML_REGION=us-east5 \
   -e ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project-id \
   -e GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcloud-creds.json \
   -v ~/.config/gcloud/application_default_credentials.json:/tmp/gcloud-creds.json:ro `# GCP credentials` \
-  ghcr.io/calebevans/mulder:1.0
+  ghcr.io/calebevans/mulder:1.1
 ```
 
 **With Amazon Bedrock:**
@@ -117,14 +119,14 @@ docker run -it --privileged \
 mkdir -p ~/mulder-cases
 
 docker run -it --privileged \
-  -v /path/to/evidence:/evidence:ro            `# evidence directory (read-only)` \
-  -v ~/mulder-cases:/root/.mulder/cases        `# case DBs, audit logs, reports` \
-  -v ~/.claude:/root/.claude                   `# Claude Code config and sessions` \
+  -v /path/to/evidence:/evidence:ro                  `# evidence directory (read-only)` \
+  -v ~/mulder-cases:/home/mulder/.mulder/cases       `# case DBs, audit logs, reports` \
+  -v ~/.claude:/home/mulder/.claude                  `# Claude Code config and sessions` \
   -e CLAUDE_CODE_USE_BEDROCK=1 \
   -e AWS_REGION=us-east-1 \
   -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
   -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
-  ghcr.io/calebevans/mulder:1.0
+  ghcr.io/calebevans/mulder:1.1
 ```
 
 The container starts Claude Code directly. Once inside, use the `/investigate` slash command to begin:
@@ -136,6 +138,15 @@ The container starts Claude Code directly. Once inside, use the `/investigate` s
 Point it at the directory where your evidence is mounted. The directory can contain archives (zip, 7z, gz, tar, tar.gz, etc.) — the agent will automatically extract them into a temporary directory and read from there.
 
 Case databases and reports are written to the mounted `~/mulder-cases` directory on the host.
+
+#### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ANTHROPIC_API_KEY` | — | API key for direct Anthropic access |
+| `CLAUDE_CODE_USE_VERTEX` | — | Set to `1` for Google Cloud Vertex AI |
+| `CLAUDE_CODE_USE_BEDROCK` | — | Set to `1` for Amazon Bedrock |
+| `DISABLE_AUTOUPDATE` | `1` | Prevents Claude Code from auto-updating inside the container (set by default in the image) |
 
 ## CLI Reference
 

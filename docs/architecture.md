@@ -19,7 +19,7 @@ src/mulder/
 │   ├── sleuthkit.py              # Sleuthkit (fls, icat, mmls) wrapper
 │   ├── plaso.py                  # Plaso (log2timeline) wrapper
 │   ├── bulk.py                   # bulk_extractor wrapper
-│   ├── disk.py                   # Disk image helpers (mount, walk, EVTX/prefetch extraction)
+│   ├── disk.py                   # Disk image helpers (mount, unmount, walk, extraction)
 │   ├── logs.py                   # Log file ingestion
 │   └── eztools.py                # Eric Zimmerman tools wrapper
 ├── index/
@@ -41,16 +41,31 @@ src/mulder/
     ├── jobs.py                   # Background JobStore for async extraction batches
     ├── extract_helpers.py        # Common extraction utilities (extract_and_index, mount_disk_image)
     ├── tools_case.py             # scan_evidence, open_case, list_cases, verify_evidence_integrity, extract_archive
-    ├── tools_extract.py          # Volatility, Sleuthkit, Plaso, EVTX, Registry, bulk_extractor, etc.
+    ├── tools_extract.py          # Extraction tool registry and dispatch
+    ├── tools_extract_volatility.py  # Volatility memory analysis tools
+    ├── tools_extract_tsk.py      # Sleuthkit disk image tools
+    ├── tools_extract_evtx.py     # Windows event log extraction and indexing
+    ├── tools_extract_registry.py # Windows registry parsing tools
+    ├── tools_extract_plaso.py    # Plaso super-timeline extraction
+    ├── tools_extract_pcap.py     # Network capture (PCAP) analysis tools
+    ├── tools_extract_carving.py  # File carving (foremost, scalpel, photorec) tools
+    ├── tools_extract_misc.py     # Miscellaneous extraction tools (strings, exiftool, etc.)
     ├── tools_core.py             # search, correlate, list_sources, process/memory queries, decode_payload
-    ├── tools_composite.py        # Multi-source hunting (persistence, lateral movement, exfil, etc.)
+    ├── tools_composite.py        # Composite tool registry and shared utilities
+    ├── tools_composite_core.py   # Core composite analysis (correlation, timeline)
+    ├── tools_composite_process.py   # Process analysis (suspicious processes, execution chains)
+    ├── tools_composite_persistence.py  # Persistence mechanism detection
+    ├── tools_composite_lateral.py   # Lateral movement indicator detection
+    ├── tools_composite_exfil.py  # Data exfiltration indicator detection
+    ├── tools_composite_execution.py  # Execution evidence and timeline analysis
+    ├── tools_composite_misc.py   # Defense evasion, recovery assessment
     ├── tools_findings.py         # submit_finding, submit_narrative, get_findings, finalize_report
     ├── tools_review.py           # Pre-report self-review (audit_evidence_coverage, audit_tool_coverage)
     ├── tools_plaso.py            # Plaso timeline filtering and export
     ├── tools_hayabusa.py         # Hayabusa Windows event log analysis
     ├── tools_yara.py             # YARA scanning (files, memory, Volatility integration)
     ├── tools_tsk.py              # Sleuthkit convenience tools (partitions, deleted files, inodes)
-    ├── tools_eztools.py          # Eric Zimmerman artifact parsers
+    ├── tools_eztools.py          # Eric Zimmerman artifact parsers (generated from config table)
     ├── tools_bulk.py             # Bulk extractor IOC summary
     ├── tools_phone.py            # Mobile forensics (Android, iOS, SQLCipher)
     ├── tools_artifacts.py        # Browser history, plist, SQLite from image, steganography
@@ -195,6 +210,7 @@ erDiagram
         text extractor
         int line_count
         text ingested_at
+        text windows_hash
     }
 
     windows {
@@ -241,8 +257,8 @@ erDiagram
 ### Tables
 
 - **case_metadata**: one row per case, storing the evidence root path, extractor version info, and an optional long-form investigation narrative (set via `submit_narrative`)
-- **sources**: one row per ingested evidence source (a Volatility plugin output, a disk image FLS listing, etc.), keyed to a case
-- **windows**: line-oriented text chunks from extractor output, each belonging to a source. The primary unit of searchable evidence.
+- **sources**: one row per ingested evidence source (a Volatility plugin output, a disk image FLS listing, etc.), keyed to a case. The `windows_hash` column stores a BLAKE2b hash of all window content for fast integrity verification.
+- **windows**: character-budget chunks from extractor output, each belonging to a source. The primary unit of searchable evidence. Each window is up to 4,096 characters (a character budget, not a line count).
 - **windows_fts**: an FTS5 virtual table that mirrors `windows.raw_text` for full-text search
 - **findings**: agent-submitted investigation findings with severity, confidence, MITRE ATT&CK IDs, and evidence references
 - **evidence_registry**: SHA-256 chain-of-custody records for original evidence files
@@ -257,7 +273,7 @@ flowchart TD
     AgentDecides["Agent decides which\nextractions to run"]
     RunTool["Agent calls extraction tool\n(run_volatility, run_fls,\nrun_plaso, etc.)"]
     ExtBinary["Extractor runs\nexternal binary"]
-    ParseOutput["Output parsed into\nWindowRow objects"]
+    ParseOutput["Output parsed into\nWindowRow objects\n(character-budget chunking)"]
     RegisterSource["register_source()\nrecords source metadata + hash"]
     InsertWindows["insert_windows()\nbatch insert via WriteQueue"]
     FTSSync["FTS5 triggers sync\nsearchable text"]
@@ -291,30 +307,27 @@ Each extractor module wraps one or more external forensic tools and normalizes t
 | `logs.py` | None (Python native) | Plain text log files |
 | `disk.py` | Sleuthkit utilities | Disk image metadata and file extraction |
 
-Additional tools invoked directly from `tools_extract.py` without a dedicated extractor module:
+Additional tools invoked from dedicated `tools_extract_*.py` submodules:
 
-| Tool | What It Does |
-|------|--------------|
-| `hayabusa` | Windows event log threat hunting with Sigma rules |
-| `yara` | Pattern matching across files, memory, or Volatility output |
-| `exiftool` | File metadata extraction |
-| `clamav` (`clamscan`) | Malware scanning |
-| `hashdeep` | Recursive cryptographic hashing |
-| `foremost` / `scalpel` / `photorec` | File carving and recovery |
-| `ssdeep` | Fuzzy hashing for similarity matching |
-| `tshark` | PCAP network capture analysis |
-| `binwalk` | Firmware and embedded file analysis |
-| `chkrootkit` | Rootkit detection |
-| `regripper` | Windows registry hive parsing |
-| `pasco` | Internet Explorer index.dat parsing |
-| `stegdetect` / `steghide` | Steganography detection and extraction |
-| `radare2` (`r2`) | Binary analysis and reverse engineering for malware triage |
-| `tcpflow` / `tcpxtract` | TCP stream reconstruction and file extraction from PCAPs |
-| `dislocker` / `bdeinfo` | BitLocker volume decryption and metadata extraction |
-| `fvdeinfo` | Apple FileVault encryption metadata extraction |
-| `hindsight` | Chrome/Chromium browser forensics (via `tools_hindsight.py`) |
+| Module | Tools |
+|--------|-------|
+| `tools_extract_volatility.py` | Volatility 3 memory analysis (`run_volatility`, `run_volatility_batch`) |
+| `tools_extract_tsk.py` | Sleuthkit (`run_fls`, `run_mmls`, `run_fsstat`, `mactime`) |
+| `tools_extract_evtx.py` | Windows EVTX parsing and indexing (`run_evtx_parser`, `index_evtx_file`) |
+| `tools_extract_registry.py` | Registry parsing (`run_registry_parser`, `run_regripper`) |
+| `tools_extract_plaso.py` | Plaso super-timeline (`run_plaso`) |
+| `tools_extract_pcap.py` | PCAP analysis, tunneling detection, PCAP-host correlation (`run_pcap_analysis`) |
+| `tools_extract_carving.py` | File carving and recovery (`foremost`, `scalpel`, `photorec`) |
+| `tools_extract_misc.py` | `exiftool`, `clamav`, `hashdeep`, `ssdeep`, `binwalk`, `chkrootkit`, `strings`, `stegdetect`/`steghide`, `radare2`, `tcpflow`/`tcpxtract`, `dislocker`/`bdeinfo`, `fvdeinfo` |
 
-| `mvt-android` / `mvt-ios` | Mobile Verification Toolkit for spyware detection (via `tools_mvt.py`) |
+Standalone tool modules for specialized forensic tools:
+
+| Module | Tools |
+|--------|-------|
+| `tools_hayabusa.py` | Hayabusa Windows event log threat hunting with Sigma rules |
+| `tools_yara.py` | YARA pattern matching across files, memory, or Volatility output |
+| `tools_hindsight.py` | Chrome/Chromium browser forensics |
+| `tools_mvt.py` | MVT mobile spyware detection (Android, iOS) |
 
 ## 📜 Audit and Provenance
 
@@ -425,3 +438,67 @@ The engine uses `NullPool` so each `engine.begin()` / `engine.connect()` gets a 
 - The `AuditLog` uses a `threading.Lock` around file appends and index updates
 - The `_WriteQueue` serializes all database mutations through a single thread
 - Read operations (search, correlation, listing) go directly through SQLAlchemy without the WriteQueue since WAL mode allows concurrent reads
+
+## 🔐 Security Architecture
+
+### SQL Authorizer
+
+The `query_sqlite_from_image` tool allows agents to run arbitrary SQL against SQLite databases extracted from evidence. To prevent abuse, a custom SQLite authorizer callback (`_readonly_authorizer`) restricts the connection to read-only operations. This blocks `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `ATTACH`, `DETACH`, `CREATE`, and `load_extension` calls at the SQLite engine level, regardless of how the query is constructed.
+
+### Path Validation
+
+The `read_evidence_file` and `list_directory` tools validate that requested paths resolve to locations under allowed roots (the evidence directory and the case database directory). This prevents path traversal attacks that could read arbitrary filesystem contents. The validation uses `Path.resolve()` to canonicalize symlinks before checking containment.
+
+### Archive Extraction Filters
+
+- **Zip files**: Member paths are checked for path traversal (`..` components, absolute paths) before extraction to prevent Zip Slip attacks.
+- **Tar files**: A custom filter rejects members with `..` in both `name` and `linkname` fields, blocking relative symlink traversal.
+
+### FTS5 Query Sanitization
+
+Full-text search queries are sanitized before being passed to FTS5 to prevent FTS syntax injection. Special characters that have meaning in FTS5 query syntax are escaped or removed.
+
+### Non-Root Container
+
+The container creates a `mulder` user and runs all processes (including Claude Code and the MCP server) as that user via `gosu`. An entrypoint script (`scripts/entrypoint.sh`) handles:
+
+1. Copying mounted credential files (e.g., GCP service account JSON) to a mulder-accessible location
+2. Ensuring Claude Code project settings are configured
+3. Setting correct file ownership before dropping privileges
+
+### Logging and Error Message Hardening
+
+Log messages and error responses are hardened against injection and data leakage:
+- User-controlled values are repr-escaped in log statements to prevent log injection
+- Error messages returned to the MCP client are sanitized to avoid exposing filesystem paths, SQL details, or stack traces
+
+## ⚡ Performance
+
+### Source Caching in Composite Tools
+
+Composite tools (persistence detection, lateral movement analysis, etc.) previously issued N+1 database queries to check source existence. Source metadata is now cached once per tool invocation, reducing database round-trips from dozens to one.
+
+### Batch YARA Validation
+
+YARA rule validation previously spawned a separate subprocess per rule file (~4,000 files). Validation is now batched to reduce subprocess overhead.
+
+### Correlator Query Optimization
+
+The `Correlator` class previously issued one database query per source for time-range joins. Queries are now consolidated to reduce round-trips when many sources are present.
+
+### Windowing Algorithm
+
+Evidence text is chunked into windows using a **character budget** (4,096 characters per window) rather than a fixed line count. This produces more uniform window sizes regardless of line length variation in the source data, improving FTS search relevance and reducing storage overhead for sources with very short or very long lines.
+
+### Integrity Verification
+
+Evidence integrity verification uses a fast DB-only approach: BLAKE2b hashes of all window content are computed and stored in the `windows_hash` column of the `sources` table at ingestion time. The `verify_evidence_integrity` tool recomputes hashes from stored windows and compares against the recorded values without needing to re-read original evidence files from disk.
+
+## 🧩 Shared Helpers
+
+Common utility functions that were previously duplicated across multiple tool modules are consolidated into `server/helpers.py` and `server/extract_helpers.py`:
+
+- **Partition offset parsing**: Unified `parse_partition_offset()` replaces 5 independent implementations
+- **PID/module extraction**: `_extract_pid()` and `_extract_module()` shared across composite and core tools
+- **Disk image extensions**: `_DISK_IMAGE_EXTS` defined once and imported where needed
+- **Mount/unmount logic**: Consolidated into `extractors/disk.py` as the single source of truth

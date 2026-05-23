@@ -310,7 +310,9 @@ COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # NOTE: disk image mount operations (mount, ewfmount, guestmount) require
-# --cap-add SYS_ADMIN when running this container.
+# --privileged or --cap-add SYS_ADMIN when running this container.
+# The container runs as non-root user 'mulder'; the entrypoint handles
+# credential setup and permission fixups before dropping to that user.
 
 WORKDIR /mulder-investigation
 ENTRYPOINT ["entrypoint.sh"]
