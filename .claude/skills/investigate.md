@@ -48,6 +48,19 @@ context window. Instead:
 - **Keep your context lean.** After extracting and analyzing data, submit
   the finding and move on. The database remembers everything.
 
+## Context Budget
+
+Your context window is finite. Every word you write consumes it.
+
+- **Keep responses to 1-2 sentences per tool call.** State the key
+  finding or next action. Do NOT write paragraphs analyzing tool output.
+- **Never print large tool results.** They are in the database. Use
+  `search()` to recall them later.
+- **Submit findings immediately.** Findings persist in the DB and
+  survive context compaction. Your conversation history does not.
+- **If you have made 30+ tool calls**, call `/compact` to free context,
+  then use `get_findings()` and `list_sources()` to recover your state.
+
 ## Investigation Questions
 
 Your job is to ANSWER THESE QUESTIONS, not just run tools. Every phase and
@@ -141,16 +154,9 @@ theory. Phase 3.5 enforces this -- you CANNOT skip it.
 Memory and disk evidence answer different questions. Analyzing only one
 gives you half the picture. Before concluding your analysis of any
 system that has BOTH a memory dump AND a disk image, verify you have
-answered these questions from BOTH evidence types:
-
-| Question | Memory answers | Disk answers |
-|----------|---------------|-------------|
-| What ran? | Running processes, injected code, network connections at capture time | Execution artifacts (prefetch, amcache, shimcache), event logs, file timestamps |
-| What persists? | Services/drivers loaded in memory | Registry autoruns, scheduled tasks, startup folders, installed services, cron |
-| What was stolen? | Clipboard, open file handles | File access history, USN journal, archive tools, upload service artifacts |
-| What was installed? | DLLs loaded, modules in memory | Full filesystem: dropped tools, staging directories, deleted-but-recoverable files |
-| Who was involved? | Active sessions, token holders | User profile data, email addresses, browser history, document metadata |
-| What was deleted? | Unlinked processes/modules | Deleted files ($OrphanFiles, recycle bin), log gaps, anti-forensic tool artifacts |
+answered these questions from BOTH evidence types: what ran, what
+persists, what was stolen, what was installed, who was involved, and
+what was deleted.
 
 **Rule: If a system has both memory and disk evidence, you MUST run
 extraction tools on BOTH before submitting your final findings for that
@@ -176,119 +182,26 @@ proving presence.
 - Do NOT submit negatives for tools that failed due to missing data
 - Do NOT submit trivial negatives -- only meaningful absences
 
-## Tool Reference by Evidence Type
+## Tool Selection
 
-Choose tools based on what `scan_evidence` tells you about each system.
-Not all tools apply to every case -- use what fits the evidence.
+Choose tools based on evidence type. The MCP tool descriptions contain
+full documentation. Key mappings:
 
-### Memory Dumps
-- `run_volatility_batch(plugins, memory_path)` -- run multiple plugins
-  in one call with shared context. Choose plugins based on the OS profile
-  (Windows: pslist, pstree, cmdline, netscan, malfind, psscan, dlllist,
-  svcscan; Linux: linux_pslist, linux_bash, linux_netstat, etc.)
-- `find_suspicious_processes()` -- cross-references volatility artifacts
-- `reconstruct_execution_chains()` -- parent-child process trees
-- `yara_scan_memory(ruleset="full")` -- signature-based malware detection
-- `run_volatility(plugin, memory_path)` -- single plugin when needed
-
-### Disk Images (any platform)
-- `run_mmls(image_path)` -- partition table
-- `run_fls(image_path)` -- recursive file listing
-- `run_bulk_extractor(image, scanners=[...])` -- carve IOCs (emails, URLs,
-  IPs, domains, etc.). Choose scanners based on what you need.
-- `list_files(include_deleted=true)` -- browse indexed file listings
-- `get_deleted_files()` -- deleted file entries
-- `yara_scan_files(path, ruleset="full")` -- scan for malware signatures
-- `run_plaso(evidence_path)` -- build super-timeline (expensive, use targeted)
-- `extract_file_by_inode(inode)` -- extract specific files for inspection
-- `get_file_metadata(inode)` -- MAC timestamps and metadata
-
-### Disk Images (Windows-specific, use when applicable)
-- `run_evtx_parser(image_path)` -- extract Windows event logs
-- `run_hayabusa()` -- scan EVTX against Sigma detection rules
-- `index_evtx_file(filename, event_ids=[...])` -- index specific events
-- `run_registry_parser(image_path)` -- parse registry hives
-- `run_regripper(hive_path, profile)` -- targeted registry analysis
-- `run_prefetch_parser`, `run_amcache_parser`, `run_shimcache_parser` --
-  Windows execution artifacts
-- `run_mft_parser(image_path)` -- NTFS MFT analysis
-- `parse_usn_journal(t_start, t_end)` -- NTFS change journal
-- `analyze_execution_timeline()` -- correlate prefetch/amcache/shimcache
-- `get_eventlog_anomalies(channel, t_start, t_end)` -- anomalous events
-- `get_userassist()` -- GUI program execution history
-
-### Disk Images (macOS-specific, use when applicable)
-- `parse_plist(plist_filter)` -- login items, LaunchAgents, LaunchDaemons
-- `parse_browser_history()` -- Safari, Chrome, Firefox
-
-### Disk Images (Linux-specific, use when applicable)
-- Log files in /var/log -- use `read_evidence_file` or `extract_file_by_inode`
-- Crontabs, systemd units -- use `list_files` + `extract_file_by_inode`
-- `.bash_history`, `.zsh_history` -- use `extract_file_by_inode`
-
-### PCAPs / Network Evidence
-- `run_pcap_analysis(mode="all")` -- DNS, HTTP, SMTP, TLS, beaconing, tunneling
-- `run_pcap_analysis(mode="all", ssl_keylog_path="...")` -- same but with TLS
-  decryption using an NSS key log file. Look for `sslkeylog.log` or
-  `ssl_keylog*.log` in the evidence before running PCAP analysis.
-- `correlate_pcap_with_host(t_start, t_end)` -- link network to host evidence
-
-### Cross-System / Composite (run after per-system analysis)
-- `find_persistence_mechanisms()` -- autorun, services, scheduled tasks
-- `find_execution_evidence()` -- correlate execution artifacts
-- `find_lateral_movement_indicators()` -- lateral movement patterns
-- `find_defense_evasion()` -- anti-forensics detection
-- `find_data_exfiltration_indicators()` -- exfiltration patterns
-- `assess_recovery()` -- evidence recoverability assessment
-- `analyze_execution_timeline()` -- unified execution timeline
-- `correlate_across_sources(t_start, t_end)` -- cross-source at a timestamp
-- `search(query, source)` -- keyword search across indexed data
-- `get_raw_output(source)` -- paginate tool output
-
-### General / Any Evidence
-- `parse_browser_history()` -- Chrome/Firefox/Safari
-- `query_sqlite_from_image(inode, query)` -- query any SQLite database
-- `detect_steganography(target_path)` -- hidden data in images
-- `read_evidence_file(path)` -- read text files from evidence
-- `list_directory(path)` -- list directory contents
-- `lookup_attack_technique(query)` -- MITRE ATT&CK reference
-
-### Report and Self-Correction (run before finalize_report)
-- `submit_narrative(narrative)` -- submit long-form prose investigation report
-- `audit_evidence_coverage()` -- find indexed sources not cited by any finding
-- `audit_tool_coverage()` -- find applicable tools that were never invoked
-- `decode_payload(data, encoding)` -- safely decode base64, hex,
-  UTF-16LE (PowerShell -EncodedCommand), or Python pickle payloads.
-  Never executes code. Use this instead of Bash to decode suspicious
-  strings found in evidence. Can also extract encoded strings directly
-  from indexed evidence: `decode_payload(source="read_evidence",
-  pattern="gASV")` finds the matching window and extracts the longest
-  base64-like substring for decoding.
-
-### Investigation Questions to Tool Mapping
-
-| Question | Key Tools (choose based on evidence type) |
-|----------|------------------------------------------|
-| Q1 Origin | Event logs, browser history, PCAP, network connections, execution chains |
-| Q2 Tools/Malware | YARA scans, malfind, Hayabusa/Sigma, execution timeline, file listings |
-| Q3 Persistence | Persistence composite, registry/plist/cron, services, scheduled tasks |
-| Q4 Spread | Lateral movement composite, cross-source correlation, PCAP, network scans |
-| Q5 Data Impact | Exfiltration composite, deleted files, filesystem timeline, PCAP SMTP |
-| Q6 Anti-Forensics | Defense evasion composite, recovery assessment, deleted files, USN journal |
-| Q7 IOCs | bulk_extractor, network scans, browser history, search across all data |
-| Q8 Motive | Keyword searches, browser history, email/chat databases, context files |
-
-## Power Tools
-
-Use these after EVERY extraction round:
-
-- `search(query, source=..., max_results=50)` -- keyword search across
-  all indexed data. Use `source` to scope to a specific tool output.
-  Use `regex=True` for pattern matching.
-- `correlate_across_sources(t_start, t_end)` -- see what EVERY source
-  recorded at a suspicious timestamp.
-- `get_raw_output(source, offset=0, limit=50)` -- paginate through
-  a source's raw output.
+- **Memory dumps**: run_volatility_batch, find_suspicious_processes,
+  reconstruct_execution_chains, yara_scan_memory
+- **Disk images (all)**: run_fls, run_bulk_extractor, list_files,
+  get_deleted_files, yara_scan_files, extract_file_by_inode
+- **Disk images (Windows)**: run_evtx_parser, run_hayabusa,
+  run_registry_parser, run_prefetch_parser, run_amcache_parser,
+  run_shimcache_parser, run_mft_parser, parse_usn_journal
+- **Disk images (macOS)**: parse_plist, parse_browser_history
+- **Disk images (Linux)**: read_evidence_file for /var/log, extract_file_by_inode for crontabs/history
+- **PCAPs**: run_pcap_analysis, correlate_pcap_with_host
+- **Cross-system**: find_persistence_mechanisms, find_execution_evidence,
+  find_lateral_movement_indicators, find_defense_evasion,
+  find_data_exfiltration_indicators, assess_recovery,
+  analyze_execution_timeline, correlate_across_sources
+- **Self-correction**: audit_evidence_coverage, audit_tool_coverage
 
 ## Investigation Workflow
 
@@ -378,6 +291,10 @@ Poll for completed extractions and analyze results as they arrive:
    - Run composite tools if their prerequisite data is now indexed
 4. Repeat until all extractions complete
 5. Continue polling until all extractions complete.
+
+**GATE CHECK: Do NOT leave Wave 3 until:**
+- `check_extraction_status` on EVERY batch_id reports `all_done: true`
+- If ANY batch has running jobs, stay here. Do more search/analysis work.
 
 #### Wave 4 -- Dependent Tools
 
@@ -737,60 +654,31 @@ After the narrative is submitted, call `finalize_report()`.
 
 ## Async Extraction Reference
 
-### When to use `start_extraction_batch` vs `run_parallel`
-
-| Use `start_extraction_batch` | Use `run_parallel` |
-|------------------------------|-------------------|
-| `run_volatility_batch` | `extract_archive` |
-| `run_volatility` | `run_mmls` |
-| `run_plaso` | `run_fsstat` |
-| `run_bulk_extractor` | `run_hayabusa` |
-| `run_fls` | `find_suspicious_processes` |
-| `run_evtx_parser` | `find_persistence_mechanisms` |
-| `run_registry_parser` | `find_lateral_movement_indicators` |
-| `run_prefetch_parser` | `find_defense_evasion` |
-| `run_amcache_parser` | `find_data_exfiltration_indicators` |
-| `run_shimcache_parser` | `find_execution_evidence` |
-| `run_mft_parser` | `assess_recovery` |
-| `run_pcap_analysis` | `analyze_execution_timeline` |
-| `index_evtx_file` | `correlate_across_sources` |
-| `run_regripper` | `search` |
-| `run_strings` | `list_files` |
-| `run_clamav` | `get_raw_output` |
-| `run_foremost` | `yara_scan_files` |
-
-**Rule of thumb:** If the tool runs a subprocess (forensic binary) or
-processes a large evidence file, use `start_extraction_batch`.  If it
-queries the database or runs fast in-process analysis, use `run_parallel`.
-
-### Polling Pattern
+**Rule:** If a tool runs a subprocess or processes large evidence files,
+use `start_extraction_batch`. If it queries the DB or runs fast analysis,
+use `run_parallel`.
 
 ```
-batch_id = start_extraction_batch(tasks=[...])["batch_id"]
-
-# Do fast work while extractions run
-run_parallel(tasks=[...fast tools...])
-search("suspicious keyword")
-submit_finding(...)
-
-# Check progress and harvest results
-status = check_extraction_status(batch_id)
-if status["completed"] > 0:
-    results = get_completed_results(batch_id)
-    # Analyze each completed extraction...
-
-# Continue polling until all done
-status = check_extraction_status(batch_id)
-if status["all_done"]:
-    results = get_completed_results(batch_id)
-    # Process remaining results, proceed to next phase
+start_extraction_batch(tasks=[...])  # slow tools (volatility, plaso, fls, evtx, etc.)
+run_parallel(tasks=[...])            # fast tools (extract_archive, search, composites, etc.)
 ```
 
-### Handling Failures
+Poll with `check_extraction_status(batch_id)`, harvest with
+`get_completed_results(batch_id)`. Do NOT wait idly.
 
-When `check_extraction_status` shows failed jobs:
-- Check the `error` field for the failure reason
-- Common causes: binary not found, timeout, corrupt evidence file
-- Retry with different parameters if appropriate (e.g., run_fls
-  without partition offset, run_bulk_extractor with fewer scanners)
-- Document as a gap if the evidence cannot be processed
+---
+
+## FINAL RULES
+
+These override everything above if there is a conflict.
+
+1. Do NOT call `finalize_report` until `audit_evidence_coverage` shows
+   coverage above 70%. If it is lower, go back and analyze uncited sources.
+2. Do NOT proceed to Phase 3 until ALL extraction batches report
+   `all_done: true`. Poll until they do.
+3. Keep responses SHORT. 1-2 sentences per tool call. Submit findings
+   to the DB, not to the conversation.
+4. If you have run 30+ tool calls without running composite analysis
+   tools, you are behind schedule. Finish extractions and move to Phase 3.
+5. ALL 8 investigation questions (Q1-Q8) must be ANSWERED or documented
+   as GAP before you may call `finalize_report`.
