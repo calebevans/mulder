@@ -424,11 +424,22 @@ class CaseDB:
         query: str,
         source_name: str | None = None,
         max_results: int = 100,
+        time_start: str | None = None,
+        time_end: str | None = None,
+        exclude_source_names: list[str] | None = None,
     ) -> list[tuple[WindowRow, str]]:
         """Full-text keyword search over raw_text using FTS5.
 
         Supports terms (``spinlock.exe``), phrases (``"brute force"``),
         and boolean (``4624 AND logon``).
+
+        Args:
+            query: FTS5 query string.
+            source_name: Optional source name or prefix to scope search.
+            max_results: Maximum number of results to return.
+            time_start: Optional ISO 8601 lower bound for event_time.
+            time_end: Optional ISO 8601 upper bound for event_time.
+            exclude_source_names: Optional source name prefixes to exclude.
         """
         j = windows_t.join(sources_t, windows_t.c.source_id == sources_t.c.source_id)
         stmt = (
@@ -450,6 +461,20 @@ class CaseDB:
                     sources_t.c.source_name.like(source_name + ".%"),
                 )
             )
+
+        if time_start is not None:
+            stmt = stmt.where(windows_t.c.event_time >= time_start)
+        if time_end is not None:
+            stmt = stmt.where(windows_t.c.event_time <= time_end)
+
+        if exclude_source_names:
+            for prefix in exclude_source_names:
+                stmt = stmt.where(
+                    ~or_(
+                        sources_t.c.source_name == prefix,
+                        sources_t.c.source_name.like(prefix + ".%"),
+                    )
+                )
 
         stmt = stmt.order_by(windows_t.c.line_start).limit(max_results)
 
@@ -850,6 +875,31 @@ class CaseDB:
             )
             result.setdefault(sname, []).append(w)
         return result
+
+    def get_source_stats(self) -> list[dict[str, object]]:
+        """Return per-source window counts and time ranges via a single query."""
+        stmt = text(
+            "SELECT s.source_name, s.extractor, "
+            "       COUNT(w.window_id) AS window_count, "
+            "       MIN(w.event_time) AS earliest, "
+            "       MAX(w.event_time) AS latest "
+            "FROM sources s "
+            "LEFT JOIN windows w ON s.source_id = w.source_id "
+            "GROUP BY s.source_id "
+            "ORDER BY s.source_id"
+        )
+        with self._engine.connect() as conn:
+            rows = conn.execute(stmt).fetchall()
+        return [
+            {
+                "source_name": row[0],
+                "extractor": row[1],
+                "window_count": row[2],
+                "earliest": row[3],
+                "latest": row[4],
+            }
+            for row in rows
+        ]
 
     @property
     def db_path(self) -> Path:

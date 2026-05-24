@@ -104,11 +104,70 @@ def list_sources() -> dict[str, object]:
 
 
 @mcp.tool()
+def get_source_stats() -> dict[str, object]:
+    """Return per-source statistics for the current case.
+
+    Shows window counts, time ranges, and whether each source is cited
+    by any finding. Useful for understanding what data is available and
+    identifying analysis gaps. Read-only.
+    """
+    ctx = get_ctx()
+    tc_id = make_tool_call_id()
+    t0 = time.monotonic()
+
+    source_rows = ctx.db.get_source_stats()
+    findings = ctx.db.get_findings()
+
+    cited: set[str] = set()
+    for f in findings:
+        cited.update(f.sources)
+
+    stats: list[dict[str, object]] = []
+    for row in source_rows:
+        src_name = str(row["source_name"])
+        earliest = row["earliest"]
+        latest = row["latest"]
+        stats.append(
+            {
+                "source_name": src_name,
+                "extractor": row["extractor"],
+                "window_count": row["window_count"],
+                "has_timestamps": earliest is not None,
+                "time_range": {"earliest": earliest, "latest": latest},
+                "cited_by_finding": src_name in cited,
+            }
+        )
+
+    elapsed = (time.monotonic() - t0) * 1000
+    ctx.audit.log_tool_call(
+        tool_call_id=tc_id,
+        tool_name="get_source_stats",
+        params={},
+        output_hash=hash_output(stats),
+        duration_ms=elapsed,
+    )
+
+    cited_count = sum(1 for s in stats if s["cited_by_finding"])
+    return {
+        "tool_call_id": tc_id,
+        "status": "success",
+        "total_sources": len(stats),
+        "cited_sources": cited_count,
+        "uncited_sources": len(stats) - cited_count,
+        "sources": stats,
+    }
+
+
+@mcp.tool()
 def search(
-    query: str,
+    query: str = "",
     source: str | None = None,
     max_results: int = 50,
     regex: bool = False,
+    t_start: str | None = None,
+    t_end: str | None = None,
+    queries: list[str] | None = None,
+    exclude_sources: list[str] | None = None,
 ) -> dict[str, object]:
     """Keyword or regex search across all ingested evidence.
 
@@ -122,6 +181,12 @@ def search(
         source: Optional source name or prefix to scope the search.
         max_results: Maximum number of matching windows to return.
         regex: If True, treat *query* as a Python regex pattern.
+        t_start: Optional ISO 8601 start time to filter results.
+        t_end: Optional ISO 8601 end time to filter results.
+        queries: Optional list of search terms. Matches windows containing
+            ANY of the terms. Combines with query if both provided.
+        exclude_sources: Optional list of source name prefixes to exclude
+            from results (e.g. ["tsk.filelist"] to skip file listings).
     """
     import re as _re
 
@@ -129,9 +194,22 @@ def search(
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
+    all_terms: list[str] = list(queries) if queries else []
+    if query:
+        all_terms.append(query)
+    if not all_terms:
+        return {
+            "tool_call_id": tc_id,
+            "status": "error",
+            "error_message": "At least one of query or queries must be provided.",
+            "results": [],
+            "result_count": 0,
+        }
+
     if regex:
+        combined_pattern = "|".join(all_terms)
         _MAX_REGEX_LEN = 500
-        if len(query) > _MAX_REGEX_LEN:
+        if len(combined_pattern) > _MAX_REGEX_LEN:
             return {
                 "tool_call_id": tc_id,
                 "status": "error",
@@ -140,7 +218,7 @@ def search(
                 "result_count": 0,
             }
         try:
-            pattern = _re.compile(query, _re.IGNORECASE)
+            pattern = _re.compile(combined_pattern, _re.IGNORECASE)
         except _re.error as exc:
             return {
                 "tool_call_id": tc_id,
@@ -154,16 +232,26 @@ def search(
         cursor = 0
         src_prefix = source or ""
         source_map: dict[int, str] = {s.source_id: s.source_name for s in ctx.db.get_sources()}
+        exclude_set = exclude_sources or []
         while len(matches) < max_results:
             chunk, _total = ctx.db.get_windows_page(src_prefix, after_id=cursor, limit=_CHUNK)
             if not chunk:
                 break
             for w in chunk:
+                src_name = source_map.get(w.source_id, source or "unknown")
+                if exclude_set and any(
+                    src_name == ex or src_name.startswith(ex + ".") for ex in exclude_set
+                ):
+                    continue
+                if t_start and w.event_time and w.event_time < t_start:
+                    continue
+                if t_end and w.event_time and w.event_time > t_end:
+                    continue
                 if pattern.search(w.raw_text):
                     matches.append(
                         {
                             "window": _truncated_window(w),
-                            "source_name": source_map.get(w.source_id, source or "unknown"),
+                            "source_name": src_name,
                         }
                     )
                     if len(matches) >= max_results:
@@ -171,7 +259,15 @@ def search(
             cursor = chunk[-1].window_id or 0
         results = matches
     else:
-        raw_matches = ctx.db.search_windows(query, source_name=source, max_results=max_results)
+        combined_fts = " OR ".join(all_terms)
+        raw_matches = ctx.db.search_windows(
+            combined_fts,
+            source_name=source,
+            max_results=max_results,
+            time_start=t_start,
+            time_end=t_end,
+            exclude_source_names=exclude_sources,
+        )
         results = [
             {"window": _truncated_window(w), "source_name": sname} for w, sname in raw_matches
         ]
@@ -182,7 +278,16 @@ def search(
     ctx.audit.log_tool_call(
         tool_call_id=tc_id,
         tool_name="search",
-        params={"query": query, "source": source, "max_results": max_results, "regex": regex},
+        params={
+            "query": query,
+            "source": source,
+            "max_results": max_results,
+            "regex": regex,
+            "t_start": t_start,
+            "t_end": t_end,
+            "queries": queries,
+            "exclude_sources": exclude_sources,
+        },
         output_hash=hash_output(results),
         duration_ms=elapsed,
     )
