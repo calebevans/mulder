@@ -147,6 +147,13 @@ def audit_evidence_coverage() -> dict[str, object]:
         ),
     }
 
+    if coverage_pct < 70:
+        result["warning"] = (
+            f"Evidence coverage is only {coverage_pct:.0f}%. "
+            f"You MUST analyze uncited sources and submit findings "
+            f"before calling finalize_report. Target: >70% coverage."
+        )
+
     elapsed = (time.monotonic() - t0) * 1000
     ctx.audit.log_tool_call(
         tool_call_id=tc_id,

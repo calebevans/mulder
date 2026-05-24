@@ -164,6 +164,15 @@ def check_extraction_status(batch_id: str) -> dict[str, Any]:
 
     status["tool_call_id"] = tc_id
     status["hint"] = " ".join(hint_parts)
+
+    running_count = status.get("running", 0)
+    if running_count > 0:
+        status["warning"] = (
+            f"{running_count} extraction jobs still running. "
+            f"Do NOT proceed to cross-system composite analysis (Phase 3) "
+            f"until all batches report all_done: true."
+        )
+
     return status
 
 

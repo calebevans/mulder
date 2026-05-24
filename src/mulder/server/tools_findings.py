@@ -245,6 +245,12 @@ def get_findings(limit: int = 20, offset: int = 0) -> dict[str, object]:
 def finalize_report() -> dict[str, object]:
     """Generate the final investigation report from all submitted findings.
 
+    PREREQUISITES (do NOT call until all are met):
+    - All extraction batches report all_done via check_extraction_status
+    - audit_evidence_coverage shows >70% source coverage
+    - submit_narrative has been called with the investigation narrative
+    - All 8 investigation questions (Q1-Q8) answered or documented as gaps
+
     Renders markdown and HTML reports via Jinja2 templates and writes them
     to disk alongside the case database.  Returns the report path and
     finding counts.
