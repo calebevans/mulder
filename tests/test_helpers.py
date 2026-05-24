@@ -72,9 +72,9 @@ class TestSerializeWindows:
         assert len(result) == 5
 
     def test_over_default_cap(self) -> None:
-        ws = self._windows(250)
+        ws = self._windows(100)
         result = serialize_windows(ws)
-        assert len(result) == 200
+        assert len(result) == 50
 
     def test_custom_cap(self) -> None:
         ws = self._windows(10)

@@ -207,6 +207,7 @@ def list_files(
         "list_files",
         {"path_filter": path_filter, "include_deleted": include_deleted},
         elapsed,
+        cap=20,
     )
 
 
@@ -226,7 +227,9 @@ def get_deleted_files() -> dict[str, object]:
     windows = ctx.db.get_windows_by_source(_SRC_FILELIST)
     deleted = [w for w in windows if "* " in w.raw_text]
     elapsed = (time.monotonic() - t0) * 1000
-    return windowed_response(tc_id, deleted, _SRC_FILELIST, "get_deleted_files", {}, elapsed)
+    return windowed_response(
+        tc_id, deleted, _SRC_FILELIST, "get_deleted_files", {}, elapsed, cap=20
+    )
 
 
 @mcp.tool()

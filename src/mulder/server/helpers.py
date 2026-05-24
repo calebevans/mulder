@@ -23,7 +23,7 @@ def make_tool_call_id() -> str:
 
 _PREVIEW_CHAR_LIMIT = 500
 _HINT_CHAR_LIMIT = 200
-_DEFAULT_SEARCH_LIMIT = 500
+_DEFAULT_SEARCH_LIMIT = 50
 _FILE_LIST_CAP = 500
 
 _HASH_SIZE_THRESHOLD = 10000
@@ -54,7 +54,7 @@ def hash_output(output: object) -> str:
     return _blake2b_hex(raw.encode())
 
 
-_DEFAULT_WINDOW_CAP = 200
+_DEFAULT_WINDOW_CAP = 50
 
 
 def serialize_windows(
