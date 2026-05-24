@@ -164,6 +164,11 @@ class JobStore:
         finally:
             current_batch_id.set(None)
 
+    def batch_ids(self) -> list[str]:
+        """Return a snapshot of all known batch IDs."""
+        with self._lock:
+            return list(self._batches.keys())
+
     def get_batch_status(self, batch_id: str) -> dict[str, Any] | None:
         """Return a lean status summary for *batch_id*.
 

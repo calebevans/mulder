@@ -17,6 +17,12 @@ if TYPE_CHECKING:
     from mulder.server.jobs import JobStore
 from mulder.server.helpers import hash_output, make_tool_call_id
 
+_NEXT_STEPS: dict[str, list[str]] = {
+    "run_fls": ["run_evtx_parser", "run_registry_parser", "run_bulk_extractor"],
+    "run_evtx_parser": ["run_hayabusa", "index_evtx_file"],
+    "run_volatility_batch": ["find_suspicious_processes", "reconstruct_execution_chains"],
+}
+
 
 def _get_job_store() -> JobStore:
     """Import lazily to avoid circular import at module level."""
@@ -218,6 +224,9 @@ def get_completed_results(
 
     sub_call_ids = []
     for r in results:
+        tool_name = r.get("tool", "")
+        if tool_name in _NEXT_STEPS:
+            r["suggested_next"] = _NEXT_STEPS[tool_name]
         res = r.get("result")
         if isinstance(res, dict) and "tool_call_id" in res:
             sub_call_ids.append(res["tool_call_id"])

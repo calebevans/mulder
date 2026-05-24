@@ -18,7 +18,7 @@ from uuid import uuid4
 
 from mulder.models import Finding
 from mulder.report.renderer import ReportRenderer
-from mulder.server.app import get_ctx, mcp
+from mulder.server.app import get_ctx, get_job_store, mcp
 from mulder.server.helpers import hash_output, make_tool_call_id
 
 logger = logging.getLogger(__name__)
@@ -258,6 +258,26 @@ def finalize_report() -> dict[str, object]:
     ctx = get_ctx()
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
+
+    try:
+        store = get_job_store()
+        for batch_id in store.batch_ids():
+            status = store.get_batch_status(batch_id)
+            if status and not status.get("all_done", False):
+                running = status.get("running", 0)
+                pending = status.get("pending", 0)
+                return {
+                    "tool_call_id": tc_id,
+                    "status": "blocked",
+                    "error_message": (
+                        f"Cannot finalize: batch {batch_id} still has "
+                        f"{running} running and {pending} pending jobs. "
+                        f"Call check_extraction_status('{batch_id}') and "
+                        f"get_completed_results('{batch_id}') first."
+                    ),
+                }
+    except RuntimeError:
+        pass
 
     findings = ctx.db.get_findings()
     case_metadata = ctx.db.get_case_metadata()

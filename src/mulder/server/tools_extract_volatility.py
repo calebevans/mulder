@@ -146,6 +146,20 @@ def _run_single_vol_plugin(vol_cmd: list[str], memory_path: str, plugin: str) ->
         return result
 
     output = proc.stdout.strip()
+    lines = output.split("\n")
+    if len(lines) <= 1:
+        return {
+            "plugin": plugin,
+            "status": "header_only",
+            "source_name": f"volatility.{short}",
+            "message": (
+                f"Plugin {plugin} produced only column headers. "
+                f"This usually means ISF symbols are missing for this "
+                f"memory dump's Windows version, or the memory format "
+                f"is not fully supported."
+            ),
+        }
+
     summary = extract_and_index(
         raw_output=output,
         source_name=f"volatility.{short}",
@@ -312,22 +326,37 @@ def _run_batch_plugin(
     treegrid = constructed.run()
     output = _render_treegrid_to_text(treegrid)
 
-    if output.strip():
-        summary = extract_and_index(
-            raw_output=output,
-            source_name=f"volatility.{short}",
-            source_path=memory_path,
-            extractor_name="volatility3",
-        )
-        summary["plugin"] = plugin_name
-        return summary
+    stripped = output.strip()
+    if not stripped:
+        return {
+            "plugin": plugin_name,
+            "status": "empty",
+            "source_name": f"volatility.{short}",
+            "error_message": "Plugin produced no output",
+        }
 
-    return {
-        "plugin": plugin_name,
-        "status": "empty",
-        "source_name": f"volatility.{short}",
-        "error_message": "Plugin produced no output",
-    }
+    lines = stripped.split("\n")
+    if len(lines) <= 1:
+        return {
+            "plugin": plugin_name,
+            "status": "header_only",
+            "source_name": f"volatility.{short}",
+            "message": (
+                f"Plugin {plugin_name} produced only column headers. "
+                f"This usually means ISF symbols are missing for this "
+                f"memory dump's Windows version, or the memory format "
+                f"is not fully supported."
+            ),
+        }
+
+    summary = extract_and_index(
+        raw_output=stripped,
+        source_name=f"volatility.{short}",
+        source_path=memory_path,
+        extractor_name="volatility3",
+    )
+    summary["plugin"] = plugin_name
+    return summary
 
 
 def _run_netscan_fallback_batch(
@@ -498,8 +527,11 @@ def run_volatility_batch(
             "Volatility batch: %s -> %s", short, results.get(plugin_name, {}).get("status", "?")
         )
 
-    succeeded = sum(1 for r in results.values() if r.get("status") not in ("error", "empty"))
-    failed = len(results) - succeeded
+    succeeded = sum(
+        1 for r in results.values() if r.get("status") not in ("error", "empty", "header_only")
+    )
+    header_only_count = sum(1 for r in results.values() if r.get("status") == "header_only")
+    failed = len(results) - succeeded - header_only_count
 
     total_windows = 0
     total_lines = 0
@@ -519,6 +551,7 @@ def run_volatility_batch(
         {
             "plugins_requested": len(plugins),
             "plugins_succeeded": succeeded,
+            "plugins_header_only": header_only_count,
             "plugins_failed": failed,
             "total_windows_indexed": total_windows,
             "total_lines": total_lines,
