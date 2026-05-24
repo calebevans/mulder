@@ -43,7 +43,7 @@ def _resolve_evtx_dir(evtx_dir: str | None, image_path: str | None = None) -> st
     if evtx_dir and Path(evtx_dir).is_dir():
         return evtx_dir
 
-    from mulder.server.tools_extract_evtx import _evtx_extract_dirs
+    from mulder.server.tools.extract.evtx import _evtx_extract_dirs
 
     if image_path and image_path in _evtx_extract_dirs:
         d = _evtx_extract_dirs[image_path]

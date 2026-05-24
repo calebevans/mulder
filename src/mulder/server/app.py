@@ -539,21 +539,4 @@ async def run_parallel(tasks: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-import mulder.server.tools_artifacts as _tools_artifacts  # noqa: E402, F401
-import mulder.server.tools_attack as _tools_attack  # noqa: E402, F401
-import mulder.server.tools_bulk as _tools_bulk  # noqa: E402, F401
-import mulder.server.tools_case as _tools_case  # noqa: E402, F401
-import mulder.server.tools_composite as _tools_composite  # noqa: E402, F401
-import mulder.server.tools_core as _tools_core  # noqa: E402, F401
-import mulder.server.tools_extract as _tools_extract  # noqa: E402, F401
-import mulder.server.tools_eztools as _tools_eztools  # noqa: E402, F401
-import mulder.server.tools_findings as _tools_findings  # noqa: E402, F401
-import mulder.server.tools_hayabusa as _tools_hayabusa  # noqa: E402, F401
-import mulder.server.tools_hindsight as _tools_hindsight  # noqa: E402, F401
-import mulder.server.tools_jobs as _tools_jobs  # noqa: E402, F401
-import mulder.server.tools_mvt as _tools_mvt  # noqa: E402, F401
-import mulder.server.tools_phone as _tools_phone  # noqa: E402, F401
-import mulder.server.tools_plaso as _tools_plaso  # noqa: E402, F401
-import mulder.server.tools_review as _tools_review  # noqa: E402, F401
-import mulder.server.tools_tsk as _tools_tsk  # noqa: E402, F401
-import mulder.server.tools_yara as _tools_yara  # noqa: E402, F401
+import mulder.server.tools as _tools  # noqa: E402, F401

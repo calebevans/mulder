@@ -18,7 +18,7 @@ from mulder.server.helpers import (
     make_tool_call_id,
     slim_window,
 )
-from mulder.server.tools_composite_core import (
+from mulder.server.tools.composite.core import (
     _IP_RE,
     _PORT_RE,
     _SRC_CMDLINE,

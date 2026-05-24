@@ -1188,7 +1188,7 @@ def remove_bookmark(bookmark_id: int) -> dict[str, object]:
     }
 
 
-_TOOL_GUIDE_PATH = Path(__file__).resolve().parent / "data" / "tool_guide.json"
+_TOOL_GUIDE_PATH = Path(__file__).resolve().parent.parent / "data" / "tool_guide.json"
 
 _ToolGuide = dict[str, list[dict[str, str | list[str]]]]
 

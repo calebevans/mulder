@@ -16,8 +16,8 @@ from typing import cast
 from mulder.server.app import get_cfg, get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import error_response, make_tool_call_id, tool_response
-from mulder.server.tools_extract_misc import _DOTNET, _find_ez_tool
-from mulder.server.tools_extract_tsk import _parse_partition_offset, _tsk_extract_dirs
+from mulder.server.tools.extract.misc import _DOTNET, _find_ez_tool
+from mulder.server.tools.extract.tsk import _parse_partition_offset, _tsk_extract_dirs
 
 __all__ = [
     "_cleanup_temp_dirs",

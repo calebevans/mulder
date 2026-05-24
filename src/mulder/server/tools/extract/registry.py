@@ -18,8 +18,8 @@ from mulder.server.helpers import (
     make_tool_call_id,
     tool_response,
 )
-from mulder.server.tools_extract_misc import _DOTNET, _find_ez_tool
-from mulder.server.tools_extract_tsk import _tsk_extract_files
+from mulder.server.tools.extract.misc import _DOTNET, _find_ez_tool
+from mulder.server.tools.extract.tsk import _tsk_extract_files
 
 __all__ = [
     "run_registry_parser",

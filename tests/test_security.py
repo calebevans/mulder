@@ -5,8 +5,8 @@ from __future__ import annotations
 import sqlite3
 import tarfile
 
-from mulder.server.tools_artifacts import _readonly_authorizer
-from mulder.server.tools_case import _safe_tar_filter
+from mulder.server.tools.artifacts import _readonly_authorizer
+from mulder.server.tools.case import _safe_tar_filter
 
 
 class TestSqliteAuthorizer:
