@@ -45,6 +45,9 @@ context window. Instead:
 - **Use `get_findings()` to review what you've already submitted.** At each
   phase gate, check your submitted findings to avoid duplicates and
   identify gaps.
+- **Use `bookmark_window(window_id, note)` to flag interesting evidence**
+  that doesn't yet warrant a full finding. Bookmarks persist in the DB.
+  Call `get_bookmarks()` after context compaction to recover your leads.
 - **Keep your context lean.** After extracting and analyzing data, submit
   the finding and move on. The database remembers everything.
 
@@ -58,8 +61,11 @@ Your context window is finite. Every word you write consumes it.
   `search()` to recall them later.
 - **Submit findings immediately.** Findings persist in the DB and
   survive context compaction. Your conversation history does not.
+- **Call `get_investigation_summary()` every ~15 tool calls** to stay
+  oriented. It shows findings count, sources indexed, and progress.
 - **If you have made 30+ tool calls**, call `/compact` to free context,
-  then use `get_findings()` and `list_sources()` to recover your state.
+  then use `get_investigation_summary()` and `get_bookmarks()` to
+  recover your state.
 
 ## Investigation Questions
 
@@ -345,8 +351,9 @@ prerequisites complete, and analyzing results. Only proceed when
 every system is fully analyzed.
 
 **PHASE GATE (only after ALL per-system analysis is complete):**
-1. Call `check_extraction_status` on every batch -- confirm ALL done.
-2. Call `get_completed_results` on every batch -- retrieve any remaining.
+1. Call `get_investigation_summary()` to check overall progress.
+2. Call `check_extraction_status` on every batch -- confirm ALL done.
+3. Call `get_completed_results` on every batch -- retrieve any remaining.
 3. Confirm all dependent and platform-specific tools have been run on
    every applicable system.
 4. Confirm per-system composite tools have run where applicable.
@@ -392,9 +399,12 @@ have been analyzed:
 - `correlate_pcap_with_host(t_start, t_end)` at suspicious time windows
 
 **Cross-system correlation:**
+- `get_timeline(t_start, t_end)` for a unified chronological view
+  across ALL sources at suspicious time windows
 - `correlate_across_sources` at 3+ distinct time windows covering the
   key events in your timeline
-- `search()` for every IOC found so far across ALL systems
+- `get_ioc_summary()` to extract and deduplicate all IOCs from findings
+  and bulk_extractor data, then search for each across ALL systems
 - `search()` for evidence of multiple actors / motives / narratives
 
 **YARA on disk (if not done per-system):**
@@ -672,13 +682,16 @@ Poll with `check_extraction_status(batch_id)`, harvest with
 
 These override everything above if there is a conflict.
 
-1. Do NOT call `finalize_report` until `audit_evidence_coverage` shows
-   coverage above 70%. If it is lower, go back and analyze uncited sources.
+1. Do NOT call `finalize_report` until `audit_tool_coverage` shows
+   adequate tool invocation. The server will block you if coverage is
+   too low.
 2. Do NOT proceed to Phase 3 until ALL extraction batches report
    `all_done: true`. Poll until they do.
 3. Keep responses SHORT. 1-2 sentences per tool call. Submit findings
    to the DB, not to the conversation.
-4. If you have run 30+ tool calls without running composite analysis
-   tools, you are behind schedule. Finish extractions and move to Phase 3.
+4. Call `get_investigation_summary()` every ~15 tool calls to stay
+   oriented. If you have run 30+ calls without composite tools, speed up.
 5. ALL 8 investigation questions (Q1-Q8) must be ANSWERED or documented
    as GAP before you may call `finalize_report`.
+6. Use `bookmark_window()` for interesting evidence you are not ready to
+   submit as a finding. Use `get_bookmarks()` after `/compact`.
