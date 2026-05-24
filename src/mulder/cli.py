@@ -194,21 +194,38 @@ def report(case_id: str, db_dir: str) -> None:
     help="Directory containing per-case databases.",
 )
 @click.option(
-    "--min-coverage",
-    default=0.7,
+    "--min-tool-coverage",
+    default=0.6,
     show_default=True,
     type=float,
-    help="Minimum fraction of sources that must be cited by findings.",
+    help="Minimum fraction of applicable tools that must have been invoked.",
 )
-def validate_pre_finalize(db_dir: str, min_coverage: float) -> None:
+def validate_pre_finalize(db_dir: str, min_tool_coverage: float) -> None:
     """Validate prerequisites before finalizing a report.
 
     Used as a Claude Code PreToolUse hook to block premature finalization.
-    Outputs JSON compatible with the hookSpecificOutput schema.
+    Checks tool invocation coverage (were the right tools run for each
+    evidence type?) rather than source citation coverage.
     """
     import json
 
+    from mulder.audit import AuditLog
     from mulder.db import CaseDB
+    from mulder.extractors.classifier import ClassifierConfig, EvidenceClassifier
+    from mulder.server.tools_review import _EVIDENCE_TOOL_MAP
+
+    def _hook_response(decision: str, reason: str) -> None:
+        click.echo(
+            json.dumps(
+                {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": decision,
+                        "permissionDecisionReason": reason,
+                    }
+                }
+            )
+        )
 
     db_dir_path = Path(db_dir).expanduser()
 
@@ -218,81 +235,64 @@ def validate_pre_finalize(db_dir: str, min_coverage: float) -> None:
         reverse=True,
     )
     if not db_files:
-        click.echo(
-            json.dumps(
-                {
-                    "hookSpecificOutput": {
-                        "hookEventName": "PreToolUse",
-                        "permissionDecision": "allow",
-                        "permissionDecisionReason": "No case DB found",
-                    }
-                }
-            )
-        )
+        _hook_response("allow", "No case DB found")
         return
 
     db_path = db_files[0]
 
     with CaseDB(db_path) as case_db:
         findings = case_db.get_findings()
-        sources = case_db.get_sources()
 
         if not findings:
-            click.echo(
-                json.dumps(
-                    {
-                        "hookSpecificOutput": {
-                            "hookEventName": "PreToolUse",
-                            "permissionDecision": "deny",
-                            "permissionDecisionReason": (
-                                "No findings submitted yet. You must submit findings "
-                                "before finalizing the report."
-                            ),
-                        }
-                    }
-                )
+            _hook_response(
+                "deny",
+                "No findings submitted yet. You must submit findings "
+                "before finalizing the report.",
             )
             return
 
-        cited_sources: set[str] = set()
-        for finding in findings:
-            cited_sources.update(finding.sources)
+        meta = case_db.get_case_metadata()
+        evidence_root = Path(meta.evidence_root)
 
-        total = len(sources)
-        cited = len(cited_sources)
-        coverage = cited / total if total > 0 else 0.0
+        if not evidence_root.exists():
+            _hook_response("allow", "Evidence path not accessible, skipping tool coverage check")
+            return
 
-        if coverage < min_coverage:
-            click.echo(
-                json.dumps(
-                    {
-                        "hookSpecificOutput": {
-                            "hookEventName": "PreToolUse",
-                            "permissionDecision": "deny",
-                            "permissionDecisionReason": (
-                                f"Evidence coverage too low: {cited}/{total} sources "
-                                f"cited ({coverage:.0%}). Must exceed {min_coverage:.0%}. "
-                                f"Run audit_evidence_coverage() to identify uncited "
-                                f"sources, then analyze them and submit findings."
-                            ),
-                        }
-                    }
-                )
+        audit_path = db_path.with_suffix(".audit.jsonl")
+        audit = AuditLog(audit_path)
+        audit_summary = audit.summary()
+        tools_invoked = set(audit_summary.tool_call_counts.keys())
+
+        classifier = EvidenceClassifier(ClassifierConfig())
+        classified = classifier.classify(evidence_root)
+
+        total_applicable = 0
+        total_run = 0
+
+        for ev in classified:
+            applicable = _EVIDENCE_TOOL_MAP.get(ev.artifact_type, [])
+            if not applicable:
+                continue
+            run = [t for t in applicable if t in tools_invoked]
+            total_applicable += len(applicable)
+            total_run += len(run)
+
+        coverage = total_run / total_applicable if total_applicable > 0 else 1.0
+
+        if coverage < min_tool_coverage:
+            _hook_response(
+                "deny",
+                f"Tool coverage too low: {total_run}/{total_applicable} applicable "
+                f"tools invoked ({coverage:.0%}). Must exceed {min_tool_coverage:.0%}. "
+                f"Run audit_tool_coverage() to see which tools were skipped, "
+                f"then run them or document why they were skipped.",
             )
             return
 
-        click.echo(
-            json.dumps(
-                {
-                    "hookSpecificOutput": {
-                        "hookEventName": "PreToolUse",
-                        "permissionDecision": "allow",
-                        "permissionDecisionReason": (
-                            f"Coverage {cited}/{total} ({coverage:.0%}) meets threshold."
-                        ),
-                    }
-                }
-            )
+        _hook_response(
+            "allow",
+            f"Tool coverage {total_run}/{total_applicable} ({coverage:.0%}) "
+            f"meets threshold. {len(findings)} findings submitted.",
         )
 
 

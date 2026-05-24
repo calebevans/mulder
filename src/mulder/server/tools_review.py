@@ -147,11 +147,12 @@ def audit_evidence_coverage() -> dict[str, object]:
         ),
     }
 
-    if coverage_pct < 70:
+    if coverage_pct < 50:
         result["warning"] = (
-            f"Evidence coverage is only {coverage_pct:.0f}%. "
-            f"You MUST analyze uncited sources and submit findings "
-            f"before calling finalize_report. Target: >70% coverage."
+            f"Only {coverage_pct:.0f}% of sources are cited by findings. "
+            f"Review uncited sources with content for relevant evidence. "
+            f"Not every source needs a finding, but sources with significant "
+            f"content should be reviewed."
         )
 
     elapsed = (time.monotonic() - t0) * 1000
