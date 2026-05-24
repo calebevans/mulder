@@ -25,6 +25,9 @@ if [ ! -f "$PROJ_DIR/settings.local.json" ]; then
 SETTINGS
 fi
 
-chown -R mulder:mulder "$MULDER_CONFIG" "$MULDER_HOME/.mulder" 2>/dev/null || true
+chown -R mulder:mulder "$MULDER_CONFIG" 2>/dev/null || true
+chown -R mulder:mulder "$MULDER_HOME/.mulder" 2>/dev/null || true
+# Ensure the cases directory is writable (may be a bind mount from host)
+chmod -R a+rwX "$MULDER_HOME/.mulder/cases" 2>/dev/null || true
 
 exec gosu mulder "$@"
