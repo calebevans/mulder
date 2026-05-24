@@ -295,12 +295,29 @@ Poll for completed extractions and analyze results as they arrive:
    - `search()` across the new data for IOCs and suspicious patterns
    - `submit_finding()` for anything notable
    - Run composite tools if their prerequisite data is now indexed
-4. Repeat until all extractions complete
-5. Continue polling until all extractions complete.
+4. Repeat until all extractions complete.
 
 **GATE CHECK: Do NOT leave Wave 3 until:**
 - `check_extraction_status` on EVERY batch_id reports `all_done: true`
 - If ANY batch has running jobs, stay here. Do more search/analysis work.
+
+**POLLING DISCIPLINE:**
+- Do NOT poll `check_extraction_status` more than once every 5-10 tool
+  calls. Between polls, do productive work: search for IOCs, analyze
+  completed results, submit findings, run composite tools on available
+  data.
+- If extractions are taking a long time (20+ minutes), that is normal
+  for large memory dumps. DO NOT give up. DO NOT print a summary to the
+  conversation instead of finalizing through the MCP tools.
+- If you have exhausted all productive work and batches are still
+  running, call `wait(seconds=600)` to sleep for 10 minutes, then poll
+  again. Sleeping is far better than burning context with repeated
+  status checks.
+- If your context is above 70%, call `/compact` and then use
+  `get_investigation_summary()` and `get_findings()` to recover state.
+  Then continue polling and analyzing.
+- NEVER terminate the investigation while batches are running. The
+  `finalize_report` tool will block you anyway. Wait for them.
 
 #### Wave 4 -- Dependent Tools
 
@@ -682,14 +699,16 @@ Poll with `check_extraction_status(batch_id)`, harvest with
 
 These override everything above if there is a conflict.
 
-1. Do NOT call `finalize_report` until you have run all applicable
-   tools for every evidence type. Use `audit_tool_coverage()` to check.
-2. Do NOT proceed to Phase 3 until ALL extraction batches report
-   `all_done: true`. Poll until they do.
+1. **NEVER terminate while batches are running.** The `finalize_report`
+   tool will block you. Do not print a summary to the conversation as
+   a substitute. Wait for batches, analyze results, then finalize via
+   the MCP tool.
+2. **Do NOT poll in a tight loop.** Poll `check_extraction_status` once
+   every 5-10 tool calls. Between polls, do productive analysis work.
 3. Keep responses SHORT. 1-2 sentences per tool call. Submit findings
    to the DB, not to the conversation.
-4. Call `get_investigation_summary()` every ~15 tool calls to stay
-   oriented. If you have run 30+ calls without composite tools, speed up.
+4. **If context is above 70%, `/compact` and continue.** Use
+   `get_investigation_summary()` and `get_findings()` to recover state.
 5. ALL 8 investigation questions (Q1-Q8) must be ANSWERED or documented
    as GAP before you may call `finalize_report`.
 6. Use `bookmark_window()` for interesting evidence you are not ready to

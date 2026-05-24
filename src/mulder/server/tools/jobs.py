@@ -244,3 +244,24 @@ def get_completed_results(
             "tool_call_id for use in submit_finding evidence_refs."
         ),
     }
+
+
+@mcp.tool()
+def wait(seconds: int = 300) -> dict[str, object]:
+    """Sleep for a specified duration while waiting for extractions to complete.
+
+    Use this instead of polling check_extraction_status in a tight loop.
+    When you have exhausted all productive analysis work and batches are
+    still running, call this to wait without burning context tokens.
+
+    Args:
+        seconds: Number of seconds to sleep (default 300 = 5 minutes,
+            max 900 = 15 minutes).
+    """
+    capped = min(max(seconds, 10), 900)
+    time.sleep(capped)
+    return {
+        "status": "done",
+        "waited_seconds": capped,
+        "message": f"Waited {capped} seconds. Check extraction status now.",
+    }
