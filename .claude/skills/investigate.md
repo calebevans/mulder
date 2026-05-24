@@ -682,9 +682,8 @@ Poll with `check_extraction_status(batch_id)`, harvest with
 
 These override everything above if there is a conflict.
 
-1. Do NOT call `finalize_report` until `audit_tool_coverage` shows
-   adequate tool invocation. The server will block you if coverage is
-   too low.
+1. Do NOT call `finalize_report` until you have run all applicable
+   tools for every evidence type. Use `audit_tool_coverage()` to check.
 2. Do NOT proceed to Phase 3 until ALL extraction batches report
    `all_done: true`. Poll until they do.
 3. Keep responses SHORT. 1-2 sentences per tool call. Submit findings

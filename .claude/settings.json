@@ -7,19 +7,5 @@
       "Bash",
       "Shell"
     ]
-  },
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "mcp__mulder__finalize_report",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "mulder validate-pre-finalize",
-            "timeout": 10
-          }
-        ]
-      }
-    ]
   }
 }

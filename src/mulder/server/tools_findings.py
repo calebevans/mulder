@@ -245,15 +245,11 @@ def get_findings(limit: int = 20, offset: int = 0) -> dict[str, object]:
 def finalize_report() -> dict[str, object]:
     """Generate the final investigation report from all submitted findings.
 
-    PREREQUISITES (do NOT call until all are met):
+    Before calling, ensure:
     - All extraction batches report all_done via check_extraction_status
-    - audit_tool_coverage shows adequate tool invocation per evidence type
+    - All applicable tools have been run (check with audit_tool_coverage)
     - submit_narrative has been called with the investigation narrative
     - All 8 investigation questions (Q1-Q8) answered or documented as gaps
-    - get_investigation_summary confirms adequate progress
-
-    A PreToolUse hook will BLOCK this call if tool coverage is too low.
-    Run audit_tool_coverage() first to check.
 
     Renders markdown and HTML reports via Jinja2 templates and writes them
     to disk alongside the case database.  Returns the report path and
