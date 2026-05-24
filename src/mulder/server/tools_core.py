@@ -13,6 +13,9 @@ import re
 import time
 from typing import Any
 
+from sqlalchemy import select as sa_select
+
+from mulder.db import windows_t
 from mulder.server.app import get_ctx, mcp
 from mulder.server.helpers import (
     _DEFAULT_SEARCH_LIMIT,
@@ -991,3 +994,193 @@ def _inspect_pickle_bytes(raw: bytes) -> str:
         result = "Embedded strings:\n" + "\n".join(f"  {s}" for s in text_fragments[:50])
     result += "\n\nPickle disassembly:\n" + disasm
     return result
+
+
+_TIMELINE_TEXT_CAP = 500
+
+
+@mcp.tool()
+def get_timeline(
+    t_start: str,
+    t_end: str,
+    limit: int = 50,
+) -> dict[str, object]:
+    """Return a unified chronological timeline across all sources.
+
+    Merges events from all indexed sources (volatility, EVTX, filesystem,
+    bulk_extractor, etc.) into a single time-sorted view. Use this to
+    understand what happened across ALL systems at a specific time.
+    Read-only.
+
+    Args:
+        t_start: ISO 8601 start time.
+        t_end: ISO 8601 end time.
+        limit: Maximum events to return (default 50).
+    """
+    ctx = get_ctx()
+    tc_id = make_tool_call_id()
+    t0 = time.monotonic()
+
+    grouped = ctx.db.get_windows_by_time_range(t_start, t_end)
+
+    flat: list[dict[str, object]] = []
+    for source_name, windows in grouped.items():
+        for w in windows:
+            raw = w.raw_text
+            if len(raw) > _TIMELINE_TEXT_CAP:
+                raw = raw[:_TIMELINE_TEXT_CAP] + "..."
+            flat.append(
+                {
+                    "event_time": w.event_time,
+                    "source_name": source_name,
+                    "raw_text": raw,
+                    "window_id": w.window_id,
+                }
+            )
+
+    flat.sort(key=lambda e: str(e.get("event_time") or ""))
+    total_events = len(flat)
+    capped = flat[:limit]
+
+    elapsed = (time.monotonic() - t0) * 1000
+    ctx.audit.log_tool_call(
+        tool_call_id=tc_id,
+        tool_name="get_timeline",
+        params={"t_start": t_start, "t_end": t_end, "limit": limit},
+        output_hash=hash_output(capped),
+        duration_ms=elapsed,
+    )
+
+    response: dict[str, object] = {
+        "tool_call_id": tc_id,
+        "status": "success",
+        "results": capped,
+        "result_count": len(capped),
+        "total_events": total_events,
+        "has_more": total_events > limit,
+        "sources_represented": sorted({str(e["source_name"]) for e in capped}),
+        "elapsed_ms": round(elapsed, 1),
+    }
+    if total_events > limit:
+        response["hint"] = (
+            f"Showing {limit} of {total_events} events. "
+            "Narrow the time range or increase limit to see more."
+        )
+    return response
+
+
+@mcp.tool()
+def bookmark_window(
+    window_id: int,
+    note: str,
+    source_name: str = "",
+) -> dict[str, object]:
+    """Bookmark a specific window for later review.
+
+    Use this to flag interesting evidence that doesn't yet warrant a
+    full finding. Bookmarks persist in the database and survive context
+    compaction. Review bookmarks later with get_bookmarks(). Read-only
+    on evidence (writes only to case DB metadata).
+
+    Args:
+        window_id: The window_id to bookmark.
+        note: Why this window is interesting.
+        source_name: Source name for context (optional).
+    """
+    ctx = get_ctx()
+    tc_id = make_tool_call_id()
+    t0 = time.monotonic()
+
+    bookmark_id = ctx.db.add_bookmark(window_id, source_name, note)
+
+    elapsed = (time.monotonic() - t0) * 1000
+    ctx.audit.log_tool_call(
+        tool_call_id=tc_id,
+        tool_name="bookmark_window",
+        params={"window_id": window_id, "note": note, "source_name": source_name},
+        output_hash=hash_output({"bookmark_id": bookmark_id}),
+        duration_ms=elapsed,
+    )
+    return {
+        "tool_call_id": tc_id,
+        "status": "success",
+        "bookmark_id": bookmark_id,
+        "window_id": window_id,
+        "note": note,
+        "elapsed_ms": round(elapsed, 1),
+    }
+
+
+@mcp.tool()
+def get_bookmarks() -> dict[str, object]:
+    """Retrieve all bookmarked windows with their notes.
+
+    Returns bookmarks created during this investigation, including the
+    window content and the note explaining why it was flagged. Use this
+    after context compaction to recover interesting leads. Read-only.
+    """
+    ctx = get_ctx()
+    tc_id = make_tool_call_id()
+    t0 = time.monotonic()
+
+    bookmarks = ctx.db.get_bookmarks()
+
+    enriched: list[dict[str, object]] = []
+    for bm in bookmarks:
+        entry: dict[str, object] = dict(bm)
+        wid = int(str(bm["window_id"]))
+        with ctx.db._engine.connect() as conn:
+            row = conn.execute(sa_select(windows_t).where(windows_t.c.window_id == wid)).fetchone()
+            if row:
+                raw = row.raw_text
+                if len(raw) > _TIMELINE_TEXT_CAP:
+                    raw = raw[:_TIMELINE_TEXT_CAP] + "..."
+                entry["raw_text"] = raw
+                entry["event_time"] = row.event_time
+        enriched.append(entry)
+
+    elapsed = (time.monotonic() - t0) * 1000
+    ctx.audit.log_tool_call(
+        tool_call_id=tc_id,
+        tool_name="get_bookmarks",
+        params={},
+        output_hash=hash_output(enriched),
+        duration_ms=elapsed,
+    )
+    return {
+        "tool_call_id": tc_id,
+        "status": "success",
+        "results": enriched,
+        "result_count": len(enriched),
+        "elapsed_ms": round(elapsed, 1),
+    }
+
+
+@mcp.tool()
+def remove_bookmark(bookmark_id: int) -> dict[str, object]:
+    """Remove a bookmark by ID.
+
+    Args:
+        bookmark_id: The bookmark ID to remove.
+    """
+    ctx = get_ctx()
+    tc_id = make_tool_call_id()
+    t0 = time.monotonic()
+
+    removed = ctx.db.remove_bookmark(bookmark_id)
+
+    elapsed = (time.monotonic() - t0) * 1000
+    ctx.audit.log_tool_call(
+        tool_call_id=tc_id,
+        tool_name="remove_bookmark",
+        params={"bookmark_id": bookmark_id},
+        output_hash=hash_output({"removed": removed}),
+        duration_ms=elapsed,
+    )
+    return {
+        "tool_call_id": tc_id,
+        "status": "success" if removed else "not_found",
+        "bookmark_id": bookmark_id,
+        "removed": removed,
+        "elapsed_ms": round(elapsed, 1),
+    }

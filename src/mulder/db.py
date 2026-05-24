@@ -103,6 +103,16 @@ evidence_registry_t = Table(
     Column("registered_at", Text, nullable=False),
 )
 
+bookmarks_t = Table(
+    "bookmarks",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("window_id", Integer, ForeignKey("windows.window_id"), nullable=False),
+    Column("source_name", Text, nullable=False),
+    Column("note", Text, nullable=False),
+    Column("created_at", Text, nullable=False),
+)
+
 _FTS_CREATE = (
     "CREATE VIRTUAL TABLE IF NOT EXISTS windows_fts USING fts5("
     "    raw_text, content=windows, content_rowid=window_id"
@@ -209,6 +219,22 @@ def _migrate_add_windows_hash(conn: Connection) -> None:
     except Exception as exc:
         if "duplicate column" not in str(exc).lower():
             raise
+
+
+def _migrate_add_bookmarks(conn: Connection) -> None:
+    """Create the bookmarks table if it doesn't exist yet."""
+    conn.execute(
+        text(
+            "CREATE TABLE IF NOT EXISTS bookmarks ("
+            "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "  window_id INTEGER NOT NULL,"
+            "  source_name TEXT NOT NULL,"
+            "  note TEXT NOT NULL,"
+            "  created_at TEXT NOT NULL,"
+            "  FOREIGN KEY (window_id) REFERENCES windows(window_id)"
+            ")"
+        )
+    )
 
 
 _SENTINEL = object()
@@ -326,6 +352,7 @@ class CaseDB:
             _migrate_add_narrative(conn)
             _migrate_add_evidence_registry(conn)
             _migrate_add_windows_hash(conn)
+            _migrate_add_bookmarks(conn)
         return db
 
     def close(self) -> None:
@@ -792,6 +819,56 @@ class CaseDB:
             }
             for row in rows
         ]
+
+    def add_bookmark(self, window_id: int, source_name: str, note: str) -> int:
+        """Add a bookmark for a window and return its ID."""
+
+        def _do_insert() -> int:
+            """Insert a bookmark row and return its auto-generated ID."""
+            now = datetime.now(timezone.utc).isoformat()
+            with self._engine.begin() as conn:
+                result = conn.execute(
+                    insert(bookmarks_t).values(
+                        window_id=window_id,
+                        source_name=source_name,
+                        note=note,
+                        created_at=now,
+                    )
+                )
+                assert result.inserted_primary_key is not None
+                return int(result.inserted_primary_key[0])
+
+        return int(self._wq.submit(_do_insert))
+
+    def get_bookmarks(self) -> list[dict[str, object]]:
+        """Return all bookmarks ordered by creation time."""
+        stmt = select(bookmarks_t).order_by(bookmarks_t.c.created_at)
+        with self._engine.connect() as conn:
+            rows = conn.execute(stmt).fetchall()
+        return [
+            {
+                "id": row.id,
+                "window_id": row.window_id,
+                "source_name": row.source_name,
+                "note": row.note,
+                "created_at": row.created_at,
+            }
+            for row in rows
+        ]
+
+    def remove_bookmark(self, bookmark_id: int) -> bool:
+        """Remove a bookmark by ID. Returns True if a row was deleted."""
+
+        def _do_delete() -> bool:
+            """Delete the bookmark row and return whether it existed."""
+            with self._engine.begin() as conn:
+                result = conn.execute(
+                    text("DELETE FROM bookmarks WHERE id = :bid"),
+                    {"bid": bookmark_id},
+                )
+                return result.rowcount > 0
+
+        return bool(self._wq.submit(_do_delete))
 
     def verify_evidence_integrity(self) -> list[dict[str, object]]:
         """Verify indexed source data against stored window hashes.
