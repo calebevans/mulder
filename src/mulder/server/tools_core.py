@@ -1188,7 +1188,7 @@ def remove_bookmark(bookmark_id: int) -> dict[str, object]:
     }
 
 
-_TOOL_GUIDE_PATH = Path(__file__).resolve().parent.parent / "report" / "data" / "tool_guide.json"
+_TOOL_GUIDE_PATH = Path(__file__).resolve().parent / "data" / "tool_guide.json"
 
 _ToolGuide = dict[str, list[dict[str, str | list[str]]]]
 
@@ -1212,9 +1212,11 @@ def get_tool_guide(category: str = "all") -> dict[str, object]:
     given evidence type, or to understand dependencies between tools.
 
     Args:
-        category: Filter by category. Options: "all", "memory", "disk",
-            "network", "windows", "macos", "linux", "composite",
-            "post_extraction".
+        category: Filter by category. Options: "all", "case_management",
+            "evidence_browsing", "memory", "disk", "windows", "network",
+            "browser_forensics", "mobile", "macos", "malware_analysis",
+            "encryption", "composite", "reporting", "post_extraction",
+            "reference".
     """
     if category == "all":
         return {

@@ -1,0 +1,638 @@
+{
+  "case_management": [
+    {
+      "tool": "scan_evidence",
+      "description": "Ingest and index an evidence source for the active case",
+      "input": "Evidence file path (disk image, memory dump, PCAP, etc.)",
+      "related": ["list_sources", "list_cases", "verify_evidence_integrity"]
+    },
+    {
+      "tool": "list_cases",
+      "description": "List all cases in the database",
+      "input": "None",
+      "related": ["open_case", "scan_evidence"]
+    },
+    {
+      "tool": "open_case",
+      "description": "Switch the active case to an existing case",
+      "input": "Case ID",
+      "related": ["list_cases", "scan_evidence"]
+    },
+    {
+      "tool": "verify_evidence_integrity",
+      "description": "Verify the integrity of all indexed source data",
+      "input": "None (checks current case sources)",
+      "related": ["scan_evidence", "list_sources"]
+    },
+    {
+      "tool": "extract_archive",
+      "description": "Extract compressed archives for analysis",
+      "input": "Archive file path",
+      "related": ["scan_evidence"]
+    }
+  ],
+  "evidence_browsing": [
+    {
+      "tool": "list_sources",
+      "description": "List every evidence source indexed for the active case",
+      "input": "None (reads current case state)",
+      "related": ["get_source_stats", "scan_evidence"]
+    },
+    {
+      "tool": "get_source_stats",
+      "description": "Return per-source statistics for the current case",
+      "input": "None (reads current case state)",
+      "related": ["list_sources"]
+    },
+    {
+      "tool": "search",
+      "description": "Full-text search across all indexed evidence",
+      "input": "Query string, optional source/time filters",
+      "related": ["correlate_across_sources", "get_timeline"]
+    },
+    {
+      "tool": "list_directory",
+      "description": "List files and directories within evidence",
+      "input": "Path within evidence, optional source filter",
+      "related": ["read_evidence_file", "run_fls"]
+    },
+    {
+      "tool": "read_evidence_file",
+      "description": "Read the contents of a file from evidence",
+      "input": "File path or inode within evidence",
+      "related": ["list_directory", "query_sqlite_from_image"]
+    },
+    {
+      "tool": "query_sqlite_from_image",
+      "description": "Extract a SQLite database from a disk image and run a SQL query",
+      "input": "Inode number, SQL query",
+      "related": ["read_evidence_file", "list_directory"]
+    },
+    {
+      "tool": "get_raw_output",
+      "description": "Retrieve raw tool output for a specific source",
+      "input": "Source name, optional tool filter",
+      "related": ["list_sources", "get_source_stats"]
+    }
+  ],
+  "memory": [
+    {
+      "tool": "run_volatility_batch",
+      "description": "Run multiple Volatility 3 plugins on a memory dump",
+      "input": "Memory dump file path (.img, .vmem, .raw)",
+      "related": ["find_suspicious_processes", "reconstruct_execution_chains", "yara_scan_memory"]
+    },
+    {
+      "tool": "yara_scan_memory",
+      "description": "Scan memory dump with YARA rules for malware signatures",
+      "input": "Memory dump (requires Volatility data indexed first)",
+      "related": ["run_volatility_batch", "yara_scan_with_volatility"]
+    },
+    {
+      "tool": "yara_scan_with_volatility",
+      "description": "Scan process memory with YARA rules via Volatility",
+      "input": "Optional PID and YARA rules (requires Volatility data indexed)",
+      "related": ["yara_scan_memory", "run_volatility_batch"]
+    },
+    {
+      "tool": "list_processes_from_memory",
+      "description": "List all processes from memory dump (Volatility pslist)",
+      "input": "Requires Volatility data indexed",
+      "related": ["get_process_tree", "scan_hidden_processes", "find_suspicious_processes"]
+    },
+    {
+      "tool": "get_process_tree",
+      "description": "Return the process parent-child tree from memory",
+      "input": "Requires Volatility data indexed",
+      "related": ["list_processes_from_memory", "reconstruct_execution_chains"]
+    },
+    {
+      "tool": "scan_hidden_processes",
+      "description": "Detect hidden processes by comparing psscan vs pslist",
+      "input": "Requires Volatility data indexed",
+      "related": ["list_processes_from_memory", "find_suspicious_processes"]
+    },
+    {
+      "tool": "get_process_environment",
+      "description": "Return environment variables for a specific process",
+      "input": "PID (requires Volatility data indexed)",
+      "related": ["list_processes_from_memory", "get_process_privileges"]
+    },
+    {
+      "tool": "get_process_privileges",
+      "description": "Return token privileges for a specific process",
+      "input": "PID (requires Volatility data indexed)",
+      "related": ["list_processes_from_memory", "get_process_environment"]
+    },
+    {
+      "tool": "scan_kernel_modules",
+      "description": "Detect hidden kernel modules by comparing modscan vs modules",
+      "input": "Requires Volatility data indexed",
+      "related": ["scan_hidden_processes", "find_defense_evasion"]
+    },
+    {
+      "tool": "get_userassist",
+      "description": "Return UserAssist registry entries from memory",
+      "input": "Requires Volatility data indexed",
+      "related": ["find_execution_evidence", "analyze_execution_timeline"]
+    },
+    {
+      "tool": "scan_files_in_memory",
+      "description": "Return all file objects cached in the memory dump (Volatility filescan)",
+      "input": "Requires Volatility data indexed",
+      "related": ["list_processes_from_memory", "run_fls"]
+    }
+  ],
+  "disk": [
+    {
+      "tool": "run_fls",
+      "description": "Recursive file listing from disk image via SleuthKit",
+      "input": "Disk image file path (.E01, .dd, .img)",
+      "related": ["run_mmls", "run_bulk_extractor", "list_directory"]
+    },
+    {
+      "tool": "run_mmls",
+      "description": "List partitions in a disk image using TSK mmls",
+      "input": "Disk image file path",
+      "related": ["run_fls", "run_fsstat"]
+    },
+    {
+      "tool": "run_fsstat",
+      "description": "Get filesystem statistics from a disk image",
+      "input": "Disk image file path",
+      "related": ["run_mmls", "run_fls"]
+    },
+    {
+      "tool": "run_mactime",
+      "description": "Generate MAC timeline from a disk image using TSK",
+      "input": "Disk image file path, optional time range",
+      "related": ["run_fls", "get_timeline"]
+    },
+    {
+      "tool": "run_bulk_extractor",
+      "description": "Carve IOCs (emails, URLs, IPs, domains) from disk image",
+      "input": "Disk image file path",
+      "related": ["run_fls", "yara_scan_files", "get_carved_iocs"]
+    },
+    {
+      "tool": "get_carved_iocs",
+      "description": "Return IOC data carved by bulk_extractor during ingest",
+      "input": "Optional feature filter (e.g. email, url, domain)",
+      "related": ["run_bulk_extractor", "get_ioc_summary"]
+    },
+    {
+      "tool": "yara_scan_files",
+      "description": "Scan files on disk with YARA rules",
+      "input": "Mounted/extracted evidence path",
+      "related": ["run_fls", "run_bulk_extractor", "yara_scan_memory"]
+    },
+    {
+      "tool": "run_foremost",
+      "description": "Carve files from a disk image using foremost",
+      "input": "Disk image file path",
+      "related": ["run_scalpel", "run_photorec", "run_binwalk"]
+    },
+    {
+      "tool": "run_scalpel",
+      "description": "Carve files from a disk image using Scalpel",
+      "input": "Disk image file path",
+      "related": ["run_foremost", "run_photorec"]
+    },
+    {
+      "tool": "run_binwalk",
+      "description": "Scan for embedded files, firmware headers, and compressed archives",
+      "input": "Target file path, optional extraction flag",
+      "related": ["run_foremost", "run_strings"]
+    },
+    {
+      "tool": "run_photorec",
+      "description": "Recover deleted files from a disk image using PhotoRec",
+      "input": "Disk image file path",
+      "related": ["run_foremost", "run_scalpel"]
+    },
+    {
+      "tool": "run_mft_parser",
+      "description": "Parse the $MFT from a disk image using MFTECmd",
+      "input": "Disk image file path",
+      "related": ["parse_mft", "run_fls"]
+    },
+    {
+      "tool": "run_plaso",
+      "description": "Run Plaso super-timeline extraction on evidence",
+      "input": "Evidence file path, optional time filter",
+      "related": ["extract_mft_timeline", "get_timeline"]
+    },
+    {
+      "tool": "run_strings",
+      "description": "Extract printable strings from a file or disk image",
+      "input": "Target file path, optional minimum string length",
+      "related": ["run_binwalk", "decode_payload"]
+    },
+    {
+      "tool": "run_hashdeep",
+      "description": "Compute recursive cryptographic hashes using hashdeep",
+      "input": "Target file or directory path",
+      "related": ["run_ssdeep", "verify_evidence_integrity"]
+    },
+    {
+      "tool": "run_exiftool",
+      "description": "Extract file metadata (EXIF, document properties)",
+      "input": "Target file path or evidence file path",
+      "related": ["list_directory", "read_evidence_file"]
+    },
+    {
+      "tool": "run_ssdeep",
+      "description": "Compute fuzzy hashes of files for similarity matching",
+      "input": "Target file path, optional recursive flag",
+      "related": ["run_hashdeep", "yara_scan_files"]
+    }
+  ],
+  "windows": [
+    {
+      "tool": "run_evtx_parser",
+      "description": "Extract Windows Event Logs from disk image",
+      "input": "Disk image (run after run_fls for best results)",
+      "related": ["run_hayabusa", "index_evtx_file", "run_registry_parser"]
+    },
+    {
+      "tool": "run_hayabusa",
+      "description": "Scan extracted EVTX with Sigma detection rules",
+      "input": "Requires run_evtx_parser to have completed first",
+      "related": ["run_evtx_parser", "index_evtx_file"]
+    },
+    {
+      "tool": "index_evtx_file",
+      "description": "Index a specific EVTX file for detailed searching",
+      "input": "EVTX filename, optional channel and time filters",
+      "related": ["run_evtx_parser", "get_eventlog_anomalies"]
+    },
+    {
+      "tool": "get_eventlog_anomalies",
+      "description": "Detect anomalies in Windows Event Log channels",
+      "input": "Channel name, optional time filters",
+      "related": ["run_evtx_parser", "index_evtx_file"]
+    },
+    {
+      "tool": "run_registry_parser",
+      "description": "Parse Windows registry hives (autoruns, services, user activity)",
+      "input": "Disk image file path",
+      "related": ["run_regripper", "run_evtx_parser", "run_fls"]
+    },
+    {
+      "tool": "run_regripper",
+      "description": "Analyze a Windows registry hive using RegRipper",
+      "input": "Registry hive file path, optional profile",
+      "related": ["run_registry_parser", "find_persistence_mechanisms"]
+    },
+    {
+      "tool": "run_prefetch_parser",
+      "description": "Parse Windows Prefetch files (program execution history)",
+      "input": "Requires run_fls to have indexed the filesystem",
+      "related": ["run_amcache_parser", "run_shimcache_parser", "analyze_execution_timeline"]
+    },
+    {
+      "tool": "run_amcache_parser",
+      "description": "Parse Amcache (application execution and installation history)",
+      "input": "Requires run_fls to have indexed the filesystem",
+      "related": ["run_prefetch_parser", "run_shimcache_parser"]
+    },
+    {
+      "tool": "run_shimcache_parser",
+      "description": "Parse ShimCache (application compatibility cache)",
+      "input": "Requires run_fls to have indexed the filesystem",
+      "related": ["run_prefetch_parser", "run_amcache_parser"]
+    },
+    {
+      "tool": "parse_prefetch",
+      "description": "Return all parsed Windows Prefetch data",
+      "input": "Requires run_prefetch_parser to have completed",
+      "related": ["run_prefetch_parser", "analyze_execution_timeline"]
+    },
+    {
+      "tool": "get_amcache",
+      "description": "Return parsed AmCache and registry system hive data",
+      "input": "Requires run_amcache_parser to have completed",
+      "related": ["run_amcache_parser", "analyze_execution_timeline"]
+    },
+    {
+      "tool": "parse_mft",
+      "description": "Return MFT entries within a time range (EZ Tools)",
+      "input": "Time range (t_start, t_end)",
+      "related": ["run_mft_parser", "parse_usn_journal"]
+    },
+    {
+      "tool": "parse_usn_journal",
+      "description": "Return USN Journal entries within a time range (EZ Tools)",
+      "input": "Time range (t_start, t_end)",
+      "related": ["parse_mft", "run_mft_parser"]
+    },
+    {
+      "tool": "extract_mft_timeline",
+      "description": "Extract Plaso super-timeline for a time range",
+      "input": "Time range (t_start, t_end)",
+      "related": ["run_plaso", "get_timeline"]
+    },
+    {
+      "tool": "run_pasco",
+      "description": "Parse Internet Explorer index.dat browser history",
+      "input": "index.dat file path",
+      "related": ["parse_browser_history", "run_hindsight"]
+    },
+    {
+      "tool": "run_vshadow_info",
+      "description": "List Volume Shadow Copy (VSS) snapshots in a disk image",
+      "input": "Disk image file path, optional partition offset",
+      "related": ["run_fls", "run_registry_parser"]
+    }
+  ],
+  "network": [
+    {
+      "tool": "run_pcap_analysis",
+      "description": "Analyze network captures (DNS, HTTP, SMTP, TLS, beaconing, tunneling)",
+      "input": "PCAP file path",
+      "related": ["correlate_pcap_with_host", "run_tcpflow", "run_tcpxtract"]
+    },
+    {
+      "tool": "run_tcpflow",
+      "description": "Reconstruct TCP streams from a PCAP file",
+      "input": "PCAP file path",
+      "related": ["run_pcap_analysis", "run_tcpxtract"]
+    },
+    {
+      "tool": "run_tcpxtract",
+      "description": "Extract files from TCP streams in a PCAP",
+      "input": "PCAP file path",
+      "related": ["run_tcpflow", "run_pcap_analysis"]
+    }
+  ],
+  "browser_forensics": [
+    {
+      "tool": "parse_browser_history",
+      "description": "Extract browser history from Chrome, Firefox, and Safari databases",
+      "input": "Requires disk image with browser data indexed",
+      "related": ["run_hindsight", "run_pasco"]
+    },
+    {
+      "tool": "run_hindsight",
+      "description": "Analyze Chromium browser artifacts (history, cache, downloads, cookies)",
+      "input": "Browser profile path",
+      "related": ["parse_browser_history"]
+    }
+  ],
+  "mobile": [
+    {
+      "tool": "run_mvt_android",
+      "description": "Scan Android device backup for spyware indicators (MVT)",
+      "input": "Android evidence path, optional IOC file",
+      "related": ["parse_android_artifacts", "run_mvt_ios"]
+    },
+    {
+      "tool": "run_mvt_ios",
+      "description": "Scan iOS backup for spyware indicators (MVT)",
+      "input": "iOS backup path, optional IOC file",
+      "related": ["parse_ios_artifacts", "run_mvt_android"]
+    },
+    {
+      "tool": "parse_android_artifacts",
+      "description": "Parse Android forensic artifacts (contacts, SMS, calls, apps)",
+      "input": "Android evidence path",
+      "related": ["run_mvt_android", "carve_sqlite_from_raw"]
+    },
+    {
+      "tool": "parse_ios_artifacts",
+      "description": "Parse iOS forensic artifacts (contacts, SMS, calls, apps)",
+      "input": "iOS evidence path",
+      "related": ["run_mvt_ios", "carve_sqlite_from_raw"]
+    },
+    {
+      "tool": "carve_sqlite_from_raw",
+      "description": "Carve SQLite databases from raw disk images",
+      "input": "Disk image path",
+      "related": ["query_sqlite_from_image", "parse_android_artifacts"]
+    },
+    {
+      "tool": "decrypt_app_data",
+      "description": "Decrypt encrypted mobile application data",
+      "input": "App data path, decryption parameters",
+      "related": ["parse_android_artifacts", "parse_ios_artifacts"]
+    }
+  ],
+  "macos": [
+    {
+      "tool": "parse_plist",
+      "description": "Extract and parse macOS plist files from a disk image",
+      "input": "Disk image (requires run_fls), optional plist filter",
+      "related": ["run_fls", "list_directory"]
+    }
+  ],
+  "malware_analysis": [
+    {
+      "tool": "run_clamav",
+      "description": "Scan files for malware signatures using ClamAV",
+      "input": "Target file or directory path",
+      "related": ["yara_scan_files", "run_chkrootkit"]
+    },
+    {
+      "tool": "run_chkrootkit",
+      "description": "Scan for known Linux rootkits and suspicious kernel modifications",
+      "input": "Optional target path",
+      "related": ["run_clamav", "scan_kernel_modules"]
+    },
+    {
+      "tool": "run_radare2",
+      "description": "Binary analysis and disassembly using radare2",
+      "input": "Target binary path, analysis commands",
+      "related": ["run_strings", "decode_payload"]
+    },
+    {
+      "tool": "decode_payload",
+      "description": "Decode obfuscated payloads (Base64, XOR, hex, etc.)",
+      "input": "Encoded data string or file reference",
+      "related": ["run_radare2", "run_strings"]
+    },
+    {
+      "tool": "detect_steganography",
+      "description": "Scan image files for hidden steganographic content",
+      "input": "Target image file or directory path",
+      "related": ["extract_steganography", "run_exiftool"]
+    },
+    {
+      "tool": "extract_steganography",
+      "description": "Extract hidden data from steganographic images",
+      "input": "Image file path, extraction method and parameters",
+      "related": ["detect_steganography"]
+    }
+  ],
+  "encryption": [
+    {
+      "tool": "run_dislocker",
+      "description": "Decrypt and mount BitLocker-encrypted volumes",
+      "input": "Disk image path, decryption key or recovery password",
+      "related": ["run_bdeinfo", "run_fls"]
+    },
+    {
+      "tool": "run_bdeinfo",
+      "description": "Extract metadata from a BitLocker-encrypted volume",
+      "input": "Disk image file path",
+      "related": ["run_dislocker"]
+    },
+    {
+      "tool": "run_fvdeinfo",
+      "description": "Extract metadata from a FileVault-encrypted macOS volume",
+      "input": "Disk image file path",
+      "related": ["parse_plist", "run_bdeinfo"]
+    }
+  ],
+  "composite": [
+    {
+      "tool": "find_suspicious_processes",
+      "description": "Cross-reference Volatility process data for anomalies",
+      "input": "Requires Volatility data indexed",
+      "related": ["reconstruct_execution_chains", "find_lateral_movement_indicators"]
+    },
+    {
+      "tool": "find_persistence_mechanisms",
+      "description": "Detect autoruns, services, scheduled tasks across all evidence",
+      "input": "Works best with registry + EVTX + Volatility data indexed",
+      "related": ["find_defense_evasion", "find_execution_evidence"]
+    },
+    {
+      "tool": "find_lateral_movement_indicators",
+      "description": "Detect RDP, WinRM, PsExec, lateral movement patterns",
+      "input": "Works best with EVTX + Volatility + PCAP data indexed",
+      "related": ["find_suspicious_processes", "correlate_pcap_with_host"]
+    },
+    {
+      "tool": "find_data_exfiltration_indicators",
+      "description": "Detect data staging, archiving, and exfiltration patterns",
+      "input": "Works best with bulk_extractor + filesystem + PCAP data",
+      "related": ["assess_recovery", "correlate_pcap_with_host"]
+    },
+    {
+      "tool": "find_defense_evasion",
+      "description": "Detect anti-forensics, log clearing, timestomping",
+      "input": "Works best with EVTX + Volatility + filesystem data",
+      "related": ["find_persistence_mechanisms", "scan_kernel_modules"]
+    },
+    {
+      "tool": "analyze_execution_timeline",
+      "description": "Unified timeline from prefetch + amcache + shimcache",
+      "input": "Requires EZ tool parsers to have completed",
+      "related": ["run_prefetch_parser", "run_amcache_parser", "run_shimcache_parser"]
+    },
+    {
+      "tool": "find_execution_evidence",
+      "description": "Build a unified execution evidence view from multiple sources",
+      "input": "Requires execution artifact parsers to have completed",
+      "related": ["analyze_execution_timeline", "find_suspicious_processes"]
+    },
+    {
+      "tool": "reconstruct_execution_chains",
+      "description": "Reconstruct parent-child process execution chains from memory",
+      "input": "Requires Volatility data indexed",
+      "related": ["find_suspicious_processes", "get_process_tree"]
+    },
+    {
+      "tool": "assess_recovery",
+      "description": "Assess evidence recoverability across deleted files and shadow copies",
+      "input": "Works best with filesystem + memory + EVTX data indexed",
+      "related": ["find_data_exfiltration_indicators", "run_vshadow_info"]
+    },
+    {
+      "tool": "correlate_pcap_with_host",
+      "description": "Correlate network traffic with host activity in a time window",
+      "input": "Optional time range (t_start, t_end)",
+      "related": ["run_pcap_analysis", "find_lateral_movement_indicators"]
+    }
+  ],
+  "reporting": [
+    {
+      "tool": "submit_finding",
+      "description": "Submit a forensic finding to the current case",
+      "input": "Title, description, severity, evidence references",
+      "related": ["get_findings", "submit_narrative"]
+    },
+    {
+      "tool": "submit_narrative",
+      "description": "Submit the long-form investigation narrative report",
+      "input": "Narrative text",
+      "related": ["submit_finding", "finalize_report"]
+    },
+    {
+      "tool": "get_findings",
+      "description": "Retrieve findings submitted in this case",
+      "input": "Optional limit and offset for pagination",
+      "related": ["submit_finding", "finalize_report"]
+    },
+    {
+      "tool": "finalize_report",
+      "description": "Generate the final investigation report from all findings",
+      "input": "None (reads current case findings and narrative)",
+      "related": ["submit_finding", "submit_narrative", "get_findings"]
+    }
+  ],
+  "post_extraction": [
+    {
+      "tool": "get_investigation_summary",
+      "description": "Progress dashboard showing findings, sources, and coverage",
+      "input": "None (reads current case state)",
+      "related": ["audit_tool_coverage", "audit_evidence_coverage"]
+    },
+    {
+      "tool": "get_timeline",
+      "description": "Unified chronological timeline across all sources",
+      "input": "Time range (t_start, t_end)",
+      "related": ["correlate_across_sources", "extract_mft_timeline"]
+    },
+    {
+      "tool": "get_ioc_summary",
+      "description": "Extract and deduplicate IOCs from findings and bulk data",
+      "input": "None (reads current findings and bulk sources)",
+      "related": ["search", "get_carved_iocs"]
+    },
+    {
+      "tool": "correlate_across_sources",
+      "description": "Correlate events across evidence sources in a time window",
+      "input": "Time range (t_start, t_end), optional query filter",
+      "related": ["get_timeline", "search"]
+    },
+    {
+      "tool": "audit_evidence_coverage",
+      "description": "Identify indexed evidence sources not cited by any finding",
+      "input": "None (reads current case state)",
+      "related": ["audit_tool_coverage", "get_investigation_summary"]
+    },
+    {
+      "tool": "audit_tool_coverage",
+      "description": "Report applicable forensic tools that were never invoked",
+      "input": "None (reads current case state)",
+      "related": ["audit_evidence_coverage", "get_investigation_summary"]
+    },
+    {
+      "tool": "bookmark_window",
+      "description": "Bookmark a timeline window for later reference",
+      "input": "Window ID, optional annotation",
+      "related": ["get_bookmarks", "remove_bookmark", "get_timeline"]
+    },
+    {
+      "tool": "get_bookmarks",
+      "description": "Retrieve all bookmarked timeline windows with notes",
+      "input": "None",
+      "related": ["bookmark_window", "remove_bookmark"]
+    },
+    {
+      "tool": "remove_bookmark",
+      "description": "Remove a bookmark by ID",
+      "input": "Bookmark ID",
+      "related": ["bookmark_window", "get_bookmarks"]
+    }
+  ],
+  "reference": [
+    {
+      "tool": "lookup_attack_technique",
+      "description": "Look up MITRE ATT&CK techniques by keyword or ID",
+      "input": "Query string or ATT&CK technique ID",
+      "related": ["find_persistence_mechanisms", "find_defense_evasion"]
+    }
+  ]
+}
