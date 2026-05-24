@@ -1184,3 +1184,190 @@ def remove_bookmark(bookmark_id: int) -> dict[str, object]:
         "removed": removed,
         "elapsed_ms": round(elapsed, 1),
     }
+
+
+_TOOL_GUIDE: dict[str, list[dict[str, str | list[str]]]] = {
+    "memory": [
+        {
+            "tool": "run_volatility_batch",
+            "description": "Run multiple Volatility 3 plugins on a memory dump",
+            "input": "Memory dump file path (.img, .vmem, .raw)",
+            "related": [
+                "find_suspicious_processes",
+                "reconstruct_execution_chains",
+                "yara_scan_memory",
+            ],
+        },
+        {
+            "tool": "yara_scan_memory",
+            "description": "Scan memory dump with YARA rules for malware signatures",
+            "input": "Memory dump (requires Volatility data indexed first)",
+            "related": ["run_volatility_batch"],
+        },
+    ],
+    "disk": [
+        {
+            "tool": "run_fls",
+            "description": "Recursive file listing from disk image via SleuthKit",
+            "input": "Disk image file path (.E01, .dd, .img)",
+            "related": ["run_bulk_extractor", "list_files", "get_deleted_files"],
+        },
+        {
+            "tool": "run_bulk_extractor",
+            "description": "Carve IOCs (emails, URLs, IPs, domains) from disk image",
+            "input": "Disk image file path",
+            "related": ["run_fls", "yara_scan_files"],
+        },
+        {
+            "tool": "yara_scan_files",
+            "description": "Scan files on disk with YARA rules",
+            "input": "Mounted/extracted evidence path",
+            "related": ["run_fls", "run_bulk_extractor"],
+        },
+    ],
+    "windows": [
+        {
+            "tool": "run_evtx_parser",
+            "description": "Extract Windows Event Logs from disk image",
+            "input": "Disk image (run after run_fls for best results)",
+            "related": ["run_hayabusa", "index_evtx_file", "run_registry_parser"],
+        },
+        {
+            "tool": "run_hayabusa",
+            "description": "Scan extracted EVTX with Sigma detection rules",
+            "input": "Requires run_evtx_parser to have completed first",
+            "related": ["run_evtx_parser", "index_evtx_file"],
+        },
+        {
+            "tool": "run_registry_parser",
+            "description": "Parse Windows registry hives (autoruns, services, user activity)",
+            "input": "Disk image file path",
+            "related": ["run_evtx_parser", "run_fls"],
+        },
+        {
+            "tool": "run_prefetch_parser",
+            "description": "Parse Windows Prefetch files (program execution history)",
+            "input": "Requires run_fls to have indexed the filesystem",
+            "related": [
+                "run_amcache_parser",
+                "run_shimcache_parser",
+                "analyze_execution_timeline",
+            ],
+        },
+        {
+            "tool": "run_amcache_parser",
+            "description": "Parse Amcache (application execution and installation history)",
+            "input": "Requires run_fls to have indexed the filesystem",
+            "related": ["run_prefetch_parser", "run_shimcache_parser"],
+        },
+        {
+            "tool": "run_shimcache_parser",
+            "description": "Parse ShimCache (application compatibility cache)",
+            "input": "Requires run_fls to have indexed the filesystem",
+            "related": ["run_prefetch_parser", "run_amcache_parser"],
+        },
+    ],
+    "network": [
+        {
+            "tool": "run_pcap_analysis",
+            "description": "Analyze network captures (DNS, HTTP, SMTP, TLS, beaconing, tunneling)",
+            "input": "PCAP file path",
+            "related": ["correlate_pcap_with_host"],
+        },
+    ],
+    "composite": [
+        {
+            "tool": "find_suspicious_processes",
+            "description": "Cross-reference Volatility process data for anomalies",
+            "input": "Requires Volatility data indexed",
+            "related": ["reconstruct_execution_chains", "find_lateral_movement_indicators"],
+        },
+        {
+            "tool": "find_persistence_mechanisms",
+            "description": "Detect autoruns, services, scheduled tasks across all evidence",
+            "input": "Works best with registry + EVTX + Volatility data indexed",
+            "related": ["find_defense_evasion"],
+        },
+        {
+            "tool": "find_lateral_movement_indicators",
+            "description": "Detect RDP, WinRM, PsExec, lateral movement patterns",
+            "input": "Works best with EVTX + Volatility + PCAP data indexed",
+            "related": ["find_suspicious_processes", "correlate_pcap_with_host"],
+        },
+        {
+            "tool": "find_data_exfiltration_indicators",
+            "description": "Detect data staging, archiving, and exfiltration patterns",
+            "input": "Works best with bulk_extractor + filesystem + PCAP data",
+            "related": ["assess_recovery"],
+        },
+        {
+            "tool": "find_defense_evasion",
+            "description": "Detect anti-forensics, log clearing, timestomping",
+            "input": "Works best with EVTX + Volatility + filesystem data",
+            "related": ["find_persistence_mechanisms"],
+        },
+        {
+            "tool": "analyze_execution_timeline",
+            "description": "Unified timeline from prefetch + amcache + shimcache",
+            "input": "Requires EZ tool parsers to have completed",
+            "related": ["run_prefetch_parser", "run_amcache_parser", "run_shimcache_parser"],
+        },
+    ],
+    "post_extraction": [
+        {
+            "tool": "get_investigation_summary",
+            "description": "Progress dashboard showing findings, sources, and coverage",
+            "input": "None (reads current case state)",
+            "related": ["audit_tool_coverage", "audit_evidence_coverage"],
+        },
+        {
+            "tool": "get_timeline",
+            "description": "Unified chronological timeline across all sources",
+            "input": "Time range (t_start, t_end)",
+            "related": ["correlate_across_sources"],
+        },
+        {
+            "tool": "get_ioc_summary",
+            "description": "Extract and deduplicate IOCs from findings and bulk data",
+            "input": "None (reads current findings and bulk sources)",
+            "related": ["search"],
+        },
+    ],
+}
+
+_VALID_CATEGORIES = frozenset(_TOOL_GUIDE.keys())
+
+
+@mcp.tool()
+def get_tool_guide(category: str = "all") -> dict[str, object]:
+    """Return a reference guide of available forensic tools and their relationships.
+
+    Call this when you need to decide which tools to run next for a
+    given evidence type, or to understand dependencies between tools.
+
+    Args:
+        category: Filter by category. Options: "all", "memory", "disk",
+            "network", "windows", "macos", "linux", "composite",
+            "post_extraction".
+    """
+    if category == "all":
+        return {
+            "status": "success",
+            "categories": list(_TOOL_GUIDE.keys()),
+            "guide": _TOOL_GUIDE,
+        }
+
+    if category not in _VALID_CATEGORIES:
+        return {
+            "status": "error",
+            "error_message": (
+                f"Unknown category: {category!r}. "
+                f"Valid options: 'all', {sorted(_VALID_CATEGORIES)}"
+            ),
+        }
+
+    return {
+        "status": "success",
+        "category": category,
+        "tools": _TOOL_GUIDE[category],
+    }
