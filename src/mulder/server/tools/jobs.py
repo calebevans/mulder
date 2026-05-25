@@ -270,21 +270,66 @@ def get_completed_results(
 
 
 @mcp.tool()
-def wait(seconds: int = 300) -> dict[str, object]:
-    """Sleep for a specified duration while waiting for extractions to complete.
+def wait(
+    seconds: int = 300,
+    batch_id: str | None = None,
+) -> dict[str, object]:
+    """Wait for extraction batches to complete without burning context.
 
-    Use this instead of polling check_extraction_status in a tight loop.
-    When you have exhausted all productive analysis work and batches are
-    still running, call this to wait without burning context tokens.
+    If *batch_id* is provided, polls every 30 seconds until that batch
+    reports all_done, then returns the final status. Much better than
+    calling check_extraction_status in a loop.
+
+    If no batch_id, sleeps for *seconds* and returns.
 
     Args:
-        seconds: Number of seconds to sleep (default 300 = 5 minutes,
-            max 900 = 15 minutes).
+        seconds: Max seconds to wait (default 300, max 1800 = 30 min).
+            Ignored when batch_id is provided and batch completes sooner.
+        batch_id: Optional batch to wait for. Returns as soon as it
+            completes instead of waiting the full duration.
     """
-    capped = min(max(seconds, 10), 900)
-    time.sleep(capped)
+    max_wait = min(max(seconds, 10), 1800)
+
+    if batch_id is not None:
+        store = _get_job_store()
+        poll_interval = 30
+        elapsed = 0
+        while elapsed < max_wait:
+            status = store.get_batch_status(batch_id)
+            if status is None:
+                return {
+                    "status": "error",
+                    "error_message": f"Unknown batch: {batch_id}",
+                }
+            if status.get("all_done", False):
+                return {
+                    "status": "done",
+                    "batch_id": batch_id,
+                    "waited_seconds": elapsed,
+                    "batch_status": status,
+                    "message": (
+                        f"Batch {batch_id} complete after {elapsed}s. "
+                        f"Call get_completed_results('{batch_id}') to retrieve."
+                    ),
+                }
+            time.sleep(poll_interval)
+            elapsed += poll_interval
+
+        status = store.get_batch_status(batch_id)
+        return {
+            "status": "timeout",
+            "batch_id": batch_id,
+            "waited_seconds": max_wait,
+            "batch_status": status,
+            "message": (
+                f"Batch {batch_id} still running after {max_wait}s. "
+                f"Call wait(batch_id='{batch_id}') again to keep waiting."
+            ),
+        }
+
+    time.sleep(max_wait)
     return {
         "status": "done",
-        "waited_seconds": capped,
-        "message": f"Waited {capped} seconds. Check extraction status now.",
+        "waited_seconds": max_wait,
+        "message": f"Waited {max_wait} seconds. Check extraction status now.",
     }
