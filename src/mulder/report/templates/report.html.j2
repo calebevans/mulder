@@ -1153,47 +1153,7 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
     <div class="card-header">Activity Sparkline</div>
     <div class="card-body"><div class="sparkline-container" id="sparklineContainer"></div></div>
   </div>
-  <div class="card mb-2">
-    <div class="card-header">Avg Processing Time by Tool</div>
-    <div class="card-body">
-      {% if tool_call_counts %}
-      {% set ns = namespace(max_avg=0.001) %}
-      {% for tool_name, count in tool_call_counts.items() %}
-        {% set avg = tool_durations.get(tool_name, 0) / count %}
-        {% if avg > ns.max_avg %}{% set ns.max_avg = avg %}{% endif %}
-      {% endfor %}
-      <div class="audit-bar-chart">
-        {% for tool_name, count in tool_call_counts | dictsort(by='value', reverse=true) %}
-        {% set avg = tool_durations.get(tool_name, 0) / count %}
-        <div class="bar-row">
-          <div class="bar-label" title="{{ tool_name }}">{{ tool_name }}</div>
-          <div class="bar-track"><div class="bar-fill" style="width:{{ (avg / ns.max_avg * 100) | round(1) }}%;background:linear-gradient(90deg,var(--accent),var(--accent2));"></div></div>
-          <div class="bar-count">{{ "%.1f" | format(avg / 1000) }}s avg &middot; {{ count }}x</div>
-        </div>
-        {% endfor %}
-      </div>
-      {% else %}<p class="text-muted">No tool call data available.</p>{% endif %}
-    </div>
-  </div>
-  <div class="card">
-    <div class="card-header">Top Longest Operations</div>
-    <div class="card-body">
-      {% if audit_entries %}
-      <table class="data-table">
-        <thead><tr><th>Tool</th><th>Duration</th><th>Params</th></tr></thead>
-        <tbody>
-        {% for entry in audit_entries | sort(attribute='duration_ms', reverse=true) %}{% if loop.index <= 10 %}
-        <tr>
-          <td><strong>{{ entry.tool_name }}</strong></td>
-          <td class="mono" style="text-align:right;">{{ "%.1f" | format(entry.duration_ms / 1000) }}s</td>
-          <td class="mono" style="font-size:0.68rem;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ entry.params | tojson | truncate(80) }}</td>
-        </tr>
-        {% endif %}{% endfor %}
-        </tbody>
-      </table>
-      {% endif %}
-    </div>
-  </div>
+  
 </div>
 
 <!-- ==================== AUDIT TRAIL ==================== -->
