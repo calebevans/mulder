@@ -2,7 +2,7 @@
 
 Queries pre-extracted bulk_extractor feature data from the case database.
 Supports both summary mode (counts per feature type) and detail mode
-(full windows for a specific feature).  All tools are read-only.
+(truncated windows for a specific feature).  All tools are read-only.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from mulder.server.app import ServerContext, get_ctx, mcp
 from mulder.server.helpers import make_tool_call_id, windowed_response
 
 _BULK_SOURCE_PREFIX = "bulk."
+_BULK_FEATURE_CAP = 15
 
 
 @mcp.tool()
@@ -23,7 +24,8 @@ def get_carved_iocs(feature: str | None = None) -> dict[str, object]:
     windows for each ``bulk.*`` source (email, url, domain, ip, etc.).
 
     When *feature* is specified (e.g. ``"email"``, ``"url"``), returns
-    windows from the ``bulk.<feature>`` source (capped for efficiency).
+    a capped, truncated sample of windows from the ``bulk.<feature>``
+    source.  Use ``search()`` or ``get_raw_output()`` for full data.
     Read-only.
     """
     ctx = get_ctx()
@@ -35,7 +37,13 @@ def get_carved_iocs(feature: str | None = None) -> dict[str, object]:
         windows = ctx.db.get_windows_by_source(source)
         elapsed = (time.monotonic() - t0) * 1000
         return windowed_response(
-            tc_id, windows, source, "get_carved_iocs", {"feature": feature}, elapsed
+            tc_id,
+            windows,
+            source,
+            "get_carved_iocs",
+            {"feature": feature},
+            elapsed,
+            cap=_BULK_FEATURE_CAP,
         )
 
     results = _summary_mode(ctx)

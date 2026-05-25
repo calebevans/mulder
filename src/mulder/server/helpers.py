@@ -54,21 +54,33 @@ def hash_output(output: object) -> str:
     return _blake2b_hex(raw.encode())
 
 
-_DEFAULT_WINDOW_CAP = 50
+_DEFAULT_WINDOW_CAP = 20
+_DEFAULT_TEXT_CAP = 300
 
 
 def serialize_windows(
-    windows: Sequence[Any], cap: int = _DEFAULT_WINDOW_CAP
+    windows: Sequence[Any],
+    cap: int = _DEFAULT_WINDOW_CAP,
+    text_cap: int = _DEFAULT_TEXT_CAP,
 ) -> list[dict[str, Any]]:
     """Convert Pydantic window models to dicts, capped for token efficiency.
 
-    Returns at most *cap* windows.  Callers should check
+    Returns at most *cap* windows with ``raw_text`` truncated to
+    *text_cap* characters.  Callers should check
     ``len(result) < len(windows)`` and include ``total_windows`` /
     ``truncated`` in the response so the agent knows to use
     ``search()`` or ``get_raw_output()`` for the full data.
     """
     capped = windows[:cap] if len(windows) > cap else windows
-    return [w.model_dump() for w in capped]
+    result: list[dict[str, Any]] = []
+    for w in capped:
+        d: dict[str, Any] = w.model_dump() if hasattr(w, "model_dump") else dict(w)
+        raw = d.get("raw_text", "")
+        if text_cap and len(raw) > text_cap:
+            d["raw_text"] = raw[:text_cap] + "..."
+            d["full_text_available"] = True
+        result.append(d)
+    return result
 
 
 def windowed_response(
@@ -79,13 +91,15 @@ def windowed_response(
     params: Mapping[str, object],
     elapsed_ms: float,
     cap: int = _DEFAULT_WINDOW_CAP,
+    text_cap: int = _DEFAULT_TEXT_CAP,
 ) -> dict[str, object]:
     """Build a standard response for tools that return serialized windows.
 
-    Caps the result, includes truncation metadata, and logs the audit entry.
+    Caps the result, truncates ``raw_text``, includes truncation metadata,
+    and logs the audit entry.
     """
     total = len(windows)
-    results = serialize_windows(windows, cap=cap)
+    results = serialize_windows(windows, cap=cap, text_cap=text_cap)
 
     ctx = get_ctx()
     ctx.audit.log_tool_call(

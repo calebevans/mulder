@@ -658,19 +658,49 @@ def get_userassist() -> dict[str, object]:
 
 @mcp.tool()
 def scan_files_in_memory() -> dict[str, object]:
-    """Return all file objects cached in the memory dump (Volatility filescan).
+    """Return a summary of file objects cached in the memory dump (Volatility filescan).
 
-    Lists every file object found via pool-tag scanning.  Useful for
-    identifying files that were open or recently accessed at the time
-    of capture.  Read-only.
+    Lists every file object found via pool-tag scanning.  Returns a
+    count and sample of file paths rather than full window content.
+    Use ``search(query, source='volatility.filescan')`` to find
+    specific files or ``get_raw_output('volatility.filescan')`` to
+    paginate through the full listing.  Read-only.
     """
     ctx = get_ctx()
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
     windows = ctx.db.get_windows_by_source(_SRC_FILESCAN)
+    total_entries = sum(w.raw_text.count("\n") + 1 for w in windows)
+
+    sample_paths: list[str] = []
+    for w in windows[:10]:
+        for line in w.raw_text.split("\n"):
+            stripped = line.strip()
+            if stripped and len(sample_paths) < 20:
+                sample_paths.append(stripped[:200])
+
     elapsed = (time.monotonic() - t0) * 1000
-    return windowed_response(tc_id, windows, _SRC_FILESCAN, "scan_files_in_memory", {}, elapsed)
+    ctx.audit.log_tool_call(
+        tool_call_id=tc_id,
+        tool_name="scan_files_in_memory",
+        params={},
+        output_hash=hash_output({"total": len(windows)}),
+        duration_ms=elapsed,
+    )
+    return {
+        "tool_call_id": tc_id,
+        "status": "success",
+        "source": _SRC_FILESCAN,
+        "total_windows": len(windows),
+        "approx_file_count": total_entries,
+        "sample_paths": sample_paths,
+        "hint": (
+            f"{total_entries} file objects found in memory. "
+            f"Use search(query, source='volatility.filescan') to find specific files, "
+            f"or get_raw_output('volatility.filescan') to paginate the full listing."
+        ),
+    }
 
 
 @mcp.tool()

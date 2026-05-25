@@ -1,7 +1,8 @@
 """MCP tools for EZ forensic parsers (Prefetch, Amcache, ShimCache, etc.).
 
 All tools are read-only and query pre-extracted EZ Tools data from the
-case database.
+case database.  Tools return compact summaries with window counts and
+sample entries; use ``search()`` or ``get_raw_output()`` for full data.
 """
 
 from __future__ import annotations
@@ -10,12 +11,10 @@ import time
 from typing import Any
 
 from mulder.server.app import get_ctx, mcp
-from mulder.server.helpers import make_tool_call_id, windowed_response
+from mulder.server.helpers import hash_output, make_tool_call_id, windowed_response
 
-# ---------------------------------------------------------------------------
-# Config-driven simple tools (no parameters beyond ctx)
-# Each tuple: (function_name, source_name, docstring)
-# ---------------------------------------------------------------------------
+_EZ_SUMMARY_SAMPLE_CAP = 10
+_EZ_SUMMARY_TEXT_CAP = 200
 
 _EZ_TOOLS: list[tuple[str, str, str]] = [
     (
@@ -23,71 +22,106 @@ _EZ_TOOLS: list[tuple[str, str, str]] = [
         "ez.prefetch",
         "Return detailed Prefetch data parsed by PECmd (EZ Tools).\n\n"
         "Shows last 8 run times, referenced DLLs, and execution metadata\n"
-        "per executable.  Richer than the basic stat-based Prefetch data.\n"
-        "Read-only.",
+        "per executable.  Returns a summary with counts and sample entries;\n"
+        "use ``search()`` or ``get_raw_output()`` for full data.  Read-only.",
     ),
     (
         "parse_amcache",
         "ez.amcache",
         "Return Amcache data parsed by AmcacheParser (EZ Tools).\n\n"
         "Shows program execution history with SHA1 hashes, file paths,\n"
-        "and timestamps.  Useful for identifying recently installed or\n"
-        "executed programs.  Read-only.",
+        "and timestamps.  Returns a summary with counts and sample entries;\n"
+        "use ``search()`` or ``get_raw_output()`` for full data.  Read-only.",
     ),
     (
         "parse_shimcache",
         "ez.shimcache",
         "Return ShimCache (AppCompatCache) data parsed by AppCompatCacheParser (EZ Tools).\n\n"
-        "Shows file existence evidence with timestamps.  On Windows 7 the\n"
-        "entries are chronologically ordered, making this a useful execution\n"
-        "timeline artifact.  Read-only.",
+        "Shows file existence evidence with timestamps.  Returns a summary\n"
+        "with counts and sample entries; use ``search()`` or\n"
+        "``get_raw_output()`` for full data.  Read-only.",
     ),
     (
         "parse_jump_lists",
         "ez.jumplists",
         "Return Jump List data parsed by JLECmd (EZ Tools).\n\n"
-        "Shows user file access history from Windows AutomaticDestinations\n"
-        "and CustomDestinations jump lists.  Useful for tracking which files\n"
-        "a user recently opened.  Read-only.",
+        "Shows user file access history.  Returns a summary with counts and\n"
+        "sample entries; use ``search()`` or ``get_raw_output()`` for full\n"
+        "data.  Read-only.",
     ),
     (
         "parse_lnk_files",
         "ez.lnkfiles",
         "Return LNK file data parsed by LECmd (EZ Tools).\n\n"
-        "Shows shortcut targets, timestamps, and metadata.  LNK files\n"
-        "provide execution evidence -- they are created when a file is\n"
-        "opened from Explorer.  Read-only.",
+        "Shows shortcut targets, timestamps, and metadata.  Returns a summary\n"
+        "with counts and sample entries; use ``search()`` or\n"
+        "``get_raw_output()`` for full data.  Read-only.",
     ),
     (
         "parse_shellbags",
         "ez.shellbags",
         "Return Shellbags data parsed by SBECmd (EZ Tools).\n\n"
-        "Shows folder access history from UsrClass.dat.  Shellbags persist\n"
-        "even after folders are deleted, making them useful for proving a\n"
-        "user navigated to a specific directory.  Read-only.",
+        "Shows folder access history from UsrClass.dat.  Returns a summary\n"
+        "with counts and sample entries; use ``search()`` or\n"
+        "``get_raw_output()`` for full data.  Read-only.",
     ),
     (
         "parse_srum",
         "ez.srum",
         "Return SRUM data parsed by SrumECmd (EZ Tools).\n\n"
-        "Shows network usage, application resource usage, and energy usage\n"
-        "over the past 30-60 days from the System Resource Usage Monitor\n"
-        "database.  Useful for detecting anomalous network activity.\n"
-        "Read-only.",
+        "Shows network/app resource usage over 30-60 days.  Returns a summary\n"
+        "with counts and sample entries; use ``search()`` or\n"
+        "``get_raw_output()`` for full data.  Read-only.",
     ),
 ]
 
 
 def _make_ez_tool(source_name: str, tool_name: str) -> Any:
-    """Create a no-arg tool function that fetches windows from *source_name*."""
+    """Create a no-arg tool function that returns a compact summary."""
 
     def tool_fn() -> dict[str, object]:
+        """Return a compact summary of EZ tool output."""
         ctx = get_ctx()
         tc_id = make_tool_call_id()
         t0 = time.monotonic()
         windows = ctx.db.get_windows_by_source(source_name)
+        total = len(windows)
+
+        samples: list[str] = []
+        for w in windows[:_EZ_SUMMARY_SAMPLE_CAP]:
+            text = w.raw_text.strip()
+            if len(text) > _EZ_SUMMARY_TEXT_CAP:
+                text = text[:_EZ_SUMMARY_TEXT_CAP] + "..."
+            samples.append(text)
+
         elapsed = (time.monotonic() - t0) * 1000
-        return windowed_response(tc_id, windows, source_name, tool_name, {}, elapsed)
+        ctx.audit.log_tool_call(
+            tool_call_id=tc_id,
+            tool_name=tool_name,
+            params={},
+            output_hash=hash_output({"total": total}),
+            duration_ms=elapsed,
+        )
+        resp: dict[str, object] = {
+            "tool_call_id": tc_id,
+            "status": "success",
+            "source": source_name,
+            "total_windows": total,
+            "sample_count": len(samples),
+            "samples": samples,
+        }
+        if total == 0:
+            resp["hint"] = (
+                f"No data indexed for {source_name}. "
+                f"Run the corresponding EZ Tools extractor first."
+            )
+        else:
+            resp["hint"] = (
+                f"Showing {len(samples)} of {total} entries. "
+                f"Use search(query, source='{source_name}') to find specific entries, "
+                f"or get_raw_output('{source_name}') to paginate the full data."
+            )
+        return resp
 
     return tool_fn
 
@@ -108,6 +142,9 @@ _SRC_MFT = "ez.mft"
 _SRC_USNJRNL = "ez.usnjrnl"
 
 
+_MFT_USN_CAP = 15
+
+
 @mcp.tool()
 def parse_mft(t_start: str, t_end: str) -> dict[str, object]:
     """Return MFT entries within a time range, parsed by MFTECmd (EZ Tools).
@@ -121,7 +158,13 @@ def parse_mft(t_start: str, t_end: str) -> dict[str, object]:
     windows = ctx.db.get_windows_by_source(_SRC_MFT, t_start, t_end)
     elapsed = (time.monotonic() - t0) * 1000
     return windowed_response(
-        tc_id, windows, _SRC_MFT, "parse_mft", {"t_start": t_start, "t_end": t_end}, elapsed
+        tc_id,
+        windows,
+        _SRC_MFT,
+        "parse_mft",
+        {"t_start": t_start, "t_end": t_end},
+        elapsed,
+        cap=_MFT_USN_CAP,
     )
 
 
@@ -144,4 +187,5 @@ def parse_usn_journal(t_start: str, t_end: str) -> dict[str, object]:
         "parse_usn_journal",
         {"t_start": t_start, "t_end": t_end},
         elapsed,
+        cap=_MFT_USN_CAP,
     )

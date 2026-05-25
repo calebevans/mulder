@@ -74,7 +74,7 @@ class TestSerializeWindows:
     def test_over_default_cap(self) -> None:
         ws = self._windows(100)
         result = serialize_windows(ws)
-        assert len(result) == 50
+        assert len(result) == 20
 
     def test_custom_cap(self) -> None:
         ws = self._windows(10)
@@ -86,6 +86,30 @@ class TestSerializeWindows:
         result = serialize_windows(ws)
         assert isinstance(result[0], dict)
         assert "raw_text" in result[0]
+
+    def test_truncates_raw_text(self) -> None:
+        w = WindowRow(
+            source_id=1,
+            line_start=0,
+            line_end=1,
+            event_time=None,
+            raw_text="x" * 500,
+        )
+        result = serialize_windows([w], text_cap=100)
+        assert result[0]["raw_text"] == "x" * 100 + "..."
+        assert result[0]["full_text_available"] is True
+
+    def test_short_text_not_truncated(self) -> None:
+        w = WindowRow(
+            source_id=1,
+            line_start=0,
+            line_end=1,
+            event_time=None,
+            raw_text="short",
+        )
+        result = serialize_windows([w], text_cap=100)
+        assert result[0]["raw_text"] == "short"
+        assert "full_text_available" not in result[0]
 
 
 class TestSlimWindow:
