@@ -292,37 +292,47 @@ def wait(
 
     if batch_id is not None:
         store = _get_job_store()
-        poll_interval = 30
-        elapsed = 0
-        while elapsed < max_wait:
-            status = store.get_batch_status(batch_id)
-            if status is None:
-                return {
-                    "status": "error",
-                    "error_message": f"Unknown batch: {batch_id}",
-                }
-            if status.get("all_done", False):
-                return {
-                    "status": "done",
-                    "batch_id": batch_id,
-                    "waited_seconds": elapsed,
-                    "batch_status": status,
-                    "message": (
-                        f"Batch {batch_id} complete after {elapsed}s. "
-                        f"Call get_completed_results('{batch_id}') to retrieve."
-                    ),
-                }
-            time.sleep(poll_interval)
-            elapsed += poll_interval
+        status = store.get_batch_status(batch_id)
+        if status is None:
+            return {
+                "status": "error",
+                "error_message": f"Unknown batch: {batch_id}",
+            }
+        if status.get("all_done", False):
+            return {
+                "status": "done",
+                "batch_id": batch_id,
+                "waited_seconds": 0,
+                "batch_status": status,
+                "message": (
+                    f"Batch {batch_id} already complete. "
+                    f"Call get_completed_results('{batch_id}') to retrieve."
+                ),
+            }
+
+        t0 = time.monotonic()
+        finished = store.wait_for_batch(batch_id, timeout=float(max_wait))
+        elapsed = int(time.monotonic() - t0)
 
         status = store.get_batch_status(batch_id)
+        if finished:
+            return {
+                "status": "done",
+                "batch_id": batch_id,
+                "waited_seconds": elapsed,
+                "batch_status": status,
+                "message": (
+                    f"Batch {batch_id} complete after {elapsed}s. "
+                    f"Call get_completed_results('{batch_id}') to retrieve."
+                ),
+            }
         return {
             "status": "timeout",
             "batch_id": batch_id,
-            "waited_seconds": max_wait,
+            "waited_seconds": elapsed,
             "batch_status": status,
             "message": (
-                f"Batch {batch_id} still running after {max_wait}s. "
+                f"Batch {batch_id} still running after {elapsed}s. "
                 f"Call wait(batch_id='{batch_id}') again to keep waiting."
             ),
         }

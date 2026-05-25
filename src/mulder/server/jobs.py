@@ -51,6 +51,7 @@ class Batch:
     batch_id: str
     job_ids: list[str]
     created_at: float = field(default_factory=time.monotonic)
+    done_event: threading.Event = field(default_factory=threading.Event)
 
 
 class JobStore:
@@ -163,11 +164,32 @@ class JobStore:
                 job.completed_at = time.monotonic()
         finally:
             current_batch_id.set(None)
+            self._check_batch_done(job.batch_id)
+
+    def _check_batch_done(self, batch_id: str) -> None:
+        """Set the batch done_event if all jobs are finished."""
+        with self._lock:
+            batch = self._batches.get(batch_id)
+            if batch is None:
+                return
+            for jid in batch.job_ids:
+                j = self._jobs[jid]
+                if j.status in ("pending", "running"):
+                    return
+            batch.done_event.set()
 
     def batch_ids(self) -> list[str]:
         """Return a snapshot of all known batch IDs."""
         with self._lock:
             return list(self._batches.keys())
+
+    def wait_for_batch(self, batch_id: str, timeout: float | None = None) -> bool:
+        """Block until all jobs in the batch finish. Returns True if done."""
+        with self._lock:
+            batch = self._batches.get(batch_id)
+        if batch is None:
+            return False
+        return batch.done_event.wait(timeout=timeout)
 
     def get_batch_status(self, batch_id: str) -> dict[str, Any] | None:
         """Return a lean status summary for *batch_id*.
