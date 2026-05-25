@@ -300,6 +300,55 @@ def update_finding(
 
 
 @mcp.tool()
+def delete_finding(finding_id: str) -> dict[str, object]:
+    """Delete a finding that was submitted in error.
+
+    Use this when a finding turns out to be completely wrong (e.g.,
+    a legitimate tool misidentified as malware). The finding is
+    permanently removed from the case database and will not appear
+    in the final report.
+
+    Args:
+        finding_id: The finding ID to delete.
+    """
+    ctx = get_ctx()
+    tc_id = make_tool_call_id()
+    t0 = time.monotonic()
+
+    deleted = ctx.db.delete_finding(finding_id)
+
+    if not deleted:
+        error: dict[str, object] = {
+            "tool_call_id": tc_id,
+            "error": f"Finding '{finding_id}' not found.",
+        }
+        elapsed = (time.monotonic() - t0) * 1000
+        ctx.audit.log_tool_call(
+            tool_call_id=tc_id,
+            tool_name="delete_finding",
+            params={"finding_id": finding_id},
+            output_hash=hash_output(error),
+            duration_ms=elapsed,
+        )
+        return error
+
+    result: dict[str, object] = {
+        "tool_call_id": tc_id,
+        "finding_id": finding_id,
+        "status": "deleted",
+    }
+    elapsed = (time.monotonic() - t0) * 1000
+    ctx.audit.log_tool_call(
+        tool_call_id=tc_id,
+        tool_name="delete_finding",
+        params={"finding_id": finding_id},
+        output_hash=hash_output(result),
+        duration_ms=elapsed,
+    )
+    return result
+
+
+@mcp.tool()
 def submit_narrative(narrative: str) -> dict[str, object]:
     """Submit the long-form investigation narrative report.
 

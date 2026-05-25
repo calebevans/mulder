@@ -21,6 +21,7 @@ from sqlalchemy import (
     Table,
     Text,
     create_engine,
+    delete,
     event,
     func,
     insert,
@@ -783,6 +784,26 @@ class CaseDB:
                 return result.rowcount > 0
 
         return bool(self._wq.submit(_do_update))
+
+    def delete_finding(self, finding_id: str) -> bool:
+        """Delete a finding by ID. Returns True if a row was deleted.
+
+        Args:
+            finding_id: Primary key of the finding to remove.
+
+        Returns:
+            True if the finding existed and was deleted, False otherwise.
+        """
+
+        def _do_delete() -> bool:
+            """Execute the DELETE and return whether a row was matched."""
+            with self._engine.begin() as conn:
+                result = conn.execute(
+                    delete(findings_t).where(findings_t.c.finding_id == finding_id)
+                )
+                return result.rowcount > 0
+
+        return bool(self._wq.submit(_do_delete))
 
     def _finding_exists(self, finding_id: str) -> bool:
         """Return True if a finding with the given ID exists."""
