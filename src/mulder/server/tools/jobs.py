@@ -217,10 +217,32 @@ def get_completed_results(
         }
 
     sub_call_ids = []
+    summaries: list[dict[str, object]] = []
     for r in results:
         res = r.get("result")
-        if isinstance(res, dict) and "tool_call_id" in res:
-            sub_call_ids.append(res["tool_call_id"])
+        summary: dict[str, object] = {
+            "tool": r.get("tool", "unknown"),
+            "status": r.get("status", "unknown"),
+        }
+        if isinstance(res, dict):
+            if "tool_call_id" in res:
+                sub_call_ids.append(res["tool_call_id"])
+                summary["tool_call_id"] = res["tool_call_id"]
+            if "source_name" in res:
+                summary["source_name"] = res["source_name"]
+            if "windows_indexed" in res:
+                summary["windows_indexed"] = res["windows_indexed"]
+            if "line_count" in res:
+                summary["line_count"] = res["line_count"]
+            if "error_message" in res:
+                summary["error_message"] = res["error_message"]
+            if "status" in res:
+                summary["result_status"] = res["status"]
+        elif isinstance(res, str) and len(res) > 200:
+            summary["result_preview"] = res[:200]
+        else:
+            summary["result"] = res
+        summaries.append(summary)
 
     if has_ctx():
         ctx = get_ctx()
@@ -237,11 +259,12 @@ def get_completed_results(
         "tool_call_id": tc_id,
         "status": "success",
         "batch_id": batch_id,
-        "results_returned": len(results),
-        "results": results,
+        "results_returned": len(summaries),
+        "results": summaries,
         "hint": (
-            "Each result contains the tool's full output including "
-            "tool_call_id for use in submit_finding evidence_refs."
+            "Results show metadata only. Use search(query, source=source_name) "
+            "or get_raw_output(source_name) to access the actual evidence data. "
+            "Use tool_call_id values in submit_finding evidence_refs."
         ),
     }
 
