@@ -340,6 +340,16 @@ output. Choose based on what applies to each system:
 Use `start_extraction_batch` for these if there are multiple, or call
 them directly if just one or two.
 
+**WHEN A TOOL FAILS OR RETURNS NO RESULTS:**
+Do NOT just accept it and move on. Investigate why:
+- Check if the inputs were correct (wrong path, wrong format, missing
+  prerequisite data).
+- Try an alternative tool or approach that produces equivalent data.
+  Use `get_tool_guide(category)` to find related tools.
+- If a tool returns empty results, verify the input data was valid
+  before concluding there is nothing to find.
+- Only after exhausting alternatives, document the gap and move on.
+
 #### Per-System Tool Selection
 
 Choose tools based on what evidence exists for each system. Use the
