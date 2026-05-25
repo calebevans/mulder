@@ -176,6 +176,130 @@ def submit_finding(
 
 
 @mcp.tool()
+def update_finding(
+    finding_id: str,
+    title: str | None = None,
+    description: str | None = None,
+    severity: str | None = None,
+    confidence: str | None = None,
+    evidence_refs: list[str] | None = None,
+    sources: list[str] | None = None,
+    mitre_attack_ids: list[str] | None = None,
+    event_time_start: str | None = None,
+    event_time_end: str | None = None,
+) -> dict[str, object]:
+    """Update or correct an existing finding.
+
+    Use this to correct a finding when new evidence changes your
+    assessment.  For example, downgrade severity when a suspicious
+    process turns out to be legitimate, or update the description
+    with additional context.
+
+    Only provided fields are updated.  Omitted fields remain unchanged.
+
+    Args:
+        finding_id: The finding ID to update (from get_findings).
+        title: New title (optional).
+        description: New/appended description (optional).
+        severity: New severity level (optional).
+        confidence: New confidence level (optional).
+        evidence_refs: New evidence refs list (optional).
+        sources: New sources list (optional).
+        mitre_attack_ids: New ATT&CK IDs (optional).
+        event_time_start: New start time (optional).
+        event_time_end: New end time (optional).
+    """
+    ctx = get_ctx()
+    tc_id = make_tool_call_id()
+    t0 = time.monotonic()
+
+    if not ctx.db._finding_exists(finding_id):
+        error: dict[str, object] = {
+            "tool_call_id": tc_id,
+            "error": f"Finding '{finding_id}' not found.",
+        }
+        elapsed = (time.monotonic() - t0) * 1000
+        ctx.audit.log_tool_call(
+            tool_call_id=tc_id,
+            tool_name="update_finding",
+            params={"finding_id": finding_id},
+            output_hash=hash_output(error),
+            duration_ms=elapsed,
+        )
+        return error
+
+    if evidence_refs is not None:
+        invalid_refs = [ref for ref in evidence_refs if not ctx.audit.has_tool_call(ref)]
+        if invalid_refs:
+            recent_ids = sorted(ctx.audit.tool_call_ids)[-10:]
+            error = {
+                "tool_call_id": tc_id,
+                "error": (
+                    f"Invalid evidence_ref(s): {', '.join(invalid_refs)} "
+                    f"not found in the audit log"
+                ),
+                "valid_refs": recent_ids,
+            }
+            elapsed = (time.monotonic() - t0) * 1000
+            ctx.audit.log_tool_call(
+                tool_call_id=tc_id,
+                tool_name="update_finding",
+                params={"finding_id": finding_id, "evidence_refs": evidence_refs},
+                output_hash=hash_output(error),
+                duration_ms=elapsed,
+            )
+            return error
+
+    ts_warnings: list[str] = []
+    if event_time_start is not None:
+        event_time_start, w = _sanitize_event_time(event_time_start)
+        if w:
+            ts_warnings.append(w)
+    if event_time_end is not None:
+        event_time_end, w = _sanitize_event_time(event_time_end)
+        if w:
+            ts_warnings.append(w)
+
+    update_kwargs: dict[str, object] = {}
+    for field, value in [
+        ("title", title),
+        ("description", description),
+        ("severity", severity),
+        ("confidence", confidence),
+        ("evidence_refs", evidence_refs),
+        ("sources", sources),
+        ("mitre_attack_ids", mitre_attack_ids),
+        ("event_time_start", event_time_start),
+        ("event_time_end", event_time_end),
+    ]:
+        if value is not None:
+            update_kwargs[field] = value
+
+    ctx.db.update_finding(finding_id, **update_kwargs)
+
+    updated = ctx.db.get_finding(finding_id)
+    ctx.audit.log_tool_call(
+        tool_call_id=tc_id,
+        tool_name="update_finding",
+        params={"finding_id": finding_id, **update_kwargs},
+        output_hash=hash_output(update_kwargs),
+        duration_ms=(time.monotonic() - t0) * 1000,
+    )
+
+    result: dict[str, object] = {
+        "tool_call_id": tc_id,
+        "finding_id": finding_id,
+        "status": "updated",
+        "updated_fields": list(update_kwargs.keys()),
+    }
+    if updated is not None:
+        result["finding"] = updated.model_dump()
+    if ts_warnings:
+        result["timestamp_warnings"] = ts_warnings
+    return result
+
+
+@mcp.tool()
 def submit_narrative(narrative: str) -> dict[str, object]:
     """Submit the long-form investigation narrative report.
 

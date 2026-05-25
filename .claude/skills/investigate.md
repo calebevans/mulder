@@ -39,6 +39,10 @@ context window. Instead:
 - **Submit findings as you go.** Call `submit_finding` as soon as you have
   enough evidence for a finding. Do NOT wait until the end. Findings are
   persisted in the database and survive context compaction.
+- **Correct findings in place.** Call `update_finding` to revise a
+  previously submitted finding (e.g. downgrade severity, refine the
+  description, add MITRE ATT&CK IDs). Only provided fields are changed.
+  This is preferred over submitting a separate `[CORRECTION]` finding.
 - **Use `search()` and `get_raw_output()` to recall evidence.** If you need
   to reference earlier tool output, query the database. Do not rely on
   having it in your conversation history.
@@ -104,6 +108,8 @@ theory. Phase 3.5 enforces this -- you CANNOT skip it.
 1. **Read-only tools only.** Enforced architecturally.
 2. **Evidence-backed findings only.** `submit_finding` requires valid
    `tool_call_id` references. The server rejects invalid references.
+   Use `update_finding` to correct a submitted finding rather than
+   submitting a duplicate or `[CORRECTION]` finding.
 3. **Never fabricate evidence.** Note gaps and move on.
 4. **Confidence:** `"confirmed"` only with 2+ independent sources.
    Otherwise `"inference"`.

@@ -744,6 +744,74 @@ class CaseDB:
 
         self._wq.submit(_do_insert)
 
+    def update_finding(self, finding_id: str, **kwargs: object) -> bool:
+        """Update fields on an existing finding. Returns True if found.
+
+        Only the provided keyword arguments are written; omitted fields
+        remain unchanged.  List-valued columns (``evidence_refs``,
+        ``sources``, ``mitre_attack_ids``) are JSON-serialised before
+        storage.
+
+        Args:
+            finding_id: Primary key of the finding to update.
+            **kwargs: Column names mapped to their new values.
+
+        Returns:
+            True if a row was matched and updated, False otherwise.
+        """
+        json_columns = frozenset({"evidence_refs", "sources", "mitre_attack_ids"})
+        values: dict[str, object] = {}
+        for key, val in kwargs.items():
+            if val is None:
+                continue
+            if key in json_columns:
+                values[key] = json.dumps(val)
+            else:
+                values[key] = val
+
+        if not values:
+            return self._finding_exists(finding_id)
+
+        def _do_update() -> bool:
+            """Execute the UPDATE and return whether a row was matched."""
+            with self._engine.begin() as conn:
+                result = conn.execute(
+                    update(findings_t)
+                    .where(findings_t.c.finding_id == finding_id)
+                    .values(**values)
+                )
+                return result.rowcount > 0
+
+        return bool(self._wq.submit(_do_update))
+
+    def _finding_exists(self, finding_id: str) -> bool:
+        """Return True if a finding with the given ID exists."""
+        stmt = select(findings_t.c.finding_id).where(findings_t.c.finding_id == finding_id)
+        with self._engine.connect() as conn:
+            return conn.execute(stmt).fetchone() is not None
+
+    def get_finding(self, finding_id: str) -> Finding | None:
+        """Return a single finding by ID, or None if not found."""
+        stmt = select(findings_t).where(findings_t.c.finding_id == finding_id)
+        with self._engine.connect() as conn:
+            row = conn.execute(stmt).fetchone()
+        if row is None:
+            return None
+        return Finding(
+            finding_id=row.finding_id,
+            case_id=row.case_id,
+            title=row.title,
+            description=row.description,
+            severity=row.severity,
+            confidence=row.confidence,
+            evidence_refs=json.loads(row.evidence_refs),
+            sources=json.loads(row.sources),
+            mitre_attack_ids=json.loads(row.mitre_attack_ids) if row.mitre_attack_ids else [],
+            event_time_start=row.event_time_start,
+            event_time_end=row.event_time_end,
+            submitted_at=row.submitted_at,
+        )
+
     def get_findings(self) -> list[Finding]:
         """Return all findings ordered by submission time."""
         stmt = select(findings_t).order_by(findings_t.c.submitted_at)
