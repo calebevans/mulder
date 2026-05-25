@@ -181,10 +181,13 @@ def list_files(
 ) -> dict[str, object]:
     """List files from the disk image filesystem (TSK fls).
 
-    Returns the recursive file listing extracted at ingest time.
-    Optionally filter by *path_filter* substring.  Set *include_deleted*
-    to True to include only deleted files (marked with ``*`` by TSK).
-    Read-only.
+    Returns a summary of matching files with counts. Use search() to
+    find specific files by name or path, and get_raw_output() to
+    paginate through the full listing.
+
+    Args:
+        path_filter: Optional substring filter on file paths.
+        include_deleted: If True, only show deleted files (TSK ``*`` marker).
     """
     ctx = get_ctx()
     tc_id = make_tool_call_id()
@@ -199,26 +202,49 @@ def list_files(
         pf_lower = path_filter.lower()
         windows = [w for w in windows if pf_lower in w.raw_text.lower()]
 
+    total_entries = sum(w.raw_text.count("\n") + 1 for w in windows)
+
+    top_dirs: dict[str, int] = {}
+    for w in windows[:50]:
+        for line in w.raw_text.split("\n"):
+            parts = line.split("\t")
+            if len(parts) >= 2:
+                path = parts[-1].strip()
+                top_dir = path.split("/")[0] if "/" in path else path
+                top_dirs[top_dir] = top_dirs.get(top_dir, 0) + 1
+
+    sorted_dirs = sorted(top_dirs.items(), key=lambda x: -x[1])[:20]
+
     elapsed = (time.monotonic() - t0) * 1000
-    return windowed_response(
-        tc_id,
-        windows,
-        _SRC_FILELIST,
-        "list_files",
-        {"path_filter": path_filter, "include_deleted": include_deleted},
-        elapsed,
-        cap=20,
+    ctx.audit.log_tool_call(
+        tool_call_id=tc_id,
+        tool_name="list_files",
+        params={"path_filter": path_filter, "include_deleted": include_deleted},
+        output_hash=hash_output({"total": len(windows)}),
+        duration_ms=elapsed,
     )
+    return {
+        "tool_call_id": tc_id,
+        "status": "success",
+        "source": _SRC_FILELIST,
+        "total_windows": len(windows),
+        "approx_file_count": total_entries,
+        "top_directories": [{"name": d, "entries": c} for d, c in sorted_dirs],
+        "hint": (
+            f"Showing summary of {total_entries} entries. "
+            f"Use search(query, source='tsk.filelist') to find specific files, "
+            f"or get_raw_output('tsk.filelist') to paginate the full listing."
+        ),
+    }
 
 
 @mcp.tool()
 def get_deleted_files() -> dict[str, object]:
-    """Return deleted files detected in the disk image (TSK fls).
+    """Return a summary of deleted files detected in the disk image.
 
-    TSK marks deleted entries with a ``*`` prefix.  This tool filters
-    the full file listing to show only those entries.  Useful for
-    detecting evidence tampering or recovering deleted artifacts.
-    Read-only.
+    TSK marks deleted entries with a ``*`` prefix. Returns counts and
+    top directories containing deleted files. Use search() to find
+    specific deleted files by name.
     """
     ctx = get_ctx()
     tc_id = make_tool_call_id()
@@ -226,10 +252,43 @@ def get_deleted_files() -> dict[str, object]:
 
     windows = ctx.db.get_windows_by_source(_SRC_FILELIST)
     deleted = [w for w in windows if "* " in w.raw_text]
+
+    total_entries = sum(w.raw_text.count("\n") + 1 for w in deleted)
+
+    top_dirs: dict[str, int] = {}
+    for w in deleted[:50]:
+        for line in w.raw_text.split("\n"):
+            if "* " not in line:
+                continue
+            parts = line.split("\t")
+            if len(parts) >= 2:
+                path = parts[-1].strip()
+                top_dir = path.split("/")[0] if "/" in path else path
+                top_dirs[top_dir] = top_dirs.get(top_dir, 0) + 1
+
+    sorted_dirs = sorted(top_dirs.items(), key=lambda x: -x[1])[:20]
+
     elapsed = (time.monotonic() - t0) * 1000
-    return windowed_response(
-        tc_id, deleted, _SRC_FILELIST, "get_deleted_files", {}, elapsed, cap=20
+    ctx.audit.log_tool_call(
+        tool_call_id=tc_id,
+        tool_name="get_deleted_files",
+        params={},
+        output_hash=hash_output({"total": len(deleted)}),
+        duration_ms=elapsed,
     )
+    return {
+        "tool_call_id": tc_id,
+        "status": "success",
+        "source": _SRC_FILELIST,
+        "total_windows": len(deleted),
+        "approx_deleted_count": total_entries,
+        "top_directories": [{"name": d, "entries": c} for d, c in sorted_dirs],
+        "hint": (
+            f"{total_entries} deleted entries found. "
+            f"Use search('* ', source='tsk.filelist') to find specific "
+            f"deleted files, or get_raw_output('tsk.filelist') to browse."
+        ),
+    }
 
 
 @mcp.tool()
