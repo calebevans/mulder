@@ -5,7 +5,6 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
-import shutil
 import subprocess
 import tempfile
 import time
@@ -17,8 +16,10 @@ from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
     _FILE_LIST_CAP,
     _PREVIEW_CHAR_LIMIT,
+    TOOL_TIMEOUT,
     error_response,
     make_tool_call_id,
+    require_binary,
     tool_response,
 )
 
@@ -35,12 +36,6 @@ logger = logging.getLogger(__name__)
 _BULK_TIMEOUT = 1800
 _SCALPEL_TIMEOUT = 1800
 _PHOTOREC_TIMEOUT = 3600
-_TOOL_TIMEOUT = 600
-
-
-def _require_binary(name: str) -> str | None:
-    """Return the binary path if found, else None."""
-    return shutil.which(name)
 
 
 def _bulk_page_size() -> int:
@@ -144,20 +139,24 @@ def _build_bulk_extractor_cmd(
     return cmd
 
 
-def _collect_bulk_feature_texts(outdir: str, features: list[str] | None) -> dict[str, str]:
-    """Read feature files from a bulk_extractor output directory.
+def _stream_and_index_features(
+    outdir: str,
+    features: list[str] | None,
+    image_path: str,
+) -> list[dict[str, object]]:
+    """Read, index, and discard each feature file sequentially.
 
-    Skips XML metadata, histogram files, and features not in the
-    requested filter list.
+    Bounds peak memory to a single feature file rather than all combined.
 
     Args:
-        outdir: Directory containing bulk_extractor output files.
-        features: Feature stems to include, or None to include all.
+        outdir: bulk_extractor output directory.
+        features: Feature stems to include, or None for all.
+        image_path: Disk image path for source registration.
 
     Returns:
-        Mapping of feature stem to file text content.
+        List of per-feature index summary dicts.
     """
-    feature_texts: dict[str, str] = {}
+    results: list[dict[str, object]] = []
     for feature_file in sorted(Path(outdir).iterdir()):
         if not feature_file.is_file() or feature_file.suffix == ".xml":
             continue
@@ -169,30 +168,16 @@ def _collect_bulk_feature_texts(outdir: str, features: list[str] | None) -> dict
 
         try:
             text = feature_file.read_text(encoding="utf-8", errors="replace").strip()
-            if text:
-                feature_texts[stem] = text
         except OSError:
-            pass
-    return feature_texts
+            continue
+        if not text:
+            continue
 
-
-def _index_bulk_features(
-    feature_texts: dict[str, str], image_path: str
-) -> list[dict[str, object]]:
-    """Index each collected feature file into the case database.
-
-    Args:
-        feature_texts: Mapping of feature stem to raw text content.
-        image_path: Disk image path used as the source reference.
-
-    Returns:
-        List of per-feature index summary dicts.
-    """
-    results: list[dict[str, object]] = []
-    for stem, text in feature_texts.items():
         source_name = _FEATURE_SOURCE_MAP.get(stem, f"bulk.{stem}")
         summary = extract_and_index(text, source_name, image_path, "bulk_extractor")
         results.append(summary)
+        del text
+
     return results
 
 
@@ -245,7 +230,7 @@ def run_bulk_extractor(
         "max_depth": max_depth,
     }
 
-    if not _require_binary("bulk_extractor"):
+    if not require_binary("bulk_extractor"):
         return error_response(
             tc_id, "run_bulk_extractor", params, "bulk_extractor not found on PATH"
         )
@@ -276,8 +261,7 @@ def run_bulk_extractor(
                 error_type="extraction_failed",
             )
 
-        feature_texts = _collect_bulk_feature_texts(tmpdir, features)
-        results = _index_bulk_features(feature_texts, image_path)
+        results = _stream_and_index_features(tmpdir, features, image_path)
 
     total_windows = sum(cast(int, r.get("windows_indexed", 0)) for r in results)
     for r in results:
@@ -312,7 +296,7 @@ def run_foremost(image_path: str) -> dict[str, object]:
     t0 = time.monotonic()
     params = {"image_path": image_path}
 
-    if not _require_binary("foremost"):
+    if not require_binary("foremost"):
         return error_response(tc_id, "run_foremost", params, "foremost not found on PATH")
 
     with tempfile.TemporaryDirectory(prefix="mulder_foremost_") as tmpdir:
@@ -354,7 +338,7 @@ def run_scalpel(image_path: str) -> dict[str, object]:
     t0 = time.monotonic()
     params = {"image_path": image_path}
 
-    if not _require_binary("scalpel"):
+    if not require_binary("scalpel"):
         return error_response(
             tc_id,
             "run_scalpel",
@@ -420,7 +404,7 @@ def run_binwalk(target_path: str, extract: bool = False) -> dict[str, object]:
     t0 = time.monotonic()
     params = {"target_path": target_path, "extract": extract}
 
-    if not _require_binary("binwalk"):
+    if not require_binary("binwalk"):
         return error_response(
             tc_id,
             "run_binwalk",
@@ -448,7 +432,7 @@ def run_binwalk(target_path: str, extract: bool = False) -> dict[str, object]:
             cmd,
             capture_output=True,
             text=True,
-            timeout=_TOOL_TIMEOUT * 3,
+            timeout=TOOL_TIMEOUT * 3,
             check=False,
         )
     except subprocess.TimeoutExpired:
@@ -479,7 +463,7 @@ def run_photorec(image_path: str) -> dict[str, object]:
     t0 = time.monotonic()
     params = {"image_path": image_path}
 
-    if not _require_binary("photorec"):
+    if not require_binary("photorec"):
         return error_response(
             tc_id,
             "run_photorec",

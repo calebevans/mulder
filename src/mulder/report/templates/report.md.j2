@@ -14,10 +14,30 @@
 ### Critical Findings
 
 {% for f in critical_findings %}
-- **{{ f.title }}** {% if f.event_time_start %}({{ f.event_time_start }}{% if f.event_time_end %} -- {{ f.event_time_end }}{% endif %}){% endif %}
+- **{{ f.title }}** {% if f.event_time_start %}({{ f.event_time_start }}{% if f.event_time_end %} to {{ f.event_time_end }}{% endif %}){% endif %}
 
 {% endfor %}
 {% endif %}
+
+---
+
+## Forensic Soundness and Evidence Integrity
+
+Analysis was executed via a read-only Model Context Protocol (MCP) server
+mapped to the SANS SIFT toolchain. The MCP architecture enforces structural
+evidence protection: original evidence files were mounted as read-only
+volumes, all tool interactions are typed functions (no shell access), and
+every finding is validated against the append-only audit log before
+acceptance.
+{% if evidence_integrity %}
+{{ evidence_integrity | length }} evidence files were cryptographically
+validated via SHA-256 hashes computed at ingestion and verified against the
+case database.
+{% endif %}
+{{ total_tool_calls }} tool calls were executed across {{ sources | length }}
+indexed sources over the course of the investigation, with full provenance
+tracking via append-only JSONL audit log.
+
 {% if narrative %}
 
 ---
@@ -64,9 +84,21 @@ SHA-256 hashes recorded at ingestion. Verify with `sha256sum <file>`.
 No timestamped findings to build a timeline from.
 {% endif %}
 
+{% if negative_findings %}
 ---
 
-## Findings
+## Hypotheses Ruled Out
+
+These hypotheses were explicitly tested and no supporting evidence was found.
+
+{% for f in negative_findings %}
+- **{{ f.title | replace("[NEGATIVE] ", "") }}** : {{ f.description | truncate(200) }}
+{% endfor %}
+{% endif %}
+
+---
+
+## Appendix A: Verified Forensic Findings
 {% for finding in findings %}
 
 ### {{ loop.index }}. {% if finding.severity == "critical" %}[CRITICAL]{% elif finding.severity == "high" %}[HIGH]{% elif finding.severity == "medium" %}[MEDIUM]{% elif finding.severity == "low" %}[LOW]{% else %}[INFO]{% endif %} {{ finding.title }}
@@ -75,7 +107,7 @@ No timestamped findings to build a timeline from.
 |---|---|
 | **Severity** | {{ finding.severity | upper }} |
 | **Confidence** | {{ finding.confidence }} |
-{% if finding.event_time_start %}| **Time** | {{ finding.event_time_start }}{% if finding.event_time_end %} -- {{ finding.event_time_end }}{% endif %} |
+{% if finding.event_time_start %}| **Time** | {{ finding.event_time_start }}{% if finding.event_time_end %} to {{ finding.event_time_end }}{% endif %} |
 {% endif %}| **Sources** | {{ finding.sources | join(", ") }} |
 | **Evidence Refs** | {{ finding.evidence_refs | join(", ") }} |
 {% if finding.mitre_attack_ids %}| **ATT&CK** | {% for tid in finding.mitre_attack_ids %}[{{ tid }}]({{ tid | attack_url }}){% if not loop.last %}, {% endif %}{% endfor %} |
@@ -85,28 +117,16 @@ No timestamped findings to build a timeline from.
 
 {% endfor %}
 
-{% if negative_findings %}
 ---
 
-## Ruled Out
-
-These hypotheses were explicitly tested and no supporting evidence was found.
-
-{% for f in negative_findings %}
-- **{{ f.title | replace("[NEGATIVE] ", "") }}** -- {{ f.description | truncate(200) }}
-{% endfor %}
-{% endif %}
-
----
-
-## Indicators of Compromise
+## Appendix B: Indicators of Compromise
 
 ### Network IOCs
 
 | Type | Value | Context |
 |------|-------|---------|
 {% for ioc in network_iocs %}| {{ ioc.type }} | `{{ ioc.value }}` | {{ ioc.context }} |
-{% endfor %}{% if not network_iocs %}| -- | No network IOCs extracted | -- |
+{% endfor %}{% if not network_iocs %}| | No network IOCs extracted | |
 {% endif %}
 
 ### File IOCs
@@ -114,7 +134,7 @@ These hypotheses were explicitly tested and no supporting evidence was found.
 | Type | Value | Context |
 |------|-------|---------|
 {% for ioc in file_iocs %}| {{ ioc.type }} | `{{ ioc.value }}` | {{ ioc.context }} |
-{% endfor %}{% if not file_iocs %}| -- | No file IOCs extracted | -- |
+{% endfor %}{% if not file_iocs %}| | No file IOCs extracted | |
 {% endif %}
 
 {% if email_iocs %}
@@ -129,12 +149,12 @@ These hypotheses were explicitly tested and no supporting evidence was found.
 {% if mitre_techniques %}
 ---
 
-## MITRE ATT&CK Coverage
+## Appendix C: MITRE ATT&CK Coverage
 
 {{ mitre_techniques | length }} techniques identified across findings.
 {% if mitre_tactic_groups %}
 
-**Kill Chain Coverage:** {% for grp in mitre_tactic_groups %}{{ grp.name }} ({{ grp.technique_count }}){% if not loop.last %} &#8594; {% endif %}{% endfor %}
+**Kill Chain Coverage:** {% for grp in mitre_tactic_groups %}{{ grp.name }} ({{ grp.technique_count }}){% if not loop.last %} > {% endif %}{% endfor %}
 
 {% for grp in mitre_tactic_groups %}
 ### {{ grp.name }}
@@ -155,7 +175,7 @@ These hypotheses were explicitly tested and no supporting evidence was found.
 
 ---
 
-## Audit Trail
+## Appendix D: Audit Trail and Token Usage
 
 | Metric | Value |
 |--------|-------|
@@ -163,7 +183,21 @@ These hypotheses were explicitly tested and no supporting evidence was found.
 | Findings submitted | {{ finding_count }} |
 | Confirmed | {{ confirmed_count }} |
 | Inferences | {{ inference_count }} |
-| Audit log | {{ audit_log_path }} |
+{% if model_token_breakdown %}| Input tokens | {{ model_token_breakdown | sum(attribute='input') | tokformat }} |
+| Output tokens | {{ model_token_breakdown | sum(attribute='output') | tokformat }} |
+| Total tokens | {{ (model_token_breakdown | sum(attribute='input') + model_token_breakdown | sum(attribute='output')) | tokformat }} |
+{% elif estimated_input_tokens %}| Estimated input tokens | {{ estimated_input_tokens | tokformat }} |
+| Estimated output tokens | {{ estimated_output_tokens | tokformat }} |
+{% endif %}| Audit log | {{ audit_log_path }} |
+
+{% if model_token_breakdown %}
+### Token Usage by Model
+
+| Model | Input | Output | Total |
+|-------|-------|--------|-------|
+{% for entry in model_token_breakdown %}| {{ entry.model }} | {{ entry.input | tokformat }} | {{ entry.output | tokformat }} | {{ (entry.input + entry.output) | tokformat }} |
+{% endfor %}
+{% endif %}
 
 {% if sources_list %}
 <details>
@@ -179,4 +213,4 @@ These hypotheses were explicitly tested and no supporting evidence was found.
 
 ---
 
-*Report generated by [Mulder](https://github.com/calebevans/mulder) -- AI-driven forensic investigation via MCP*
+*Report generated by [Mulder](https://github.com/calebevans/mulder) via MCP*

@@ -23,6 +23,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_COST_PER_MTOK_INPUT = 3.0
+_COST_PER_MTOK_OUTPUT = 15.0
+_MIN_OUTPUT_TOKEN_ESTIMATE = 100
+
 
 class AuditLog:
     """Append-only JSONL audit log for a case investigation.
@@ -294,12 +298,14 @@ class AuditLog:
                     total_duration_ms += dur
                     params_str = json.dumps(entry.get("params", {}))
                     estimated_input_tokens += len(params_str) // 4
-                    estimated_output_tokens += max(len(params_str) // 2, 100)
+                    estimated_output_tokens += max(
+                        len(params_str) // 2, _MIN_OUTPUT_TOKEN_ESTIMATE
+                    )
                 elif entry_type == "finding":
                     total_findings += 1
 
-        cost_per_mtok_in = 3.0
-        cost_per_mtok_out = 15.0
+        cost_per_mtok_in = _COST_PER_MTOK_INPUT
+        cost_per_mtok_out = _COST_PER_MTOK_OUTPUT
         estimated_cost = (
             estimated_input_tokens / 1_000_000 * cost_per_mtok_in
             + estimated_output_tokens / 1_000_000 * cost_per_mtok_out

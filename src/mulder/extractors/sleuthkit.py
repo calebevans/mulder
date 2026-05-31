@@ -84,7 +84,7 @@ class SleuthKitExtractor:
     def extract(self, path: Path, _case_id: str) -> list[ExtractionResult]:
         """Run TSK tools (mmls, fls, mactime, fsstat) and return filesystem metadata."""
         if not _tsk_available():
-            logger.info("Sleuth Kit not installed (fls not on PATH) -- skipping %s", path)
+            logger.info("Sleuth Kit not installed (fls not on PATH), skipping %s", path)
             return []
 
         results: list[ExtractionResult] = []
@@ -183,7 +183,7 @@ class SleuthKitExtractor:
 
         if proc.returncode != 0 or not proc.stdout.strip():
             logger.info(
-                "mmls returned no partition table for %s (rc=%d) -- using offset 0",
+                "mmls returned no partition table for %s (rc=%d); using offset 0",
                 image,
                 proc.returncode,
             )
@@ -224,7 +224,7 @@ class SleuthKitExtractor:
     def _run_fls_timeline(self, image: str, offset: int) -> str:
         """Run ``fls -r -m /`` piped to ``mactime -b - -z UTC`` for a filesystem timeline."""
         if not shutil.which("mactime"):
-            logger.info("mactime not on PATH -- skipping timeline generation")
+            logger.info("mactime not on PATH, skipping timeline generation")
             return ""
 
         fls_cmd = ["fls", "-r", "-m", "/"]
@@ -257,9 +257,16 @@ class SleuthKitExtractor:
             for p in (fls_proc, mac_proc):
                 with contextlib.suppress(OSError):
                     p.kill()
+                with contextlib.suppress(OSError):
+                    p.wait(timeout=5)
             return ""
         except OSError as exc:
             logger.error("fls|mactime pipeline failed on %s: %s", image, exc)
+            for p in (fls_proc, mac_proc):
+                with contextlib.suppress(OSError):
+                    p.kill()
+                with contextlib.suppress(OSError):
+                    p.wait(timeout=5)
             return ""
 
         if mac_proc.returncode != 0:

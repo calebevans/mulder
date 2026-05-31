@@ -19,16 +19,31 @@ class Redactor:
             logger.warning("detect-secrets is not installed; secret redaction disabled")
             self._available = False
 
-    def redact(self, text: str) -> str:
-        """Return *text* with detected secrets replaced by ``[REDACTED]``."""
-        if not self._available or not text:
-            return text
+    def redact(self, text: str) -> tuple[str, bool]:
+        """Return ``(text, success)`` with detected secrets replaced by ``[REDACTED]``.
+
+        Args:
+            text: The input text to scan for secrets.
+
+        Returns:
+            A tuple of the (possibly redacted) text and a boolean indicating
+            whether redaction completed successfully.  When ``detect-secrets``
+            is unavailable the original text is returned with ``False``.
+            An empty input always returns ``("", True)``.
+        """
+        if not text:
+            return text, True
+        if not self._available:
+            return text, False
 
         try:
-            return self._redact_with_detect_secrets(text)
+            return self._redact_with_detect_secrets(text), True
         except Exception:
-            logger.warning("detect-secrets scan failed; returning unredacted text", exc_info=True)
-            return text
+            logger.warning(
+                "detect-secrets scan failed; returning unredacted text",
+                exc_info=True,
+            )
+            return text, False
 
     def _redact_with_detect_secrets(self, text: str) -> str:
         """Replace each substring reported by detect-secrets with ``[REDACTED]``, line by line."""

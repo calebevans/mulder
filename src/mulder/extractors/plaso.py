@@ -136,10 +136,10 @@ class PlasoExtractor:
     def extract(self, path: Path, case_id: str) -> list[ExtractionResult]:
         """Run log2timeline + psort against *path*, returning timeline and stats results."""
         if not shutil.which(_LOG2TIMELINE_BIN):
-            logger.warning("%s not found on $PATH -- skipping Plaso extraction", _LOG2TIMELINE_BIN)
+            logger.warning("%s not found on $PATH, skipping Plaso extraction", _LOG2TIMELINE_BIN)
             return []
         if not shutil.which(_PSORT_BIN):
-            logger.warning("%s not found on $PATH -- skipping Plaso extraction", _PSORT_BIN)
+            logger.warning("%s not found on $PATH, skipping Plaso extraction", _PSORT_BIN)
             return []
 
         if path.suffix.lower() == ".e01" and not self._check_ewf_support():
@@ -283,7 +283,7 @@ class PlasoExtractor:
         can locate it from the sources table.
         """
         if not shutil.which(_PINFO_BIN):
-            logger.debug("pinfo.py not found on $PATH -- skipping stats collection")
+            logger.debug("pinfo.py not found on $PATH, skipping stats collection")
             return None
 
         logger.info("Running pinfo to collect parser statistics ...")

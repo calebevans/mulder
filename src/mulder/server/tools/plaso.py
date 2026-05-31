@@ -18,6 +18,7 @@ from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
     _PREVIEW_CHAR_LIMIT,
+    error_response,
     hash_output,
     make_tool_call_id,
     windowed_response,
@@ -55,31 +56,17 @@ def _find_plaso_file() -> str:
     raise RuntimeError("No .plaso storage file found. Was this case ingested with Plaso?")
 
 
-def _error_response(
+def _plaso_error(
     tc_id: str,
     tool_name: str,
     params: Mapping[str, object],
     error: str,
     t0: float,
 ) -> dict[str, object]:
-    """Build an audited error response dict."""
-    ctx = get_ctx()
-    elapsed = (time.monotonic() - t0) * 1000
-    ctx.audit.log_tool_call(
-        tool_call_id=tc_id,
-        tool_name=tool_name,
-        params=params,
-        output_hash=hash_output({"error": error}),
-        duration_ms=elapsed,
-    )
-    return {
-        "tool_call_id": tc_id,
-        "status": "error",
-        "error_message": error,
-        "results": [],
-        "source": _SRC_PLASO_TIMELINE,
-        "result_count": 0,
-    }
+    """Build an audited plaso error response with empty results metadata."""
+    resp = error_response(tc_id, tool_name, params, error, (time.monotonic() - t0) * 1000)
+    resp.update({"results": [], "source": _SRC_PLASO_TIMELINE, "result_count": 0})
+    return resp
 
 
 def _run_psort(cmd: list[str]) -> subprocess.CompletedProcess[str]:
@@ -106,11 +93,11 @@ def _resolve_psort_prerequisites(
     Returns the plaso file path on success, or an error response dict.
     """
     if not shutil.which(_PSORT_BIN):
-        return _error_response(tc_id, tool_name, params, "psort.py not found on PATH", t0)
+        return _plaso_error(tc_id, tool_name, params, "psort.py not found on PATH", t0)
     try:
         return _find_plaso_file()
     except RuntimeError as exc:
-        return _error_response(tc_id, tool_name, params, str(exc), t0)
+        return _plaso_error(tc_id, tool_name, params, str(exc), t0)
 
 
 @mcp.tool()
@@ -163,14 +150,14 @@ def filter_timeline(
     try:
         proc = _run_psort(cmd)
     except subprocess.TimeoutExpired:
-        return _error_response(
+        return _plaso_error(
             tc_id, "filter_timeline", params, f"psort timed out after {_PSORT_TIMEOUT}s", t0
         )
 
     output = proc.stdout.strip()
     if proc.returncode != 0:
         stderr_preview = (proc.stderr or "")[:_PREVIEW_CHAR_LIMIT]
-        return _error_response(
+        return _plaso_error(
             tc_id,
             "filter_timeline",
             params,
@@ -251,14 +238,14 @@ def export_timeline_slice(timestamp: str) -> dict[str, object]:
     try:
         proc = _run_psort(cmd)
     except subprocess.TimeoutExpired:
-        return _error_response(
+        return _plaso_error(
             tc_id, "export_timeline_slice", params, f"psort timed out after {_PSORT_TIMEOUT}s", t0
         )
 
     output = proc.stdout.strip()
     if proc.returncode != 0:
         stderr_preview = (proc.stderr or "")[:_PREVIEW_CHAR_LIMIT]
-        return _error_response(
+        return _plaso_error(
             tc_id,
             "export_timeline_slice",
             params,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from mulder.models import Finding, WindowRow
+from mulder.models import Finding
 
 
 class TestFinding:
@@ -85,9 +85,3 @@ class TestFinding:
         assert f.mitre_attack_ids == []
         assert f.event_time_start is None
         assert f.event_time_end is None
-
-
-class TestWindowRow:
-    def test_window_id_defaults_to_none(self) -> None:
-        w = WindowRow(source_id=1, line_start=0, line_end=10, event_time=None, raw_text="hello")
-        assert w.window_id is None

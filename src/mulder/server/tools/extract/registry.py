@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import shutil
 import subprocess
 import tempfile
 import time
@@ -14,8 +13,10 @@ from mulder.server.app import mcp
 from mulder.server.extract_helpers import extract_and_index, mount_disk_image
 from mulder.server.helpers import (
     _HINT_CHAR_LIMIT,
+    TOOL_TIMEOUT,
     error_response,
     make_tool_call_id,
+    require_binary,
     tool_response,
 )
 from mulder.server.tools.extract.misc import _DOTNET, _find_ez_tool
@@ -27,14 +28,7 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-_TOOL_TIMEOUT = 600
-
 _HIVE_NAMES = {"system", "software", "sam", "security", "default"}
-
-
-def _require_binary(name: str) -> str | None:
-    """Return the binary path if found, else None."""
-    return shutil.which(name)
 
 
 def _discover_hives_from_mount(mount_path: Path) -> list[tuple[Path, str]]:
@@ -78,7 +72,7 @@ def _discover_hives_from_mount(mount_path: Path) -> list[tuple[Path, str]]:
 def _discover_hives_via_tsk(image_path: str, offset: int | None = None) -> list[tuple[Path, str]]:
     """Extract registry hives from a disk image using The Sleuth Kit.
 
-    Falls back to TSK file extraction when mount-based discovery is not
+    Falls back to TSK file extraction when mount discovery is not
     possible. Extracts standard hive files and maps them to canonical names.
 
     Args:
@@ -132,7 +126,7 @@ def _parse_single_hive(
     hive_status: str | None = None
 
     dll = _find_ez_tool("RECmd.dll")
-    if dll and _require_binary(_DOTNET):
+    if dll and require_binary(_DOTNET):
         with tempfile.TemporaryDirectory(prefix="mulder_reg_") as tmpdir:
             cmd = [_DOTNET, dll, "-f", str(hive_path), "--csv", tmpdir]
             try:
@@ -140,7 +134,7 @@ def _parse_single_hive(
                     cmd,
                     capture_output=True,
                     text=True,
-                    timeout=_TOOL_TIMEOUT,
+                    timeout=TOOL_TIMEOUT,
                     check=False,
                 )
             except subprocess.TimeoutExpired:
@@ -156,14 +150,14 @@ def _parse_single_hive(
                     f"recmd_empty_output ({stderr_hint})" if stderr_hint else "recmd_empty_output"
                 )
 
-    rip = _require_binary("rip.pl") or _require_binary("regripper")
+    rip = require_binary("rip.pl") or require_binary("regripper")
     if rip:
         try:
             proc = subprocess.run(
                 [rip, "-r", str(hive_path), "-a"],
                 capture_output=True,
                 text=True,
-                timeout=_TOOL_TIMEOUT,
+                timeout=TOOL_TIMEOUT,
                 check=False,
             )
             if proc.stdout.strip():
@@ -179,7 +173,7 @@ def _parse_single_hive(
         except OSError as exc:
             hive_status = f"regripper_error ({exc})"
     elif hive_status is None:
-        has_recmd = bool(dll and _require_binary(_DOTNET))
+        has_recmd = bool(dll and require_binary(_DOTNET))
         hive_status = (
             "no_parser_installed (neither RECmd nor RegRipper found on PATH)"
             if not has_recmd

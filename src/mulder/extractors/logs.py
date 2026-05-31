@@ -1,7 +1,7 @@
 """Already-text log file and log directory extractor.
 
 Ingests ``.log``, ``.txt`` files and directories classified as
-``log_directory``.  No external tools are needed -- this is a pure-Python
+``log_directory``.  No external tools are needed; this is a pure-Python
 reader with binary-file detection and a per-file size cap.
 """
 

@@ -1,4 +1,4 @@
-"""Hayabusa MCP tools for Sigma-rule-based EVTX detection.
+"""Hayabusa MCP tools for Sigma-rule EVTX detection.
 
 Runs Hayabusa against extracted EVTX files and indexes the resulting
 detection alerts into the case database.  All tools are read-only

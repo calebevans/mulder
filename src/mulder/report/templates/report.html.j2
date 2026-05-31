@@ -266,6 +266,8 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
 .report-narrative strong { color: var(--text); }
 .report-narrative em { color: var(--accent); font-style: italic; }
 .report-narrative code { background: var(--code-bg); padding: 0.15em 0.4em; border-radius: 4px; font-size: 0.85em; font-family: var(--mono); }
+.report-narrative .mermaid { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.5rem; margin: 1.5rem 0; overflow-x: auto; }
+.report-narrative .mermaid svg { max-width: 100%; height: auto; }
 .report-narrative blockquote { border-left: 3px solid var(--accent); padding: 0.5rem 1rem; margin: 0 0 1rem 0; background: var(--accent-dim); border-radius: 0 var(--radius) var(--radius) 0; }
 
 /* ===================== DASHBOARD ===================== */
@@ -439,37 +441,32 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
 .ioc-lookup:hover { opacity: 1; }
 
 /* ===================== ATT&CK PAGE ===================== */
-.tactic-strip { display: flex; align-items: center; gap: 0; overflow-x: auto; padding: 0.75rem 0; margin-bottom: 1.5rem; scrollbar-width: thin; }
-.tactic-strip::-webkit-scrollbar { height: 4px; }
-.tactic-strip::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-.tactic-cell { flex-shrink: 0; padding: 0.45rem 0.7rem; border-radius: 6px; font-size: 0.68rem; font-weight: 600; white-space: nowrap; border: 1px solid var(--border); color: var(--text-dim); background: var(--surface); transition: all 0.2s; position: relative; letter-spacing: 0.01em; }
-.tactic-cell.active { background: var(--info-dim); color: var(--info); border-color: var(--info-border); cursor: pointer; }
-.tactic-cell.active:hover { border-color: var(--info); box-shadow: 0 0 12px var(--info-dim); transform: translateY(-1px); }
-.tactic-cell .tactic-badge { display: inline-block; background: var(--info); color: #fff; font-size: 0.58rem; font-weight: 700; border-radius: 9px; padding: 0.05em 0.45em; margin-left: 0.4em; vertical-align: middle; line-height: 1.4; }
-.tactic-chevron { flex-shrink: 0; width: 18px; text-align: center; color: var(--text-dim); font-size: 0.6rem; opacity: 0.5; }
-.tactic-chevron.active-link { opacity: 1; color: var(--info); }
+.tactic-grid { display: flex; flex-wrap: wrap; gap: 0.5rem; padding: 0.5rem 0; margin-bottom: 1.5rem; }
+.tactic-pill { padding: 0.4rem 0.75rem; border-radius: 20px; font-size: 0.72rem; font-weight: 600; border: 1px solid var(--border); color: var(--text-dim); background: var(--surface); transition: all 0.2s; }
+.tactic-pill.active { background: var(--info-dim); color: var(--info); border-color: var(--info-border); cursor: pointer; }
+.tactic-pill.active:hover { border-color: var(--info); box-shadow: 0 0 8px var(--info-dim); }
+.tactic-pill .tactic-badge { display: inline-block; background: var(--info); color: #fff; font-size: 0.58rem; font-weight: 700; border-radius: 9px; padding: 0.05em 0.45em; margin-left: 0.35em; vertical-align: middle; line-height: 1.4; }
 
-.tactic-columns { display: flex; gap: 1rem; overflow-x: auto; padding-bottom: 0.5rem; align-items: flex-start; }
-.tactic-col { flex: 1 1 200px; min-width: 180px; max-width: 320px; }
-.tactic-col-header { padding: 0.65rem 0.85rem; background: var(--info-dim); border: 1px solid var(--info-border); border-radius: var(--radius) var(--radius) 0 0; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
-.tactic-col-name { font-size: 0.78rem; font-weight: 700; color: var(--info); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tactic-col-meta { font-size: 0.62rem; color: var(--text-muted); white-space: nowrap; font-family: var(--mono); }
-.tactic-col-body { border: 1px solid var(--border); border-top: none; border-radius: 0 0 var(--radius) var(--radius); padding: 0.5rem; display: flex; flex-direction: column; gap: 0.4rem; background: var(--surface); }
-
-.attack-grid { display: flex; flex-wrap: wrap; gap: 0.5rem; }
-.attack-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem 0.75rem; cursor: pointer; transition: all var(--transition); position: relative; overflow: hidden; width: 100%; }
-.attack-card::before { content: ''; position: absolute; top: 0; left: 0; bottom: 0; width: 3px; background: var(--info); opacity: 0; transition: opacity 0.2s; }
-.attack-card:hover { border-color: var(--info); box-shadow: var(--shadow); }
-.attack-card:hover::before { opacity: 1; }
-.attack-card.open { border-color: var(--info); }
-.attack-card.open::before { opacity: 1; }
-.attack-card-id { font-family: var(--mono); font-size: 0.78rem; font-weight: 700; color: var(--info); }
-.attack-card-name { font-size: 0.68rem; color: var(--text-muted); margin-top: 0.15rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.attack-card-count { font-size: 0.62rem; color: var(--text-dim); margin-top: 0.15rem; }
-.attack-card-findings { display: none; margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px solid var(--border); }
-.attack-card.open .attack-card-findings { display: block; }
-.attack-card-finding { font-size: 0.72rem; padding: 0.2rem 0; color: var(--text-muted); cursor: pointer; transition: color 0.15s; }
-.attack-card-finding:hover { color: var(--accent); }
+.tactic-accordion { display: flex; flex-direction: column; gap: 0.75rem; }
+.tactic-section { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.tactic-section-header { padding: 0.75rem 1rem; background: var(--surface); display: flex; align-items: center; justify-content: space-between; cursor: pointer; transition: background 0.2s; }
+.tactic-section-header:hover { background: var(--info-dim); }
+.tactic-section-header.open { background: var(--info-dim); border-bottom: 1px solid var(--info-border); }
+.tactic-section-name { font-size: 0.88rem; font-weight: 700; color: var(--info); }
+.tactic-section-meta { font-size: 0.72rem; color: var(--text-muted); font-family: var(--mono); }
+.tactic-section-body { display: none; padding: 0.75rem 1rem; }
+.tactic-section.open .tactic-section-body { display: block; }
+.tactic-section-body .technique-row { display: flex; align-items: flex-start; gap: 0.75rem; padding: 0.5rem 0; border-bottom: 1px solid var(--border); }
+.tactic-section-body .technique-row:last-child { border-bottom: none; }
+.technique-id { font-family: var(--mono); font-size: 0.78rem; font-weight: 700; color: var(--info); min-width: 80px; flex-shrink: 0; }
+.technique-id a { color: inherit; text-decoration: none; }
+.technique-id a:hover { text-decoration: underline; }
+.technique-info { flex: 1; min-width: 0; }
+.technique-name { font-size: 0.82rem; font-weight: 600; color: var(--text); }
+.technique-findings { margin-top: 0.3rem; display: flex; flex-direction: column; gap: 0.15rem; }
+.technique-finding-link { font-size: 0.72rem; color: var(--text-muted); cursor: pointer; transition: color 0.15s; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.technique-finding-link:hover { color: var(--accent); }
+.technique-count { font-size: 0.68rem; color: var(--text-dim); flex-shrink: 0; font-family: var(--mono); }
 
 .tactic-ministrip { display: flex; gap: 2px; flex-wrap: wrap; padding: 0.4rem 0; }
 .tactic-minicell { width: 18px; height: 18px; border-radius: 3px; border: 1px solid var(--border); background: var(--surface); position: relative; }
@@ -569,19 +566,19 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
       <span class="nav-icon">&#8614;</span> Timeline
       <span class="nav-badge">{{ timeline_findings | length }}</span>
     </a>
-    <div class="nav-section-label">Analysis</div>
+    <div class="nav-section-label">Appendices</div>
     <a class="nav-item" onclick="navigate('findings')" data-page="findings">
       <span class="nav-icon">&#9888;</span> Findings
       <span class="nav-badge">{{ finding_count }}</span>
+    </a>
+    <a class="nav-item" onclick="navigate('iocs')" data-page="iocs">
+      <span class="nav-icon">&#9733;</span> IOCs
+      <span class="nav-badge">{{ network_iocs | length + file_iocs | length + email_iocs | length }}</span>
     </a>
     {% if mitre_techniques %}<a class="nav-item" onclick="navigate('attack')" data-page="attack">
       <span class="nav-icon">&#9876;</span> ATT&amp;CK
       <span class="nav-badge">{{ mitre_techniques | length }}</span>
     </a>{% endif %}
-    <a class="nav-item" onclick="navigate('iocs')" data-page="iocs">
-      <span class="nav-icon">&#9733;</span> IOCs
-      <span class="nav-badge">{{ network_iocs | length + file_iocs | length + email_iocs | length }}</span>
-    </a>
     {% if evidence_integrity %}<a class="nav-item" onclick="navigate('integrity')" data-page="integrity">
       <span class="nav-icon">&#9745;</span> Hashes
     </a>{% endif %}
@@ -653,6 +650,15 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
         {% if low_count %}<span class="leg-low">Low ({{ low_count }})</span>{% endif %}
         {% if info_count %}<span class="leg-info">Info ({{ info_count }})</span>{% endif %}
       </div>
+    </div>
+  </div>
+
+  <div class="card mb-1 mt-2">
+    <div class="card-header">&#9745; Forensic Soundness and Evidence Integrity</div>
+    <div class="card-body" style="font-size:0.88rem;line-height:1.7;color:var(--text-muted);">
+      Analysis was executed via a read-only Model Context Protocol (MCP) server mapped to the SANS SIFT toolchain. The MCP architecture enforces structural evidence protection: original evidence files were mounted as read-only volumes, all tool interactions are typed functions (no shell access), and every finding is validated against the append-only audit log before acceptance.
+      {% if evidence_integrity %}{{ evidence_integrity | length }} evidence files were cryptographically validated via SHA-256 hashes computed at ingestion.{% endif %}
+      {{ total_tool_calls }} tool calls executed across {{ sources | length }} indexed sources with full provenance tracking.
     </div>
   </div>
 
@@ -900,9 +906,10 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
       <p style="opacity:0.7;margin-bottom:1em;">These hypotheses were explicitly tested and no supporting evidence was found.</p>
       <ul style="list-style:none;padding:0;">
         {% for nf in negative_findings %}
-        <li style="padding:0.5em 0;border-bottom:1px solid var(--border);">
+        <li style="padding:0.5em 0;border-bottom:1px solid var(--border);cursor:pointer;" onclick="var d=this.querySelector('.neg-full');if(d){d.style.display=d.style.display==='none'?'block':'none'}">
           <strong>{{ nf.title | replace("[NEGATIVE] ", "") }}</strong>
-          <div style="opacity:0.8;font-size:0.9em;margin-top:0.25em;">{{ nf.description | truncate(300) }}</div>
+          <div style="opacity:0.6;font-size:0.75em;margin-top:0.15em;">Click to expand</div>
+          <div class="neg-full" style="display:none;opacity:0.85;font-size:0.88em;margin-top:0.5em;line-height:1.6;">{{ nf.description_html if nf.description_html is defined else nf.description }}</div>
         </li>
         {% endfor %}
       </ul>
@@ -924,27 +931,29 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
     <div class="stat"><div class="stat-value" data-count="{{ finding_count }}">0</div><div class="stat-label">Findings Mapped</div></div>
   </div>
   {% if mitre_all_tactics %}
-  <div class="tactic-strip">
-    {% for tac in mitre_all_tactics %}{% if not loop.first %}<div class="tactic-chevron{% if mitre_all_tactics[loop.index0 - 1].active and tac.active %} active-link{% endif %}">&#9654;</div>{% endif %}<div class="tactic-cell{% if tac.active %} active{% endif %}"{% if tac.active %} onclick="scrollToTactic('tactic-col-{{ tac.id }}')"{% endif %}>{{ tac.name }}{% if tac.active %}<span class="tactic-badge">{{ tac.technique_count }}</span>{% endif %}</div>{% endfor %}
+  <div class="tactic-grid">
+    {% for tac in mitre_all_tactics %}<div class="tactic-pill{% if tac.active %} active{% endif %}"{% if tac.active %} onclick="toggleTacticSection('tactic-section-{{ tac.id }}')"{% endif %}>{{ tac.name }}{% if tac.active %}<span class="tactic-badge">{{ tac.technique_count }}</span>{% endif %}</div>{% endfor %}
   </div>
-  <div class="tactic-columns">
+  <div class="tactic-accordion">
     {% for grp in mitre_tactic_groups %}
-    <div class="tactic-col" id="tactic-col-{{ grp.id }}">
-      <div class="tactic-col-header">
-        <div class="tactic-col-name">{{ grp.name }}</div>
-        <div class="tactic-col-meta">{{ grp.technique_count }}T / {{ grp.finding_count }}F</div>
+    <div class="tactic-section" id="tactic-section-{{ grp.id }}">
+      <div class="tactic-section-header" onclick="this.classList.toggle('open');this.parentElement.classList.toggle('open')">
+        <div class="tactic-section-name">{{ grp.name }}</div>
+        <div class="tactic-section-meta">{{ grp.technique_count }} techniques / {{ grp.finding_count }} findings</div>
       </div>
-      <div class="tactic-col-body">
+      <div class="tactic-section-body">
         {% for t in grp.techniques %}
-        <div class="attack-card" onclick="this.classList.toggle('open')">
-          <div class="attack-card-id"><a href="{{ t.url }}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;" onclick="event.stopPropagation()">{{ t.id }}</a></div>
-          {% if t.name %}<div class="attack-card-name">{{ t.name }}</div>{% endif %}
-          <div class="attack-card-count">{{ t.finding_count }} finding{{ 's' if t.finding_count != 1 }}</div>
-          <div class="attack-card-findings">
-            {% for af in t.findings %}
-            <div class="attack-card-finding" onclick="event.stopPropagation();navigateToFinding('{{ af.finding_id }}')">{{ af.title | truncate(60) }}</div>
-            {% endfor %}
+        <div class="technique-row">
+          <div class="technique-id"><a href="{{ t.url }}" target="_blank" rel="noopener">{{ t.id }}</a></div>
+          <div class="technique-info">
+            {% if t.name %}<div class="technique-name">{{ t.name }}</div>{% endif %}
+            <div class="technique-findings">
+              {% for af in t.findings %}
+              <div class="technique-finding-link" onclick="navigateToFinding('{{ af.finding_id }}')">{{ af.title | truncate(80) }}</div>
+              {% endfor %}
+            </div>
           </div>
+          <div class="technique-count">{{ t.finding_count }}F</div>
         </div>
         {% endfor %}
       </div>
@@ -952,19 +961,29 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
     {% endfor %}
   </div>
   {% else %}
-  <div class="attack-grid">
-    {% for t in mitre_techniques %}
-    <div class="attack-card" onclick="this.classList.toggle('open')">
-      <div class="attack-card-id"><a href="{{ t.url }}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;" onclick="event.stopPropagation()">{{ t.id }}</a></div>
-      {% if t.name %}<div class="attack-card-name">{{ t.name }}</div>{% endif %}
-      <div class="attack-card-count">{{ t.finding_count }} finding{{ 's' if t.finding_count != 1 }}</div>
-      <div class="attack-card-findings">
-        {% for af in t.findings %}
-        <div class="attack-card-finding" onclick="event.stopPropagation();navigateToFinding('{{ af.finding_id }}')">{{ af.title | truncate(60) }}</div>
+  <div class="tactic-accordion">
+    <div class="tactic-section open">
+      <div class="tactic-section-header open">
+        <div class="tactic-section-name">All Techniques</div>
+        <div class="tactic-section-meta">{{ mitre_techniques | length }} techniques</div>
+      </div>
+      <div class="tactic-section-body">
+        {% for t in mitre_techniques %}
+        <div class="technique-row">
+          <div class="technique-id"><a href="{{ t.url }}" target="_blank" rel="noopener">{{ t.id }}</a></div>
+          <div class="technique-info">
+            {% if t.name %}<div class="technique-name">{{ t.name }}</div>{% endif %}
+            <div class="technique-findings">
+              {% for af in t.findings %}
+              <div class="technique-finding-link" onclick="navigateToFinding('{{ af.finding_id }}')">{{ af.title | truncate(80) }}</div>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="technique-count">{{ t.finding_count }}F</div>
+        </div>
         {% endfor %}
       </div>
     </div>
-    {% endfor %}
   </div>
   {% endif %}
 </div>
@@ -1129,7 +1148,9 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
     <div class="stat"><div class="stat-value" data-count="{{ total_tool_calls }}">0</div><div class="stat-label">Tool Calls</div></div>
     <div class="stat"><div class="stat-value" data-count="{{ tool_call_counts | length }}">0</div><div class="stat-label">Unique Tools</div></div>
     <div class="stat"><div class="stat-value">{{ "%.1f" | format(total_duration_ms / 1000) if total_duration_ms else '0' }}s</div><div class="stat-label">Processing Time</div></div>
-    <div class="stat"><div class="stat-value">~{{ "%.0f" | format((estimated_input_tokens + estimated_output_tokens) / 1000) }}k</div><div class="stat-label">Est. Tokens</div></div>
+    {% if model_token_breakdown %}{% set _total_tok = model_token_breakdown | sum(attribute='input') + model_token_breakdown | sum(attribute='output') %}<div class="stat"><div class="stat-value">{{ "{:,.0f}".format(_total_tok) }}</div><div class="stat-label">Tokens</div></div>
+    {% if total_duration_ms > 0 %}<div class="stat"><div class="stat-value">{{ "{:,.0f}".format(_total_tok / (total_duration_ms / 60000)) }}</div><div class="stat-label">Tokens/min</div></div>{% endif %}
+    {% else %}<div class="stat"><div class="stat-value">~{{ "%.0f" | format((estimated_input_tokens + estimated_output_tokens) / 1000) }}k</div><div class="stat-label">Est. Tokens</div></div>{% endif %}
   </div>
   <div class="perf-grid">
     <div class="card">
@@ -1141,18 +1162,64 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
       <div class="card-body">
         <table class="data-table" style="font-size:0.8rem;">
           <tbody>
+            {% if model_token_breakdown %}
+            {% set real_in = model_token_breakdown | sum(attribute='input') %}
+            {% set real_out = model_token_breakdown | sum(attribute='output') %}
+            <tr><td style="color:var(--text-muted)">Input Tokens</td><td class="mono" style="text-align:right;">{{ "{:,}".format(real_in) }}</td></tr>
+            <tr><td style="color:var(--text-muted)">Output Tokens</td><td class="mono" style="text-align:right;">{{ "{:,}".format(real_out) }}</td></tr>
+            <tr><td style="color:var(--text-muted)">Total Tokens</td><td class="mono" style="text-align:right;font-weight:700;">{{ "{:,}".format(real_in + real_out) }}</td></tr>
+            <tr><td colspan="2" style="border-top:1px solid var(--border);padding-top:0.5rem;font-weight:600;">Per-Model Breakdown</td></tr>
+            {% for entry in model_token_breakdown %}
+            <tr><td style="color:var(--text-muted);padding-left:1rem;">{{ entry.model }}</td><td class="mono" style="text-align:right;">{{ "{:,}".format(entry.input + entry.output) }}</td></tr>
+            {% endfor %}
+            {% else %}
             <tr><td style="color:var(--text-muted)">Input Tokens (est.)</td><td class="mono" style="text-align:right;">{{ "{:,}".format(estimated_input_tokens) }}</td></tr>
             <tr><td style="color:var(--text-muted)">Output Tokens (est.)</td><td class="mono" style="text-align:right;">{{ "{:,}".format(estimated_output_tokens) }}</td></tr>
             <tr><td style="color:var(--text-muted)">Total Tokens (est.)</td><td class="mono" style="text-align:right;font-weight:700;">{{ "{:,}".format(estimated_input_tokens + estimated_output_tokens) }}</td></tr>
+            {% endif %}
           </tbody>
         </table>
       </div>
     </div>
   </div>
+  {% if model_token_breakdown and model_token_breakdown | length > 1 %}
   <div class="card mb-2">
-    <div class="card-header">Activity Sparkline</div>
-    <div class="card-body"><div class="sparkline-container" id="sparklineContainer"></div></div>
+    <div class="card-header">Model Usage Comparison</div>
+    <div class="card-body">
+      {% set max_model_tok = [] %}
+      {% for entry in model_token_breakdown %}{% if (entry.input + entry.output) > (max_model_tok | last | default(0)) %}{% if max_model_tok.append(entry.input + entry.output) %}{% endif %}{% endif %}{% endfor %}
+      {% set max_tok = max_model_tok | last | default(1) %}
+      <table class="data-table" style="font-size:0.8rem;width:100%;">
+        <thead><tr><th>Model</th><th style="text-align:right;">Input</th><th style="text-align:right;">Output</th><th style="text-align:right;">Total</th><th style="width:40%;">Share</th></tr></thead>
+        <tbody>
+        {% for entry in model_token_breakdown %}
+        {% set mtotal = entry.input + entry.output %}
+        {% set pct = (mtotal * 100 / (_total_tok if _total_tok is defined and _total_tok > 0 else 1)) | int %}
+        <tr>
+          <td><strong>{{ entry.model }}</strong></td>
+          <td class="mono" style="text-align:right;">{{ "{:,}".format(entry.input) }}</td>
+          <td class="mono" style="text-align:right;">{{ "{:,}".format(entry.output) }}</td>
+          <td class="mono" style="text-align:right;font-weight:700;">{{ "{:,}".format(mtotal) }}</td>
+          <td><div style="background:var(--surface);border-radius:4px;overflow:hidden;height:18px;"><div style="background:var(--info);height:100%;width:{{ pct }}%;border-radius:4px;transition:width 0.5s;"></div></div><div style="font-size:0.65rem;color:var(--text-dim);text-align:center;margin-top:2px;">{{ pct }}%</div></td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
   </div>
+  {% endif %}
+  {% if model_token_breakdown and total_duration_ms > 0 %}
+  <div class="card mb-2">
+    <div class="card-header">Token Throughput Over Time</div>
+    <div class="card-body">
+      <div style="font-size:0.75rem;color:var(--text-dim);margin-bottom:0.75rem;">Estimated token consumption by model over time. Each bar represents a 5-minute window.</div>
+      <div style="position:relative;">
+        <canvas id="throughputChart" style="width:100%;height:220px;"></canvas>
+        <div id="throughputTooltip" style="display:none;position:absolute;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:0.5rem 0.75rem;font-size:0.72rem;line-height:1.5;pointer-events:none;z-index:10;box-shadow:var(--shadow);color:var(--text-muted);min-width:120px;"></div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
   
 </div>
 
@@ -1312,6 +1379,14 @@ function navigate(page, skipHash) {
 function scrollToTactic(elementId) {
   var el = document.getElementById(elementId);
   if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+}
+function toggleTacticSection(sectionId) {
+  var section = document.getElementById(sectionId);
+  if (!section) return;
+  var header = section.querySelector('.tactic-section-header');
+  section.classList.toggle('open');
+  if (header) header.classList.toggle('open');
+  section.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function navigateToFinding(findingId) {
@@ -1640,6 +1715,145 @@ function renderSparkline() {
   sparkRendered=true;
 }
 
+/* ========== THROUGHPUT CHART ========== */
+var throughputRendered = false;
+function renderThroughputChart() {
+  if (throughputRendered || !AUDIT_DATA.length) return;
+  var canvas = document.getElementById('throughputChart');
+  var tooltip = document.getElementById('throughputTooltip');
+  if (!canvas) return;
+  var timestamps = AUDIT_DATA.filter(function(e){return e.timestamp;}).map(function(e){return new Date(e.timestamp).getTime();});
+  if (timestamps.length < 2) return;
+  timestamps.sort(function(a,b){return a-b;});
+  var minT=timestamps[0], maxT=timestamps[timestamps.length-1], span=maxT-minT||60000;
+  var bucketMs=300000;
+  var numBuckets=Math.max(1,Math.ceil(span/bucketMs));
+  if(numBuckets>200){bucketMs=span/100;numBuckets=100;}
+  var counts=new Array(numBuckets).fill(0);
+  timestamps.forEach(function(t){var idx=Math.min(Math.floor((t-minT)/bucketMs),numBuckets-1);counts[idx]++;});
+
+  /* Per-model token data */
+  var models=[
+    {% for entry in model_token_breakdown %}
+    {name:'{{ entry.model }}',total:{{ entry.input + entry.output }}},
+    {% endfor %}
+  ];
+  var totalTok=0;
+  models.forEach(function(m){totalTok+=m.total;});
+  var modelColors=['#4a9eff','#f59e0b','#10b981','#ef4444','#8b5cf6'];
+  var tokPerCall=timestamps.length>0?totalTok/timestamps.length:0;
+
+  /* Build stacked data: each bucket gets proportional model splits */
+  var modelFractions=models.map(function(m){return totalTok>0?m.total/totalTok:0;});
+  var stackedBuckets=counts.map(function(c){
+    var total=Math.round(c*tokPerCall);
+    return models.map(function(m,mi){return Math.round(total*modelFractions[mi]);});
+  });
+  var maxTok=Math.max.apply(null,counts.map(function(c){return Math.round(c*tokPerCall);}))||1;
+
+  var dpr=window.devicePixelRatio||1;
+  var rect=canvas.getBoundingClientRect();
+  canvas.width=rect.width*dpr;
+  canvas.height=220*dpr;
+  var ctx=canvas.getContext('2d');
+  ctx.scale(dpr,dpr);
+  var W=rect.width,H=220,padL=55,padR=10,padT=10,padB=45;
+  var chartW=W-padL-padR,chartH=H-padT-padB;
+  var barW=Math.max(2,chartW/numBuckets-1);
+  var cs=getComputedStyle(document.documentElement);
+  var dimColor=cs.getPropertyValue('--text-dim').trim()||'#666';
+  var borderColor=cs.getPropertyValue('--border').trim()||'#333';
+
+  /* Y axis */
+  ctx.fillStyle=dimColor;ctx.font='10px monospace';ctx.textAlign='right';
+  for(var i=0;i<=4;i++){
+    var yVal=Math.round(maxTok*i/4);
+    var y=padT+chartH-chartH*(i/4);
+    var label=yVal>=1000000?(yVal/1000000).toFixed(1)+'M':yVal>=1000?(yVal/1000).toFixed(0)+'K':yVal;
+    ctx.fillText(label,padL-6,y+3);
+    ctx.strokeStyle=borderColor;ctx.lineWidth=0.5;
+    ctx.beginPath();ctx.moveTo(padL,y);ctx.lineTo(W-padR,y);ctx.stroke();
+  }
+
+  /* Stacked bars */
+  var barRects=[];
+  stackedBuckets.forEach(function(stack,i){
+    var x=padL+i*(chartW/numBuckets);
+    var totalInBucket=0;stack.forEach(function(v){totalInBucket+=v;});
+    var yOffset=0;
+    var rects=[];
+    stack.forEach(function(val,mi){
+      var barH=(val/maxTok)*chartH;
+      ctx.fillStyle=modelColors[mi%modelColors.length];
+      ctx.globalAlpha=0.8;
+      ctx.fillRect(x,padT+chartH-yOffset-barH,barW,barH);
+      rects.push({x:x,y:padT+chartH-yOffset-barH,w:barW,h:barH,model:models[mi].name,tokens:val});
+      yOffset+=barH;
+    });
+    ctx.globalAlpha=1;
+    barRects.push({x:x,w:barW,total:totalInBucket,time:new Date(minT+i*bucketMs),segments:rects});
+  });
+
+  /* X axis labels */
+  ctx.fillStyle=dimColor;ctx.font='10px monospace';ctx.textAlign='center';
+  var labelCount=Math.min(8,numBuckets);
+  for(var i=0;i<labelCount;i++){
+    var idx=Math.round(i*(numBuckets-1)/(labelCount-1));
+    var t=new Date(minT+idx*bucketMs);
+    var lbl=t.toISOString().substring(11,16);
+    var x=padL+idx*(chartW/numBuckets)+barW/2;
+    ctx.fillText(lbl,x,H-padB+15);
+  }
+
+  /* Legend */
+  var legendY=H-12;
+  var legendX=padL;
+  ctx.font='10px sans-serif';ctx.textAlign='left';
+  models.forEach(function(m,mi){
+    ctx.fillStyle=modelColors[mi%modelColors.length];
+    ctx.fillRect(legendX,legendY-8,10,10);
+    ctx.fillStyle=dimColor;
+    var shortName=m.name.replace('claude-','');
+    ctx.fillText(shortName,legendX+14,legendY);
+    legendX+=ctx.measureText(shortName).width+28;
+  });
+
+  /* Tooltip on hover */
+  canvas.addEventListener('mousemove',function(e){
+    var cr=canvas.getBoundingClientRect();
+    var mx=e.clientX-cr.left,my=e.clientY-cr.top;
+    var hit=null;
+    for(var i=0;i<barRects.length;i++){
+      var br=barRects[i];
+      if(mx>=br.x&&mx<=br.x+br.w){hit=br;break;}
+    }
+    if(hit&&tooltip){
+      var lines='<strong>'+hit.time.toISOString().substring(11,16)+'</strong><br>';
+      hit.segments.forEach(function(s,si){
+        if(s.tokens>0){
+          var tok=s.tokens>=1000?(s.tokens/1000).toFixed(1)+'K':s.tokens;
+          lines+='<span style="color:'+modelColors[si%modelColors.length]+'">'+s.model.replace('claude-','')+'</span>: '+tok+'<br>';
+        }
+      });
+      var totalLabel=hit.total>=1000?(hit.total/1000).toFixed(1)+'K':hit.total;
+      lines+='Total: '+totalLabel;
+      tooltip.innerHTML=lines;
+      tooltip.style.display='block';
+      tooltip.style.left=Math.min(e.clientX-cr.left+10,W-140)+'px';
+      tooltip.style.top=(e.clientY-cr.top-60)+'px';
+    } else if(tooltip){tooltip.style.display='none';}
+  });
+  canvas.addEventListener('mouseleave',function(){if(tooltip)tooltip.style.display='none';});
+
+  throughputRendered=true;
+}
+
+var perfObserver=new MutationObserver(function(){
+  var perfPage=document.getElementById('page-performance');
+  if(perfPage&&perfPage.classList.contains('active')){renderThroughputChart();}
+});
+perfObserver.observe(document.body,{subtree:true,attributes:true,attributeFilter:['class']});
+
 /* ========== BACK TO TOP ========== */
 window.addEventListener('scroll', function() {
   document.getElementById('backToTop').classList.toggle('visible', window.scrollY > 400);
@@ -1657,6 +1871,38 @@ document.addEventListener('keydown', function(e) {
     else if (e.key === 'Enter' && kbdFocusIdx >= 0) { e.preventDefault(); var c = getVisibleFindings()[kbdFocusIdx]; if(c) c.classList.toggle('open'); }
   }
 });
+
+/* ===================== MERMAID RENDERING ===================== */
+(function() {
+  var codeBlocks = document.querySelectorAll('pre code');
+  var hasMermaid = false;
+  codeBlocks.forEach(function(block) {
+    var text = block.textContent.trim();
+    var isMermaid = block.classList.contains('language-mermaid') ||
+      text.match(/^(graph |flowchart |sequenceDiagram|classDiagram|stateDiagram|gantt|pie |erDiagram|journey)/);
+    if (isMermaid) {
+      hasMermaid = true;
+      /* Decode HTML entities that the markdown renderer escaped */
+      var tmp = document.createElement('textarea');
+      tmp.innerHTML = text;
+      var decoded = tmp.value;
+      var container = document.createElement('div');
+      container.className = 'mermaid';
+      container.textContent = decoded;
+      var pre = block.parentElement;
+      pre.parentElement.replaceChild(container, pre);
+    }
+  });
+  if (hasMermaid) {
+    var s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js';
+    s.onload = function() {
+      mermaid.initialize({ startOnLoad: false, theme: 'dark', themeVariables: { primaryColor: '#2a6dd4', primaryTextColor: '#e0e0e0', lineColor: '#555', fontSize: '13px' }});
+      mermaid.run({ querySelector: '.mermaid' });
+    };
+    document.body.appendChild(s);
+  }
+})();
 </script>
 </body>
 </html>

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import math
-import shutil
 import subprocess
 import time
 from collections.abc import Callable
@@ -13,7 +12,7 @@ from typing import Any
 
 from mulder.server.app import mcp
 from mulder.server.extract_helpers import extract_and_index
-from mulder.server.helpers import error_response, make_tool_call_id, tool_response
+from mulder.server.helpers import error_response, make_tool_call_id, require_binary, tool_response
 
 __all__ = [
     "run_pcap_analysis",
@@ -35,11 +34,6 @@ _PCAP_MODES = {
     "custom",
     "all",
 }
-
-
-def _require_binary(name: str) -> str | None:
-    """Return the binary path if found, else None."""
-    return shutil.which(name)
 
 
 def _run_tshark(
@@ -66,7 +60,7 @@ def _pcap_summary(pcap_path: str, max_packets: int, ssl_keylog_path: str | None 
     """Capture statistics via capinfos + protocol hierarchy via tshark."""
     parts: list[str] = []
 
-    capinfos = _require_binary("capinfos")
+    capinfos = require_binary("capinfos")
     if capinfos:
         try:
             proc = subprocess.run(
@@ -580,7 +574,7 @@ def _validate_pcap_params(
             error_type="file_not_found",
         )
 
-    if not _require_binary("tshark"):
+    if not require_binary("tshark"):
         return error_response(
             tc_id,
             "run_pcap_analysis",

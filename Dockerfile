@@ -85,7 +85,7 @@ RUN mkdir -p /opt/zimmermantools && cd /opt/zimmermantools \
     done
 
 # Volatility 3 symbol tables (data-only; pin to build platform to avoid QEMU)
-FROM --platform=$BUILDPLATFORM ubuntu:22.04 AS symbols-fetch
+FROM ubuntu:22.04 AS symbols-fetch
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -99,7 +99,7 @@ RUN mkdir -p /opt/vol-symbols \
         -O /opt/vol-symbols/linux.zip
 
 # YARA rule libraries (data-only; pin to build platform to avoid QEMU)
-FROM --platform=$BUILDPLATFORM ubuntu:22.04 AS yara-fetch
+FROM ubuntu:22.04 AS yara-fetch
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -151,7 +151,7 @@ RUN ARCH="$(dpkg --print-architecture)" \
         -o /tmp/radare2.deb
 
 # MITRE ATT&CK Enterprise + ICS STIX data (data-only; pin to build platform to avoid QEMU)
-FROM --platform=$BUILDPLATFORM ubuntu:22.04 AS attack-fetch
+FROM ubuntu:22.04 AS attack-fetch
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -196,6 +196,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     DISABLE_AUTOUPDATE=1 \
     DOTNET_ROOT=/usr/local/share/dotnet \
     PATH="/usr/local/share/dotnet:${PATH}"
+
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
@@ -254,7 +255,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
-    && npm install -g @anthropic-ai/claude-code \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -297,11 +297,14 @@ RUN useradd -m -s /bin/bash mulder
 COPY . /app
 RUN uv pip install --system --no-cache -e /app
 
-RUN mkdir -p /mulder-investigation/.claude/commands /mulder-investigation/.claude/skills \
+# LiteLLM proxy in isolated venv (hard dependency conflicts with mulder's
+# mcp>=1.27 and rich>=15.0; litellm pins older versions of both).
+RUN python3 -m venv /opt/litellm \
+    && /opt/litellm/bin/pip install --no-cache-dir 'litellm[proxy]' pyyaml \
+    && ln -s /opt/litellm/bin/litellm /usr/local/bin/litellm
+
+RUN mkdir -p /mulder-investigation \
     && cp /app/.mcp.json /mulder-investigation/.mcp.json \
-    && cp /app/.claude/settings.json /mulder-investigation/.claude/settings.json \
-    && cp /app/.claude/skills/investigate.md /mulder-investigation/.claude/skills/investigate.md \
-    && cp /app/.claude/commands/investigate.md /mulder-investigation/.claude/commands/investigate.md \
     && cd /mulder-investigation && git init && git config user.email "mulder@local" && git config user.name "mulder" && git add -A && git commit -m "init"
 
 RUN chown -R mulder:mulder /home/mulder /mulder-investigation
@@ -316,4 +319,4 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 
 WORKDIR /mulder-investigation
 ENTRYPOINT ["entrypoint.sh"]
-CMD ["claude"]
+CMD ["mulder", "investigate"]

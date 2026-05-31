@@ -2,14 +2,38 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Generator
 from pathlib import Path
+from types import ModuleType
+from unittest.mock import MagicMock
 
 import pytest
 
 from mulder.audit import AuditLog
 from mulder.db import CaseDB
 from mulder.models import Finding
+
+
+def _install_sdk_stub() -> None:
+    """Install a claude_agent_sdk stub for orchestrator tests."""
+    if "claude_agent_sdk" in sys.modules:
+        return
+    sdk = ModuleType("claude_agent_sdk")
+    sdk.ClaudeAgentOptions = MagicMock  # type: ignore[attr-defined]
+    sdk.query = MagicMock  # type: ignore[attr-defined]
+
+    types_mod = ModuleType("claude_agent_sdk.types")
+    types_mod.AssistantMessage = MagicMock  # type: ignore[attr-defined]
+    types_mod.ResultMessage = MagicMock  # type: ignore[attr-defined]
+    types_mod.TextBlock = MagicMock  # type: ignore[attr-defined]
+    types_mod.ToolUseBlock = MagicMock  # type: ignore[attr-defined]
+
+    sys.modules["claude_agent_sdk"] = sdk
+    sys.modules["claude_agent_sdk.types"] = types_mod
+
+
+_install_sdk_stub()
 
 
 @pytest.fixture()

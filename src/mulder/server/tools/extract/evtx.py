@@ -15,7 +15,13 @@ from typing import cast
 
 from mulder.server.app import get_cfg, get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
-from mulder.server.helpers import error_response, make_tool_call_id, tool_response
+from mulder.server.helpers import (
+    TOOL_TIMEOUT,
+    error_response,
+    make_tool_call_id,
+    require_binary,
+    tool_response,
+)
 from mulder.server.tools.extract.misc import _DOTNET, _find_ez_tool
 from mulder.server.tools.extract.tsk import _parse_partition_offset, _tsk_extract_dirs
 
@@ -28,14 +34,7 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-_TOOL_TIMEOUT = 600
-
 _evtx_extract_dirs: dict[str, str] = {}
-
-
-def _require_binary(name: str) -> str | None:
-    """Return the binary path if found, else None."""
-    return shutil.which(name)
 
 
 def _extract_evtx_from_image(image_path: str, dest_dir: str) -> list[Path]:
@@ -206,7 +205,7 @@ def _parse_evtx_with_eztools(evtx_path: str, evtx_dir: str | None) -> dict[str, 
         subprocess.TimeoutExpired: If EvtxECmd exceeds the timeout.
     """
     dll = _find_ez_tool("EvtxECmd.dll")
-    if not (dll and _require_binary(_DOTNET)):
+    if not (dll and require_binary(_DOTNET)):
         return None
 
     with tempfile.TemporaryDirectory(prefix="mulder_evtx_csv_") as csv_dir:
@@ -215,7 +214,7 @@ def _parse_evtx_with_eztools(evtx_path: str, evtx_dir: str | None) -> dict[str, 
         else:
             cmd = [_DOTNET, dll, "-f", evtx_path, "--csv", csv_dir]
 
-        subprocess.run(cmd, capture_output=True, text=True, timeout=_TOOL_TIMEOUT * 4, check=False)
+        subprocess.run(cmd, capture_output=True, text=True, timeout=TOOL_TIMEOUT * 4, check=False)
 
         combined = ""
         for csv_file in sorted(Path(csv_dir).glob("*.csv")):
@@ -413,14 +412,14 @@ def index_evtx_file(
             )
 
     dll = _find_ez_tool("EvtxECmd.dll")
-    if dll and _require_binary(_DOTNET):
+    if dll and require_binary(_DOTNET):
         with tempfile.TemporaryDirectory(prefix="mulder_evtx_csv_") as csv_dir:
             cmd = [_DOTNET, dll, "-f", str(evtx_path), "--csv", csv_dir]
             if event_ids:
                 cmd.extend(["--inc", ",".join(str(eid) for eid in event_ids)])
             try:
                 subprocess.run(
-                    cmd, capture_output=True, text=True, timeout=_TOOL_TIMEOUT * 8, check=False
+                    cmd, capture_output=True, text=True, timeout=TOOL_TIMEOUT * 8, check=False
                 )
             except subprocess.TimeoutExpired:
                 return error_response(

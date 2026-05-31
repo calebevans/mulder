@@ -8,6 +8,8 @@ from pydantic import BaseModel, model_validator
 
 
 class WindowRow(BaseModel):
+    """A single windowed slice of evidence text from an indexed source."""
+
     window_id: int | None = None
     source_id: int
     line_start: int
@@ -17,6 +19,8 @@ class WindowRow(BaseModel):
 
 
 class SourceRow(BaseModel):
+    """Metadata for a registered evidence source in the case database."""
+
     source_id: int
     case_id: str
     source_name: str
@@ -28,6 +32,8 @@ class SourceRow(BaseModel):
 
 
 class CaseMetadataRow(BaseModel):
+    """Top-level metadata record for a forensic case."""
+
     case_id: str
     ingested_at: str
     evidence_root: str
@@ -36,6 +42,8 @@ class CaseMetadataRow(BaseModel):
 
 
 class Finding(BaseModel):
+    """An investigative finding backed by evidence references."""
+
     finding_id: str
     case_id: str
     title: str

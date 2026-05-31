@@ -178,7 +178,7 @@ def run_mvt_ios(
     Args:
         evidence_path: Path to iOS backup directory or filesystem dump.
         iocs: Path to STIX2 IOC file for indicator matching (optional).
-        mode: Analysis mode -- "backup" (default) or "fs" (filesystem dump).
+        mode: Analysis mode, either "backup" (default) or "fs" (filesystem dump).
     """
     ctx = get_ctx()
     tc_id = make_tool_call_id()

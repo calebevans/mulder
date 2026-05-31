@@ -21,17 +21,12 @@ from pathlib import Path
 
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
-from mulder.server.helpers import error_response, make_tool_call_id, tool_response
+from mulder.server.helpers import error_response, make_tool_call_id, require_binary, tool_response
 
 logger = logging.getLogger(__name__)
 
 _SQLITE_MAGIC = b"SQLite format 3\000"
 _MAX_DB_SIZE = 500_000_000
-
-
-def _require_binary(name: str) -> str | None:
-    """Return the binary path if found, else None."""
-    return shutil.which(name)
 
 
 def _carve_sqlite_databases(
@@ -702,7 +697,7 @@ def _try_sqlcipher(db_path: Path, passwords: list[str]) -> list[str] | None:
 
 def _extract_strings_from_file(file_path: Path, min_length: int = 8) -> list[str]:
     """Extract printable ASCII strings from a binary file."""
-    if _require_binary("strings"):
+    if require_binary("strings"):
         try:
             proc = subprocess.run(
                 ["strings", f"-n{min_length}", str(file_path)],

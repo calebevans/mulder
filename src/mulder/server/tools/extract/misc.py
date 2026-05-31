@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import contextlib
+import functools
 import logging
-import shutil
 import subprocess
 import tempfile
 import time
@@ -15,8 +15,11 @@ from mulder.server.app import mcp
 from mulder.server.extract_helpers import extract_and_index, mount_disk_image
 from mulder.server.helpers import (
     _PREVIEW_CHAR_LIMIT,
+    TOOL_TIMEOUT,
     error_response,
     make_tool_call_id,
+    require_binary,
+    run_cli_tool,
     tool_response,
 )
 from mulder.server.tools.extract.tsk import _tsk_extract_files
@@ -49,19 +52,13 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-_TOOL_TIMEOUT = 600
-
 _EZ_TOOLS_DIR = Path("/opt/zimmermantools")
 _DOTNET = "dotnet"
 
 
-def _require_binary(name: str) -> str | None:
-    """Return the binary path if found, else None."""
-    return shutil.which(name)
-
-
+@functools.lru_cache(maxsize=32)
 def _find_ez_tool(dll_name: str) -> str | None:
-    """Find an EZ tool DLL under /opt/zimmermantools."""
+    """Find an EZ tool DLL under /opt/zimmermantools (cached)."""
     candidates = list(_EZ_TOOLS_DIR.rglob(dll_name))
     return str(candidates[0]) if candidates else None
 
@@ -77,7 +74,7 @@ def _run_ez_tool(
     t0: float,
 ) -> dict[str, object]:
     """Run an EZ tool, parse CSV output, index it, and return response."""
-    if not _require_binary(_DOTNET):
+    if not require_binary(_DOTNET):
         return error_response(
             tc_id, tool_name, params, "dotnet not found on PATH", (time.monotonic() - t0) * 1000
         )
@@ -97,7 +94,7 @@ def _run_ez_tool(
 
         try:
             subprocess.run(
-                cmd, capture_output=True, text=True, timeout=_TOOL_TIMEOUT * 2, check=False
+                cmd, capture_output=True, text=True, timeout=TOOL_TIMEOUT * 2, check=False
             )
         except subprocess.TimeoutExpired:
             return error_response(
@@ -380,31 +377,15 @@ def run_strings(target_path: str, min_length: int = 8) -> dict[str, object]:
         target_path: Path to the file to scan.
         min_length: Minimum string length to extract (default 8).
     """
-    tc_id = make_tool_call_id()
-    t0 = time.monotonic()
-    params = {"target_path": target_path, "min_length": min_length}
-
-    if not _require_binary("strings"):
-        return error_response(
-            tc_id, "run_strings", params, "strings not found on PATH", error_type="binary_missing"
-        )
-
-    try:
-        proc = subprocess.run(
-            ["strings", f"-n{min_length}", target_path],
-            capture_output=True,
-            text=True,
-            timeout=_TOOL_TIMEOUT,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        return error_response(
-            tc_id, "run_strings", params, "strings timed out", error_type="timeout"
-        )
-
-    summary = extract_and_index(proc.stdout.strip(), "strings.output", target_path, "strings")
-    elapsed = (time.monotonic() - t0) * 1000
-    return tool_response(tc_id, "run_strings", params, summary, "strings.output", elapsed)
+    return run_cli_tool(
+        binary="strings",
+        cmd=["strings", f"-n{min_length}", target_path],
+        tool_name="run_strings",
+        params={"target_path": target_path, "min_length": min_length},
+        source_name="strings.output",
+        source_path=target_path,
+        extractor_label="strings",
+    )
 
 
 @mcp.tool()
@@ -421,7 +402,7 @@ def run_clamav(target_path: str) -> dict[str, object]:
     t0 = time.monotonic()
     params = {"target_path": target_path}
 
-    if not _require_binary("clamscan"):
+    if not require_binary("clamscan"):
         return error_response(tc_id, "run_clamav", params, "clamscan not found on PATH")
 
     try:
@@ -429,7 +410,7 @@ def run_clamav(target_path: str) -> dict[str, object]:
             ["clamscan", "-r", "--no-summary", target_path],
             capture_output=True,
             text=True,
-            timeout=_TOOL_TIMEOUT * 5,
+            timeout=TOOL_TIMEOUT * 5,
             check=False,
         )
     except subprocess.TimeoutExpired:
@@ -455,27 +436,16 @@ def run_hashdeep(target_path: str) -> dict[str, object]:
     Args:
         target_path: Path to the file or directory to hash.
     """
-    tc_id = make_tool_call_id()
-    t0 = time.monotonic()
-    params = {"target_path": target_path}
-
-    if not _require_binary("hashdeep"):
-        return error_response(tc_id, "run_hashdeep", params, "hashdeep not found on PATH")
-
-    try:
-        proc = subprocess.run(
-            ["hashdeep", "-r", "-l", target_path],
-            capture_output=True,
-            text=True,
-            timeout=_TOOL_TIMEOUT * 3,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        return error_response(tc_id, "run_hashdeep", params, "hashdeep timed out")
-
-    summary = extract_and_index(proc.stdout.strip(), "hashdeep.hashes", target_path, "hashdeep")
-    elapsed = (time.monotonic() - t0) * 1000
-    return tool_response(tc_id, "run_hashdeep", params, summary, "hashdeep.hashes", elapsed)
+    return run_cli_tool(
+        binary="hashdeep",
+        cmd=["hashdeep", "-r", "-l", target_path],
+        tool_name="run_hashdeep",
+        params={"target_path": target_path},
+        source_name="hashdeep.hashes",
+        source_path=target_path,
+        extractor_label="hashdeep",
+        timeout=TOOL_TIMEOUT * 3,
+    )
 
 
 @mcp.tool()
@@ -491,27 +461,15 @@ def run_exiftool(target_path: str = "", file_path: str = "") -> dict[str, object
     """
     if not target_path and file_path:
         target_path = file_path
-    tc_id = make_tool_call_id()
-    t0 = time.monotonic()
-    params = {"target_path": target_path}
-
-    if not _require_binary("exiftool"):
-        return error_response(tc_id, "run_exiftool", params, "exiftool not found on PATH")
-
-    try:
-        proc = subprocess.run(
-            ["exiftool", "-r", target_path],
-            capture_output=True,
-            text=True,
-            timeout=_TOOL_TIMEOUT,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        return error_response(tc_id, "run_exiftool", params, "exiftool timed out")
-
-    summary = extract_and_index(proc.stdout.strip(), "exiftool.metadata", target_path, "exiftool")
-    elapsed = (time.monotonic() - t0) * 1000
-    return tool_response(tc_id, "run_exiftool", params, summary, "exiftool.metadata", elapsed)
+    return run_cli_tool(
+        binary="exiftool",
+        cmd=["exiftool", "-r", target_path],
+        tool_name="run_exiftool",
+        params={"target_path": target_path},
+        source_name="exiftool.metadata",
+        source_path=target_path,
+        extractor_label="exiftool",
+    )
 
 
 @mcp.tool()
@@ -528,7 +486,7 @@ def run_regripper(hive_path: str, profile: str | None = None) -> dict[str, objec
     t0 = time.monotonic()
     params = {"hive_path": hive_path, "profile": profile}
 
-    rip = _require_binary("rip.pl") or _require_binary("regripper")
+    rip = require_binary("rip.pl") or require_binary("regripper")
     if not rip:
         return error_response(tc_id, "run_regripper", params, "RegRipper not found on PATH")
 
@@ -543,7 +501,7 @@ def run_regripper(hive_path: str, profile: str | None = None) -> dict[str, objec
             cmd,
             capture_output=True,
             text=True,
-            timeout=_TOOL_TIMEOUT,
+            timeout=TOOL_TIMEOUT,
             check=False,
         )
     except subprocess.TimeoutExpired:
@@ -568,44 +526,20 @@ def run_ssdeep(target_path: str, recursive: bool = False) -> dict[str, object]:
         recursive: If True and target is a directory, hash all files
             recursively.
     """
-    tc_id = make_tool_call_id()
-    t0 = time.monotonic()
-    params = {"target_path": target_path, "recursive": recursive}
-
-    if not _require_binary("ssdeep"):
-        return error_response(
-            tc_id,
-            "run_ssdeep",
-            params,
-            "ssdeep not found on PATH",
-            error_type="binary_missing",
-        )
-
     cmd = ["ssdeep"]
     if recursive:
         cmd.append("-r")
     cmd.append(target_path)
 
-    try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=_TOOL_TIMEOUT,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        return error_response(
-            tc_id,
-            "run_ssdeep",
-            params,
-            "ssdeep timed out",
-            error_type="timeout",
-        )
-
-    summary = extract_and_index(proc.stdout.strip(), "ssdeep.hashes", target_path, "ssdeep")
-    elapsed = (time.monotonic() - t0) * 1000
-    return tool_response(tc_id, "run_ssdeep", params, summary, "ssdeep.hashes", elapsed)
+    return run_cli_tool(
+        binary="ssdeep",
+        cmd=cmd,
+        tool_name="run_ssdeep",
+        params={"target_path": target_path, "recursive": recursive},
+        source_name="ssdeep.hashes",
+        source_path=target_path,
+        extractor_label="ssdeep",
+    )
 
 
 @mcp.tool()
@@ -618,53 +552,16 @@ def run_pasco(indexdat_path: str) -> dict[str, object]:
     Args:
         indexdat_path: Path to the index.dat file.
     """
-    tc_id = make_tool_call_id()
-    t0 = time.monotonic()
-    params = {"indexdat_path": indexdat_path}
-
-    if not _require_binary("pasco"):
-        return error_response(
-            tc_id,
-            "run_pasco",
-            params,
-            "pasco not found on PATH",
-            error_type="binary_missing",
-        )
-
-    if not Path(indexdat_path).exists():
-        return error_response(
-            tc_id,
-            "run_pasco",
-            params,
-            f"File not found: {indexdat_path}",
-            error_type="file_not_found",
-        )
-
-    try:
-        proc = subprocess.run(
-            ["pasco", indexdat_path],
-            capture_output=True,
-            text=True,
-            timeout=_TOOL_TIMEOUT,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        return error_response(
-            tc_id,
-            "run_pasco",
-            params,
-            "pasco timed out",
-            error_type="timeout",
-        )
-
-    summary = extract_and_index(
-        proc.stdout.strip(),
-        "pasco.history",
-        indexdat_path,
-        "pasco",
+    return run_cli_tool(
+        binary="pasco",
+        cmd=["pasco", indexdat_path],
+        tool_name="run_pasco",
+        params={"indexdat_path": indexdat_path},
+        source_name="pasco.history",
+        source_path=indexdat_path,
+        extractor_label="pasco",
+        check_exists=indexdat_path,
     )
-    elapsed = (time.monotonic() - t0) * 1000
-    return tool_response(tc_id, "run_pasco", params, summary, "pasco.history", elapsed)
 
 
 @mcp.tool()
@@ -683,7 +580,7 @@ def run_vshadow_info(image_path: str, offset: int = 0) -> dict[str, object]:
     t0 = time.monotonic()
     params = {"image_path": image_path, "offset": offset}
 
-    if not _require_binary("vshadowinfo"):
+    if not require_binary("vshadowinfo"):
         return error_response(
             tc_id,
             "run_vshadow_info",
@@ -712,7 +609,7 @@ def run_vshadow_info(image_path: str, offset: int = 0) -> dict[str, object]:
             cmd,
             capture_output=True,
             text=True,
-            timeout=_TOOL_TIMEOUT,
+            timeout=TOOL_TIMEOUT,
             check=False,
         )
     except subprocess.TimeoutExpired:
@@ -749,7 +646,7 @@ def run_chkrootkit(target_path: str | None = None) -> dict[str, object]:
     t0 = time.monotonic()
     params = {"target_path": target_path}
 
-    if not _require_binary("chkrootkit"):
+    if not require_binary("chkrootkit"):
         return error_response(
             tc_id,
             "run_chkrootkit",
@@ -767,7 +664,7 @@ def run_chkrootkit(target_path: str | None = None) -> dict[str, object]:
             cmd,
             capture_output=True,
             text=True,
-            timeout=_TOOL_TIMEOUT * 3,
+            timeout=TOOL_TIMEOUT * 3,
             check=False,
         )
     except subprocess.TimeoutExpired:
@@ -814,7 +711,7 @@ def run_radare2(
     t0 = time.monotonic()
     params: dict[str, object] = {"target_path": target_path, "commands": commands}
 
-    if not _require_binary("r2"):
+    if not require_binary("r2"):
         return error_response(
             tc_id,
             "run_radare2",
@@ -837,7 +734,7 @@ def run_radare2(
             ["r2", "-q", "-c", commands, target_path],
             capture_output=True,
             text=True,
-            timeout=_TOOL_TIMEOUT,
+            timeout=TOOL_TIMEOUT,
             check=False,
         )
     except subprocess.TimeoutExpired:
@@ -874,7 +771,7 @@ def run_tcpflow(pcap_path: str) -> dict[str, object]:
     t0 = time.monotonic()
     params: dict[str, object] = {"pcap_path": pcap_path}
 
-    if not _require_binary("tcpflow"):
+    if not require_binary("tcpflow"):
         return error_response(
             tc_id,
             "run_tcpflow",
@@ -898,7 +795,7 @@ def run_tcpflow(pcap_path: str) -> dict[str, object]:
                 ["tcpflow", "-r", pcap_path, "-o", tmpdir],
                 capture_output=True,
                 text=True,
-                timeout=_TOOL_TIMEOUT,
+                timeout=TOOL_TIMEOUT,
                 check=False,
             )
         except subprocess.TimeoutExpired:
@@ -912,16 +809,17 @@ def run_tcpflow(pcap_path: str) -> dict[str, object]:
 
         parts: list[str] = []
         for stream_file in sorted(Path(tmpdir).iterdir()):
-            if stream_file.is_file() and stream_file.stat().st_size > 0:
-                with contextlib.suppress(OSError):
-                    preview = stream_file.read_text(
-                        encoding="utf-8",
-                        errors="replace",
-                    )[:4096]
-                    parts.append(
-                        f"=== {stream_file.name} "
-                        f"({stream_file.stat().st_size} bytes) ===\n{preview}"
-                    )
+            if not stream_file.is_file():
+                continue
+            st = stream_file.stat()
+            if st.st_size == 0:
+                continue
+            with contextlib.suppress(OSError):
+                preview = stream_file.read_text(
+                    encoding="utf-8",
+                    errors="replace",
+                )[:4096]
+                parts.append(f"=== {stream_file.name} ({st.st_size} bytes) ===\n{preview}")
 
         combined = "\n\n".join(parts) if parts else "No TCP streams reconstructed"
 
@@ -946,7 +844,7 @@ def run_tcpxtract(pcap_path: str) -> dict[str, object]:
     t0 = time.monotonic()
     params: dict[str, object] = {"pcap_path": pcap_path}
 
-    if not _require_binary("tcpxtract"):
+    if not require_binary("tcpxtract"):
         return error_response(
             tc_id,
             "run_tcpxtract",
@@ -970,7 +868,7 @@ def run_tcpxtract(pcap_path: str) -> dict[str, object]:
                 ["tcpxtract", "-f", pcap_path, "-o", tmpdir],
                 capture_output=True,
                 text=True,
-                timeout=_TOOL_TIMEOUT,
+                timeout=TOOL_TIMEOUT,
                 check=False,
             )
         except subprocess.TimeoutExpired:
@@ -1017,7 +915,7 @@ def _run_dislocker_metadata_mode(
     Returns:
         Tool response dict with metadata or an error response.
     """
-    if not _require_binary("dislocker-metadata"):
+    if not require_binary("dislocker-metadata"):
         return error_response(
             tc_id,
             "run_dislocker",
@@ -1030,7 +928,7 @@ def _run_dislocker_metadata_mode(
             ["dislocker-metadata", "-V", image_path],
             capture_output=True,
             text=True,
-            timeout=_TOOL_TIMEOUT,
+            timeout=TOOL_TIMEOUT,
             check=False,
         )
     except subprocess.TimeoutExpired:
@@ -1079,7 +977,7 @@ def _run_dislocker_decrypt_mode(
     Returns:
         Tool response dict with mount point info or an error response.
     """
-    if not _require_binary("dislocker-fuse"):
+    if not require_binary("dislocker-fuse"):
         return error_response(
             tc_id,
             "run_dislocker",
@@ -1101,7 +999,7 @@ def _run_dislocker_decrypt_mode(
             cmd,
             capture_output=True,
             text=True,
-            timeout=_TOOL_TIMEOUT,
+            timeout=TOOL_TIMEOUT,
             check=False,
         )
     except subprocess.TimeoutExpired:
@@ -1199,7 +1097,7 @@ def run_bdeinfo(image_path: str) -> dict[str, object]:
     t0 = time.monotonic()
     params: dict[str, object] = {"image_path": image_path}
 
-    if not _require_binary("bdeinfo"):
+    if not require_binary("bdeinfo"):
         return error_response(
             tc_id,
             "run_bdeinfo",
@@ -1222,7 +1120,7 @@ def run_bdeinfo(image_path: str) -> dict[str, object]:
             ["bdeinfo", image_path],
             capture_output=True,
             text=True,
-            timeout=_TOOL_TIMEOUT,
+            timeout=TOOL_TIMEOUT,
             check=False,
         )
     except subprocess.TimeoutExpired:
@@ -1258,7 +1156,7 @@ def run_fvdeinfo(image_path: str) -> dict[str, object]:
     t0 = time.monotonic()
     params: dict[str, object] = {"image_path": image_path}
 
-    if not _require_binary("fvdeinfo"):
+    if not require_binary("fvdeinfo"):
         return error_response(
             tc_id,
             "run_fvdeinfo",
@@ -1281,7 +1179,7 @@ def run_fvdeinfo(image_path: str) -> dict[str, object]:
             ["fvdeinfo", image_path],
             capture_output=True,
             text=True,
-            timeout=_TOOL_TIMEOUT,
+            timeout=TOOL_TIMEOUT,
             check=False,
         )
     except subprocess.TimeoutExpired:

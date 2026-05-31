@@ -10,7 +10,12 @@ from __future__ import annotations
 import time
 
 from mulder.server.app import ServerContext, get_ctx, mcp
-from mulder.server.helpers import make_tool_call_id, windowed_response
+from mulder.server.helpers import (
+    current_batch_id,
+    hash_output,
+    make_tool_call_id,
+    windowed_response,
+)
 
 _BULK_SOURCE_PREFIX = "bulk."
 _BULK_FEATURE_CAP = 15
@@ -48,7 +53,6 @@ def get_carved_iocs(feature: str | None = None) -> dict[str, object]:
 
     results = _summary_mode(ctx)
     elapsed = (time.monotonic() - t0) * 1000
-    from mulder.server.helpers import current_batch_id, hash_output
 
     ctx.audit.log_tool_call(
         tool_call_id=tc_id,

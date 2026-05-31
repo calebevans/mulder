@@ -21,11 +21,16 @@ dependencies = [
     "jinja2>=3.1.6",
     "markdown>=3.6",
     "python-evtx>=0.8.1",
+    "claude-agent-sdk>=0.2",
+    "rich>=15.0",
+    "pyyaml>=6.0",
+    "psutil>=5.9",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest",
+    "pytest-asyncio",
     "pytest-cov",
     "mypy",
     "ruff",
@@ -56,6 +61,12 @@ module = [
     "Evtx.*",
     "pysqlcipher3.*",
     "psutil",
+    "claude_agent_sdk",
+    "claude_agent_sdk.*",
+    "rich",
+    "rich.*",
+    "markdown",
+    "yaml",
 ]
 ignore_missing_imports = true
 
@@ -66,3 +77,4 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"

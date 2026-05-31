@@ -62,7 +62,7 @@ def run_hindsight(
     Args:
         profile_path: Path to the browser profile directory
             (e.g. Default/ under Chrome user data).
-        browser: Browser type -- "chrome" (default), "brave", "edge", "opera".
+        browser: Browser type, one of "chrome" (default), "brave", "edge", "opera".
     """
     ctx = get_ctx()
     tc_id = make_tool_call_id()

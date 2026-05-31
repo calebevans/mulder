@@ -169,7 +169,7 @@ def _check_resource_pressure() -> tuple[bool, str]:
 
 
 async def async_wait_for_resources(tool_name: str = "") -> None:
-    """Async throttle for MCP tool calls -- yields to the event loop while waiting.
+    """Async throttle for MCP tool calls; yields to the event loop while waiting.
 
     Uses ``anyio.sleep`` so the MCP event loop can still process
     heartbeats and new requests while this tool waits for resources
@@ -193,7 +193,7 @@ async def async_wait_for_resources(tool_name: str = "") -> None:
 def wait_for_resources(tool_name: str = "") -> None:
     """Blocking throttle for background job threads.
 
-    Uses ``time.sleep`` -- only safe for threads that are NOT on the
+    Uses ``time.sleep``, only safe for threads that are NOT on the
     MCP event loop (i.e. background ``JobStore`` workers).  MCP tool
     calls use ``async_wait_for_resources`` instead so the event loop
     stays responsive.
@@ -297,8 +297,10 @@ def init_server(
 
     _job_store = JobStore(
         max_workers=max_workers,
-        tool_dispatch=_tool_dispatch_sync,
+        tool_dispatch=_tool_dispatch_sync,  # Shared mutable ref; late registrations visible
     )
+
+    _seed_psutil()
 
     if case_id is not None:
         load_case(case_id)
@@ -306,11 +308,33 @@ def init_server(
     logger.info("Mulder MCP server ready (db_dir=%s)", db_dir)
 
 
+def _seed_psutil() -> None:
+    """Prime psutil's CPU counter so the first real check returns valid data."""
+    global _psutil_seeded  # noqa: PLW0603
+    try:
+        import psutil
+
+        psutil.cpu_percent(interval=None)
+        _psutil_seeded = True
+    except (ImportError, AttributeError):
+        pass
+
+
 def _close_current_ctx() -> None:
     """Close the current case context if one is active."""
     global _ctx  # noqa: PLW0603
     with _ctx_lock:
-        if _ctx is not None and _ctx.db is not None:
+        if _ctx is None:
+            return
+        if _job_store is not None:
+            for batch_id in _job_store.batch_ids():
+                status = _job_store.get_batch_status(batch_id)
+                if status and not status.get("all_done"):
+                    raise RuntimeError(
+                        f"Cannot switch cases: batch {batch_id} still has "
+                        f"active jobs. Wait for completion or call wait(batch_id)."
+                    )
+        if _ctx.db is not None:
             try:
                 _ctx.db.close()
             except Exception:
@@ -353,7 +377,7 @@ def create_case(
 ) -> ServerContext | dict[str, object]:
     """Create a new empty case and set it as the active context.
 
-    No extractors are run -- the agent populates the case incrementally
+    No extractors are run; the agent populates the case incrementally
     by calling Tier 2 extraction tools.
 
     If the case already exists and *replace* is ``False``, loads the
@@ -386,9 +410,11 @@ def create_case(
             "created_at": meta.ingested_at,
             "evidence_root": meta.evidence_root,
             "source_count": source_count,
-            "action_required": (
-                "Case already loaded. Use open_case to switch cases, "
-                "or scan_evidence with replace=true to start fresh."
+            "message": (
+                f"Case '{case_id}' loaded ({source_count} sources already indexed). "
+                "Archives were extracted by the catalog phase. "
+                "Proceed directly with analysis tools (run_volatility, run_fls, "
+                "run_evtx_parser, etc.). Do NOT re-extract archives."
             ),
         }
 

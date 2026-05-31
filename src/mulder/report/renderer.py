@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import re
@@ -16,6 +17,13 @@ import jinja2
 import markdown
 
 from mulder.models import AuditSummary, CaseMetadataRow, Finding, SourceRow
+from mulder.patterns import (
+    EMAIL_RE,
+    IP_RE,
+    classify_ip,
+    format_token_count,
+    is_external_ip,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,12 +42,10 @@ def _normalize_source(s: SourceRow | dict[str, Any]) -> SourceRow:
     return SourceRow(**s)
 
 
-_SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+_SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4, "informational": 4}
 
 _ATTACK_TACTICS_PATH = Path(__file__).resolve().parent / "data" / "attack_tactics.json"
-_attack_tactics_cache: dict[str, Any] | None = None
 
-_IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _IP_PORT_RE = re.compile(r"\b((?:\d{1,3}\.){3}\d{1,3}):(\d+)\b")
 _PORT_RE = re.compile(r"\bport\s+(\d+)\b", re.IGNORECASE)
 _PATH_RE = re.compile(
@@ -47,28 +53,12 @@ _PATH_RE = re.compile(
     r"[^\s,\"'`*:]+[^\s,\"'`*:.)]"
 )
 _HASH_RE = re.compile(r"\b(?:SHA1|SHA256|MD5)[:\s]+([a-fA-F0-9]{32,64})\b")
-_EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b")
 _FILE_EXT_AFTER_EMAIL = re.compile(
     r"\.(ost|tmp|xml|json|log|bak|dat|db|cfg|old|pst|eml|msg|mbox|csv|txt|ini)$",
     re.IGNORECASE,
 )
-_SKIP_IPS = {"0.0.0.0", "127.0.0.1", "255.255.255.255"}
-
-
-def _is_external_ip(ip: str) -> bool:
-    """Return True if *ip* is not covered by common private IPv4 prefixes."""
-    if ip.startswith("10.") or ip.startswith("192.168.") or ip.startswith("127."):
-        return False
-    if ip.startswith("172."):
-        parts = ip.split(".")
-        if len(parts) >= 2:
-            try:
-                second = int(parts[1])
-                if 16 <= second <= 31:
-                    return False
-            except ValueError:
-                pass
-    return True
+_SKIP_IP_CATEGORIES = frozenset({"loopback", "reserved", "link_local"})
+_NON_IOC_IPS = frozenset({"0.0.0.0", "255.255.255.255"})
 
 
 def _extract_iocs(
@@ -96,23 +86,23 @@ def _extract_iocs(
 
         for m in _IP_PORT_RE.finditer(text):
             ip, port = m.group(1), m.group(2)
-            if ip in _SKIP_IPS:
+            if ip in _NON_IOC_IPS or classify_ip(ip) in _SKIP_IP_CATEGORIES:
                 continue
             if ip not in seen_ip:
                 seen_ip.add(ip)
-                ioc_type = "External IP" if _is_external_ip(ip) else "Internal IP"
+                ioc_type = "External IP" if is_external_ip(ip) else "Internal IP"
                 network_iocs.append({"type": ioc_type, "value": ip, "context": f.title[:80]})
             port_key = f"TCP {port}"
             if port_key not in seen_port:
                 seen_port.add(port_key)
                 network_iocs.append({"type": "Port", "value": port_key, "context": f.title[:80]})
 
-        for m in _IP_RE.finditer(text):
+        for m in IP_RE.finditer(text):
             ip = m.group()
-            if ip in _SKIP_IPS or ip in seen_ip:
+            if ip in _NON_IOC_IPS or classify_ip(ip) in _SKIP_IP_CATEGORIES or ip in seen_ip:
                 continue
             seen_ip.add(ip)
-            ioc_type = "External IP" if _is_external_ip(ip) else "Internal IP"
+            ioc_type = "External IP" if is_external_ip(ip) else "Internal IP"
             network_iocs.append({"type": ioc_type, "value": ip, "context": f.title[:80]})
 
         for m in _PORT_RE.finditer(text):
@@ -135,7 +125,7 @@ def _extract_iocs(
                 hash_type = "SHA256" if len(val) == 64 else "SHA1" if len(val) == 40 else "MD5"
                 file_iocs.append({"type": hash_type, "value": val, "context": f.title[:80]})
 
-        for m in _EMAIL_RE.finditer(text):
+        for m in EMAIL_RE.finditer(text):
             addr = m.group().lower()
             after = text[m.end() : m.end() + 5]
             if after and after[0] == ".":
@@ -361,6 +351,161 @@ def _build_executive_summary(
     return "\n".join(sections)
 
 
+_KILL_CHAIN_PHASES: list[tuple[str, tuple[str, ...]]] = [
+    (
+        "Initial Access / Deployment",
+        (
+            "deploy",
+            "install",
+            "initial",
+            "implant",
+            "malware",
+            "backdoor",
+            "dropper",
+            "staging",
+            "staged",
+        ),
+    ),
+    (
+        "Persistence",
+        (
+            "persist",
+            "service",
+            "registry",
+            "run key",
+            "auto-start",
+            "scheduled task",
+            "startup",
+            "boot",
+        ),
+    ),
+    (
+        "Lateral Movement",
+        (
+            "lateral",
+            "winrm",
+            "rdp",
+            "smb",
+            "psexec",
+            "wmi",
+            "remote",
+            "spread",
+            "pivot",
+        ),
+    ),
+    (
+        "Command and Control",
+        (
+            "c2",
+            "c&c",
+            "beacon",
+            "callback",
+            "lariat",
+            "meterpreter",
+            "metasploit",
+            "cobalt",
+            "empire",
+            "powershell cradle",
+            "download cradle",
+            "shell",
+        ),
+    ),
+    (
+        "Credential Access",
+        (
+            "credential",
+            "skeleton key",
+            "mimikatz",
+            "password",
+            "kerberos",
+            "ntlm",
+            "lsass",
+            "sam",
+            "hash",
+        ),
+    ),
+    (
+        "Defense Evasion / Anti-Forensics",
+        (
+            "evasion",
+            "masquerad",
+            "injection",
+            "inject",
+            "log clear",
+            "log clearing",
+            "anti-forensic",
+            "fake",
+            "disguise",
+            "obfuscat",
+        ),
+    ),
+    (
+        "Discovery / Collection",
+        (
+            "discovery",
+            "scan",
+            "enumerat",
+            "recon",
+            "exfiltrat",
+            "collection",
+            "staging",
+        ),
+    ),
+]
+
+
+def _build_kill_chain_summary(
+    timeline_findings: Sequence[Finding],
+) -> list[tuple[str, list[Finding]]]:
+    """Group timeline findings into kill chain phases by keyword matching.
+
+    Args:
+        timeline_findings: Chronologically sorted findings with timestamps.
+
+    Returns:
+        List of (phase_name, findings) tuples, ordered by kill chain
+        progression. Only phases with matching findings are included.
+    """
+    assigned: set[str] = set()
+    result: list[tuple[str, list[Finding]]] = []
+
+    for phase_name, keywords in _KILL_CHAIN_PHASES:
+        matches: list[Finding] = []
+        for f in timeline_findings:
+            if f.finding_id in assigned:
+                continue
+            text = (f.title + " " + f.description).lower()
+            if any(kw in text for kw in keywords):
+                matches.append(f)
+                assigned.add(f.finding_id)
+        if matches:
+            result.append((phase_name, matches))
+
+    # Catch unassigned findings under "Other Activity"
+    unassigned = [f for f in timeline_findings if f.finding_id not in assigned]
+    if unassigned:
+        result.append(("Other Activity", unassigned))
+
+    return result
+
+
+def _phase_time_range(findings: Sequence[Finding]) -> str:
+    """Format the time range for a group of findings.
+
+    Args:
+        findings: Findings in a single kill chain phase.
+
+    Returns:
+        Formatted date range string like "2018-06-04 to 2018-09-07".
+    """
+    starts = [f.event_time_start[:10] for f in findings if f.event_time_start]
+    if not starts:
+        return "unknown"
+    earliest = min(starts)
+    latest = max(starts)
+    return earliest if earliest == latest else f"{earliest} to {latest}"
+
+
 def _build_executive_summary_md(
     case_id: str,
     finding_count: int,
@@ -393,8 +538,12 @@ def _build_executive_summary_md(
 
     lines: list[str] = []
 
+    effective_sources = sources_count
+    if scope_parts:
+        effective_sources = mem_count + disk_count + other_count
+
     lines.append(
-        f"**Scope:** {sources_count} evidence sources{scope_str} "
+        f"**Scope:** {effective_sources} evidence sources{scope_str} "
         f"| {total_tool_calls} tool calls | {duration_str}"
     )
 
@@ -406,7 +555,7 @@ def _build_executive_summary_md(
     sev_str = " (" + ", ".join(sev_parts) + ")" if sev_parts else ""
 
     results_line = f"**Results:** {finding_count} findings{sev_str}"
-    results_line += f" -- {confirmed_count} confirmed, {inference_count} inference"
+    results_line += f" | {confirmed_count} confirmed, {inference_count} inference"
     if negative_count:
         results_line += (
             f" | {negative_count} "
@@ -428,27 +577,20 @@ def _build_executive_summary_md(
             lines.append(f"- {f.title}")
 
     if tl:
-        lines.append("")
-        first_event = tl[0].title
-        first_ts = tl[0].event_time_start
-        narrative = f'**Narrative:** The earliest activity was "{first_event}"'
-        if first_ts:
-            narrative += f" ({first_ts[:10]})"
-        narrative += "."
-
-        crit_tl = [f for f in tl if f.severity == "critical"]
-        if len(crit_tl) > 1:
-            mid_titles = [f'"{f.title}"' for f in crit_tl[1:4]]
-            narrative += " The investigation subsequently uncovered " + "; ".join(mid_titles) + "."
-
-        last_event = tl[-1].title
-        if len(tl) > 1 and last_event != first_event:
-            last_ts = tl[-1].event_time_start
-            narrative += f' The most recent activity was "{last_event}"'
-            if last_ts:
-                narrative += f" ({last_ts[:10]})"
-            narrative += "."
-        lines.append(narrative)
+        lifecycle = _build_kill_chain_summary(tl)
+        if lifecycle:
+            lines.append("")
+            lines.append("**Attack Lifecycle:**")
+            for phase_name, phase_findings in lifecycle:
+                ts_range = _phase_time_range(phase_findings)
+                count = len(phase_findings)
+                sample = phase_findings[0].title
+                if count == 1:
+                    lines.append(f"- **{phase_name}** ({ts_range}): {sample}")
+                else:
+                    lines.append(
+                        f"- **{phase_name}** ({ts_range}): {sample} (+{count - 1} related)"
+                    )
 
     tool_parts: list[str] = []
     if tool_call_counts:
@@ -468,19 +610,17 @@ def _build_related_findings(
     findings: Sequence[Finding],
 ) -> dict[str, list[str]]:
     """Map each finding_id to IDs of findings sharing evidence refs."""
-    ref_to_fids: dict[str, list[str]] = defaultdict(list)
+    ref_to_fids: dict[str, set[str]] = defaultdict(set)
     for f in findings:
         for ref in f.evidence_refs:
-            ref_to_fids[ref].append(f.finding_id)
+            ref_to_fids[ref].add(f.finding_id)
 
-    related: dict[str, list[str]] = defaultdict(list)
+    related: dict[str, set[str]] = defaultdict(set)
     for fids in ref_to_fids.values():
         if len(fids) > 1:
             for fid in fids:
-                for other in fids:
-                    if other != fid and other not in related[fid]:
-                        related[fid].append(other)
-    return dict(related)
+                related[fid].update(fids - {fid})
+    return {fid: sorted(others) for fid, others in related.items()}
 
 
 def _build_related_titles(
@@ -528,23 +668,21 @@ def _build_mitre_techniques(
     return result
 
 
+@functools.lru_cache(maxsize=1)
 def _load_attack_tactics() -> dict[str, Any] | None:
     """Load the pre-extracted ATT&CK tactic mapping from package data.
 
     Returns ``None`` when the data file is missing (e.g. bare PyPI install
     without the extraction step).
     """
-    global _attack_tactics_cache  # noqa: PLW0603
-    if _attack_tactics_cache is not None:
-        return _attack_tactics_cache
     if not _ATTACK_TACTICS_PATH.exists():
         logger.debug(
             "ATT&CK tactic data not found at %s; skipping tactic grouping", _ATTACK_TACTICS_PATH
         )
         return None
     try:
-        _attack_tactics_cache = json.loads(_ATTACK_TACTICS_PATH.read_text(encoding="utf-8"))
-        return _attack_tactics_cache
+        data: dict[str, Any] = json.loads(_ATTACK_TACTICS_PATH.read_text(encoding="utf-8"))
+        return data
     except Exception:
         logger.warning("Failed to parse %s", _ATTACK_TACTICS_PATH, exc_info=True)
         return None
@@ -644,6 +782,23 @@ def _compute_integrity_status(integrity: list[dict[str, object]] | None) -> str:
     return "hashes_recorded"
 
 
+def _clean_finding_description(text: str) -> str:
+    """Normalize escape sequences in finding descriptions.
+
+    Fixes literal backslash-n sequences and double-escaped hex codes
+    that appear when model output is serialized through JSON twice.
+
+    Args:
+        text: Raw finding description text.
+
+    Returns:
+        Cleaned text with proper escape sequences.
+    """
+    cleaned = text.replace("\\n", "\n")
+    cleaned = cleaned.replace("\\\\x", "\\x")
+    return cleaned
+
+
 class ReportRenderer:
     """Renders validated findings into markdown and HTML investigation reports."""
 
@@ -660,8 +815,35 @@ class ReportRenderer:
         self._env.filters["attack_url"] = _attack_id_to_url
         self._env.filters["basename"] = lambda p: Path(str(p)).name
         self._env.filters["filesizeformat"] = _filesizeformat
+        self._env.filters["tokformat"] = format_token_count
 
-    def _build_context(
+    @staticmethod
+    def _render_narrative_template(narrative: str, ctx: dict[str, Any]) -> str:
+        """Render narrative text as a Jinja2 template with context variables.
+
+        Treats the narrative as a Jinja2 template string, injecting
+        authoritative numeric values from the report context. Falls back
+        to the raw narrative if rendering fails (e.g., no placeholders
+        or a syntax error).
+
+        Args:
+            narrative: Raw narrative text, potentially containing Jinja2
+                template variables like ``{{finding_count}}``.
+            ctx: Report context dictionary providing template variables.
+
+        Returns:
+            Rendered narrative string, or the original if rendering fails.
+        """
+        if not narrative:
+            return narrative
+        try:
+            env = jinja2.Environment(undefined=jinja2.Undefined)
+            template = env.from_string(narrative)
+            return template.render(**ctx)
+        except Exception:
+            return narrative
+
+    def build_context(
         self,
         case_metadata: CaseMetadataRow,
         findings: Sequence[Finding | dict[str, Any]],
@@ -672,7 +854,21 @@ class ReportRenderer:
         evidence_integrity: list[dict[str, object]] | None = None,
         source_windows: dict[str, list[dict[str, Any]]] | None = None,
     ) -> dict[str, Any]:
-        """Assemble template variables from case metadata, findings, audit trail, and sources."""
+        """Assemble template variables from case metadata, findings, audit trail, and sources.
+
+        Args:
+            case_metadata: Row from the case metadata table.
+            findings: Validated findings or dicts to include in the report.
+            audit_summary: Aggregated audit trail statistics.
+            audit_log_path: Path to the JSONL audit log.
+            audit_entries: Pre-parsed audit entries; parsed from file if None.
+            sources_list: Evidence source rows for the source table.
+            evidence_integrity: Evidence registry entries with file hashes.
+            source_windows: Per-source raw text windows for the HTML report.
+
+        Returns:
+            Dict of template variables ready for Jinja2 rendering.
+        """
         normalized_findings: list[Finding] = [_normalize_finding(f) for f in findings]
         normalized_sources: list[SourceRow] | None = (
             [_normalize_source(s) for s in sources_list] if sources_list else None
@@ -759,7 +955,7 @@ class ReportRenderer:
         else:
             all_tactics, active_tactic_groups = [], []
 
-        return {
+        ctx: dict[str, Any] = {
             "case_id": case_metadata.case_id,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "evidence_root": case_metadata.evidence_root,
@@ -777,6 +973,7 @@ class ReportRenderer:
             "critical_findings": critical_findings,
             "timeline_findings": timeline_findings,
             "sources": sorted(all_sources),
+            "sources_count": len(all_sources),
             "network_iocs": network_iocs,
             "file_iocs": file_iocs,
             "email_iocs": email_iocs,
@@ -802,70 +999,87 @@ class ReportRenderer:
             "mitre_all_tactics": all_tactics,
             "mitre_tactic_groups": active_tactic_groups,
             "source_windows": source_windows or {},
-            "narrative": case_metadata.narrative or "",
-            "narrative_html": (
-                markdown.markdown(
-                    case_metadata.narrative,
-                    extensions=["fenced_code", "tables", "nl2br"],
-                )
-                if case_metadata.narrative
-                else ""
+            "model_token_breakdown": self._load_model_usage(
+                Path(audit_log_path).parent, case_metadata.case_id
             ),
         }
 
-    def render(
-        self,
-        case_metadata: CaseMetadataRow,
-        findings: list[Finding],
-        audit_summary: AuditSummary,
-        audit_log_path: Path | str,
-        audit_entries: list[dict[str, Any]] | None = None,
-        sources_list: list[SourceRow] | None = None,
-        evidence_integrity: list[dict[str, object]] | None = None,
-    ) -> str:
-        """Render the markdown report template (``report.md.j2``) to a string."""
-        ctx = self._build_context(
-            case_metadata,
-            findings,
-            audit_summary,
-            audit_log_path,
-            audit_entries=audit_entries,
-            sources_list=sources_list,
-            evidence_integrity=evidence_integrity,
+        rendered_narrative = self._render_narrative_template(case_metadata.narrative or "", ctx)
+        ctx["narrative"] = rendered_narrative
+        ctx["narrative_html"] = (
+            markdown.markdown(
+                rendered_narrative,
+                extensions=["fenced_code", "tables", "nl2br"],
+            )
+            if rendered_narrative
+            else ""
         )
+
+        return ctx
+
+    @staticmethod
+    def _load_model_usage(db_dir: Path, case_id: str) -> list[dict[str, Any]]:
+        """Load per-model token usage from the orchestrator sidecar file.
+
+        Args:
+            db_dir: Directory containing case files.
+            case_id: Case identifier.
+
+        Returns:
+            List of dicts with model, input, and output keys, or empty
+            list if the sidecar file does not exist.
+        """
+        usage_path = db_dir / f"{case_id}.model_usage.json"
+        if not usage_path.exists():
+            return []
+        try:
+            data = json.loads(usage_path.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                return [
+                    {
+                        "model": entry.get("model", "unknown"),
+                        "input": entry.get("input_tokens", 0),
+                        "output": entry.get("output_tokens", 0),
+                    }
+                    for entry in data
+                    if isinstance(entry, dict)
+                ]
+        except (json.JSONDecodeError, OSError):
+            pass
+        return []
+
+    def _render_markdown(self, ctx: dict[str, Any]) -> str:
+        """Render the markdown report from a pre-built context.
+
+        Args:
+            ctx: Template context dict from ``build_context``.
+
+        Returns:
+            Rendered markdown report string.
+        """
         template = self._env.get_template("report.md.j2")
         return template.render(**ctx)
 
-    def render_html(
-        self,
-        case_metadata: CaseMetadataRow,
-        findings: list[Finding],
-        audit_summary: AuditSummary,
-        audit_log_path: Path | str,
-        audit_entries: list[dict[str, Any]] | None = None,
-        sources_list: list[SourceRow] | None = None,
-        evidence_integrity: list[dict[str, object]] | None = None,
-        source_windows: dict[str, list[dict[str, Any]]] | None = None,
-    ) -> str:
-        """Render the HTML report with markdown descriptions converted to HTML."""
-        ctx = self._build_context(
-            case_metadata,
-            findings,
-            audit_summary,
-            audit_log_path,
-            audit_entries=audit_entries,
-            sources_list=sources_list,
-            evidence_integrity=evidence_integrity,
-            source_windows=source_windows,
-        )
+    def _render_html(self, ctx: dict[str, Any]) -> str:
+        """Render the HTML report from a pre-built context.
 
+        Converts markdown in finding descriptions to HTML before rendering
+        the HTML template. Mutates ``ctx["findings"]``,
+        ``ctx["critical_findings"]``, and ``ctx["timeline_findings"]``
+        in-place with ``SimpleNamespace`` wrappers.
+
+        Args:
+            ctx: Template context dict from ``build_context``.
+
+        Returns:
+            Rendered HTML report string.
+        """
         md_extensions = ["fenced_code", "tables", "nl2br"]
         html_findings = []
         for f in ctx["findings"]:
             fd = f.model_dump()
-            fd["description_html"] = markdown.markdown(
-                fd.get("description", ""), extensions=md_extensions
-            )
+            cleaned_desc = _clean_finding_description(fd.get("description", ""))
+            fd["description_html"] = markdown.markdown(cleaned_desc, extensions=md_extensions)
             html_findings.append(SimpleNamespace(**fd))
         ctx["findings"] = html_findings
 
@@ -887,3 +1101,127 @@ class ReportRenderer:
 
         template = self._env.get_template("report.html.j2")
         return template.render(**ctx)
+
+    def render(
+        self,
+        case_metadata: CaseMetadataRow,
+        findings: list[Finding],
+        audit_summary: AuditSummary,
+        audit_log_path: Path | str,
+        audit_entries: list[dict[str, Any]] | None = None,
+        sources_list: list[SourceRow] | None = None,
+        evidence_integrity: list[dict[str, object]] | None = None,
+    ) -> str:
+        """Render the markdown report template (``report.md.j2``) to a string.
+
+        Convenience wrapper that builds context and renders markdown in
+        one call. Use ``render_all`` when both formats are needed.
+
+        Args:
+            case_metadata: Row from the case metadata table.
+            findings: Validated findings to include in the report.
+            audit_summary: Aggregated audit trail statistics.
+            audit_log_path: Path to the JSONL audit log.
+            audit_entries: Pre-parsed audit entries; parsed from file if None.
+            sources_list: Evidence source rows for the source table.
+            evidence_integrity: Evidence registry entries with file hashes.
+
+        Returns:
+            Rendered markdown report string.
+        """
+        ctx = self.build_context(
+            case_metadata,
+            findings,
+            audit_summary,
+            audit_log_path,
+            audit_entries=audit_entries,
+            sources_list=sources_list,
+            evidence_integrity=evidence_integrity,
+        )
+        return self._render_markdown(ctx)
+
+    def render_html(
+        self,
+        case_metadata: CaseMetadataRow,
+        findings: list[Finding],
+        audit_summary: AuditSummary,
+        audit_log_path: Path | str,
+        audit_entries: list[dict[str, Any]] | None = None,
+        sources_list: list[SourceRow] | None = None,
+        evidence_integrity: list[dict[str, object]] | None = None,
+        source_windows: dict[str, list[dict[str, Any]]] | None = None,
+    ) -> str:
+        """Render the HTML report with markdown descriptions converted to HTML.
+
+        Convenience wrapper that builds context and renders HTML in one
+        call. Use ``render_all`` when both formats are needed.
+
+        Args:
+            case_metadata: Row from the case metadata table.
+            findings: Validated findings to include in the report.
+            audit_summary: Aggregated audit trail statistics.
+            audit_log_path: Path to the JSONL audit log.
+            audit_entries: Pre-parsed audit entries; parsed from file if None.
+            sources_list: Evidence source rows for the source table.
+            evidence_integrity: Evidence registry entries with file hashes.
+            source_windows: Per-source raw text windows for the HTML report.
+
+        Returns:
+            Rendered HTML report string.
+        """
+        ctx = self.build_context(
+            case_metadata,
+            findings,
+            audit_summary,
+            audit_log_path,
+            audit_entries=audit_entries,
+            sources_list=sources_list,
+            evidence_integrity=evidence_integrity,
+            source_windows=source_windows,
+        )
+        return self._render_html(ctx)
+
+    def render_all(
+        self,
+        case_metadata: CaseMetadataRow,
+        findings: list[Finding],
+        audit_summary: AuditSummary,
+        audit_log_path: Path | str,
+        audit_entries: list[dict[str, Any]] | None = None,
+        sources_list: list[SourceRow] | None = None,
+        evidence_integrity: list[dict[str, object]] | None = None,
+        source_windows: dict[str, list[dict[str, Any]]] | None = None,
+    ) -> tuple[str, str]:
+        """Render both markdown and HTML reports from a single context build.
+
+        Avoids the cost of building the template context twice when both
+        output formats are needed. Markdown is rendered first from the
+        unmodified context; HTML rendering then augments the context with
+        converted description HTML.
+
+        Args:
+            case_metadata: Row from the case metadata table.
+            findings: Validated findings to include in the report.
+            audit_summary: Aggregated audit trail statistics.
+            audit_log_path: Path to the JSONL audit log.
+            audit_entries: Pre-parsed audit entries; parsed from file if None.
+            sources_list: Evidence source rows for the source table.
+            evidence_integrity: Evidence registry entries with file hashes.
+            source_windows: Per-source raw text windows for the HTML report.
+
+        Returns:
+            Tuple of (markdown_text, html_text).
+        """
+        ctx = self.build_context(
+            case_metadata,
+            findings,
+            audit_summary,
+            audit_log_path,
+            audit_entries=audit_entries,
+            sources_list=sources_list,
+            evidence_integrity=evidence_integrity,
+            source_windows=source_windows,
+        )
+        md_text = self._render_markdown(ctx)
+        html_text = self._render_html(dict(ctx))
+        return md_text, html_text

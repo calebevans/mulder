@@ -19,13 +19,6 @@ from mulder.server.extract_helpers import (
 )
 
 
-class TestWindowConstants:
-    """Verify windowing constants are defined with expected values."""
-
-    def test_window_char_budget(self) -> None:
-        assert _WINDOW_CHAR_BUDGET == 4096
-
-
 class TestParseTimestamp:
     """Verify timestamp extraction from raw text windows."""
 

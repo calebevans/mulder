@@ -4,18 +4,27 @@ These tools replace ``run_parallel`` for slow Tier-2 extraction work.
 The agent calls ``start_extraction_batch`` to launch background jobs,
 then polls with ``check_extraction_status`` while doing fast analysis,
 and retrieves results with ``get_completed_results``.
+
+These tools guard audit logging with ``has_ctx()`` because job queue
+operations can execute before or after a case context exists. The batch
+submission and polling tools must remain functional even when no case
+is active (e.g. during startup or after context teardown), so audit
+calls are conditional rather than mandatory.
 """
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import TYPE_CHECKING, Any
 
-from mulder.server.app import get_ctx, has_ctx, mcp
+from mulder.server.app import get_ctx, mcp
 
 if TYPE_CHECKING:
     from mulder.server.jobs import JobStore
 from mulder.server.helpers import hash_output, make_tool_call_id
+
+logger = logging.getLogger(__name__)
 
 
 def _get_job_store() -> JobStore:
@@ -64,7 +73,7 @@ def start_extraction_batch(tasks: list[dict[str, Any]]) -> dict[str, Any]:
     invalid = [t["tool"] for t in tasks if t["tool"] not in _tool_dispatch_sync]
     if invalid:
         elapsed = (time.monotonic() - t0) * 1000
-        if has_ctx():
+        try:
             ctx = get_ctx()
             ctx.audit.log_tool_call(
                 tool_call_id=tc_id,
@@ -73,6 +82,8 @@ def start_extraction_batch(tasks: list[dict[str, Any]]) -> dict[str, Any]:
                 output_hash=hash_output({"error": "unknown_tools", "tools": invalid}),
                 duration_ms=elapsed,
             )
+        except RuntimeError:
+            logger.warning("Audit skipped: no active case context for start_extraction_batch")
         return {
             "tool_call_id": tc_id,
             "status": "error",
@@ -82,7 +93,7 @@ def start_extraction_batch(tasks: list[dict[str, Any]]) -> dict[str, Any]:
     batch = store.submit_batch(tasks)
 
     elapsed = (time.monotonic() - t0) * 1000
-    if has_ctx():
+    try:
         ctx = get_ctx()
         ctx.audit.log_tool_call(
             tool_call_id=tc_id,
@@ -91,6 +102,8 @@ def start_extraction_batch(tasks: list[dict[str, Any]]) -> dict[str, Any]:
             output_hash=hash_output({"batch_id": batch.batch_id}),
             duration_ms=elapsed,
         )
+    except RuntimeError:
+        logger.warning("Audit skipped: no active case context for start_extraction_batch")
 
     return {
         "tool_call_id": tc_id,
@@ -127,7 +140,7 @@ def check_extraction_status(batch_id: str) -> dict[str, Any]:
     status = store.get_batch_status(batch_id)
 
     elapsed = (time.monotonic() - t0) * 1000
-    if has_ctx():
+    try:
         ctx = get_ctx()
         ctx.audit.log_tool_call(
             tool_call_id=tc_id,
@@ -136,6 +149,8 @@ def check_extraction_status(batch_id: str) -> dict[str, Any]:
             output_hash=hash_output(status or {}),
             duration_ms=elapsed,
         )
+    except RuntimeError:
+        logger.warning("Audit skipped: no active case context for check_extraction_status")
 
     if status is None:
         return {
@@ -201,7 +216,7 @@ def get_completed_results(
     elapsed = (time.monotonic() - t0) * 1000
 
     if results is None:
-        if has_ctx():
+        try:
             ctx = get_ctx()
             ctx.audit.log_tool_call(
                 tool_call_id=tc_id,
@@ -210,6 +225,8 @@ def get_completed_results(
                 output_hash=hash_output({"error": "unknown_batch"}),
                 duration_ms=elapsed,
             )
+        except RuntimeError:
+            logger.warning("Audit skipped: no active case context for get_completed_results")
         return {
             "tool_call_id": tc_id,
             "status": "error",
@@ -244,7 +261,7 @@ def get_completed_results(
             summary["result"] = res
         summaries.append(summary)
 
-    if has_ctx():
+    try:
         ctx = get_ctx()
         ctx.audit.log_tool_call(
             tool_call_id=tc_id,
@@ -254,6 +271,8 @@ def get_completed_results(
             duration_ms=elapsed,
             sub_calls=sub_call_ids if sub_call_ids else None,
         )
+    except RuntimeError:
+        logger.warning("Audit skipped: no active case context for get_completed_results")
 
     return {
         "tool_call_id": tc_id,
@@ -273,22 +292,53 @@ def get_completed_results(
 def wait(
     seconds: int = 300,
     batch_id: str | None = None,
+    job_id: str | None = None,
 ) -> dict[str, object]:
-    """Wait for extraction batches to complete without burning context.
+    """Wait for extraction batches or individual jobs to complete.
 
-    If *batch_id* is provided, polls every 30 seconds until that batch
-    reports all_done, then returns the final status. Much better than
-    calling check_extraction_status in a loop.
-
-    If no batch_id, sleeps for *seconds* and returns.
+    If *batch_id* is provided, polls until that batch reports all_done.
+    If *job_id* is provided, polls until that specific job completes.
+    If neither, sleeps for *seconds* and returns.
 
     Args:
         seconds: Max seconds to wait (default 300, max 1800 = 30 min).
-            Ignored when batch_id is provided and batch completes sooner.
+            Used as timeout when waiting for batch_id or job_id.
         batch_id: Optional batch to wait for. Returns as soon as it
             completes instead of waiting the full duration.
+        job_id: Optional individual job to wait for. Returns as soon
+            as that job reaches a terminal state.
     """
     max_wait = min(max(seconds, 10), 1800)
+
+    if job_id is not None:
+        store = _get_job_store()
+        t0 = time.monotonic()
+        deadline = t0 + max_wait
+        while time.monotonic() < deadline:
+            with store._lock:
+                job = store._jobs.get(job_id)
+                if job is None:
+                    return {
+                        "status": "error",
+                        "error_message": f"Unknown job: {job_id}",
+                    }
+                if job.status in ("completed", "failed", "deferred"):
+                    elapsed = int(time.monotonic() - t0)
+                    return {
+                        "status": "done",
+                        "job_id": job_id,
+                        "job_status": job.status,
+                        "waited_seconds": elapsed,
+                        "result": job.result,
+                    }
+            time.sleep(5)
+        elapsed = int(time.monotonic() - t0)
+        return {
+            "status": "timeout",
+            "job_id": job_id,
+            "waited_seconds": elapsed,
+            "message": f"Job {job_id} still running after {elapsed}s",
+        }
 
     if batch_id is not None:
         store = _get_job_store()

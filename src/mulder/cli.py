@@ -8,19 +8,20 @@ from pathlib import Path
 import click
 
 from mulder import __version__
+from mulder.patterns import DEFAULT_DB_DIR
 
 
 @click.group()
 @click.version_option(version=__version__, prog_name="mulder")
 def cli() -> None:
-    """Mulder -- forensic MCP server for the SANS SIFT Workstation."""
+    """Mulder: forensic MCP server for the SANS SIFT Workstation."""
 
 
 @cli.command()
 @click.option("--case-id", default=None, help="Pre-load this case on startup.")
 @click.option(
     "--db-dir",
-    default="~/.mulder/cases",
+    default=DEFAULT_DB_DIR,
     show_default=True,
     help="Directory containing per-case databases.",
 )
@@ -103,7 +104,7 @@ def serve(
 @click.argument("case_id")
 @click.option(
     "--db-dir",
-    default="~/.mulder/cases",
+    default=DEFAULT_DB_DIR,
     show_default=True,
     help="Directory containing per-case databases.",
 )
@@ -153,12 +154,11 @@ def report(case_id: str, db_dir: str) -> None:
         click.echo(f"  Markdown: {md_path}")
 
         _MAX_WINDOWS = 50
+        source_names = [s.source_name for s in sources_list]
+        bulk_windows = case_db.get_capped_windows_by_sources(source_names, _MAX_WINDOWS)
         source_windows: dict[str, list[dict[str, object]]] = {}
-        for src in sources_list:
-            windows = case_db.get_windows_by_source(src.source_name)
-            total = len(windows)
-            capped = windows[:_MAX_WINDOWS]
-            source_windows[src.source_name] = [
+        for sname, (windows, total) in bulk_windows.items():
+            source_windows[sname] = [
                 {
                     "line_start": w.line_start,
                     "line_end": w.line_end,
@@ -167,23 +167,174 @@ def report(case_id: str, db_dir: str) -> None:
                     "total": total,
                     "truncated": total > _MAX_WINDOWS,
                 }
-                for w in capped
+                for w in windows
             ]
 
         html_path = db_dir_path / f"{case_id}.report.html"
-        html_text = renderer.render_html(
-            case_metadata=case_metadata,
-            findings=findings,
-            audit_summary=audit_summary,
-            audit_log_path=audit_path,
-            sources_list=sources_list,
-            evidence_integrity=evidence_integrity,
-            source_windows=source_windows,
-        )
-        html_path.write_text(html_text, encoding="utf-8")
-        click.echo(f"  HTML:     {html_path}")
+        try:
+            html_text = renderer.render_html(
+                case_metadata=case_metadata,
+                findings=findings,
+                audit_summary=audit_summary,
+                audit_log_path=audit_path,
+                sources_list=sources_list,
+                evidence_integrity=evidence_integrity,
+                source_windows=source_windows,
+            )
+            html_path.write_text(html_text, encoding="utf-8")
+            click.echo(f"  HTML:     {html_path}")
+        except Exception as exc:
+            click.echo(f"  HTML generation failed: {exc}", err=True)
 
     click.echo("Done.")
+
+
+@cli.command()
+@click.argument("evidence_path")
+@click.option(
+    "--model",
+    default=None,
+    help="Fallback model for all roles.",
+)
+@click.option(
+    "--planner-model",
+    default=None,
+    help="Model for planner agents (decides what to do).",
+)
+@click.option(
+    "--executor-model",
+    default=None,
+    help="Model for executor agents (calls tools).",
+)
+@click.option(
+    "--analyst-model",
+    default=None,
+    help="Model for analyst agents (interprets results).",
+)
+@click.option(
+    "--config",
+    "config_path",
+    default=None,
+    type=click.Path(),
+    help="YAML config file for models and settings.",
+)
+@click.option(
+    "--effort",
+    default="max",
+    type=click.Choice(["max", "xhigh", "high"]),
+    show_default=True,
+    help="Effort level.",
+)
+@click.option(
+    "--db-dir",
+    default=DEFAULT_DB_DIR,
+    show_default=True,
+    help="Case database directory.",
+)
+@click.option(
+    "--cwd",
+    default="/mulder-investigation",
+    show_default=True,
+    help="Working directory for sessions.",
+)
+@click.option(
+    "--workers",
+    default=3,
+    show_default=True,
+    help="Max parallel extraction sessions.",
+)
+@click.option(
+    "--proxy-config",
+    default=None,
+    type=click.Path(exists=True),
+    help="LiteLLM config YAML for custom model routing.",
+)
+def investigate(
+    evidence_path: str,
+    model: str | None,
+    planner_model: str | None,
+    executor_model: str | None,
+    analyst_model: str | None,
+    config_path: str | None,
+    effort: str,
+    db_dir: str,
+    cwd: str,
+    workers: int,
+    proxy_config: str | None,
+) -> None:
+    """Run a full multi-pass forensic investigation.
+
+    Uses a planner/executor/analyst pipeline for each phase. Configure
+    models per role via CLI flags or a YAML config file.
+
+    EVIDENCE_PATH is the filesystem path to the evidence directory.
+
+    \b
+      mulder investigate /evidence \\
+        --planner-model claude-sonnet-4-6 \\
+        --executor-model claude-haiku-4-5 \\
+        --analyst-model claude-sonnet-4-6
+
+    Non-Claude models are supported via LiteLLM proxy (auto-started when
+    a model ID uses a provider prefix like bedrock/ or openai/).
+    """
+    import asyncio
+
+    from mulder.orchestrator.models import ModelConfig
+    from mulder.orchestrator.runner import Orchestrator
+
+    mcp_config_file = Path(cwd) / ".mcp.json"
+    if not mcp_config_file.exists():
+        raise click.ClickException(
+            f"MCP configuration not found at {mcp_config_file}. "
+            f"Ensure {cwd}/.mcp.json exists with the mulder MCP server config."
+        )
+
+    log_dir = Path(db_dir).expanduser()
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / "orchestrator.log"
+    file_handler = logging.FileHandler(str(log_file), mode="a")
+    file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    root_logger.addHandler(file_handler)
+
+    model_config = ModelConfig.from_args(
+        model=model,
+        planner_model=planner_model,
+        executor_model=executor_model,
+        analyst_model=analyst_model,
+        config_path=config_path,
+    )
+
+    click.echo(
+        f"Mulder v{__version__} \u2014 The truth is in the data.",
+        err=True,
+    )
+    click.echo(f"Starting multi-pass investigation of {evidence_path}", err=True)
+    click.echo("Models:", err=True)
+    click.echo(f"  Planner:  {model_config.planner}", err=True)
+    click.echo(f"  Executor: {model_config.executor}", err=True)
+    click.echo(f"  Analyst:  {model_config.analyst}", err=True)
+    click.echo(f"Effort: {effort}, Workers: {workers}", err=True)
+    click.echo(f"Logging to {log_file}", err=True)
+
+    orchestrator = Orchestrator(
+        evidence_path=evidence_path,
+        cwd=cwd,
+        model_config=model_config,
+        effort=effort,
+        env={},
+        parallel_extractions=workers,
+        proxy_config=proxy_config,
+    )
+
+    result = asyncio.run(orchestrator.run())
+
+    orchestrator.dashboard.print_summary(result)
+
+    if not result.success:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
