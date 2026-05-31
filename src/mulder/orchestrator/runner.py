@@ -1,4 +1,4 @@
-"""Multi-pass investigation orchestrator using Claude Code SDK.
+"""Multi-pass investigation orchestrator using the Claude Agent SDK.
 
 Decomposes forensic investigations into programmatic phases with hard
 quality gates between them. Split-mode phases use a planner/executor/analyst
@@ -90,11 +90,11 @@ class Orchestrator:
 
         Args:
             evidence_path: Filesystem path to the evidence directory.
-            cwd: Working directory for Claude Code sessions.
+            cwd: Working directory for agent sessions.
             model_config: Model identifiers for each agent role. Uses
                 built-in defaults when not provided.
             effort: Effort level (max, xhigh, high).
-            env: Additional environment variables for Claude Code sessions.
+            env: Additional environment variables for agent sessions.
             parallel_extractions: Maximum number of extraction sessions
                 to run concurrently.
             proxy_config: Optional path to a LiteLLM config YAML for

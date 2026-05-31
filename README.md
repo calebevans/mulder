@@ -53,7 +53,7 @@ See [examples/srl-2018/](examples/srl-2018/) for the full HTML and Markdown repo
 
 ### Docker/Podman
 
-The container image comes with all forensic tools, dependencies, Claude Code, and the Mulder MCP server pre-installed. The orchestrator runs inside the container, launching agent sessions that connect to the MCP server automatically.
+The container image comes with all forensic tools, dependencies, and the Mulder MCP server pre-installed. The orchestrator runs inside the container, launching agent sessions that connect to the MCP server automatically.
 
 ```bash
 docker pull ghcr.io/calebevans/mulder:1.1
@@ -63,13 +63,12 @@ docker pull ghcr.io/calebevans/mulder:1.1
 
 The container runs as a non-root `mulder` user for security. An entrypoint script handles credential copying and permission setup automatically.
 
-The container expects three volume mounts:
+The container expects two volume mounts:
 
 | Mount | Purpose |
 |-------|---------|
 | `/evidence` | Your evidence directory (mount read-only with `:ro`) |
 | `/home/mulder/.mulder/cases` | Case databases, audit logs, and generated reports (persisted to host) |
-| `/home/mulder/.claude` | Claude Code configuration and session data |
 
 **With an Anthropic API key:**
 
@@ -81,7 +80,6 @@ mkdir -p ~/mulder-cases
 docker run -it --privileged \
   -v /path/to/evidence:/evidence:ro \
   -v ~/mulder-cases:/home/mulder/.mulder/cases \
-  -v ~/.claude:/home/mulder/.claude \
   -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
   ghcr.io/calebevans/mulder:1.1
 ```
@@ -94,7 +92,6 @@ mkdir -p ~/mulder-cases
 docker run -it --privileged \
   -v /path/to/evidence:/evidence:ro \
   -v ~/mulder-cases:/home/mulder/.mulder/cases \
-  -v ~/.claude:/home/mulder/.claude \
   -e CLAUDE_CODE_USE_VERTEX=1 \
   -e CLOUD_ML_REGION=us-east5 \
   -e ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project-id \
@@ -111,7 +108,6 @@ mkdir -p ~/mulder-cases
 docker run -it --privileged \
   -v /path/to/evidence:/evidence:ro \
   -v ~/mulder-cases:/home/mulder/.mulder/cases \
-  -v ~/.claude:/home/mulder/.claude \
   -e CLAUDE_CODE_USE_BEDROCK=1 \
   -e AWS_REGION=us-east-1 \
   -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
@@ -144,7 +140,6 @@ Case databases and reports are written to the mounted `~/mulder-cases` directory
 | `ANTHROPIC_API_KEY` | | API key for direct Anthropic access |
 | `CLAUDE_CODE_USE_VERTEX` | | Set to `1` for Google Cloud Vertex AI |
 | `CLAUDE_CODE_USE_BEDROCK` | | Set to `1` for Amazon Bedrock |
-| `DISABLE_AUTOUPDATE` | `1` | Prevents Claude Code from auto-updating inside the container (set by default in the image) |
 
 ## Investigation Pipeline
 
@@ -188,10 +183,10 @@ Runs a full multi-phase forensic investigation using the agentic pipeline.
 | `--executor-model` | `claude-haiku-4-5` | Model for executor agents (calls tools, manages waits) |
 | `--analyst-model` | `claude-sonnet-4-6` | Model for analyst agents (interprets results, submits findings) |
 | `--config` | None | YAML config file for models and settings |
-| `--effort` | `max` | Effort level for Claude Code sessions (`max`, `xhigh`, `high`) |
+| `--effort` | `max` | Effort level for agent sessions (`max`, `xhigh`, `high`) |
 | `--workers` | `3` | Max concurrent extraction agent sessions (not tool threads) |
 | `--db-dir` | `~/.mulder/cases` | Case database directory |
-| `--cwd` | `/mulder-investigation` | Working directory for Claude Code sessions |
+| `--cwd` | `/mulder-investigation` | Working directory for agent sessions |
 | `--proxy-config` | None | LiteLLM config YAML for custom model routing |
 
 **Cost-optimized (recommended):**
@@ -217,7 +212,7 @@ mulder investigate /evidence/case-2025-001 --config investigation.yaml
 
 All roles inherit from `--model` when not explicitly set, so a single `--model` flag is sufficient for providers that use a unified model identifier.
 
-**Non-Claude models** (via built-in LiteLLM proxy, supports Bedrock, OpenAI, Vertex AI, Ollama):
+**Non-Anthropic models** (via built-in LiteLLM proxy, supports Bedrock, OpenAI, Vertex AI, Ollama):
 
 ```bash
 # Use a Bedrock-hosted Llama model for all roles

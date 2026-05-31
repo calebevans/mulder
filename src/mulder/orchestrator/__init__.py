@@ -1,1 +1,1 @@
-"""Multi-pass forensic investigation orchestrator using Claude Code SDK."""
+"""Multi-pass forensic investigation orchestrator using the Claude Agent SDK."""

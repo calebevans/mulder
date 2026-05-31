@@ -2,7 +2,7 @@
 
 Provides a split-screen terminal UI with a fixed stats header and a
 scrolling log panel. Uses Rich's Live display to manage all terminal
-rendering, preventing corruption from the Claude Code CLI subprocess.
+rendering, preventing corruption from the SDK subprocess.
 """
 
 from __future__ import annotations
@@ -125,8 +125,8 @@ class InvestigationDashboard:
     - A scrolling log panel showing assistant reasoning and tool calls.
 
     All output goes through Rich's console, which properly manages
-    terminal cursor state and prevents corruption from the Claude Code
-    CLI subprocess writing its own ANSI sequences.
+    terminal cursor state and prevents corruption from the SDK
+    subprocess writing its own ANSI sequences.
     """
 
     def __init__(self) -> None:
@@ -497,9 +497,9 @@ class InvestigationDashboard:
 
     @staticmethod
     def suppress_stderr(_line: str) -> None:
-        """No-op stderr callback for the Claude Code SDK.
+        """No-op stderr callback for the Agent SDK.
 
-        Suppresses all CLI subprocess stderr output to prevent
+        Suppresses all SDK subprocess stderr output to prevent
         terminal corruption. Passed as the ``stderr`` parameter
         to ``ClaudeAgentOptions``.
         """

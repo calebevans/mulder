@@ -9,7 +9,7 @@ flowchart TB
     subgraph container [Docker Container]
         CLI["mulder CLI"]
         Orchestrator["Orchestrator\n(multi-phase pipeline)"]
-        ClaudeCode["Claude Code\n(Agent Runtime)"]
+        AgentSDK["Agent SDK\n(Session Runtime)"]
         MCPServer["MCP Server\n(FastMCP, 110+ tools)"]
         DB["SQLite + FTS5\n(per-case database)"]
         AuditLog["Audit Log\n(append-only JSONL)"]
@@ -31,8 +31,8 @@ flowchart TB
     Evidence["/evidence\n(read-only mount)"]
 
     CLI --> Orchestrator
-    Orchestrator --> ClaudeCode
-    ClaudeCode -->|"MCP (stdio)"| MCPServer
+    Orchestrator --> AgentSDK
+    AgentSDK -->|"MCP (stdio)"| MCPServer
     MCPServer --> Extractors
     Extractors --> binaries
     Extractors -->|"read"| Evidence
@@ -379,7 +379,6 @@ flowchart TB
     subgraph host [Host System]
         evidenceDir["/path/to/evidence"]
         casesDir["~/mulder-cases"]
-        claudeDir["~/.claude"]
         creds["API credentials"]
     end
 
@@ -392,7 +391,7 @@ flowchart TB
         subgraph app [Application Layer]
             mulderCLI["mulder CLI"]
             orchestrator2["Orchestrator"]
-            claudeCode2["Claude Code (Agent Runtime)"]
+            agentSDK2["Agent SDK (Session Runtime)"]
             mcpServer2["MCP Server (FastMCP)"]
         end
 
@@ -408,7 +407,6 @@ flowchart TB
 
     evidenceDir -->|":ro mount"| mulderCLI
     casesDir -->|"mount"| mcpServer2
-    claudeDir -->|"mount"| claudeCode2
     creds -->|"env vars"| entrypoint
     entrypoint --> mulderUser
     mulderUser --> mulderCLI

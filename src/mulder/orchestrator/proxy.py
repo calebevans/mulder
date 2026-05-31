@@ -172,7 +172,7 @@ class ProxyManager:
         """Environment variables to route the SDK through the proxy.
 
         These must be merged into the orchestrator's env dict so that
-        Claude Code SDK sessions route API calls through the local proxy
+        agent SDK sessions route API calls through the local proxy
         instead of directly to Anthropic. Bedrock/Vertex flags are
         explicitly disabled so the SDK uses standard API routing (the
         proxy handles provider translation).

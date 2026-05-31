@@ -94,7 +94,7 @@ class PhaseResult:
         success: Whether the phase and its gate both passed.
         messages: Collected assistant text messages from the phase.
         turns_used: Total tool-use turns consumed.
-        session_id: Claude Code session identifier from the final attempt.
+        session_id: Agent session identifier from the final attempt.
         gate_result: Validation gate outcome, if a gate was evaluated.
         plans_executed: Number of plans executed in this phase.
         follow_ups_used: Number of follow-up iterations used.

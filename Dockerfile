@@ -197,8 +197,6 @@ ENV DEBIAN_FRONTEND=noninteractive \
     DOTNET_ROOT=/usr/local/share/dotnet \
     PATH="/usr/local/share/dotnet:${PATH}"
 
-ENV CLAUDE_CODE_EFFORT_LEVEL=max
-ENV CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
@@ -257,7 +255,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
-    && npm install -g @anthropic-ai/claude-code \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -306,9 +303,7 @@ RUN python3 -m venv /opt/litellm \
     && /opt/litellm/bin/pip install --no-cache-dir 'litellm[proxy]' pyyaml \
     && ln -s /opt/litellm/bin/litellm /usr/local/bin/litellm
 
-RUN mkdir -p /mulder-investigation/.claude \
-    && cp /app/.mcp.json /mulder-investigation/.mcp.json \
-    && cp /app/.claude/settings.json /mulder-investigation/.claude/settings.json \
+RUN cp /app/.mcp.json /mulder-investigation/.mcp.json \
     && cd /mulder-investigation && git init && git config user.email "mulder@local" && git config user.name "mulder" && git add -A && git commit -m "init"
 
 RUN chown -R mulder:mulder /home/mulder /mulder-investigation
@@ -323,4 +318,4 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 
 WORKDIR /mulder-investigation
 ENTRYPOINT ["entrypoint.sh"]
-CMD ["claude"]
+CMD ["mulder", "investigate"]
