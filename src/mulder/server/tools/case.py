@@ -23,6 +23,7 @@ from mulder.server.app import (
     mcp,
     slugify,
 )
+from mulder.server.helpers import error_response, hash_output, make_tool_call_id
 
 logger = logging.getLogger(__name__)
 
@@ -53,19 +54,53 @@ def scan_evidence(
             it.  If False (default), returns info about the existing case
             so the caller can decide whether to replace or resume.
     """
+    tc_id = make_tool_call_id()
+    t0 = time.monotonic()
+    params: dict[str, object] = {
+        "evidence_path": evidence_path,
+        "case_id": case_id,
+        "replace": replace,
+    }
+
     ev_path = Path(evidence_path).expanduser().resolve()
 
     if not ev_path.exists():
-        return {"error": f"Evidence path does not exist: {ev_path}"}
+        return error_response(
+            tc_id,
+            "scan_evidence",
+            params,
+            f"Evidence path does not exist: {ev_path}",
+            (time.monotonic() - t0) * 1000,
+            error_type="file_not_found",
+        )
 
     if case_id is None:
         case_id = slugify(ev_path.name)
 
     try:
-        return _scan_evidence_inner(ev_path, case_id, replace)
-    except Exception:
+        result = _scan_evidence_inner(ev_path, case_id, replace)
+    except Exception as exc:
         logger.exception("scan_evidence failed for %r", ev_path)
-        return {"error": "scan_evidence failed"}
+        return error_response(
+            tc_id,
+            "scan_evidence",
+            params,
+            f"scan_evidence failed: {exc}",
+            (time.monotonic() - t0) * 1000,
+        )
+
+    elapsed = (time.monotonic() - t0) * 1000
+    result["tool_call_id"] = tc_id
+    if has_ctx():
+        ctx = get_ctx()
+        ctx.audit.log_tool_call(
+            tool_call_id=tc_id,
+            tool_name="scan_evidence",
+            params=params,
+            output_hash=hash_output(result),
+            duration_ms=elapsed,
+        )
+    return result
 
 
 def _hash_and_register_evidence(manifest: list[dict[str, object]]) -> None:
@@ -187,6 +222,9 @@ def list_cases() -> dict[str, object]:
     Returns case IDs, evidence paths, source counts, and creation dates
     for every case that has been created or ingested.
     """
+    tc_id = make_tool_call_id()
+    t0 = time.monotonic()
+
     cfg = get_cfg()
     cases: list[dict[str, object]] = []
 
@@ -215,11 +253,25 @@ def list_cases() -> dict[str, object]:
     if has_ctx():
         active = get_ctx().case_id
 
-    return {
-        "cases": cases,
+    result: dict[str, object] = {
+        "tool_call_id": tc_id,
+        "status": "success",
+        "results": cases,
+        "result_count": len(cases),
         "active_case": active,
-        "total": len(cases),
     }
+
+    elapsed = (time.monotonic() - t0) * 1000
+    if has_ctx():
+        ctx = get_ctx()
+        ctx.audit.log_tool_call(
+            tool_call_id=tc_id,
+            tool_name="list_cases",
+            params={},
+            output_hash=hash_output(result),
+            duration_ms=elapsed,
+        )
+    return result
 
 
 @mcp.tool()
@@ -231,23 +283,43 @@ def open_case(case_id: str) -> dict[str, object]:
     Args:
         case_id: The case identifier to load (must already exist).
     """
+    tc_id = make_tool_call_id()
+    t0 = time.monotonic()
+    params: dict[str, object] = {"case_id": case_id}
+
     cfg = get_cfg()
     db_path = cfg.db_dir / f"{case_id}.db"
 
     if not db_path.exists():
-        return {
-            "error": f"Case '{case_id}' not found. Use list_cases() to see available cases, "
+        return error_response(
+            tc_id,
+            "open_case",
+            params,
+            f"Case '{case_id}' not found. Use list_cases() to see available cases, "
             f"or scan_evidence() to create a new one.",
-        }
+            (time.monotonic() - t0) * 1000,
+            error_type="not_found",
+        )
 
     ctx = load_case(case_id)
     source_count = ctx.db.get_source_count()
 
-    return {
+    result: dict[str, object] = {
+        "tool_call_id": tc_id,
         "status": "success",
         "case_id": case_id,
         "source_count": source_count,
     }
+
+    elapsed = (time.monotonic() - t0) * 1000
+    ctx.audit.log_tool_call(
+        tool_call_id=tc_id,
+        tool_name="open_case",
+        params=params,
+        output_hash=hash_output(result),
+        duration_ms=elapsed,
+    )
+    return result
 
 
 def _human_size(nbytes: int) -> str:
@@ -266,9 +338,12 @@ def verify_evidence_integrity() -> dict[str, object]:
 
     Recomputes BLAKE2b hashes from stored windows and compares against
     the hashes recorded at ingestion. This is a fast DB-only operation.
+    Wall-clock time is included in the response since verification
+    duration is meaningful for integrity auditing.
     """
-    ctx = get_ctx()
+    tc_id = make_tool_call_id()
     t0 = time.monotonic()
+    ctx = get_ctx()
 
     results = ctx.db.verify_evidence_integrity()
     total = len(results)
@@ -285,7 +360,8 @@ def verify_evidence_integrity() -> dict[str, object]:
     else:
         status = "all_verified"
 
-    return {
+    result: dict[str, object] = {
+        "tool_call_id": tc_id,
         "status": status,
         "total_sources": total,
         "verified_count": verified,
@@ -294,6 +370,15 @@ def verify_evidence_integrity() -> dict[str, object]:
         "sources": results,
         "elapsed_ms": round(elapsed_ms, 1),
     }
+
+    ctx.audit.log_tool_call(
+        tool_call_id=tc_id,
+        tool_name="verify_evidence_integrity",
+        params={},
+        output_hash=hash_output(result),
+        duration_ms=elapsed_ms,
+    )
+    return result
 
 
 def _extract_zip(archive: Path, dest: Path) -> list[str]:
@@ -351,7 +436,7 @@ def extract_archive(
 
     Extracts the archive contents so that evidence files inside become
     accessible to extraction and analysis tools.  Extracts to a writable
-    temporary directory under the mulder cases directory -- the original
+    temporary directory under the mulder cases directory; the original
     evidence is never modified.
 
     After extraction, call ``scan_evidence`` on the extracted directory
@@ -362,10 +447,21 @@ def extract_archive(
         extract_to: Optional destination directory.  If omitted, creates
             a directory under the mulder cases dir.
     """
+    tc_id = make_tool_call_id()
+    t0 = time.monotonic()
+    params: dict[str, object] = {"archive_path": archive_path, "extract_to": extract_to}
+
     archive = Path(archive_path).expanduser().resolve()
 
     if not archive.exists():
-        return {"error": f"Archive not found: {archive}"}
+        return error_response(
+            tc_id,
+            "extract_archive",
+            params,
+            f"Archive not found: {archive}",
+            (time.monotonic() - t0) * 1000,
+            error_type="file_not_found",
+        )
 
     if extract_to:
         dest = Path(extract_to).expanduser().resolve()
@@ -376,7 +472,8 @@ def extract_archive(
     # Idempotent: if already extracted, return the existing files
     if dest.exists() and any(dest.iterdir()):
         existing_files = [str(f.relative_to(dest)) for f in dest.rglob("*") if f.is_file()]
-        return {
+        result: dict[str, object] = {
+            "tool_call_id": tc_id,
             "status": "already_extracted",
             "archive": str(archive),
             "extracted_to": str(dest),
@@ -390,6 +487,17 @@ def extract_archive(
                 else ""
             ),
         }
+        elapsed = (time.monotonic() - t0) * 1000
+        if has_ctx():
+            ctx = get_ctx()
+            ctx.audit.log_tool_call(
+                tool_call_id=tc_id,
+                tool_name="extract_archive",
+                params=params,
+                output_hash=hash_output(result),
+                duration_ms=elapsed,
+            )
+        return result
 
     dest.mkdir(parents=True, exist_ok=True)
 
@@ -407,31 +515,33 @@ def extract_archive(
             files = _extract_tar(archive, dest)
         elif ext in (".7z", ".rar"):
             if not shutil.which("7z"):
-                return {
-                    "error": "7z not found on PATH. Install p7zip-full.",
-                }
+                return error_response(
+                    tc_id,
+                    "extract_archive",
+                    params,
+                    "7z not found on PATH. Install p7zip-full.",
+                    (time.monotonic() - t0) * 1000,
+                    error_type="binary_missing",
+                )
             files = _extract_7z(archive, dest)
         else:
-            return {
-                "error": f"Unsupported archive format: {ext}",
-                "supported": [
-                    ".zip",
-                    ".tar",
-                    ".tar.gz",
-                    ".tar.bz2",
-                    ".tgz",
-                    ".gz",
-                    ".bz2",
-                    ".7z",
-                    ".rar",
-                ],
-            }
+            return error_response(
+                tc_id,
+                "extract_archive",
+                params,
+                f"Unsupported archive format: {ext}",
+                (time.monotonic() - t0) * 1000,
+                error_type="unsupported_format",
+            )
     except Exception as exc:
         logger.error("Archive extraction failed for %r: %s", archive, exc)
-        return {
-            "error": "Extraction failed",
-            "archive": str(archive),
-        }
+        return error_response(
+            tc_id,
+            "extract_archive",
+            params,
+            f"Extraction failed: {exc}",
+            (time.monotonic() - t0) * 1000,
+        )
 
     from mulder.extractors.classifier import ClassifierConfig, EvidenceClassifier
 
@@ -458,7 +568,8 @@ def extract_archive(
         t = str(mi["artifact_type"])
         type_counts[t] = type_counts.get(t, 0) + 1
 
-    return {
+    result = {
+        "tool_call_id": tc_id,
         "status": "success",
         "archive": str(archive),
         "extracted_to": str(dest),
@@ -472,3 +583,15 @@ def extract_archive(
             "or run extraction tools directly on the evidence files."
         ),
     }
+
+    elapsed = (time.monotonic() - t0) * 1000
+    if has_ctx():
+        ctx = get_ctx()
+        ctx.audit.log_tool_call(
+            tool_call_id=tc_id,
+            tool_name="extract_archive",
+            params=params,
+            output_hash=hash_output(result),
+            duration_ms=elapsed,
+        )
+    return result

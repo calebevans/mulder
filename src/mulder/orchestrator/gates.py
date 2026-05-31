@@ -75,6 +75,16 @@ def validate_catalog(summary: dict[str, Any]) -> GateResult:
     if not check_case.passed:
         gaps.append("No case was created during cataloging. scan_evidence may have failed.")
 
+    evidence_found = bool(summary.get("evidence_root"))
+    check_evidence = GateCheck(
+        name="evidence_discovered",
+        passed=evidence_found,
+        detail="Evidence root set" if evidence_found else "No evidence root in summary",
+    )
+    checks.append(check_evidence)
+    if not check_evidence.passed:
+        gaps.append("Catalog completed but no evidence_root was set.")
+
     return GateResult(
         passed=all(c.passed for c in checks),
         phase_name="catalog",

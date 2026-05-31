@@ -4,18 +4,27 @@ These tools replace ``run_parallel`` for slow Tier-2 extraction work.
 The agent calls ``start_extraction_batch`` to launch background jobs,
 then polls with ``check_extraction_status`` while doing fast analysis,
 and retrieves results with ``get_completed_results``.
+
+These tools guard audit logging with ``has_ctx()`` because job queue
+operations can execute before or after a case context exists. The batch
+submission and polling tools must remain functional even when no case
+is active (e.g. during startup or after context teardown), so audit
+calls are conditional rather than mandatory.
 """
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import TYPE_CHECKING, Any
 
-from mulder.server.app import get_ctx, has_ctx, mcp
+from mulder.server.app import get_ctx, mcp
 
 if TYPE_CHECKING:
     from mulder.server.jobs import JobStore
 from mulder.server.helpers import hash_output, make_tool_call_id
+
+logger = logging.getLogger(__name__)
 
 
 def _get_job_store() -> JobStore:
@@ -64,7 +73,7 @@ def start_extraction_batch(tasks: list[dict[str, Any]]) -> dict[str, Any]:
     invalid = [t["tool"] for t in tasks if t["tool"] not in _tool_dispatch_sync]
     if invalid:
         elapsed = (time.monotonic() - t0) * 1000
-        if has_ctx():
+        try:
             ctx = get_ctx()
             ctx.audit.log_tool_call(
                 tool_call_id=tc_id,
@@ -73,6 +82,8 @@ def start_extraction_batch(tasks: list[dict[str, Any]]) -> dict[str, Any]:
                 output_hash=hash_output({"error": "unknown_tools", "tools": invalid}),
                 duration_ms=elapsed,
             )
+        except RuntimeError:
+            logger.warning("Audit skipped: no active case context for start_extraction_batch")
         return {
             "tool_call_id": tc_id,
             "status": "error",
@@ -82,7 +93,7 @@ def start_extraction_batch(tasks: list[dict[str, Any]]) -> dict[str, Any]:
     batch = store.submit_batch(tasks)
 
     elapsed = (time.monotonic() - t0) * 1000
-    if has_ctx():
+    try:
         ctx = get_ctx()
         ctx.audit.log_tool_call(
             tool_call_id=tc_id,
@@ -91,6 +102,8 @@ def start_extraction_batch(tasks: list[dict[str, Any]]) -> dict[str, Any]:
             output_hash=hash_output({"batch_id": batch.batch_id}),
             duration_ms=elapsed,
         )
+    except RuntimeError:
+        logger.warning("Audit skipped: no active case context for start_extraction_batch")
 
     return {
         "tool_call_id": tc_id,
@@ -127,7 +140,7 @@ def check_extraction_status(batch_id: str) -> dict[str, Any]:
     status = store.get_batch_status(batch_id)
 
     elapsed = (time.monotonic() - t0) * 1000
-    if has_ctx():
+    try:
         ctx = get_ctx()
         ctx.audit.log_tool_call(
             tool_call_id=tc_id,
@@ -136,6 +149,8 @@ def check_extraction_status(batch_id: str) -> dict[str, Any]:
             output_hash=hash_output(status or {}),
             duration_ms=elapsed,
         )
+    except RuntimeError:
+        logger.warning("Audit skipped: no active case context for check_extraction_status")
 
     if status is None:
         return {
@@ -201,7 +216,7 @@ def get_completed_results(
     elapsed = (time.monotonic() - t0) * 1000
 
     if results is None:
-        if has_ctx():
+        try:
             ctx = get_ctx()
             ctx.audit.log_tool_call(
                 tool_call_id=tc_id,
@@ -210,6 +225,8 @@ def get_completed_results(
                 output_hash=hash_output({"error": "unknown_batch"}),
                 duration_ms=elapsed,
             )
+        except RuntimeError:
+            logger.warning("Audit skipped: no active case context for get_completed_results")
         return {
             "tool_call_id": tc_id,
             "status": "error",
@@ -244,7 +261,7 @@ def get_completed_results(
             summary["result"] = res
         summaries.append(summary)
 
-    if has_ctx():
+    try:
         ctx = get_ctx()
         ctx.audit.log_tool_call(
             tool_call_id=tc_id,
@@ -254,6 +271,8 @@ def get_completed_results(
             duration_ms=elapsed,
             sub_calls=sub_call_ids if sub_call_ids else None,
         )
+    except RuntimeError:
+        logger.warning("Audit skipped: no active case context for get_completed_results")
 
     return {
         "tool_call_id": tc_id,
