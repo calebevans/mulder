@@ -452,7 +452,7 @@ class Orchestrator:
                     f"{retry_prompt}{gap_info}"
                 )
                 self.dashboard.log_info(
-                    f"Retry {attempt}/{phase.max_retries} (budget: ${budget:.2f})"
+                    f"Retry {attempt}/{phase.max_retries}"
                 )
 
             phase_result = await self._execute_query(
@@ -1328,7 +1328,11 @@ class Orchestrator:
                     "memory dump",
                 )
             )
-            summary: dict[str, Any] = {"case_id": "pending" if has_evidence else None}
+            has_root = "evidence root" in full_text or "evidence_root" in full_text
+            summary: dict[str, Any] = {
+                "case_id": "pending" if has_evidence else None,
+                "evidence_root": "/evidence" if has_root or has_evidence else None,
+            }
             return validate_catalog(summary)
 
         if phase.name == "extraction":
