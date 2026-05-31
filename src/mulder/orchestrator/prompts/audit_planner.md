@@ -30,7 +30,8 @@ phase can only search existing indexed data, update findings, and submit
 new findings from uncited sources already in the database.
 
 OUTPUT (MANDATORY):
-Produce a JSON plan as your final message:
+Your FINAL message MUST be ONLY valid JSON. No text before or after it.
+No markdown fences. Produce a JSON plan:
 {
   "tasks": [{"tool": "...", "args": {...}, "purpose": "..."}],
   "investigation_questions": ["..."],

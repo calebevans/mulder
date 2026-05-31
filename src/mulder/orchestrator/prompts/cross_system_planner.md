@@ -28,7 +28,8 @@ reconstruct_execution_chains, analyze_execution_timeline,
 assess_recovery, correlate_pcap_with_host.
 
 OUTPUT (MANDATORY):
-Produce a JSON plan as your final message:
+Your FINAL message MUST be ONLY valid JSON. No text before or after it.
+No markdown fences. Produce a JSON plan:
 {
   "tasks": [{"tool": "...", "args": {...}, "purpose": "..."}],
   "investigation_questions": ["..."],

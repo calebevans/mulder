@@ -15,10 +15,12 @@ YOUR JOB:
 IMPORTANT:
 - Archives are ALREADY extracted. Memory .img files are listed in the
   evidence context above.
-- Do NOT call list_directory or get_tool_guide. All paths are provided.
-- Do NOT include extract_archive in your plan.
+- Do NOT call get_tool_guide.
+- If the evidence context lists file paths, use them directly. Do NOT
+  call list_directory.
 - If the evidence context says "No pre-populated paths available", call
   list_directory on the evidence path to discover files, then plan.
+- Do NOT include extract_archive in your plan.
 
 TOOL REFERENCE:
 - Memory: run_volatility_batch(plugins=[...], memory_path="<path>")

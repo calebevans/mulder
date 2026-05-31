@@ -22,7 +22,8 @@ CHALLENGE TARGETS:
   as malicious?
 
 OUTPUT (MANDATORY):
-Produce a JSON plan as your final message:
+Your FINAL message MUST be ONLY valid JSON. No text before or after it.
+No markdown fences. Produce a JSON plan:
 {
   "tasks": [{"tool": "...", "args": {...}, "purpose": "..."}],
   "investigation_questions": ["..."],

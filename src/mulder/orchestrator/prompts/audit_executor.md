@@ -27,4 +27,6 @@ CONSTRAINTS:
 - Do NOT call extract_archive, run_volatility, run_fls, run_bulk_extractor,
   or any extraction tools. Extraction is complete. Your job is only to
   search existing indexed data and update findings.
+- If more than half of the planned tasks have failed after retries,
+  stop execution and report the partial results.
 - Keep text responses to 1-2 SHORT sentences per tool call.

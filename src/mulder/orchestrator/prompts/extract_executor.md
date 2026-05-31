@@ -36,4 +36,6 @@ CONSTRAINTS:
 - Do NOT reason about or interpret results.
 - Do NOT submit findings or call submit_finding.
 - Do NOT deviate from the plan or run unplanned tools.
+- If more than half of the planned tasks have failed after retries,
+  stop execution and report the partial results.
 - Keep text responses to 1-2 SHORT sentences per tool call.
