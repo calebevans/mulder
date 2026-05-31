@@ -196,6 +196,7 @@ class ProxyManager:
             RuntimeError: If litellm is not installed or the proxy fails
                 to start within the health check timeout.
         """
+        import os
         import shutil
 
         litellm_bin = shutil.which("litellm")
@@ -209,7 +210,9 @@ class ProxyManager:
             config_file = self._config_path
         else:
             config = _build_proxy_config(self._models, self._port)
-            self._temp_config = Path(tempfile.mktemp(suffix=".yaml", prefix="mulder_litellm_"))
+            fd, tmp_path = tempfile.mkstemp(suffix=".yaml", prefix="mulder_litellm_")
+            self._temp_config = Path(tmp_path)
+            os.close(fd)
             self._temp_config.write_text(
                 yaml.dump(config, default_flow_style=False), encoding="utf-8"
             )
@@ -230,8 +233,6 @@ class ProxyManager:
             self._port,
             self._models,
         )
-
-        import os
 
         proxy_env = os.environ.copy()
 
