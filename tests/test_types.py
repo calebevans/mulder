@@ -5,9 +5,6 @@ from __future__ import annotations
 import json
 
 from mulder.orchestrator.types import (
-    AnalystResult,
-    ExecutionResults,
-    Plan,
     extract_follow_up_request,
     extract_json_plan,
 )
@@ -83,32 +80,6 @@ class TestPlanEmptyTasksInvalid:
         assert result is None
 
 
-class TestExecutionResultsParse:
-    """ExecutionResults correctly parses ok/error status."""
-
-    def test_has_failures_detection(self) -> None:
-        results = ExecutionResults(
-            plan_id="test-plan-001",
-            results=[
-                {"tool": "read_file", "status": "ok", "source": "log.txt", "error": None},
-                {"tool": "grep", "status": "error", "source": None, "error": "timeout"},
-            ],
-            turns_used=5,
-            has_failures=True,
-        )
-        assert results.has_failures is True
-        assert len(results.results) == 2
-
-    def test_no_failures(self) -> None:
-        results = ExecutionResults(
-            plan_id="test-plan-002",
-            results=[{"tool": "read_file", "status": "ok", "source": "a.txt", "error": None}],
-            turns_used=2,
-            has_failures=False,
-        )
-        assert results.has_failures is False
-
-
 class TestFollowUpDetection:
     """Follow-up requests are found in analyst messages."""
 
@@ -151,35 +122,3 @@ class TestNoFollowUp:
     def test_empty_messages(self) -> None:
         result = extract_follow_up_request([])
         assert result is None
-
-
-class TestPlanDataclass:
-    """Plan dataclass holds structured plan data."""
-
-    def test_plan_fields(self) -> None:
-        plan = Plan(
-            plan_id="catalog-plan-case001-abc123",
-            tasks=[{"tool": "read", "args": {}, "purpose": "test"}],
-            investigation_questions=["What happened?"],
-            expected_sources=["syslog"],
-            raw_text="raw output here",
-            turns_used=3,
-        )
-        assert plan.plan_id == "catalog-plan-case001-abc123"
-        assert plan.turns_used == 3
-        assert len(plan.tasks) == 1
-
-
-class TestAnalystResult:
-    """AnalystResult dataclass holds analyst output."""
-
-    def test_analyst_result_fields(self) -> None:
-        result = AnalystResult(
-            findings_submitted=2,
-            follow_up_request=None,
-            messages=["Found suspicious activity"],
-            turns_used=7,
-        )
-        assert result.findings_submitted == 2
-        assert result.follow_up_request is None
-        assert result.turns_used == 7

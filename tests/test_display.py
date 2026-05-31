@@ -5,10 +5,11 @@ from __future__ import annotations
 import logging
 from unittest.mock import patch
 
+import pytest
+
 from mulder.orchestrator.display import (
     _SYSTEM_COLORS,
     InvestigationDashboard,
-    TaskItem,
 )
 
 
@@ -18,28 +19,19 @@ def _make_dashboard() -> InvestigationDashboard:
         return InvestigationDashboard()
 
 
-class TestTaskItemDataclass:
-    """TaskItem dataclass has correct defaults."""
-
-    def test_defaults(self) -> None:
-        task = TaskItem(tool="extract_archive", system="base-dc")
-        assert task.status == "pending"
-        assert task.elapsed_seconds is None
-        assert task.error is None
-
-
 class TestSetTasksAndRender:
     """Setting tasks produces correct panel output."""
 
-    def test_set_tasks_populates_list(self) -> None:
+    def test_set_tasks_produces_panel(self) -> None:
         dash = _make_dashboard()
         dash.set_tasks("base-dc", ["extract_archive", "run_volatility_batch"])
-
-        assert len(dash._tasks) == 2
-        assert dash._tasks_active is True
-        assert dash._tasks[0].tool == "extract_archive"
-        assert dash._tasks[0].system == "base-dc"
-        assert dash._tasks[1].tool == "run_volatility_batch"
+        panel = dash._build_task_panel()
+        assert panel is not None
+        rendered = (
+            panel.renderable.plain if hasattr(panel.renderable, "plain") else str(panel.renderable)
+        )
+        assert "extract_archive" in rendered
+        assert "run_volatility_batch" in rendered
 
     def test_set_tasks_renders_panel(self) -> None:
         dash = _make_dashboard()
@@ -113,35 +105,6 @@ class TestTaskClear:
         assert dash._build_task_panel() is None
 
 
-class TestSpinnerAnimates:
-    """Spinner frame advances on each panel build."""
-
-    def test_spinner_frame_advances(self) -> None:
-        dash = _make_dashboard()
-        dash.set_tasks("base-dc", ["extract_archive"])
-        dash.update_task("base-dc", "extract_archive", "running")
-
-        # Spinner is now time-based, just verify the panel renders
-        # with a spinner character from the expected set
-        import time as _time
-
-        panel = dash._build_task_panel()
-        assert panel is not None
-        _time.sleep(0.15)
-        panel2 = dash._build_task_panel()
-        assert panel2 is not None
-
-    def test_spinner_uses_time_based_frame(self) -> None:
-        """Spinner derives frame from monotonic clock, always animates."""
-        dash = _make_dashboard()
-        dash.set_tasks("base-dc", ["run_fls"])
-        dash.update_task("base-dc", "run_fls", "running")
-
-        # Just verify it renders without error
-        panel = dash._build_task_panel()
-        assert panel is not None
-
-
 class TestMultipleSystems:
     """Systems are grouped correctly in the panel output."""
 
@@ -193,13 +156,8 @@ class TestBuildLayoutWithTasks:
 
         assert layout["header"] is not None
         assert layout["logs"] is not None
-
-        has_tasks = True
-        try:
+        with pytest.raises(KeyError):
             layout["tasks"]
-        except KeyError:
-            has_tasks = False
-        assert not has_tasks
 
 
 class TestSystemColors:
@@ -226,38 +184,21 @@ class TestSystemColors:
 class TestLogPersistence:
     """Log methods emit to the Python logger for file persistence."""
 
-    def test_log_writes_to_logger(self, caplog: object) -> None:
+    @pytest.mark.parametrize(
+        ("method", "arg", "expected"),
+        [
+            ("log", "[base-dc] found artifact", "found artifact"),
+            ("log_tool", "extract_archive", "extract_archive"),
+            ("log_info", "retrying phase", "retrying phase"),
+        ],
+    )
+    def test_log_methods_write_to_logger(self, method: str, arg: str, expected: str) -> None:
         dash = _make_dashboard()
-        with patch.object(
-            logging.getLogger("mulder.orchestrator.display"),
-            "info",
-        ) as mock_info:
-            dash.log("[base-dc] found artifact")
+        with patch.object(logging.getLogger("mulder.orchestrator.display"), "info") as mock_info:
+            getattr(dash, method)(arg)
             mock_info.assert_called()
             args = mock_info.call_args[0]
-            assert "found artifact" in args[1]
-
-    def test_log_tool_writes_to_logger(self) -> None:
-        dash = _make_dashboard()
-        with patch.object(
-            logging.getLogger("mulder.orchestrator.display"),
-            "info",
-        ) as mock_info:
-            dash.log_tool("extract_archive")
-            mock_info.assert_called()
-            args = mock_info.call_args[0]
-            assert "extract_archive" in args[1]
-
-    def test_log_info_writes_to_logger(self) -> None:
-        dash = _make_dashboard()
-        with patch.object(
-            logging.getLogger("mulder.orchestrator.display"),
-            "info",
-        ) as mock_info:
-            dash.log_info("retrying phase")
-            mock_info.assert_called()
-            args = mock_info.call_args[0]
-            assert "retrying phase" in args[1]
+            assert expected in args[1]
 
 
 class TestSystemColorInLog:
@@ -297,12 +238,6 @@ class TestExtractionCounters:
 
         assert "3/10 done" in dash._phase_label
         assert "2 active" in dash._phase_label
-
-    def test_extraction_counts_zero_initial(self) -> None:
-        dash = _make_dashboard()
-        assert dash._extraction_total == 0
-        assert dash._extraction_done == 0
-        assert dash._extraction_active == 0
 
     def test_extraction_counts_progress_sequence(self) -> None:
         """Simulate a realistic progression of counter updates."""

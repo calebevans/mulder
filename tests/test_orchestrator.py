@@ -4,37 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
 from pathlib import Path
-from types import ModuleType
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-# The claude_agent_sdk is not installed in the test environment; stub it
-# so we can import the orchestrator module for unit testing.
-_sdk_stub = ModuleType("claude_agent_sdk")
-_sdk_stub.ClaudeAgentOptions = MagicMock  # type: ignore[attr-defined]
-_sdk_stub.query = MagicMock  # type: ignore[attr-defined]
-
-_types_stub = ModuleType("claude_agent_sdk.types")
-_types_stub.AssistantMessage = MagicMock  # type: ignore[attr-defined]
-_types_stub.ResultMessage = MagicMock  # type: ignore[attr-defined]
-_types_stub.TextBlock = MagicMock  # type: ignore[attr-defined]
-_types_stub.ToolUseBlock = MagicMock  # type: ignore[attr-defined]
-
-sys.modules.setdefault("claude_agent_sdk", _sdk_stub)
-sys.modules.setdefault("claude_agent_sdk.types", _types_stub)
-
-from mulder.orchestrator.gates import (  # noqa: E402
+from mulder.orchestrator.gates import (
     GateResult,
     validate_audit,
     validate_cross_system,
     validate_extraction,
 )
-from mulder.orchestrator.models import ModelConfig  # noqa: E402
-from mulder.orchestrator.runner import Orchestrator  # noqa: E402
-from mulder.orchestrator.types import PhaseResult  # noqa: E402
+from mulder.orchestrator.models import ModelConfig
+from mulder.orchestrator.runner import Orchestrator
+from mulder.orchestrator.types import PhaseResult
 
 
 def _make_orchestrator(**kwargs: object) -> Orchestrator:

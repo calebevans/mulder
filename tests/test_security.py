@@ -5,6 +5,8 @@ from __future__ import annotations
 import sqlite3
 import tarfile
 
+import pytest
+
 from mulder.server.tools.artifacts import _readonly_authorizer
 from mulder.server.tools.case import _safe_tar_filter
 
@@ -24,24 +26,18 @@ class TestSqliteAuthorizer:
         result = _readonly_authorizer(sqlite3.SQLITE_FUNCTION, None, None, None, None)
         assert result == sqlite3.SQLITE_OK
 
-    def test_blocks_create_table(self) -> None:
-        result = _readonly_authorizer(sqlite3.SQLITE_CREATE_TABLE, None, None, None, None)
-        assert result == sqlite3.SQLITE_DENY
-
-    def test_blocks_insert(self) -> None:
-        result = _readonly_authorizer(sqlite3.SQLITE_INSERT, None, None, None, None)
-        assert result == sqlite3.SQLITE_DENY
-
-    def test_blocks_delete(self) -> None:
-        result = _readonly_authorizer(sqlite3.SQLITE_DELETE, None, None, None, None)
-        assert result == sqlite3.SQLITE_DENY
-
-    def test_blocks_update(self) -> None:
-        result = _readonly_authorizer(sqlite3.SQLITE_UPDATE, None, None, None, None)
-        assert result == sqlite3.SQLITE_DENY
-
-    def test_blocks_drop_table(self) -> None:
-        result = _readonly_authorizer(sqlite3.SQLITE_DROP_TABLE, None, None, None, None)
+    @pytest.mark.parametrize(
+        "action",
+        [
+            sqlite3.SQLITE_CREATE_TABLE,
+            sqlite3.SQLITE_INSERT,
+            sqlite3.SQLITE_DELETE,
+            sqlite3.SQLITE_UPDATE,
+            sqlite3.SQLITE_DROP_TABLE,
+        ],
+    )
+    def test_blocks_write_operations(self, action: int) -> None:
+        result = _readonly_authorizer(action, None, None, None, None)
         assert result == sqlite3.SQLITE_DENY
 
 

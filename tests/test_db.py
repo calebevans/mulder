@@ -9,9 +9,6 @@ from sqlalchemy import text
 
 from mulder.db import (
     CaseDB,
-    ProgressRecord,
-    ProgressSummary,
-    _QueueResult,
     _sanitize_fts5_query,
 )
 from mulder.models import Finding, WindowRow
@@ -425,28 +422,6 @@ class TestWindowsByTimeRange:
         assert result == {}
 
 
-class TestQueueResult:
-    """Tests for the _QueueResult dataclass."""
-
-    def test_defaults(self) -> None:
-        """Fresh _QueueResult should have None value and no error."""
-        qr = _QueueResult()
-        assert qr.value is None
-        assert qr.error is None
-
-    def test_stores_value(self) -> None:
-        qr = _QueueResult()
-        qr.value = 42
-        assert qr.value == 42
-        assert qr.error is None
-
-    def test_stores_error(self) -> None:
-        exc = ValueError("boom")
-        qr = _QueueResult(error=exc)
-        assert qr.error is exc
-        assert qr.value is None
-
-
 class TestCappedWindowsBySources:
     """Tests for get_capped_windows_by_sources batch query."""
 
@@ -530,26 +505,283 @@ class TestStreamingHash:
         assert src.windows_hash == expected
 
 
-class TestProgressTypedDicts:
-    """Verify ProgressRecord and ProgressSummary TypedDicts."""
+class TestUpdateFinding:
+    """Tests for CaseDB.update_finding partial updates."""
 
-    def test_get_all_progress_returns_typed_records(self, tmp_case_db: CaseDB) -> None:
-        tmp_case_db.record_progress("net", ["run_pcap"], ["Q1"], notes="note")
-        records = tmp_case_db.get_all_progress()
-        assert len(records) == 1
+    def test_updates_single_field(self, tmp_case_db: CaseDB, sample_finding: Finding) -> None:
+        """Partial update changes only the specified field."""
+        tmp_case_db.insert_finding(sample_finding)
+        result = tmp_case_db.update_finding("f-001", title="Updated Title")
+        assert result is True
+        f = tmp_case_db.get_finding("f-001")
+        assert f is not None
+        assert f.title == "Updated Title"
+        assert f.description == sample_finding.description
 
-        r: ProgressRecord = records[0]
-        assert r["system_name"] == "net"
-        assert r["tools_completed"] == ["run_pcap"]
-        assert r["questions_addressed"] == ["Q1"]
-        assert r["notes"] == "note"
-        assert isinstance(r["id"], int)
-        assert isinstance(r["recorded_at"], str)
+    def test_serializes_list_fields_as_json(
+        self, tmp_case_db: CaseDB, sample_finding: Finding
+    ) -> None:
+        """evidence_refs, sources, mitre_attack_ids round-trip as JSON."""
+        tmp_case_db.insert_finding(sample_finding)
+        new_refs = ["tc_new1", "tc_new2"]
+        new_mitre = ["T1059", "T1003.001"]
+        tmp_case_db.update_finding("f-001", evidence_refs=new_refs, mitre_attack_ids=new_mitre)
+        f = tmp_case_db.get_finding("f-001")
+        assert f is not None
+        assert f.evidence_refs == new_refs
+        assert f.mitre_attack_ids == new_mitre
 
-    def test_get_progress_summary_returns_typed(self, tmp_case_db: CaseDB) -> None:
-        tmp_case_db.record_progress("memory", ["run_vol"], ["Q1"])
-        summary: ProgressSummary = tmp_case_db.get_progress_summary()
-        assert summary["systems_analyzed"] == ["memory"]
-        assert summary["tools_used"] == ["run_vol"]
-        assert summary["questions_covered"] == ["Q1"]
-        assert summary["total_progress_records"] == 1
+    def test_returns_false_for_missing_id(self, tmp_case_db: CaseDB) -> None:
+        """Non-existent finding_id returns False, no error."""
+        result = tmp_case_db.update_finding("nonexistent-id", title="x")
+        assert result is False
+
+
+class TestDeleteFinding:
+    """Tests for CaseDB.delete_finding."""
+
+    def test_deletes_existing_finding(self, tmp_case_db: CaseDB, sample_finding: Finding) -> None:
+        """Existing finding is removed, returns True."""
+        tmp_case_db.insert_finding(sample_finding)
+        assert tmp_case_db.delete_finding("f-001") is True
+        assert tmp_case_db.get_finding("f-001") is None
+
+    def test_returns_false_for_missing(self, tmp_case_db: CaseDB) -> None:
+        """Non-existent ID returns False."""
+        assert tmp_case_db.delete_finding("no-such-id") is False
+
+
+class TestNarrative:
+    """Tests for CaseDB.set_narrative / get_case_metadata narrative field."""
+
+    def test_set_and_get_narrative(self, tmp_case_db: CaseDB) -> None:
+        """Stored narrative is retrievable via case metadata."""
+        tmp_case_db.set_narrative("The attacker used lateral movement via RDP.")
+        meta = tmp_case_db.get_case_metadata()
+        assert meta.narrative == "The attacker used lateral movement via RDP."
+
+    def test_overwrite_narrative(self, tmp_case_db: CaseDB) -> None:
+        """Calling set_narrative twice replaces the previous value."""
+        tmp_case_db.set_narrative("First version")
+        tmp_case_db.set_narrative("Second version")
+        meta = tmp_case_db.get_case_metadata()
+        assert meta.narrative == "Second version"
+
+
+class TestGetFinding:
+    """Tests for CaseDB.get_finding (singular)."""
+
+    def test_returns_finding_by_id(self, tmp_case_db: CaseDB, sample_finding: Finding) -> None:
+        """Existing ID returns the Finding model instance."""
+        tmp_case_db.insert_finding(sample_finding)
+        f = tmp_case_db.get_finding("f-001")
+        assert f is not None
+        assert f.finding_id == "f-001"
+        assert f.title == sample_finding.title
+
+    def test_returns_none_for_missing(self, tmp_case_db: CaseDB) -> None:
+        """Non-existent ID returns None."""
+        assert tmp_case_db.get_finding("missing-id") is None
+
+
+class TestBookmarks:
+    """Tests for CaseDB bookmark CRUD operations."""
+
+    def test_add_and_get_bookmark(self, tmp_case_db: CaseDB) -> None:
+        """Added bookmark appears in get_bookmarks list."""
+        sid = tmp_case_db.register_source("src", "/p", "h", "ext", 10)
+        windows = [
+            WindowRow(source_id=sid, line_start=0, line_end=5, event_time=None, raw_text="data")
+        ]
+        tmp_case_db.insert_windows(sid, windows)
+        all_windows = tmp_case_db.get_windows_by_source("src")
+        wid = all_windows[0].window_id
+        assert wid is not None
+
+        bm_id = tmp_case_db.add_bookmark(wid, "src", "interesting window")
+        bookmarks = tmp_case_db.get_bookmarks()
+        assert len(bookmarks) == 1
+        assert bookmarks[0]["note"] == "interesting window"
+        assert bookmarks[0]["id"] == bm_id
+
+    def test_remove_bookmark(self, tmp_case_db: CaseDB) -> None:
+        """Removed bookmark no longer appears in list."""
+        sid = tmp_case_db.register_source("src", "/p", "h", "ext", 10)
+        windows = [
+            WindowRow(source_id=sid, line_start=0, line_end=5, event_time=None, raw_text="data")
+        ]
+        tmp_case_db.insert_windows(sid, windows)
+        all_windows = tmp_case_db.get_windows_by_source("src")
+        wid = all_windows[0].window_id
+        assert wid is not None
+
+        bm_id = tmp_case_db.add_bookmark(wid, "src", "temp")
+        assert tmp_case_db.remove_bookmark(bm_id) is True
+        assert tmp_case_db.get_bookmarks() == []
+
+    def test_remove_nonexistent_returns_false(self, tmp_case_db: CaseDB) -> None:
+        """Removing missing ID returns False."""
+        assert tmp_case_db.remove_bookmark(9999) is False
+
+
+class TestGetSourceStats:
+    """Tests for CaseDB.get_source_stats."""
+
+    def test_aggregates_per_source(self, tmp_case_db: CaseDB) -> None:
+        """Returns window count and time range for each source."""
+        sid = tmp_case_db.register_source("vol.pslist", "/p", "h", "volatility", 10)
+        windows = [
+            WindowRow(
+                source_id=sid,
+                line_start=0,
+                line_end=5,
+                event_time="2025-01-15T08:00:00Z",
+                raw_text="proc1",
+            ),
+            WindowRow(
+                source_id=sid,
+                line_start=5,
+                line_end=10,
+                event_time="2025-01-15T09:00:00Z",
+                raw_text="proc2",
+            ),
+        ]
+        tmp_case_db.insert_windows(sid, windows)
+        stats = tmp_case_db.get_source_stats()
+        assert len(stats) == 1
+        assert stats[0]["source_name"] == "vol.pslist"
+        assert stats[0]["window_count"] == 2
+        assert stats[0]["earliest"] == "2025-01-15T08:00:00Z"
+        assert stats[0]["latest"] == "2025-01-15T09:00:00Z"
+
+    def test_empty_db_returns_empty(self, tmp_case_db: CaseDB) -> None:
+        """No sources yields empty list."""
+        assert tmp_case_db.get_source_stats() == []
+
+
+class TestGetWindowsBySourcePrefix:
+    """Tests for CaseDB.get_windows_by_source_prefix."""
+
+    @pytest.fixture(autouse=True)
+    def _setup_sources(self, tmp_case_db: CaseDB) -> None:
+        self.db = tmp_case_db
+        self.sid1 = tmp_case_db.register_source("vol.pslist", "/p", "h1", "vol", 10)
+        self.sid2 = tmp_case_db.register_source("vol.netscan", "/p", "h2", "vol", 10)
+        self.sid3 = tmp_case_db.register_source("tsk.fls", "/p", "h3", "tsk", 10)
+
+    def test_exact_name_match(self) -> None:
+        """Prefix equal to full source name returns windows."""
+        windows = [
+            WindowRow(
+                source_id=self.sid1,
+                line_start=0,
+                line_end=5,
+                event_time=None,
+                raw_text="exact match",
+            )
+        ]
+        self.db.insert_windows(self.sid1, windows)
+        results = self.db.get_windows_by_source_prefix("vol.pslist")
+        assert len(results) == 1
+        assert results[0].raw_text == "exact match"
+
+    def test_dot_prefix_match(self) -> None:
+        """Prefix 'vol' matches 'vol.pslist' via LIKE 'vol.%'."""
+        w1 = [
+            WindowRow(
+                source_id=self.sid1,
+                line_start=0,
+                line_end=5,
+                event_time=None,
+                raw_text="pslist data",
+            )
+        ]
+        w2 = [
+            WindowRow(
+                source_id=self.sid2,
+                line_start=0,
+                line_end=5,
+                event_time=None,
+                raw_text="netscan data",
+            )
+        ]
+        self.db.insert_windows(self.sid1, w1)
+        self.db.insert_windows(self.sid2, w2)
+        results = self.db.get_windows_by_source_prefix("vol")
+        assert len(results) == 2
+
+    def test_time_range_filtering(self) -> None:
+        """time_start and time_end narrow results correctly."""
+        windows = [
+            WindowRow(
+                source_id=self.sid1,
+                line_start=0,
+                line_end=5,
+                event_time="2025-01-15T08:00:00Z",
+                raw_text="early",
+            ),
+            WindowRow(
+                source_id=self.sid1,
+                line_start=5,
+                line_end=10,
+                event_time="2025-01-15T12:00:00Z",
+                raw_text="later",
+            ),
+        ]
+        self.db.insert_windows(self.sid1, windows)
+        results = self.db.get_windows_by_source_prefix(
+            "vol.pslist",
+            time_start="2025-01-15T10:00:00Z",
+            time_end="2025-01-15T13:00:00Z",
+        )
+        assert len(results) == 1
+        assert results[0].raw_text == "later"
+
+    def test_unrelated_source_excluded(self) -> None:
+        """Source not matching prefix is not returned."""
+        w_tsk = [
+            WindowRow(
+                source_id=self.sid3,
+                line_start=0,
+                line_end=5,
+                event_time=None,
+                raw_text="tsk data",
+            )
+        ]
+        self.db.insert_windows(self.sid3, w_tsk)
+        results = self.db.get_windows_by_source_prefix("vol")
+        assert len(results) == 0
+
+
+class TestSanitizeFts5QueryPipeConversion:
+    """Tests for _sanitize_fts5_query pipe-to-OR conversion."""
+
+    def test_pipe_separated_becomes_or(self) -> None:
+        """'a|b|c' becomes 'a OR b OR c'."""
+        result = _sanitize_fts5_query("a|b|c")
+        assert "a" in result
+        assert "b" in result
+        assert "c" in result
+        assert "OR" in result
+
+    def test_escaped_pipe_becomes_or(self) -> None:
+        r"""'a\\|b' is also converted to OR."""
+        result = _sanitize_fts5_query("a\\|b")
+        assert "a" in result
+        assert "b" in result
+        assert "OR" in result
+
+    def test_pipe_with_existing_or_unchanged(self) -> None:
+        """Input already containing OR still processes correctly."""
+        result = _sanitize_fts5_query("a OR b")
+        assert "OR" in result
+        assert "a" in result
+        assert "b" in result
+
+    def test_empty_segments_stripped(self) -> None:
+        """'|a||b|' does not produce empty tokens."""
+        result = _sanitize_fts5_query("|a||b|")
+        tokens = result.split()
+        assert "" not in tokens
+        assert "a" in tokens
+        assert "b" in tokens

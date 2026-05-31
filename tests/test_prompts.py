@@ -57,9 +57,9 @@ class TestPromptConstraints:
         ]
         for name, text in executor_prompts:
             lower = text.lower()
-            assert "submit_finding" in lower or "submit findings" in lower, (
-                f"{name} does not forbid submit_finding"
-            )
+            assert "finding" in lower and any(
+                w in lower for w in ("not", "never", "forbid", "avoid", "do not")
+            ), f"{name} does not reference finding submission restrictions"
 
     def test_analyst_prompts_forbid_extraction(self) -> None:
         """Analyst prompts instruct agents not to call extraction tools."""

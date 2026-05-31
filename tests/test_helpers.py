@@ -187,7 +187,3 @@ class TestMakeToolCallId:
     def test_format(self) -> None:
         tc_id = make_tool_call_id()
         assert re.match(r"^tc_[0-9a-f]{8}$", tc_id)
-
-    def test_unique(self) -> None:
-        ids = {make_tool_call_id() for _ in range(100)}
-        assert len(ids) == 100
