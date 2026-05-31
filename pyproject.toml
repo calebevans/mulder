@@ -24,6 +24,7 @@ dependencies = [
     "claude-agent-sdk>=0.2",
     "rich>=15.0",
     "pyyaml>=6.0",
+    "psutil>=5.9",
 ]
 
 [project.optional-dependencies]
