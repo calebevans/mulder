@@ -1,6 +1,6 @@
 # Architecture
 
-Mulder is a forensic investigation platform consisting of two core components: an MCP server that exposes 110+ typed forensic tools with no shell access, and an SDK orchestrator that runs multi-phase investigations with quality gates using the Claude Agent SDK.
+Mulder is a forensic investigation platform consisting of two core components: an MCP server that exposes 110+ typed forensic tools with no shell access, and an agentic orchestrator that runs multi-phase investigations with quality gates.
 
 ## System Overview
 
@@ -8,8 +8,8 @@ Mulder is a forensic investigation platform consisting of two core components: a
 flowchart TB
     subgraph container [Docker Container]
         CLI["mulder CLI"]
-        Orchestrator["SDK Orchestrator\n(multi-phase pipeline)"]
-        ClaudeCode["Claude Code\n(Agent SDK)"]
+        Orchestrator["Orchestrator\n(multi-phase pipeline)"]
+        ClaudeCode["Claude Code\n(Agent Runtime)"]
         MCPServer["MCP Server\n(FastMCP, 110+ tools)"]
         DB["SQLite + FTS5\n(per-case database)"]
         AuditLog["Audit Log\n(append-only JSONL)"]
@@ -116,9 +116,9 @@ flowchart LR
 
 The `CapacityLimiter` bounds concurrent tool execution to the `--workers` count (default 8). The `--mem-limit` and `--cpu-limit` flags set thresholds (default 90%) above which tools wait before proceeding.
 
-## SDK Orchestrator Pipeline
+## Orchestration Pipeline
 
-The orchestrator (`mulder investigate`) uses the Claude Agent SDK to run six investigation phases sequentially. Most phases use a three-agent pipeline (planner/executor/analyst) while catalog and report use single-agent sessions.
+The orchestrator (`mulder investigate`) runs six investigation phases sequentially. Most phases use a three-agent pipeline (planner/executor/analyst) while catalog and report use single-agent sessions.
 
 ```mermaid
 flowchart TD
@@ -175,6 +175,8 @@ flowchart TD
     reportGate -->|"Fail"| retryR["Retry (1.5x turn limit)"]
     retryR --> report
 ```
+
+The Alternative Narrative phase (Phase 4) is advisory: it has no hard quality gate and always proceeds to the audit phase regardless of output.
 
 ### Phase Configuration
 
@@ -313,7 +315,7 @@ erDiagram
 ### Key Tables
 
 - **case_metadata**: One row per case with evidence root path, extractor versions, and the investigation narrative (set via `submit_narrative`)
-- **sources**: One row per ingested evidence source (a Volatility plugin output, an FLS listing, etc.). The `windows_hash` column stores a BLAKE2b digest of all window content for integrity verification.
+- **sources**: One row per ingested evidence source (a Volatility plugin output, an FLS listing, etc.). The `windows_hash` column stores a BLAKE2b digest of all window content for integrity verification (BLAKE2b is used for window-content integrity, chosen for speed on large payloads; SHA-256 is used for evidence chain-of-custody, chosen for standard forensic interoperability).
 - **windows**: Character-budget chunks (4,096 chars each) from extractor output. The primary unit of searchable evidence.
 - **windows_fts**: FTS5 virtual table mirroring `windows.raw_text` for full-text keyword search
 - **findings**: Agent-submitted investigation findings with severity, confidence, MITRE ATT&CK IDs, timestamps, and evidence references
@@ -390,8 +392,8 @@ flowchart TB
 
         subgraph app [Application Layer]
             mulderCLI["mulder CLI"]
-            orchestrator2["SDK Orchestrator"]
-            claudeCode2["Claude Code + Agent SDK"]
+            orchestrator2["Orchestrator"]
+            claudeCode2["Claude Code (Agent Runtime)"]
             mcpServer2["MCP Server (FastMCP)"]
         end
 
@@ -525,3 +527,10 @@ The `ReportRenderer` uses Jinja2 templates to produce both Markdown and HTML rep
 
 - **Markdown** (`{case_id}.report.md`): Plain-text report for version control and review
 - **HTML** (`{case_id}.report.html`): Self-contained styled page with dark/light theme toggle, sidebar navigation, per-model token usage breakdown, and collapsible source window samples
+
+## Limitations and Known Considerations
+
+- **Accuracy:** Findings are classified as "confirmed" or "inference". The system does not guarantee zero false positives. The alternative narrative phase challenges findings but does not eliminate all confabulation risk.
+- **Evidence admissibility:** Reports are intended as investigative aids. Chain-of-custody records (SHA-256 hashes, append-only audit logs) do not guarantee legal admissibility.
+- **LLM failure modes:** The model may misinterpret benign artifacts as malicious. Evidence-ref validation prevents fabricated citations but not incorrect interpretations. The planner/analyst split mitigates this by separating tool execution from reasoning.
+- **Adversarial evidence:** Attackers aware of AI analysis could craft evidence to mislead the model. The adversarial evidence warning in system prompts mitigates but does not eliminate this risk.

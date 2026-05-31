@@ -5,7 +5,11 @@
 
 </div>
 
-Mulder is an [MCP](https://modelcontextprotocol.io/) server and SDK orchestrator for digital forensics. It exposes 110+ typed forensic tools (Volatility 3, Sleuthkit, Plaso, Hayabusa, YARA, and more) through the Model Context Protocol with no shell access, and includes a multi-phase SDK orchestrator that runs full investigations autonomously with quality gates between phases.
+Mulder is an [MCP](https://modelcontextprotocol.io/) server and agentic orchestrator for digital forensics. It exposes 110+ typed forensic tools (Volatility 3, Sleuthkit, Plaso, Hayabusa, YARA, and more) through the Model Context Protocol with no shell access, and includes a multi-phase agentic pipeline that runs full investigations autonomously with quality gates between phases.
+
+<p align="center">
+  <img src="docs/photos/cli.gif" alt="Mulder CLI running a forensic investigation" width="800">
+</p>
 
 <p align="center">
   <b>Example report:</b>&nbsp;
@@ -15,7 +19,7 @@ Mulder is an [MCP](https://modelcontextprotocol.io/) server and SDK orchestrator
 ## Features
 
 - **MCP server** with 110+ typed forensic tools covering memory, disk, timeline, Windows event logs, YARA, network capture, mobile, steganography, and more
-- **SDK orchestrator** that decomposes investigations into six phases (Catalog, Extraction, Cross-System Analysis, Alternative Narrative, Audit, Report) with hard quality gates between each phase
+- **Agentic pipeline** that decomposes investigations into six phases (Catalog, Extraction, Cross-System Analysis, Alternative Narrative, Audit, Report) with hard quality gates between each phase
 - **Per-case SQLite database** with FTS5 full-text search across all indexed evidence
 - **Append-only audit log** that records every tool invocation; findings must cite real tool call IDs to prevent hallucinated evidence citations
 - **Cross-source correlation** to join evidence from different artifact types within a time range
@@ -50,7 +54,7 @@ See [examples/srl-2018/](examples/srl-2018/) for the full HTML and Markdown repo
 
 ### Docker/Podman
 
-The container image comes with all forensic tools, dependencies, Claude Code, and the Mulder MCP server pre-installed. The SDK orchestrator runs inside the container, launching Claude Code sessions that connect to the MCP server automatically.
+The container image comes with all forensic tools, dependencies, Claude Code, and the Mulder MCP server pre-installed. The orchestrator runs inside the container, launching agent sessions that connect to the MCP server automatically.
 
 ```bash
 docker pull ghcr.io/calebevans/mulder:1.1
@@ -174,7 +178,7 @@ Each phase passes through a quality gate before proceeding. Failed gates trigger
 
 ### `mulder investigate <evidence_path>`
 
-Runs a full multi-phase forensic investigation using the SDK orchestrator.
+Runs a full multi-phase forensic investigation using the agentic pipeline.
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -311,9 +315,9 @@ Both formats include an executive summary, severity overview, evidence integrity
 
 Reports can be generated in two ways:
 
-1. **Automatically** by the SDK orchestrator at the end of a successful investigation
+1. **Automatically** by the orchestrator at the end of a successful investigation
 2. **CLI**: run `mulder report <case_id>` offline without starting the server
 
 ## Architecture
 
-See [docs/architecture.md](docs/architecture.md) for a detailed technical overview of the server internals, SDK orchestrator pipeline, database schema, and security model.
+See [docs/architecture.md](docs/architecture.md) for a detailed technical overview of the server internals, orchestration pipeline, database schema, and security model.

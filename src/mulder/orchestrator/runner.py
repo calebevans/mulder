@@ -61,7 +61,6 @@ logger = logging.getLogger(__name__)
 
 _RETRY_BUDGET_MULTIPLIER: float = 1.5
 _MAX_COMPACTIONS: int = 3
-_VALIDATION_SEMAPHORE_LIMIT: int = 3
 
 _MAX_SIMPLE_SYSTEMS_PER_SESSION: int = 4
 
@@ -110,7 +109,6 @@ class Orchestrator:
         self._parallel_extractions = max(1, parallel_extractions)
         self._phase_counter = 0
         self._total_phases = 0
-        self._validation_semaphore = asyncio.Semaphore(_VALIDATION_SEMAPHORE_LIMIT)
         self._proxy_config = proxy_config
         self._proxy: ProxyManager | None = None
         self._using_proxy = False
