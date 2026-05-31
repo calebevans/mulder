@@ -1,6 +1,6 @@
 """YARA threat-hunting MCP tools.
 
-All three tools are query-time only -- they shell out to the ``yara`` CLI
+All three tools are query-time only; they shell out to the ``yara`` CLI
 or Volatility 3's ``vadyarascan`` plugin on demand.  YARA is read-only by
 design: it scans files and memory but never modifies evidence.
 """
@@ -17,6 +17,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
@@ -89,9 +90,9 @@ _VALID_RULESETS = ("builtin", "standard", "full")
 def _collect_rules_for_ruleset(ruleset: str) -> list[str]:
     """Collect rule file paths for the given ruleset level.
 
-    - ``"builtin"``  -- Yara-Rules/rules (~1,500 rules)
-    - ``"standard"`` -- same as builtin
-    - ``"full"``     -- Neo23x0/signature-base only (~4,000 rules)
+    - ``"builtin"``: Yara-Rules/rules (~1,500 rules)
+    - ``"standard"``: same as builtin
+    - ``"full"``: Neo23x0/signature-base only (~4,000 rules)
 
     The two repos are NOT combined because they share duplicate rule
     identifiers that cause YARA compilation errors.  Signature-base is
@@ -276,6 +277,138 @@ def _cleanup(path: str) -> None:
         os.unlink(path)
 
 
+def _yara_error(
+    ctx: Any,
+    tc_id: str,
+    tool_name: str,
+    params: dict[str, object],
+    source: str,
+    error_msg: str,
+    t0: float,
+) -> dict[str, object]:
+    """Build a standardized YARA error response with audit logging."""
+    elapsed = (time.monotonic() - t0) * 1000
+    ctx.audit.log_tool_call(
+        tool_call_id=tc_id,
+        tool_name=tool_name,
+        params=params,
+        output_hash=hash_output({"error": error_msg}),
+        duration_ms=elapsed,
+    )
+    return {
+        "tool_call_id": tc_id,
+        "status": "error",
+        "error_message": error_msg,
+        "results": [],
+        "source": source,
+        "result_count": 0,
+    }
+
+
+def _run_yara_scan(
+    *,
+    cmd: list[str],
+    timeout: int,
+    source_name: str,
+    tool_name: str,
+    rules_args: list[str],
+    cleanup: bool,
+    ctx: Any,
+    tc_id: str,
+    t0: float,
+    audit_params: dict[str, object],
+    target_path: str,
+) -> dict[str, object]:
+    """Execute a YARA scan command with standardized error handling.
+
+    Handles TimeoutExpired, OSError, non-zero exit codes, result parsing,
+    indexing, and audit logging. Returns the final tool response dict.
+
+    Args:
+        cmd: Full command list to execute.
+        timeout: Subprocess timeout in seconds.
+        source_name: Source label for indexing (e.g. "yara.files").
+        tool_name: MCP tool name for audit logging.
+        rules_args: List of rules file paths (first is cleaned up if needed).
+        cleanup: Whether to remove the rules file after execution.
+        ctx: Application context for audit logging.
+        tc_id: Tool call identifier.
+        t0: Start time for elapsed calculation.
+        audit_params: Parameters dict for audit logging.
+        target_path: Evidence file path for indexing.
+
+    Returns:
+        Standardized tool response dict (success or error).
+    """
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+    except subprocess.TimeoutExpired:
+        if cleanup:
+            _cleanup(rules_args[0])
+        return _yara_error(
+            ctx,
+            tc_id,
+            tool_name,
+            audit_params,
+            source_name,
+            f"yara timed out after {timeout}s",
+            t0,
+        )
+    except OSError as exc:
+        if cleanup:
+            _cleanup(rules_args[0])
+        return _yara_error(
+            ctx,
+            tc_id,
+            tool_name,
+            audit_params,
+            source_name,
+            f"Failed to run yara: {exc}",
+            t0,
+        )
+
+    if cleanup:
+        _cleanup(rules_args[0])
+
+    if proc.returncode != 0 and not proc.stdout.strip():
+        stderr_text = (proc.stderr or "")[:_PREVIEW_CHAR_LIMIT]
+        return _yara_error(
+            ctx,
+            tc_id,
+            tool_name,
+            audit_params,
+            source_name,
+            f"yara exited {proc.returncode}: {stderr_text}".rstrip(": "),
+            t0,
+        )
+
+    results = _parse_yara_output(proc.stdout)
+    index_summary: dict[str, object] = {}
+    if proc.stdout.strip():
+        index_summary = extract_and_index(proc.stdout, source_name, target_path, "yara")
+
+    elapsed = (time.monotonic() - t0) * 1000
+    ctx.audit.log_tool_call(
+        tool_call_id=tc_id,
+        tool_name=tool_name,
+        params=audit_params,
+        output_hash=hash_output({"result_count": len(results)}),
+        duration_ms=elapsed,
+    )
+    return {
+        "tool_call_id": tc_id,
+        "status": "success",
+        "source": source_name,
+        "source_name": source_name,
+        "result_count": len(results),
+        "windows_indexed": index_summary.get("windows_indexed", 0),
+        "hint": (
+            f"Use search(query, source='{source_name}') or "
+            f"get_raw_output('{source_name}') to retrieve match details."
+        ),
+    }
+
+
 @mcp.tool()
 def yara_scan_files(
     target_path: str,
@@ -299,149 +432,52 @@ def yara_scan_files(
     ctx = get_ctx()
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
+    audit_params: dict[str, object] = {
+        "target_path": target_path,
+        "rules": rules is not None,
+        "ruleset": ruleset,
+    }
 
     if ruleset not in _VALID_RULESETS:
         ruleset = "builtin"
 
     if not shutil.which("yara"):
-        error_msg = "yara not found on PATH"
-        elapsed = (time.monotonic() - t0) * 1000
-        ctx.audit.log_tool_call(
-            tool_call_id=tc_id,
-            tool_name="yara_scan_files",
-            params={"target_path": target_path, "rules": rules is not None, "ruleset": ruleset},
-            output_hash=hash_output({"error": error_msg}),
-            duration_ms=elapsed,
+        return _yara_error(
+            ctx,
+            tc_id,
+            "yara_scan_files",
+            audit_params,
+            _SRC_FILE_SCAN,
+            "yara not found on PATH",
+            t0,
         )
-        return {
-            "tool_call_id": tc_id,
-            "status": "error",
-            "error_message": error_msg,
-            "results": [],
-            "source": _SRC_FILE_SCAN,
-            "result_count": 0,
-        }
 
     rules_args, cleanup = _build_rules_args(rules, ruleset=ruleset)
     if not rules_args:
-        elapsed = (time.monotonic() - t0) * 1000
-        ctx.audit.log_tool_call(
-            tool_call_id=tc_id,
-            tool_name="yara_scan_files",
-            params={"target_path": target_path, "rules": rules is not None},
-            output_hash=hash_output({"error": _ERR_NO_RULES}),
-            duration_ms=elapsed,
+        return _yara_error(
+            ctx,
+            tc_id,
+            "yara_scan_files",
+            audit_params,
+            _SRC_FILE_SCAN,
+            _ERR_NO_RULES,
+            t0,
         )
-        return {
-            "tool_call_id": tc_id,
-            "status": "error",
-            "error_message": _ERR_NO_RULES,
-            "results": [],
-            "source": _SRC_FILE_SCAN,
-            "result_count": 0,
-        }
 
     cmd = ["yara", "-r", "-s", *rules_args, target_path]
-
-    try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=_YARA_FILE_TIMEOUT,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        if cleanup:
-            _cleanup(rules_args[0])
-        error_msg = f"yara timed out after {_YARA_FILE_TIMEOUT}s scanning {target_path}"
-        elapsed = (time.monotonic() - t0) * 1000
-        ctx.audit.log_tool_call(
-            tool_call_id=tc_id,
-            tool_name="yara_scan_files",
-            params={"target_path": target_path, "rules": rules is not None},
-            output_hash=hash_output({"error": error_msg}),
-            duration_ms=elapsed,
-        )
-        return {
-            "tool_call_id": tc_id,
-            "status": "error",
-            "error_message": error_msg,
-            "results": [],
-            "source": _SRC_FILE_SCAN,
-            "result_count": 0,
-        }
-    except OSError as exc:
-        if cleanup:
-            _cleanup(rules_args[0])
-        error_msg = f"Failed to run yara: {exc}"
-        elapsed = (time.monotonic() - t0) * 1000
-        ctx.audit.log_tool_call(
-            tool_call_id=tc_id,
-            tool_name="yara_scan_files",
-            params={"target_path": target_path, "rules": rules is not None},
-            output_hash=hash_output({"error": error_msg}),
-            duration_ms=elapsed,
-        )
-        return {
-            "tool_call_id": tc_id,
-            "status": "error",
-            "error_message": error_msg,
-            "results": [],
-            "source": _SRC_FILE_SCAN,
-            "result_count": 0,
-        }
-
-    if cleanup:
-        _cleanup(rules_args[0])
-
-    if proc.returncode != 0 and not proc.stdout.strip():
-        error_msg = f"yara exited {proc.returncode}"
-        stderr_text = (proc.stderr or "")[:_PREVIEW_CHAR_LIMIT]
-        elapsed = (time.monotonic() - t0) * 1000
-        ctx.audit.log_tool_call(
-            tool_call_id=tc_id,
-            tool_name="yara_scan_files",
-            params={"target_path": target_path, "rules": rules is not None},
-            output_hash=hash_output({"error": error_msg}),
-            duration_ms=elapsed,
-        )
-        return {
-            "tool_call_id": tc_id,
-            "status": "error",
-            "error_message": f"{error_msg}: {stderr_text}".rstrip(": "),
-            "results": [],
-            "source": _SRC_FILE_SCAN,
-            "result_count": 0,
-        }
-
-    results = _parse_yara_output(proc.stdout)
-    result_count = len(results)
-
-    index_summary = {}
-    if proc.stdout.strip():
-        index_summary = extract_and_index(proc.stdout, "yara.files", target_path, "yara")
-
-    elapsed = (time.monotonic() - t0) * 1000
-    ctx.audit.log_tool_call(
-        tool_call_id=tc_id,
+    return _run_yara_scan(
+        cmd=cmd,
+        timeout=_YARA_FILE_TIMEOUT,
+        source_name="yara.files",
         tool_name="yara_scan_files",
-        params={"target_path": target_path, "rules": rules is not None},
-        output_hash=hash_output({"result_count": result_count}),
-        duration_ms=elapsed,
+        rules_args=rules_args,
+        cleanup=cleanup,
+        ctx=ctx,
+        tc_id=tc_id,
+        t0=t0,
+        audit_params=audit_params,
+        target_path=target_path,
     )
-    return {
-        "tool_call_id": tc_id,
-        "status": "success",
-        "source": _SRC_FILE_SCAN,
-        "source_name": "yara.files",
-        "result_count": result_count,
-        "windows_indexed": index_summary.get("windows_indexed", 0),
-        "hint": (
-            "Use search(query, source='yara.files') or "
-            "get_raw_output('yara.files') to retrieve match details."
-        ),
-    }
 
 
 @mcp.tool()
@@ -467,170 +503,61 @@ def yara_scan_memory(
     ctx = get_ctx()
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
+    audit_params: dict[str, object] = {"rules": rules is not None, "ruleset": ruleset}
 
     if ruleset not in _VALID_RULESETS:
         ruleset = "builtin"
 
     if not shutil.which("yara"):
-        error_msg = "yara not found on PATH"
-        elapsed = (time.monotonic() - t0) * 1000
-        ctx.audit.log_tool_call(
-            tool_call_id=tc_id,
-            tool_name="yara_scan_memory",
-            params={"rules": rules is not None, "ruleset": ruleset},
-            output_hash=hash_output({"error": error_msg}),
-            duration_ms=elapsed,
+        return _yara_error(
+            ctx,
+            tc_id,
+            "yara_scan_memory",
+            audit_params,
+            _SRC_MEMORY_SCAN,
+            "yara not found on PATH",
+            t0,
         )
-        return {
-            "tool_call_id": tc_id,
-            "status": "error",
-            "error_message": error_msg,
-            "results": [],
-            "source": _SRC_MEMORY_SCAN,
-            "result_count": 0,
-        }
 
     try:
         image_path = _find_memory_image()
     except RuntimeError as exc:
-        error_msg = str(exc)
-        elapsed = (time.monotonic() - t0) * 1000
-        ctx.audit.log_tool_call(
-            tool_call_id=tc_id,
-            tool_name="yara_scan_memory",
-            params={"rules": rules is not None},
-            output_hash=hash_output({"error": error_msg}),
-            duration_ms=elapsed,
+        return _yara_error(
+            ctx,
+            tc_id,
+            "yara_scan_memory",
+            audit_params,
+            _SRC_MEMORY_SCAN,
+            str(exc),
+            t0,
         )
-        return {
-            "tool_call_id": tc_id,
-            "status": "error",
-            "error_message": error_msg,
-            "results": [],
-            "source": _SRC_MEMORY_SCAN,
-            "result_count": 0,
-        }
 
     rules_args, cleanup = _build_rules_args(rules, ruleset=ruleset)
     if not rules_args:
-        elapsed = (time.monotonic() - t0) * 1000
-        ctx.audit.log_tool_call(
-            tool_call_id=tc_id,
-            tool_name="yara_scan_memory",
-            params={"rules": rules is not None, "ruleset": ruleset},
-            output_hash=hash_output({"error": _ERR_NO_RULES}),
-            duration_ms=elapsed,
+        return _yara_error(
+            ctx,
+            tc_id,
+            "yara_scan_memory",
+            audit_params,
+            _SRC_MEMORY_SCAN,
+            _ERR_NO_RULES,
+            t0,
         )
-        return {
-            "tool_call_id": tc_id,
-            "status": "error",
-            "error_message": _ERR_NO_RULES,
-            "results": [],
-            "source": _SRC_MEMORY_SCAN,
-            "result_count": 0,
-        }
 
     cmd = ["yara", "-s", *rules_args, image_path]
-
-    try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=_YARA_MEMORY_TIMEOUT,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        if cleanup:
-            _cleanup(rules_args[0])
-        error_msg = f"yara timed out after {_YARA_MEMORY_TIMEOUT}s scanning memory image"
-        elapsed = (time.monotonic() - t0) * 1000
-        ctx.audit.log_tool_call(
-            tool_call_id=tc_id,
-            tool_name="yara_scan_memory",
-            params={"rules": rules is not None},
-            output_hash=hash_output({"error": error_msg}),
-            duration_ms=elapsed,
-        )
-        return {
-            "tool_call_id": tc_id,
-            "status": "error",
-            "error_message": error_msg,
-            "results": [],
-            "source": _SRC_MEMORY_SCAN,
-            "result_count": 0,
-        }
-    except OSError as exc:
-        if cleanup:
-            _cleanup(rules_args[0])
-        error_msg = f"Failed to run yara: {exc}"
-        elapsed = (time.monotonic() - t0) * 1000
-        ctx.audit.log_tool_call(
-            tool_call_id=tc_id,
-            tool_name="yara_scan_memory",
-            params={"rules": rules is not None},
-            output_hash=hash_output({"error": error_msg}),
-            duration_ms=elapsed,
-        )
-        return {
-            "tool_call_id": tc_id,
-            "status": "error",
-            "error_message": error_msg,
-            "results": [],
-            "source": _SRC_MEMORY_SCAN,
-            "result_count": 0,
-        }
-
-    if cleanup:
-        _cleanup(rules_args[0])
-
-    if proc.returncode != 0 and not proc.stdout.strip():
-        error_msg = f"yara exited {proc.returncode}"
-        stderr_text = (proc.stderr or "")[:_PREVIEW_CHAR_LIMIT]
-        elapsed = (time.monotonic() - t0) * 1000
-        ctx.audit.log_tool_call(
-            tool_call_id=tc_id,
-            tool_name="yara_scan_memory",
-            params={"rules": rules is not None},
-            output_hash=hash_output({"error": error_msg}),
-            duration_ms=elapsed,
-        )
-        return {
-            "tool_call_id": tc_id,
-            "status": "error",
-            "error_message": f"{error_msg}: {stderr_text}".rstrip(": "),
-            "results": [],
-            "source": _SRC_MEMORY_SCAN,
-            "result_count": 0,
-        }
-
-    results = _parse_yara_output(proc.stdout)
-    result_count = len(results)
-
-    index_summary = {}
-    if proc.stdout.strip():
-        index_summary = extract_and_index(proc.stdout, "yara.memory", image_path, "yara")
-
-    elapsed = (time.monotonic() - t0) * 1000
-    ctx.audit.log_tool_call(
-        tool_call_id=tc_id,
+    return _run_yara_scan(
+        cmd=cmd,
+        timeout=_YARA_MEMORY_TIMEOUT,
+        source_name="yara.memory",
         tool_name="yara_scan_memory",
-        params={"rules": rules is not None},
-        output_hash=hash_output({"result_count": result_count}),
-        duration_ms=elapsed,
+        rules_args=rules_args,
+        cleanup=cleanup,
+        ctx=ctx,
+        tc_id=tc_id,
+        t0=t0,
+        audit_params=audit_params,
+        target_path=image_path,
     )
-    return {
-        "tool_call_id": tc_id,
-        "status": "success",
-        "source": _SRC_MEMORY_SCAN,
-        "source_name": "yara.memory",
-        "result_count": result_count,
-        "windows_indexed": index_summary.get("windows_indexed", 0),
-        "hint": (
-            "Use search(query, source='yara.memory') or "
-            "get_raw_output('yara.memory') to retrieve match details."
-        ),
-    }
 
 
 @mcp.tool()
@@ -649,67 +576,45 @@ def yara_scan_with_volatility(
     ctx = get_ctx()
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
+    audit_params: dict[str, object] = {"pid": pid, "rules": rules is not None}
 
     try:
         vol_cmd = _find_vol_binary()
     except RuntimeError as exc:
-        error_msg = str(exc)
-        elapsed = (time.monotonic() - t0) * 1000
-        ctx.audit.log_tool_call(
-            tool_call_id=tc_id,
-            tool_name="yara_scan_with_volatility",
-            params={"pid": pid, "rules": rules is not None},
-            output_hash=hash_output({"error": error_msg}),
-            duration_ms=elapsed,
+        return _yara_error(
+            ctx,
+            tc_id,
+            "yara_scan_with_volatility",
+            audit_params,
+            _SRC_VOL_SCAN,
+            str(exc),
+            t0,
         )
-        return {
-            "tool_call_id": tc_id,
-            "status": "error",
-            "error_message": error_msg,
-            "results": [],
-            "source": _SRC_VOL_SCAN,
-            "result_count": 0,
-        }
 
     try:
         image_path = _find_memory_image()
     except RuntimeError as exc:
-        error_msg = str(exc)
-        elapsed = (time.monotonic() - t0) * 1000
-        ctx.audit.log_tool_call(
-            tool_call_id=tc_id,
-            tool_name="yara_scan_with_volatility",
-            params={"pid": pid, "rules": rules is not None},
-            output_hash=hash_output({"error": error_msg}),
-            duration_ms=elapsed,
+        return _yara_error(
+            ctx,
+            tc_id,
+            "yara_scan_with_volatility",
+            audit_params,
+            _SRC_VOL_SCAN,
+            str(exc),
+            t0,
         )
-        return {
-            "tool_call_id": tc_id,
-            "status": "error",
-            "error_message": error_msg,
-            "results": [],
-            "source": _SRC_VOL_SCAN,
-            "result_count": 0,
-        }
 
     rules_args, cleanup = _build_rules_args(rules)
     if not rules_args:
-        elapsed = (time.monotonic() - t0) * 1000
-        ctx.audit.log_tool_call(
-            tool_call_id=tc_id,
-            tool_name="yara_scan_with_volatility",
-            params={"pid": pid, "rules": rules is not None},
-            output_hash=hash_output({"error": _ERR_NO_RULES}),
-            duration_ms=elapsed,
+        return _yara_error(
+            ctx,
+            tc_id,
+            "yara_scan_with_volatility",
+            audit_params,
+            _SRC_VOL_SCAN,
+            _ERR_NO_RULES,
+            t0,
         )
-        return {
-            "tool_call_id": tc_id,
-            "status": "error",
-            "error_message": _ERR_NO_RULES,
-            "results": [],
-            "source": _SRC_VOL_SCAN,
-            "result_count": 0,
-        }
 
     rules_path = rules_args[0]
     cmd = [
@@ -723,103 +628,16 @@ def yara_scan_with_volatility(
     if pid is not None:
         cmd.extend(["--pid", str(pid)])
 
-    try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=_YARA_VOL_TIMEOUT,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        if cleanup:
-            _cleanup(rules_path)
-        error_msg = f"Volatility vadyarascan timed out after {_YARA_VOL_TIMEOUT}s"
-        elapsed = (time.monotonic() - t0) * 1000
-        ctx.audit.log_tool_call(
-            tool_call_id=tc_id,
-            tool_name="yara_scan_with_volatility",
-            params={"pid": pid, "rules": rules is not None},
-            output_hash=hash_output({"error": error_msg}),
-            duration_ms=elapsed,
-        )
-        return {
-            "tool_call_id": tc_id,
-            "status": "error",
-            "error_message": error_msg,
-            "results": [],
-            "source": _SRC_VOL_SCAN,
-            "result_count": 0,
-        }
-    except OSError as exc:
-        if cleanup:
-            _cleanup(rules_path)
-        error_msg = f"Failed to run Volatility: {exc}"
-        elapsed = (time.monotonic() - t0) * 1000
-        ctx.audit.log_tool_call(
-            tool_call_id=tc_id,
-            tool_name="yara_scan_with_volatility",
-            params={"pid": pid, "rules": rules is not None},
-            output_hash=hash_output({"error": error_msg}),
-            duration_ms=elapsed,
-        )
-        return {
-            "tool_call_id": tc_id,
-            "status": "error",
-            "error_message": error_msg,
-            "results": [],
-            "source": _SRC_VOL_SCAN,
-            "result_count": 0,
-        }
-
-    if cleanup:
-        _cleanup(rules_path)
-
-    if proc.returncode != 0 and not proc.stdout.strip():
-        error_msg = f"Volatility vadyarascan exited {proc.returncode}"
-        stderr_text = (proc.stderr or "")[:_PREVIEW_CHAR_LIMIT]
-        elapsed = (time.monotonic() - t0) * 1000
-        ctx.audit.log_tool_call(
-            tool_call_id=tc_id,
-            tool_name="yara_scan_with_volatility",
-            params={"pid": pid, "rules": rules is not None},
-            output_hash=hash_output({"error": error_msg}),
-            duration_ms=elapsed,
-        )
-        return {
-            "tool_call_id": tc_id,
-            "status": "error",
-            "error_message": f"{error_msg}: {stderr_text}".rstrip(": "),
-            "results": [],
-            "source": _SRC_VOL_SCAN,
-            "result_count": 0,
-        }
-
-    output = proc.stdout.strip()
-    lines = [ln for ln in output.splitlines() if ln.strip()] if output else []
-    result_count = len(lines)
-
-    index_summary = {}
-    if output:
-        index_summary = extract_and_index(output, "yara.volatility", image_path, "volatility_yara")
-
-    elapsed = (time.monotonic() - t0) * 1000
-    ctx.audit.log_tool_call(
-        tool_call_id=tc_id,
+    return _run_yara_scan(
+        cmd=cmd,
+        timeout=_YARA_VOL_TIMEOUT,
+        source_name="yara.volatility",
         tool_name="yara_scan_with_volatility",
-        params={"pid": pid, "rules": rules is not None},
-        output_hash=hash_output({"result_count": result_count}),
-        duration_ms=elapsed,
+        rules_args=rules_args,
+        cleanup=cleanup,
+        ctx=ctx,
+        tc_id=tc_id,
+        t0=t0,
+        audit_params=audit_params,
+        target_path=image_path,
     )
-    return {
-        "tool_call_id": tc_id,
-        "status": "success",
-        "source": _SRC_VOL_SCAN,
-        "source_name": "yara.volatility",
-        "result_count": result_count,
-        "windows_indexed": index_summary.get("windows_indexed", 0),
-        "hint": (
-            "Use search(query, source='yara.volatility') or "
-            "get_raw_output('yara.volatility') to retrieve match details."
-        ),
-    }

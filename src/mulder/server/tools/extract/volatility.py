@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -22,7 +21,6 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 _PLUGIN_TIMEOUT = 600
-_TOOL_TIMEOUT = 600
 
 _VOL_PLUGIN_MAP: dict[str, str] = {
     "pslist": "windows.pslist.PsList",
@@ -52,11 +50,6 @@ _NETSCAN_FALLBACKS: list[str] = [
     "windows.connscan.ConnScan",
     "windows.sockscan.SockScan",
 ]
-
-
-def _require_binary(name: str) -> str | None:
-    """Return the binary path if found, else None."""
-    return shutil.which(name)
 
 
 def _resolve_plugin_name(plugin: str) -> str:
@@ -240,8 +233,6 @@ def _render_treegrid_to_text(treegrid: Any) -> str:
             val = values[i]
             if val is None:
                 row.append("")
-            elif hasattr(val, "lookup"):
-                row.append(str(val))
             else:
                 row.append(str(val))
         accumulator.append("\t".join(row))

@@ -14,6 +14,7 @@ from typing import Any
 
 from mulder.models import SourceRow, WindowRow
 from mulder.patterns import SUSPICIOUS_PATHS
+from mulder.server import source_names as _sn
 from mulder.server.app import get_ctx
 from mulder.server.helpers import (
     extract_pid,
@@ -24,38 +25,38 @@ from mulder.server.helpers import (
 __all__: list[str] = []
 
 # ---------------------------------------------------------------------------
-# Source-name constants
+# Source-name constants (canonical definitions in mulder.server.source_names)
 # ---------------------------------------------------------------------------
 
-_SRC_NETSCAN = "volatility.netscan"
-_SRC_PSSCAN = "volatility.psscan"
-_SRC_PSLIST = "volatility.pslist"
-_SRC_ENVARS = "volatility.envars"
-_SRC_PRIVS = "volatility.privs"
-_SRC_CMDLINE = "volatility.cmdline"
-_SRC_PSTREE = "volatility.pstree"
-_SRC_DLLLIST = "volatility.dlllist"
-_SRC_MODULES = "volatility.modules"
-_SRC_MODSCAN = "volatility.modscan"
-_SRC_PLASO = "plaso.timeline"
-_SRC_EVTX_SECURITY = "evtx.security"
-_SRC_EVTX_SYSTEM = "evtx.system"
-_SRC_EZ_SHIMCACHE = "ez.shimcache"
-_SRC_EZ_AMCACHE = "ez.amcache"
-_SRC_EZ_PREFETCH = "ez.prefetch"
-_SRC_EZ_EVTX_SECURITY = "ez.evtx.security"
-_SRC_EZ_SRUM = "ez.srum"
-_SRC_EZ_USNJRNL = "ez.usnjrnl"
-_SRC_EZ_MFT = "ez.mft"
-_SRC_EZ_JUMPLISTS = "ez.jumplists"
-_SRC_EZ_LNKFILES = "ez.lnkfiles"
-_SRC_TSK_FILELIST = "tsk.filelist"
-_SRC_BULK_URL = "bulk.url"
-_SRC_BULK_EMAIL = "bulk.email"
-_SRC_BULK_DOMAIN = "bulk.domain"
-_SRC_PCAP_CONVERSATIONS = "pcap.conversations"
-_SRC_PCAP_DNS = "pcap.dns"
-_SRC_PCAP_HTTP = "pcap.http"
+_SRC_NETSCAN = _sn.SRC_NETSCAN
+_SRC_PSSCAN = _sn.SRC_PSSCAN
+_SRC_PSLIST = _sn.SRC_PSLIST
+_SRC_ENVARS = _sn.SRC_ENVARS
+_SRC_PRIVS = _sn.SRC_PRIVS
+_SRC_CMDLINE = _sn.SRC_CMDLINE
+_SRC_PSTREE = _sn.SRC_PSTREE
+_SRC_DLLLIST = _sn.SRC_DLLLIST
+_SRC_MODULES = _sn.SRC_MODULES
+_SRC_MODSCAN = _sn.SRC_MODSCAN
+_SRC_PLASO = _sn.SRC_PLASO_TIMELINE
+_SRC_EVTX_SECURITY = _sn.SRC_EVTX_SECURITY
+_SRC_EVTX_SYSTEM = _sn.SRC_EVTX_SYSTEM
+_SRC_EZ_SHIMCACHE = _sn.SRC_EZ_SHIMCACHE
+_SRC_EZ_AMCACHE = _sn.SRC_EZ_AMCACHE
+_SRC_EZ_PREFETCH = _sn.SRC_EZ_PREFETCH
+_SRC_EZ_EVTX_SECURITY = _sn.SRC_EZ_EVTX_SECURITY
+_SRC_EZ_SRUM = _sn.SRC_EZ_SRUM
+_SRC_EZ_USNJRNL = _sn.SRC_EZ_USNJRNL
+_SRC_EZ_MFT = _sn.SRC_EZ_MFT
+_SRC_EZ_JUMPLISTS = _sn.SRC_EZ_JUMPLISTS
+_SRC_EZ_LNKFILES = _sn.SRC_EZ_LNKFILES
+_SRC_TSK_FILELIST = _sn.SRC_TSK_FILELIST
+_SRC_BULK_URL = _sn.SRC_BULK_URL
+_SRC_BULK_EMAIL = _sn.SRC_BULK_EMAIL
+_SRC_BULK_DOMAIN = _sn.SRC_BULK_DOMAIN
+_SRC_PCAP_CONVERSATIONS = _sn.SRC_PCAP_CONVERSATIONS
+_SRC_PCAP_DNS = _sn.SRC_PCAP_DNS
+_SRC_PCAP_HTTP = _sn.SRC_PCAP_HTTP
 
 # ---------------------------------------------------------------------------
 # Shared executable name constants (used by process + persistence modules)

@@ -1,6 +1,6 @@
 """Core read-only MCP tool implementations for Mulder.
 
-Every tool in this module is a pure query -- no destructive operations exist
+Every tool in this module is a pure query; no destructive operations exist
 in the Mulder MCP surface.  Evidence integrity is enforced by the API design,
 not by prompts.
 """
@@ -18,6 +18,7 @@ from typing import Any
 from sqlalchemy import select as sa_select
 
 from mulder.db import windows_t
+from mulder.server import source_names as _sn
 from mulder.server.app import get_ctx, mcp
 from mulder.server.helpers import (
     _DEFAULT_SEARCH_LIMIT,
@@ -31,6 +32,16 @@ from mulder.server.helpers import (
     serialize_windows,
     windowed_response,
 )
+
+_SRC_PSLIST = _sn.SRC_PSLIST
+_SRC_PSTREE = _sn.SRC_PSTREE
+_SRC_PSSCAN = _sn.SRC_PSSCAN
+_SRC_ENVARS = _sn.SRC_ENVARS
+_SRC_PRIVS = _sn.SRC_PRIVS
+_SRC_MODULES = _sn.SRC_MODULES
+_SRC_MODSCAN = _sn.SRC_MODSCAN
+_SRC_USERASSIST = _sn.SRC_USERASSIST
+_SRC_FILESCAN = _sn.SRC_FILESCAN
 
 _RAW_TEXT_SEARCH_CAP = 300
 _RAW_TEXT_CORRELATE_CAP = 200
@@ -59,23 +70,12 @@ def _serialize_scored(scored: list[Any]) -> list[dict[str, object]]:
     ]
 
 
-_SRC_PSLIST = "volatility.pslist"
-_SRC_PSTREE = "volatility.pstree"
-_SRC_PSSCAN = "volatility.psscan"
-_SRC_ENVARS = "volatility.envars"
-_SRC_PRIVS = "volatility.privs"
-_SRC_MODULES = "volatility.modules"
-_SRC_MODSCAN = "volatility.modscan"
-_SRC_USERASSIST = "volatility.userassist"
-_SRC_FILESCAN = "volatility.filescan"
-
-
 @mcp.tool()
 def list_sources() -> dict[str, object]:
     """List every evidence source indexed for the active case.
 
     Returns source names, file paths, hash digests, extractors used,
-    and line counts.  Initially empty for a new case -- grows as the
+    and line counts.  Initially empty for a new case; grows as the
     agent runs Tier 2 extraction tools.  Read-only.
     """
     ctx = get_ctx()
@@ -747,7 +747,7 @@ def get_raw_output(
     Args:
         source_name: Exact source name or prefix (e.g. "volatility.pslist"
             matches "volatility.pslist" and "volatility.pslist.host1").
-        after_id: Cursor -- return windows with ID > this value.
+        after_id: Cursor for keyset pagination; return windows with ID > this value.
             Use 0 for the first page, then pass ``next_after_id`` from
             the response to get subsequent pages.
         limit: Maximum number of windows to return.
@@ -803,7 +803,7 @@ def decode_payload(
     """Safely decode an encoded payload found in evidence.
 
     Supports base64, hex, UTF-16LE (PowerShell -EncodedCommand), and
-    Python pickle (inspection only -- never executed).  Use this instead
+    Python pickle (inspection only, never executed).  Use this instead
     of shell commands to decode suspicious strings.  Read-only and safe:
     no code is ever executed.
 
@@ -1116,7 +1116,6 @@ def get_timeline(
         "total_events": total_events,
         "has_more": total_events > limit,
         "sources_represented": sorted({str(e["source_name"]) for e in capped}),
-        "elapsed_ms": round(elapsed, 1),
     }
     if total_events > limit:
         response["hint"] = (
@@ -1164,7 +1163,6 @@ def bookmark_window(
         "bookmark_id": bookmark_id,
         "window_id": window_id,
         "note": note,
-        "elapsed_ms": round(elapsed, 1),
     }
 
 
@@ -1209,7 +1207,6 @@ def get_bookmarks() -> dict[str, object]:
         "status": "success",
         "results": enriched,
         "result_count": len(enriched),
-        "elapsed_ms": round(elapsed, 1),
     }
 
 
@@ -1239,7 +1236,6 @@ def remove_bookmark(bookmark_id: int) -> dict[str, object]:
         "status": "success" if removed else "not_found",
         "bookmark_id": bookmark_id,
         "removed": removed,
-        "elapsed_ms": round(elapsed, 1),
     }
 
 

@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import time
 
+from mulder.server import source_names as _sn
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
@@ -25,12 +26,11 @@ from mulder.server.helpers import (
 
 logger = logging.getLogger(__name__)
 
-_SRC_PARTITIONS = "tsk.partitions"
-_SRC_FILELIST = "tsk.filelist"
-_SRC_TIMELINE = "tsk.timeline"
-_SRC_FSSTAT = "tsk.fsstat"
-_SRC_ICAT = "tsk.icat"
-_SRC_ISTAT = "tsk.istat"
+_SRC_PARTITIONS = _sn.SRC_TSK_PARTITIONS
+_SRC_FILELIST = _sn.SRC_TSK_FILELIST
+_SRC_TIMELINE = _sn.SRC_TSK_TIMELINE
+_SRC_ICAT = _sn.SRC_TSK_ICAT
+_SRC_ISTAT = _sn.SRC_TSK_ISTAT
 
 _ICAT_TIMEOUT = 30
 _ISTAT_TIMEOUT = 15

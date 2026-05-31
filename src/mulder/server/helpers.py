@@ -1,19 +1,55 @@
-"""Shared helper functions for MCP tool modules."""
+"""Shared helper functions for MCP tool modules.
+
+Convention: elapsed_ms is recorded in the audit log for every tool call.
+It should NOT be included in the response dict unless wall-clock time
+is meaningful to the consumer (e.g. verify_evidence_integrity).
+"""
 
 from __future__ import annotations
 
 import hashlib
 import json
 import re
+import shutil
+import subprocess
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from mulder.server.app import get_ctx
+from mulder.server.app import get_ctx, has_ctx
 
 current_batch_id: ContextVar[str | None] = ContextVar("current_batch_id", default=None)
+
+TOOL_TIMEOUT: int = 600
+"""Default subprocess timeout (seconds) shared across extraction tools."""
+
+
+def require_binary(name: str) -> str | None:
+    """Return the absolute path to *name* if found on PATH, else None."""
+    return shutil.which(name)
+
+
+def run_subprocess(
+    cmd: list[str],
+    *,
+    timeout: int = TOOL_TIMEOUT,
+    text: bool = True,
+) -> subprocess.CompletedProcess[str] | str:
+    """Run a subprocess with standardized timeout handling.
+
+    Returns the CompletedProcess on success, or an error message string
+    on timeout/OS failure. Callers check ``isinstance(result, str)`` to
+    detect failures.
+    """
+    try:
+        return subprocess.run(cmd, capture_output=True, text=text, timeout=timeout, check=False)
+    except subprocess.TimeoutExpired:
+        return f"{cmd[0]} timed out after {timeout}s"
+    except OSError as exc:
+        return f"Failed to run {cmd[0]}: {exc}"
 
 
 def make_tool_call_id() -> str:
@@ -49,8 +85,12 @@ def hash_output(output: object) -> str:
         if isinstance(output, dict) and len(output) > 100:
             return _blake2b_hex(f"dict:keys={sorted(output.keys())}".encode())
         probe = json.dumps(output, sort_keys=True, default=str)
+        if len(probe) > _HASH_SIZE_THRESHOLD:
+            return _blake2b_hex(f"large:{len(probe)}:{probe[:256]}".encode())
         return _blake2b_hex(probe.encode())
     raw = json.dumps(output, sort_keys=True, default=str)
+    if len(raw) > _HASH_SIZE_THRESHOLD:
+        return _blake2b_hex(f"large:{len(raw)}:{raw[:256]}".encode())
     return _blake2b_hex(raw.encode())
 
 
@@ -101,15 +141,16 @@ def windowed_response(
     total = len(windows)
     results = serialize_windows(windows, cap=cap, text_cap=text_cap)
 
-    ctx = get_ctx()
-    ctx.audit.log_tool_call(
-        tool_call_id=tc_id,
-        tool_name=tool_name,
-        params=params,
-        output_hash=hash_output({"total": total, "returned": len(results)}),
-        duration_ms=elapsed_ms,
-        batch_id=current_batch_id.get(),
-    )
+    if has_ctx():
+        ctx = get_ctx()
+        ctx.audit.log_tool_call(
+            tool_call_id=tc_id,
+            tool_name=tool_name,
+            params=params,
+            output_hash=hash_output({"total": total, "returned": len(results)}),
+            duration_ms=elapsed_ms,
+            batch_id=current_batch_id.get(),
+        )
     resp: dict[str, object] = {
         "tool_call_id": tc_id,
         "status": "success",
@@ -146,15 +187,16 @@ def tool_response(
     elapsed_ms: float = 0,
 ) -> dict[str, object]:
     """Build an audited success response and log the tool call."""
-    ctx = get_ctx()
-    ctx.audit.log_tool_call(
-        tool_call_id=tc_id,
-        tool_name=tool_name,
-        params=params,
-        output_hash=hash_output(results),
-        duration_ms=elapsed_ms,
-        batch_id=current_batch_id.get(),
-    )
+    if has_ctx():
+        ctx = get_ctx()
+        ctx.audit.log_tool_call(
+            tool_call_id=tc_id,
+            tool_name=tool_name,
+            params=params,
+            output_hash=hash_output(results),
+            duration_ms=elapsed_ms,
+            batch_id=current_batch_id.get(),
+        )
     return {
         "tool_call_id": tc_id,
         "status": "success",
@@ -173,15 +215,16 @@ def error_response(
     suggestion: str | None = None,
 ) -> dict[str, object]:
     """Build an audited error response and log the tool call."""
-    ctx = get_ctx()
-    ctx.audit.log_tool_call(
-        tool_call_id=tc_id,
-        tool_name=tool_name,
-        params=params,
-        output_hash=hash_output({"error": error}),
-        duration_ms=elapsed_ms,
-        batch_id=current_batch_id.get(),
-    )
+    if has_ctx():
+        ctx = get_ctx()
+        ctx.audit.log_tool_call(
+            tool_call_id=tc_id,
+            tool_name=tool_name,
+            params=params,
+            output_hash=hash_output({"error": error}),
+            duration_ms=elapsed_ms,
+            batch_id=current_batch_id.get(),
+        )
     result: dict[str, object] = {
         "tool_call_id": tc_id,
         "status": "error",
@@ -226,3 +269,69 @@ def extract_module_names(windows: Sequence[Any]) -> dict[str, list[Any]]:
             name = m.group(1).strip().lower()
             mod_map[name].append(w)
     return dict(mod_map)
+
+
+def run_cli_tool(
+    *,
+    binary: str,
+    cmd: list[str],
+    tool_name: str,
+    params: dict[str, object],
+    source_name: str,
+    source_path: str,
+    extractor_label: str,
+    timeout: int = TOOL_TIMEOUT,
+    check_exists: str | None = None,
+) -> dict[str, object]:
+    """Run a CLI forensic tool and index its stdout output.
+
+    Handles binary availability check, subprocess execution with timeout,
+    error reporting, extract-and-index, and audit logging in a single call.
+
+    Args:
+        binary: Name of the required binary (checked via require_binary).
+        cmd: Full command list to pass to subprocess.run.
+        tool_name: MCP tool name for audit logging.
+        params: Tool parameters dict for audit logging.
+        source_name: Source label for indexing (e.g. "strings.output").
+        source_path: Evidence file path for source registration.
+        extractor_label: Short extractor name for the DB record.
+        timeout: Subprocess timeout in seconds.
+        check_exists: Optional file path to verify exists before running.
+
+    Returns:
+        Standardized tool response dict (success or error).
+    """
+    import time
+
+    from mulder.server.extract_helpers import extract_and_index
+
+    tc_id = make_tool_call_id()
+    t0 = time.monotonic()
+
+    if not require_binary(binary):
+        return error_response(
+            tc_id,
+            tool_name,
+            params,
+            f"{binary} not found on PATH",
+            error_type="binary_missing",
+        )
+
+    if check_exists and not Path(check_exists).exists():
+        return error_response(
+            tc_id,
+            tool_name,
+            params,
+            f"File not found: {check_exists}",
+            error_type="file_not_found",
+        )
+
+    result = run_subprocess(cmd, timeout=timeout)
+    if isinstance(result, str):
+        return error_response(tc_id, tool_name, params, result, error_type="timeout")
+    proc = result
+
+    summary = extract_and_index(proc.stdout.strip(), source_name, source_path, extractor_label)
+    elapsed = (time.monotonic() - t0) * 1000
+    return tool_response(tc_id, tool_name, params, summary, source_name, elapsed)

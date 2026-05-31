@@ -3,7 +3,7 @@
 submit_finding enforces evidence-backed findings at the API boundary:
 every evidence_ref must correspond to a real tool_call_id recorded in
 the session's audit log.  This is the architectural guardrail that
-replaces prompt-based hallucination prevention.
+replaces prompt-driven hallucination prevention.
 
 finalize_report enforces structural hard gates that reject incomplete
 investigations.  The gates verify minimum finding counts, timestamp
@@ -25,7 +25,7 @@ from mulder.models import AuditSummary, CaseMetadataRow, Finding, SourceRow
 from mulder.patterns import source_is_cited
 from mulder.report.renderer import ReportRenderer
 from mulder.server.app import get_ctx, get_job_store, mcp
-from mulder.server.helpers import hash_output, make_tool_call_id
+from mulder.server.helpers import error_response, hash_output, make_tool_call_id
 
 logger = logging.getLogger(__name__)
 
@@ -154,7 +154,7 @@ def _sanitize_event_time(ts: str | None) -> tuple[str | None, str | None]:
     if _MIDNIGHT_RE.search(ts):
         return None, (
             f"Timestamp '{ts}' looks like a day-precision placeholder "
-            f"(T00:00:00). Nullified -- omit timestamps you don't have "
+            f"(T00:00:00). Nullified; omit timestamps you don't have "
             f"precise values for."
         )
     try:
@@ -202,22 +202,15 @@ def submit_finding(
     invalid_refs = [ref for ref in evidence_refs if not ctx.audit.has_tool_call(ref)]
     if invalid_refs:
         recent_ids = sorted(ctx.audit.tool_call_ids)[-10:]
-        error: dict[str, object] = {
-            "tool_call_id": tc_id,
-            "error": (
-                f"Invalid evidence_ref(s): {', '.join(invalid_refs)} not found in the audit log"
-            ),
-            "valid_refs": recent_ids,
-        }
-        elapsed = (time.monotonic() - t0) * 1000
-        ctx.audit.log_tool_call(
-            tool_call_id=tc_id,
-            tool_name="submit_finding",
-            params={"title": title, "evidence_refs": evidence_refs},
-            output_hash=hash_output(error),
-            duration_ms=elapsed,
+        resp = error_response(
+            tc_id,
+            "submit_finding",
+            {"title": title, "evidence_refs": evidence_refs},
+            f"Invalid evidence_ref(s): {', '.join(invalid_refs)} not found in the audit log",
+            (time.monotonic() - t0) * 1000,
         )
-        return error
+        resp["valid_refs"] = recent_ids
+        return resp
 
     case_metadata = ctx.db.get_case_metadata()
     finding_id = f"f_{uuid4().hex[:8]}"
@@ -247,19 +240,14 @@ def submit_finding(
             submitted_at=now,
         )
     except Exception as exc:
-        error = {
-            "tool_call_id": tc_id,
-            "error": f"Validation error: {exc}",
-        }
-        elapsed = (time.monotonic() - t0) * 1000
-        ctx.audit.log_tool_call(
-            tool_call_id=tc_id,
-            tool_name="submit_finding",
-            params={"title": title, "evidence_refs": evidence_refs},
-            output_hash=hash_output(error),
-            duration_ms=elapsed,
+        return error_response(
+            tc_id,
+            "submit_finding",
+            {"title": title, "evidence_refs": evidence_refs},
+            f"Validation error: {exc}",
+            (time.monotonic() - t0) * 1000,
+            error_type="validation",
         )
-        return error
 
     ctx.db.insert_finding(finding)
     ctx.audit.log_finding_submission(finding_id, evidence_refs)
@@ -330,41 +318,28 @@ def update_finding(
     t0 = time.monotonic()
 
     if not ctx.db._finding_exists(finding_id):
-        error: dict[str, object] = {
-            "tool_call_id": tc_id,
-            "error": f"Finding '{finding_id}' not found.",
-        }
-        elapsed = (time.monotonic() - t0) * 1000
-        ctx.audit.log_tool_call(
-            tool_call_id=tc_id,
-            tool_name="update_finding",
-            params={"finding_id": finding_id},
-            output_hash=hash_output(error),
-            duration_ms=elapsed,
+        return error_response(
+            tc_id,
+            "update_finding",
+            {"finding_id": finding_id},
+            f"Finding '{finding_id}' not found.",
+            (time.monotonic() - t0) * 1000,
+            error_type="not_found",
         )
-        return error
 
     if evidence_refs is not None:
         invalid_refs = [ref for ref in evidence_refs if not ctx.audit.has_tool_call(ref)]
         if invalid_refs:
             recent_ids = sorted(ctx.audit.tool_call_ids)[-10:]
-            error = {
-                "tool_call_id": tc_id,
-                "error": (
-                    f"Invalid evidence_ref(s): {', '.join(invalid_refs)} "
-                    f"not found in the audit log"
-                ),
-                "valid_refs": recent_ids,
-            }
-            elapsed = (time.monotonic() - t0) * 1000
-            ctx.audit.log_tool_call(
-                tool_call_id=tc_id,
-                tool_name="update_finding",
-                params={"finding_id": finding_id, "evidence_refs": evidence_refs},
-                output_hash=hash_output(error),
-                duration_ms=elapsed,
+            resp = error_response(
+                tc_id,
+                "update_finding",
+                {"finding_id": finding_id, "evidence_refs": evidence_refs},
+                f"Invalid evidence_ref(s): {', '.join(invalid_refs)} not found in the audit log",
+                (time.monotonic() - t0) * 1000,
             )
-            return error
+            resp["valid_refs"] = recent_ids
+            return resp
 
     ts_warnings: list[str] = []
     if event_time_start is not None:
@@ -434,19 +409,14 @@ def delete_finding(finding_id: str) -> dict[str, object]:
     deleted = ctx.db.delete_finding(finding_id)
 
     if not deleted:
-        error: dict[str, object] = {
-            "tool_call_id": tc_id,
-            "error": f"Finding '{finding_id}' not found.",
-        }
-        elapsed = (time.monotonic() - t0) * 1000
-        ctx.audit.log_tool_call(
-            tool_call_id=tc_id,
-            tool_name="delete_finding",
-            params={"finding_id": finding_id},
-            output_hash=hash_output(error),
-            duration_ms=elapsed,
+        return error_response(
+            tc_id,
+            "delete_finding",
+            {"finding_id": finding_id},
+            f"Finding '{finding_id}' not found.",
+            (time.monotonic() - t0) * 1000,
+            error_type="not_found",
         )
-        return error
 
     result: dict[str, object] = {
         "tool_call_id": tc_id,
@@ -474,7 +444,7 @@ def submit_narrative(narrative: str) -> dict[str, object]:
     not bullet points.  This becomes the "Report" page in the final
     output.
 
-    Can be called multiple times -- each call replaces the previous
+    Can be called multiple times; each call replaces the previous
     narrative.
     """
     ctx = get_ctx()
@@ -512,12 +482,15 @@ def get_findings(limit: int = 20, offset: int = 0) -> dict[str, object]:
         offset: Number of findings to skip (default 0, most recent first).
     """
     ctx = get_ctx()
-    # TODO: Push limit/offset to CaseDB.get_findings() to avoid fetching all rows.
+    tc_id = make_tool_call_id()
+    t0 = time.monotonic()
+
     all_findings = ctx.db.get_findings()
     total = len(all_findings)
     page = all_findings[offset : offset + limit]
     results = [f.model_dump() for f in page]
     resp: dict[str, object] = {
+        "tool_call_id": tc_id,
         "status": "success",
         "results": results,
         "result_count": len(results),
@@ -528,6 +501,15 @@ def get_findings(limit: int = 20, offset: int = 0) -> dict[str, object]:
         resp["hint"] = (
             f"Showing {len(results)} of {total} findings. Use offset={offset + limit} to see more."
         )
+
+    elapsed = (time.monotonic() - t0) * 1000
+    ctx.audit.log_tool_call(
+        tool_call_id=tc_id,
+        tool_name="get_findings",
+        params={"limit": limit, "offset": offset},
+        output_hash=hash_output(resp),
+        duration_ms=elapsed,
+    )
     return resp
 
 

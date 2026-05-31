@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import re
-import shutil
 import subprocess
 import tempfile
 import time
@@ -14,8 +13,10 @@ from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
     _HINT_CHAR_LIMIT,
+    TOOL_TIMEOUT,
     error_response,
     make_tool_call_id,
+    require_binary,
     tool_response,
 )
 
@@ -31,17 +32,10 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-_TOOL_TIMEOUT = 600
-
-
-def _require_binary(name: str) -> str | None:
-    """Return the binary path if found, else None."""
-    return shutil.which(name)
-
 
 def _detect_partition_offset(image_path: str) -> int:
     """Run mmls to find the main partition offset (in sectors)."""
-    if not _require_binary("mmls"):
+    if not require_binary("mmls"):
         return 0
     try:
         proc = subprocess.run(
@@ -169,7 +163,7 @@ def run_mmls(image_path: str) -> dict[str, object]:
     t0 = time.monotonic()
     params = {"image_path": image_path}
 
-    if not _require_binary("mmls"):
+    if not require_binary("mmls"):
         return error_response(
             tc_id, "run_mmls", params, "mmls not found on PATH", error_type="binary_missing"
         )
@@ -211,7 +205,7 @@ def run_fls(image_path: str, partition_offset: int | None = None) -> dict[str, o
     t0 = time.monotonic()
     params = {"image_path": image_path, "partition_offset": partition_offset}
 
-    if not _require_binary("fls"):
+    if not require_binary("fls"):
         return error_response(
             tc_id, "run_fls", params, "fls not found on PATH", error_type="binary_missing"
         )
@@ -225,7 +219,7 @@ def run_fls(image_path: str, partition_offset: int | None = None) -> dict[str, o
     cmd.append(image_path)
 
     try:
-        proc = subprocess.run(cmd, capture_output=True, timeout=_TOOL_TIMEOUT, check=False)
+        proc = subprocess.run(cmd, capture_output=True, timeout=TOOL_TIMEOUT, check=False)
     except subprocess.TimeoutExpired:
         return error_response(tc_id, "run_fls", params, "fls timed out", error_type="timeout")
 
@@ -266,7 +260,7 @@ def run_mactime(image_path: str, time_range: str | None = None) -> dict[str, obj
     params = {"image_path": image_path, "time_range": time_range}
 
     for binary in ("fls", "mactime"):
-        if not _require_binary(binary):
+        if not require_binary(binary):
             return error_response(tc_id, "run_mactime", params, f"{binary} not found on PATH")
 
     offset = _detect_partition_offset(image_path)
@@ -277,7 +271,7 @@ def run_mactime(image_path: str, time_range: str | None = None) -> dict[str, obj
 
     try:
         fls_proc = subprocess.run(
-            fls_cmd, capture_output=True, text=True, timeout=_TOOL_TIMEOUT, check=False
+            fls_cmd, capture_output=True, text=True, timeout=TOOL_TIMEOUT, check=False
         )
     except subprocess.TimeoutExpired:
         return error_response(tc_id, "run_mactime", params, "fls timed out")
@@ -295,7 +289,7 @@ def run_mactime(image_path: str, time_range: str | None = None) -> dict[str, obj
             input=fls_proc.stdout,
             capture_output=True,
             text=True,
-            timeout=_TOOL_TIMEOUT,
+            timeout=TOOL_TIMEOUT,
             check=False,
         )
     except subprocess.TimeoutExpired:
@@ -319,7 +313,7 @@ def run_fsstat(image_path: str) -> dict[str, object]:
     t0 = time.monotonic()
     params = {"image_path": image_path}
 
-    if not _require_binary("fsstat"):
+    if not require_binary("fsstat"):
         return error_response(tc_id, "run_fsstat", params, "fsstat not found on PATH")
 
     offset = _detect_partition_offset(image_path)

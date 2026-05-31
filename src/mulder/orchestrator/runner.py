@@ -63,6 +63,7 @@ _RETRY_BUDGET_MULTIPLIER: float = 1.5
 _MAX_COMPACTIONS: int = 3
 
 _MAX_SIMPLE_SYSTEMS_PER_SESSION: int = 4
+_MAX_BUFFER_SIZE_BYTES: int = 50 * 1024 * 1024  # 50 MB
 
 
 class Orchestrator:
@@ -1015,7 +1016,7 @@ class Orchestrator:
             effort=self.effort,
             env=self.env,
             stderr=self.dashboard.suppress_stderr,
-            max_buffer_size=50 * 1024 * 1024,
+            max_buffer_size=_MAX_BUFFER_SIZE_BYTES,
         )
 
         messages: list[str] = []
