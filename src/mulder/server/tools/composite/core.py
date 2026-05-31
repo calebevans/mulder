@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Any
 
 from mulder.models import SourceRow, WindowRow
+from mulder.patterns import SUSPICIOUS_PATHS
 from mulder.server.app import get_ctx
 from mulder.server.helpers import (
     extract_pid,
@@ -85,16 +86,7 @@ _sources_cache_case_id: str | None = None
 
 _LATERAL_PORTS: set[int] = {445, 3389, 5985, 5986, 135}
 
-_UNUSUAL_DLL_PATHS: tuple[str, ...] = (
-    "\\temp\\",
-    "\\tmp\\",
-    "\\appdata\\local\\temp\\",
-    "\\users\\public\\",
-    "\\programdata\\",
-    "\\downloads\\",
-    "\\desktop\\",
-    "\\recycle",
-)
+_UNUSUAL_DLL_PATHS = SUSPICIOUS_PATHS
 
 _NETWORK_SOURCE_ALTERNATIVES = (
     "volatility.netscan",
@@ -289,6 +281,63 @@ def _build_pid_metadata(
     return parent_map, pid_names
 
 
+def _build_coverage_metadata(
+    required_sources: list[str],
+) -> dict[str, object]:
+    """Build coverage metadata comparing queried sources against all indexed sources.
+
+    Computes which of the *required_sources* are indexed (and therefore
+    queryable) versus which are missing. Also reports total indexed
+    source count so the caller knows the overall evidence landscape.
+
+    Args:
+        required_sources: Source name prefixes the composite tool
+            intends to query (e.g. ``["volatility.netscan", "evtx.security"]``).
+
+    Returns:
+        Dict with ``sources_queried``, ``sources_available``,
+        ``total_sources_available``, and optionally ``coverage_note``
+        when some required sources are not yet indexed.
+    """
+    all_sources = _get_cached_sources()
+    source_names: set[str] = {s.source_name for s in all_sources}
+    all_names = sorted(source_names)
+    queried: list[str] = []
+    not_indexed: list[str] = []
+
+    def _prefix_matches(prefix: str) -> list[str]:
+        return [n for n in source_names if n == prefix or n.startswith(prefix + ".")]
+
+    for src in required_sources:
+        if src in _NETWORK_SOURCE_ALTERNATIVES:
+            net_matched: list[str] = []
+            for alt in _NETWORK_SOURCE_ALTERNATIVES:
+                net_matched.extend(_prefix_matches(alt))
+            if net_matched:
+                queried.extend(net_matched)
+            else:
+                not_indexed.append(src)
+        else:
+            matched = _prefix_matches(src)
+            if matched:
+                queried.extend(matched)
+            else:
+                not_indexed.append(src)
+
+    queried_unique = sorted(set(queried))
+    meta: dict[str, object] = {
+        "sources_queried": len(queried_unique),
+        "sources_queried_names": queried_unique,
+        "total_sources_available": len(all_names),
+    }
+    if not_indexed:
+        meta["coverage_note"] = (
+            f"Queried {len(queried_unique)}/{len(all_names)} sources. "
+            f"Sources not yet indexed: {sorted(not_indexed)}"
+        )
+    return meta
+
+
 def _parse_event_time(ts: str | None) -> datetime | None:
     """Parse an ISO-8601 timestamp string, returning None on failure."""
     if not ts:
@@ -297,3 +346,67 @@ def _parse_event_time(ts: str | None) -> datetime | None:
         return datetime.fromisoformat(ts)
     except (ValueError, TypeError):
         return None
+
+
+def finalize_composite_result(
+    ctx: Any,
+    composite_id: str,
+    tool_name: str,
+    results: list[Any] | dict[str, object],
+    coverage_sources: list[str],
+    missing: list[dict[str, str]],
+    sub_call_ids: list[str],
+    t0: float,
+    *,
+    audit_params: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Compute elapsed time, log audit, strip windows, and build the result dict.
+
+    Centralizes the epilogue boilerplate shared by all composite tools.
+
+    Args:
+        ctx: The request context (must expose ``audit.log_tool_call``).
+        composite_id: Tool call ID for this composite invocation.
+        tool_name: Name of the composite tool for the audit log.
+        results: The analysis results (list or single dict).
+        coverage_sources: Source prefixes to report in coverage metadata.
+        missing: Missing source descriptors from ``_check_missing_sources``.
+        sub_call_ids: IDs of sub-queries executed during the analysis.
+        t0: ``time.monotonic()`` value captured at tool entry.
+        audit_params: Optional params dict for the audit log entry.
+
+    Returns:
+        Standardized result dict ready to be returned to the caller.
+    """
+    elapsed = (time.monotonic() - t0) * 1000
+    ctx.audit.log_tool_call(
+        tool_call_id=composite_id,
+        tool_name=tool_name,
+        params=audit_params or {},
+        output_hash=hash_output(results),
+        duration_ms=elapsed,
+        sub_calls=sub_call_ids,
+    )
+
+    if isinstance(results, list):
+        _strip_source_windows(results)
+    elif isinstance(results, dict):
+        af = results.get("anti_forensics_detected")
+        if isinstance(af, list):
+            _strip_source_windows(af)
+
+    coverage = _build_coverage_metadata(coverage_sources)
+
+    result_count = len(results) if isinstance(results, list) else 1
+
+    result: dict[str, object] = {
+        "tool_call_id": composite_id,
+        "status": "success",
+        "results": results,
+        "source": None,
+        "result_count": result_count,
+        **coverage,
+    }
+    if missing:
+        result["missing_sources"] = missing
+    return result

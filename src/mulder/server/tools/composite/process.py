@@ -6,11 +6,11 @@ import time
 from typing import Any
 
 from mulder.models import WindowRow
+from mulder.patterns import SUSPICIOUS_PATHS
 from mulder.server.app import get_ctx, mcp
 from mulder.server.helpers import (
     _HINT_CHAR_LIMIT,
     extract_pids_from_windows,
-    hash_output,
     make_tool_call_id,
     slim_window,
 )
@@ -26,14 +26,13 @@ from mulder.server.tools.composite.core import (
     _SRC_PSLIST,
     _SRC_PSSCAN,
     _SRC_PSTREE,
-    _UNUSUAL_DLL_PATHS,
     _build_pid_metadata,
     _check_missing_sources,
     _extract_ports,
     _query_source,
     _score_and_sort_results,
     _source_exists,
-    _strip_source_windows,
+    finalize_composite_result,
 )
 
 __all__ = ["find_suspicious_processes"]
@@ -160,7 +159,7 @@ def _check_dll_anomalies(
         return
     for w in dlllist_pids[pid]:
         path_lower = w.raw_text.lower()
-        if any(pat in path_lower for pat in _UNUSUAL_DLL_PATHS):
+        if any(pat in path_lower for pat in SUSPICIOUS_PATHS):
             reasons.append("unusual_dll_path")
             source_windows.extend(slim_window(w) for w in dlllist_pids[pid])
             return
@@ -396,25 +395,25 @@ def find_suspicious_processes() -> dict[str, object]:
         ]
     )
 
-    elapsed = (time.monotonic() - t0) * 1000
-    ctx.audit.log_tool_call(
-        tool_call_id=composite_id,
-        tool_name="find_suspicious_processes",
-        params={},
-        output_hash=hash_output(suspicious),
-        duration_ms=elapsed,
-        sub_calls=sub_call_ids,
-    )
     _score_and_sort_results(suspicious)
-    _strip_source_windows(suspicious)
 
-    result: dict[str, object] = {
-        "tool_call_id": composite_id,
-        "status": "success",
-        "results": suspicious,
-        "source": None,
-        "result_count": len(suspicious),
-    }
-    if missing:
-        result["missing_sources"] = missing
-    return result
+    return finalize_composite_result(
+        ctx=ctx,
+        composite_id=composite_id,
+        tool_name="find_suspicious_processes",
+        results=suspicious,
+        coverage_sources=[
+            "volatility.malfind",
+            _SRC_CMDLINE,
+            _SRC_NETSCAN,
+            _SRC_PSTREE,
+            _SRC_PSSCAN,
+            _SRC_PSLIST,
+            _SRC_PRIVS,
+            _SRC_ENVARS,
+            _SRC_DLLLIST,
+        ],
+        missing=missing,
+        sub_call_ids=sub_call_ids,
+        t0=t0,
+    )

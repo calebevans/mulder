@@ -7,6 +7,7 @@ from collections import deque
 from typing import Any
 
 from mulder.models import WindowRow
+from mulder.patterns import SUSPICIOUS_PATHS
 from mulder.server.app import get_ctx, mcp
 from mulder.server.helpers import (
     _HINT_CHAR_LIMIT,
@@ -14,7 +15,6 @@ from mulder.server.helpers import (
     extract_module_names,
     extract_pid,
     extract_pids_from_windows,
-    hash_output,
     make_tool_call_id,
     slim_window,
 )
@@ -42,7 +42,6 @@ from mulder.server.tools.composite.core import (
     _SRC_PSSCAN,
     _SRC_PSTREE,
     _SRC_TSK_FILELIST,
-    _UNUSUAL_DLL_PATHS,
     _build_pid_metadata,
     _check_missing_sources,
     _extract_exe_name,
@@ -50,7 +49,7 @@ from mulder.server.tools.composite.core import (
     _keyword_sub_query,
     _query_source,
     _source_exists,
-    _strip_source_windows,
+    finalize_composite_result,
 )
 
 __all__ = [
@@ -330,7 +329,7 @@ def _build_process_graph(
         if dlllist_pids and pid in dlllist_pids:
             for w in dlllist_pids[pid]:
                 path_lower = w.raw_text.lower()
-                if any(pat in path_lower for pat in _UNUSUAL_DLL_PATHS):
+                if any(pat in path_lower for pat in SUSPICIOUS_PATHS):
                     dll_anomalies.append(w.raw_text.strip()[:_HINT_CHAR_LIMIT])
 
         nodes[pid] = {
@@ -645,26 +644,27 @@ def find_defense_evasion() -> dict[str, object]:
         ]
     )
 
-    elapsed = (time.monotonic() - t0) * 1000
-    ctx.audit.log_tool_call(
-        tool_call_id=composite_id,
+    return finalize_composite_result(
+        ctx=ctx,
+        composite_id=composite_id,
         tool_name="find_defense_evasion",
-        params={},
-        output_hash=hash_output(indicators),
-        duration_ms=elapsed,
-        sub_calls=sub_call_ids,
+        results=indicators,
+        coverage_sources=[
+            _SRC_EZ_USNJRNL,
+            _SRC_EZ_MFT,
+            _SRC_EVTX_SECURITY,
+            _SRC_EVTX_SYSTEM,
+            _SRC_PSSCAN,
+            _SRC_PSLIST,
+            _SRC_MODULES,
+            _SRC_MODSCAN,
+            _SRC_PLASO,
+            _SRC_CMDLINE,
+        ],
+        missing=missing,
+        sub_call_ids=sub_call_ids,
+        t0=t0,
     )
-    _strip_source_windows(indicators)
-    result: dict[str, object] = {
-        "tool_call_id": composite_id,
-        "status": "success",
-        "results": indicators,
-        "source": None,
-        "result_count": len(indicators),
-    }
-    if missing:
-        result["missing_sources"] = missing
-    return result
 
 
 @mcp.tool()
@@ -733,26 +733,23 @@ def reconstruct_execution_chains() -> dict[str, object]:
         ]
     )
 
-    elapsed = (time.monotonic() - t0) * 1000
-    ctx.audit.log_tool_call(
-        tool_call_id=composite_id,
+    return finalize_composite_result(
+        ctx=ctx,
+        composite_id=composite_id,
         tool_name="reconstruct_execution_chains",
-        params={},
-        output_hash=hash_output(chains),
-        duration_ms=elapsed,
-        sub_calls=sub_call_ids,
+        results=chains,
+        coverage_sources=[
+            _SRC_PSTREE,
+            _SRC_CMDLINE,
+            _SRC_NETSCAN,
+            "volatility.malfind",
+            _SRC_DLLLIST,
+            _SRC_EZ_PREFETCH,
+        ],
+        missing=missing,
+        sub_call_ids=sub_call_ids,
+        t0=t0,
     )
-    _strip_source_windows(chains)
-    result: dict[str, object] = {
-        "tool_call_id": composite_id,
-        "status": "success",
-        "results": chains,
-        "source": None,
-        "result_count": len(chains),
-    }
-    if missing:
-        result["missing_sources"] = missing
-    return result
 
 
 @mcp.tool()
@@ -782,26 +779,24 @@ def assess_recovery() -> dict[str, object]:
         ]
     )
 
-    elapsed = (time.monotonic() - t0) * 1000
-    ctx.audit.log_tool_call(
-        tool_call_id=composite_id,
+    return finalize_composite_result(
+        ctx=ctx,
+        composite_id=composite_id,
         tool_name="assess_recovery",
-        params={},
-        output_hash=hash_output(assessment),
-        duration_ms=elapsed,
-        sub_calls=sub_call_ids,
+        results=assessment,
+        coverage_sources=[
+            _SRC_TSK_FILELIST,
+            _SRC_EZ_PREFETCH,
+            _SRC_EZ_AMCACHE,
+            _SRC_EZ_SHIMCACHE,
+            _SRC_EVTX_SECURITY,
+            _SRC_EVTX_SYSTEM,
+            _SRC_EZ_USNJRNL,
+        ],
+        missing=missing,
+        sub_call_ids=sub_call_ids,
+        t0=t0,
     )
-    _strip_source_windows(assessment.get("anti_forensics_detected", []))
-    result: dict[str, object] = {
-        "tool_call_id": composite_id,
-        "status": "success",
-        "results": assessment,
-        "source": None,
-        "result_count": 1,
-    }
-    if missing:
-        result["missing_sources"] = missing
-    return result
 
 
 @mcp.tool()
@@ -866,23 +861,21 @@ def correlate_pcap_with_host(
         ]
     )
 
-    elapsed = (time.monotonic() - t0) * 1000
-    ctx.audit.log_tool_call(
-        tool_call_id=composite_id,
+    return finalize_composite_result(
+        ctx=ctx,
+        composite_id=composite_id,
         tool_name="correlate_pcap_with_host",
-        params={"t_start": t_start, "t_end": t_end},
-        output_hash=hash_output(correlations),
-        duration_ms=elapsed,
-        sub_calls=sub_call_ids,
+        results=correlations,
+        coverage_sources=[
+            _SRC_PCAP_CONVERSATIONS,
+            _SRC_PCAP_DNS,
+            _SRC_PCAP_HTTP,
+            _SRC_NETSCAN,
+            _SRC_EZ_EVTX_SECURITY,
+            _SRC_EVTX_SECURITY,
+        ],
+        missing=missing,
+        sub_call_ids=sub_call_ids,
+        t0=t0,
+        audit_params={"t_start": t_start, "t_end": t_end},
     )
-    _strip_source_windows(correlations)
-    result: dict[str, object] = {
-        "tool_call_id": composite_id,
-        "status": "success",
-        "results": correlations,
-        "source": None,
-        "result_count": len(correlations),
-    }
-    if missing:
-        result["missing_sources"] = missing
-    return result

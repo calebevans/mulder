@@ -4,6 +4,11 @@ submit_finding enforces evidence-backed findings at the API boundary:
 every evidence_ref must correspond to a real tool_call_id recorded in
 the session's audit log.  This is the architectural guardrail that
 replaces prompt-based hallucination prevention.
+
+finalize_report enforces structural hard gates that reject incomplete
+investigations.  The gates verify minimum finding counts, timestamp
+coverage, narrative presence, audit tool invocation, and evidence
+citation coverage before allowing report generation.
 """
 
 from __future__ import annotations
@@ -16,7 +21,8 @@ from pathlib import Path
 from typing import Literal, cast
 from uuid import uuid4
 
-from mulder.models import Finding
+from mulder.models import AuditSummary, CaseMetadataRow, Finding, SourceRow
+from mulder.patterns import source_is_cited
 from mulder.report.renderer import ReportRenderer
 from mulder.server.app import get_ctx, get_job_store, mcp
 from mulder.server.helpers import hash_output, make_tool_call_id
@@ -24,6 +30,116 @@ from mulder.server.helpers import hash_output, make_tool_call_id
 logger = logging.getLogger(__name__)
 
 _MIDNIGHT_RE = re.compile(r"T00:00:00(?:Z|[+-]00:?00)?$")
+
+_MIN_NON_NEGATIVE_FINDINGS = 3
+_MIN_EVIDENCE_CITATION_PCT = 50.0
+
+
+def _evaluate_finalize_gates(
+    findings: list[Finding],
+    case_metadata: CaseMetadataRow,
+    sources: list[SourceRow],
+    audit_summary: AuditSummary,
+) -> list[dict[str, object]]:
+    """Evaluate all finalize_report hard gates and return per-gate results.
+
+    Each entry contains ``name``, ``passed`` (bool), and ``detail``
+    describing the gate status.  Called by both ``finalize_report``
+    (which blocks on the first failure) and ``check_finalize_readiness``
+    (which reports all gates).
+    """
+    gates: list[dict[str, object]] = []
+    non_negative = [f for f in findings if not f.title.startswith("[NEGATIVE]")]
+
+    # Gate 1: Minimum non-negative finding count
+    count = len(non_negative)
+    passed = count >= _MIN_NON_NEGATIVE_FINDINGS
+    detail: str
+    if passed:
+        detail = f"{count} non-negative findings submitted (minimum {_MIN_NON_NEGATIVE_FINDINGS})"
+    else:
+        detail = (
+            f"Only {count} non-negative findings submitted, "
+            f"need at least {_MIN_NON_NEGATIVE_FINDINGS}. "
+            f"Submit more findings with submit_finding before finalizing."
+        )
+    gates.append({"name": "minimum_findings", "passed": passed, "detail": detail})
+
+    # Gate 2: Timestamp coverage on non-negative findings
+    missing_ts = [f for f in non_negative if not f.event_time_start]
+    passed = len(missing_ts) == 0
+    if passed:
+        detail = "All non-negative findings have event_time_start"
+    else:
+        titles = [f.title for f in missing_ts[:5]]
+        detail = (
+            f"{len(missing_ts)} non-negative finding(s) missing event_time_start: "
+            f"{titles}. Use update_finding to add precise timestamps from evidence."
+        )
+    gates.append({"name": "timestamp_coverage", "passed": passed, "detail": detail})
+
+    # Gate 3: Narrative submitted
+    passed = bool(case_metadata.narrative and case_metadata.narrative.strip())
+    if passed:
+        detail = "Narrative is present"
+    else:
+        detail = (
+            "No narrative submitted. Call submit_narrative with a complete "
+            "investigation report before finalizing."
+        )
+    gates.append({"name": "narrative_submitted", "passed": passed, "detail": detail})
+
+    # Gate 4: Audit tools called
+    tool_counts = audit_summary.tool_call_counts
+    has_evidence_audit = "audit_evidence_coverage" in tool_counts
+    has_tool_audit = "audit_tool_coverage" in tool_counts
+    passed = has_evidence_audit and has_tool_audit
+    if passed:
+        detail = "Both audit_evidence_coverage and audit_tool_coverage have been called"
+    else:
+        missing_tools: list[str] = []
+        if not has_evidence_audit:
+            missing_tools.append("audit_evidence_coverage")
+        if not has_tool_audit:
+            missing_tools.append("audit_tool_coverage")
+        detail = (
+            f"Required audit tool(s) not yet called: {missing_tools}. "
+            f"Run these tools to verify investigation completeness before finalizing."
+        )
+    gates.append({"name": "audit_tools_called", "passed": passed, "detail": detail})
+
+    # Gate 5: Evidence citation coverage
+    finding_source_names: set[str] = set()
+    for f in findings:
+        finding_source_names.update(f.sources)
+
+    non_empty_sources = [s for s in sources if s.line_count > 0]
+    total_non_empty = len(non_empty_sources)
+    if total_non_empty > 0:
+        cited_count = sum(
+            1 for s in non_empty_sources if source_is_cited(s.source_name, finding_source_names)
+        )
+        coverage_pct = round(cited_count / total_non_empty * 100, 1)
+        passed = coverage_pct >= _MIN_EVIDENCE_CITATION_PCT
+        if passed:
+            detail = (
+                f"{coverage_pct}% of non-empty sources cited in findings "
+                f"({cited_count}/{total_non_empty})"
+            )
+        else:
+            detail = (
+                f"Only {coverage_pct}% of non-empty sources are cited "
+                f"({cited_count}/{total_non_empty}), need at least "
+                f"{_MIN_EVIDENCE_CITATION_PCT}%. Run audit_evidence_coverage "
+                f"to identify uncited sources, then review and submit findings "
+                f"or document why they are not relevant."
+            )
+    else:
+        passed = True
+        detail = "No non-empty sources to check"
+    gates.append({"name": "evidence_citation_coverage", "passed": passed, "detail": detail})
+
+    return gates
 
 
 def _sanitize_event_time(ts: str | None) -> tuple[str | None, str | None]:
@@ -396,6 +512,7 @@ def get_findings(limit: int = 20, offset: int = 0) -> dict[str, object]:
         offset: Number of findings to skip (default 0, most recent first).
     """
     ctx = get_ctx()
+    # TODO: Push limit/offset to CaseDB.get_findings() to avoid fetching all rows.
     all_findings = ctx.db.get_findings()
     total = len(all_findings)
     page = all_findings[offset : offset + limit]
@@ -456,6 +573,16 @@ def finalize_report() -> dict[str, object]:
     case_metadata = ctx.db.get_case_metadata()
     audit_summary = ctx.audit.summary()
     sources_list = ctx.db.get_sources()
+
+    gate_results = _evaluate_finalize_gates(findings, case_metadata, sources_list, audit_summary)
+    for gate in gate_results:
+        if not gate["passed"]:
+            return {
+                "tool_call_id": tc_id,
+                "status": "blocked",
+                "error_message": f"Gate '{gate['name']}' failed: {gate['detail']}",
+            }
+
     evidence_integrity = ctx.db.get_evidence_registry()
 
     db_path = Path(ctx.db.db_path)
@@ -477,12 +604,11 @@ def finalize_report() -> dict[str, object]:
     report_path.write_text(report_text, encoding="utf-8")
 
     _MAX_WINDOWS_PER_SOURCE = 50
+    source_names = [s.source_name for s in sources_list]
+    bulk_windows = ctx.db.get_capped_windows_by_sources(source_names, _MAX_WINDOWS_PER_SOURCE)
     source_windows: dict[str, list[dict[str, object]]] = {}
-    for src in sources_list:
-        windows = ctx.db.get_windows_by_source(src.source_name)
-        total = len(windows)
-        capped = windows[:_MAX_WINDOWS_PER_SOURCE]
-        source_windows[src.source_name] = [
+    for sname, (windows, total) in bulk_windows.items():
+        source_windows[sname] = [
             {
                 "line_start": w.line_start,
                 "line_end": w.line_end,
@@ -491,7 +617,7 @@ def finalize_report() -> dict[str, object]:
                 "total": total,
                 "truncated": total > _MAX_WINDOWS_PER_SOURCE,
             }
-            for w in capped
+            for w in windows
         ]
 
     html_path: Path | None = report_dir / f"{case_metadata.case_id}.report.html"
@@ -507,9 +633,12 @@ def finalize_report() -> dict[str, object]:
         )
         if html_path is not None:
             html_path.write_text(html_text, encoding="utf-8")
-    except Exception:
+    except Exception as exc:
         logger.warning("HTML report generation failed, markdown report still saved", exc_info=True)
+        html_warning: str | None = f"HTML report generation failed: {exc}"
         html_path = None
+    else:
+        html_warning = None
 
     log_src = report_dir / "mulder.log"
     log_dest = report_dir / f"{case_metadata.case_id}.mulder.log"
@@ -518,8 +647,8 @@ def finalize_report() -> dict[str, object]:
             import shutil
 
             shutil.copy2(str(log_src), str(log_dest))
-        except OSError:
-            pass
+        except OSError as exc:
+            logger.debug("Failed to copy audit log: %s", exc)
 
     result: dict[str, object] = {
         "tool_call_id": tc_id,
@@ -530,6 +659,8 @@ def finalize_report() -> dict[str, object]:
         "confirmed_count": sum(1 for f in findings if f.confidence == "confirmed"),
         "inference_count": sum(1 for f in findings if f.confidence == "inference"),
     }
+    if html_warning:
+        result["html_warning"] = html_warning
 
     elapsed = (time.monotonic() - t0) * 1000
     ctx.audit.log_tool_call(

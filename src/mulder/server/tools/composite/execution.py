@@ -7,9 +7,9 @@ import time
 from typing import Any
 
 from mulder.models import WindowRow
+from mulder.patterns import SUSPICIOUS_PATHS
 from mulder.server.app import get_ctx, mcp
 from mulder.server.helpers import (
-    hash_output,
     make_tool_call_id,
     slim_window,
 )
@@ -24,7 +24,7 @@ from mulder.server.tools.composite.core import (
     _extract_exe_name,
     _query_source,
     _source_exists,
-    _strip_source_windows,
+    finalize_composite_result,
 )
 
 __all__ = ["find_execution_evidence", "analyze_execution_timeline"]
@@ -37,16 +37,7 @@ _EXE_NAME_RE = re.compile(r"(\S+\.exe)", re.IGNORECASE)
 _RUN_COUNT_RE = re.compile(r"run\s*count[:\s]+(\d+)", re.IGNORECASE)
 _SHA1_RE = re.compile(r"\b([a-fA-F0-9]{40})\b")
 
-_UNUSUAL_EXE_PATHS: tuple[str, ...] = (
-    "\\temp\\",
-    "\\tmp\\",
-    "\\downloads\\",
-    "\\desktop\\",
-    "\\appdata\\local\\temp\\",
-    "\\users\\public\\",
-    "\\recycle",
-    "\\programdata\\",
-)
+_UNUSUAL_EXE_PATHS = SUSPICIOUS_PATHS
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -254,26 +245,23 @@ def find_execution_evidence() -> dict[str, object]:
         ]
     )
 
-    elapsed = (time.monotonic() - t0) * 1000
-    ctx.audit.log_tool_call(
-        tool_call_id=composite_id,
+    return finalize_composite_result(
+        ctx=ctx,
+        composite_id=composite_id,
         tool_name="find_execution_evidence",
-        params={},
-        output_hash=hash_output(results),
-        duration_ms=elapsed,
-        sub_calls=sub_call_ids,
+        results=results,
+        coverage_sources=[
+            _SRC_EZ_PREFETCH,
+            _SRC_EZ_AMCACHE,
+            _SRC_EZ_SHIMCACHE,
+            _SRC_EZ_JUMPLISTS,
+            _SRC_EZ_LNKFILES,
+            _SRC_PSTREE,
+        ],
+        missing=missing,
+        sub_call_ids=sub_call_ids,
+        t0=t0,
     )
-    _strip_source_windows(results)
-    result: dict[str, object] = {
-        "tool_call_id": composite_id,
-        "status": "success",
-        "results": results,
-        "source": None,
-        "result_count": len(results),
-    }
-    if missing:
-        result["missing_sources"] = missing
-    return result
 
 
 @mcp.tool()
@@ -329,23 +317,17 @@ def analyze_execution_timeline() -> dict[str, object]:
         ]
     )
 
-    elapsed = (time.monotonic() - t0) * 1000
-    ctx.audit.log_tool_call(
-        tool_call_id=composite_id,
+    return finalize_composite_result(
+        ctx=ctx,
+        composite_id=composite_id,
         tool_name="analyze_execution_timeline",
-        params={},
-        output_hash=hash_output(results),
-        duration_ms=elapsed,
-        sub_calls=sub_call_ids,
+        results=results,
+        coverage_sources=[
+            _SRC_EZ_PREFETCH,
+            _SRC_EZ_AMCACHE,
+            _SRC_EZ_SHIMCACHE,
+        ],
+        missing=missing,
+        sub_call_ids=sub_call_ids,
+        t0=t0,
     )
-    _strip_source_windows(results)
-    result: dict[str, object] = {
-        "tool_call_id": composite_id,
-        "status": "success",
-        "results": results,
-        "source": None,
-        "result_count": len(results),
-    }
-    if missing:
-        result["missing_sources"] = missing
-    return result

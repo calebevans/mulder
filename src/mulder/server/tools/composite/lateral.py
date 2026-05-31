@@ -10,7 +10,6 @@ from mulder.models import WindowRow
 from mulder.server.app import get_ctx, mcp
 from mulder.server.helpers import (
     _PREVIEW_CHAR_LIMIT,
-    hash_output,
     make_tool_call_id,
     slim_window,
 )
@@ -29,7 +28,7 @@ from mulder.server.tools.composite.core import (
     _parse_event_time,
     _query_source,
     _source_exists,
-    _strip_source_windows,
+    finalize_composite_result,
 )
 
 __all__ = ["find_lateral_movement_indicators"]
@@ -374,23 +373,21 @@ def find_lateral_movement_indicators() -> dict[str, object]:
         ]
     )
 
-    elapsed = (time.monotonic() - t0) * 1000
-    ctx.audit.log_tool_call(
-        tool_call_id=composite_id,
+    return finalize_composite_result(
+        ctx=ctx,
+        composite_id=composite_id,
         tool_name="find_lateral_movement_indicators",
-        params={},
-        output_hash=hash_output(indicators),
-        duration_ms=elapsed,
-        sub_calls=sub_call_ids,
+        results=indicators,
+        coverage_sources=[
+            _SRC_NETSCAN,
+            _SRC_EVTX_SECURITY,
+            _SRC_EZ_EVTX_SECURITY,
+            _SRC_PLASO,
+            _SRC_EVTX_SYSTEM,
+            _SRC_EZ_SRUM,
+            _SRC_PCAP_CONVERSATIONS,
+        ],
+        missing=missing,
+        sub_call_ids=sub_call_ids,
+        t0=t0,
     )
-    _strip_source_windows(indicators)
-    result: dict[str, object] = {
-        "tool_call_id": composite_id,
-        "status": "success",
-        "results": indicators,
-        "source": None,
-        "result_count": len(indicators),
-    }
-    if missing:
-        result["missing_sources"] = missing
-    return result
