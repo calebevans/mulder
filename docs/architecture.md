@@ -190,6 +190,17 @@ Each phase is defined by a `PhaseConfig` dataclass specifying:
 - **Finding validator**: CRITICAL/HIGH findings are validated against cited evidence before acceptance; unsupported findings are rejected or downgraded
 - **Retry policy**: Maximum retries with 1.5x turn limit multiplier on each retry
 
+### Deferred Retry System
+
+When a quality gate fails after a phase completes, the orchestrator retries with escalating budgets:
+
+1. **Budget multiplier**: Each retry gets 1.5x the previous attempt's turn limit
+2. **Gap-specific remediation**: The gate reports specific gaps (e.g., "no sources indexed", "no MITRE mappings"), which are prepended to the retry prompt so the agent focuses on what's missing
+3. **Follow-up cycles**: Within a single attempt, the analyst can request additional planner/executor iterations (capped at `max_follow_ups`) when it identifies gaps that need more tool execution
+4. **Auto-compaction on exhaustion**: If context is exhausted mid-phase, the orchestrator restarts with a compact prompt that preserves state via the database rather than failing immediately
+
+The retry system is bounded: each phase allows up to 2 retries (configurable), after which it reports failure and the investigation proceeds with partial results.
+
 ### Phase Gates
 
 ```mermaid
@@ -412,8 +423,8 @@ The orchestrator includes a synchronous finding validator that checks submitted 
 
 | Severity | Validation | Evidence | Model | Latency |
 |----------|-----------|----------|-------|---------|
-| CRITICAL / HIGH | Full evidence check | Fetched by tc_ ref from the audit log | Utility model | 10-20s per finding |
-| MEDIUM / LOW | Source type check | Label only (no fetch) | Utility model | 2-3s per finding |
+| CRITICAL / HIGH | Full evidence check | Fetched by tc_ ref from the audit log | Planner model (lightweight query) | 10-20s per finding |
+| MEDIUM / LOW | Source type check | Label only (no fetch) | Planner model (lightweight query) | 2-3s per finding |
 | INFORMATIONAL | Skipped | None | None | 0 |
 
 ### Verdicts
@@ -478,8 +489,6 @@ The orchestrator uses a planner/executor/analyst role system for model assignmen
 Single-mode phases map to roles: catalog uses the planner model, report uses the analyst model. Per-phase overrides can be specified in a YAML config file via `--config`.
 
 All roles inherit from `--model` if not specified individually, enabling single-model deployments (e.g., Bedrock or Vertex with one model identifier).
-
-Per-model usage is written to a JSON sidecar file (`{case_id}.model_usage.json`) for inclusion in the final report's token usage breakdown. The dashboard displays running per-model totals during the investigation.
 
 ## Audit and Provenance
 

@@ -8,12 +8,8 @@
 Mulder is an [MCP](https://modelcontextprotocol.io/) server and SDK orchestrator for digital forensics. It exposes 110+ typed forensic tools (Volatility 3, Sleuthkit, Plaso, Hayabusa, YARA, and more) through the Model Context Protocol with no shell access, and includes a multi-phase SDK orchestrator that runs full investigations autonomously with quality gates between phases.
 
 <p align="center">
-  <img src="docs/photos/report-demo.gif" alt="Mulder report demo" width="800">
-</p>
-
-<p align="center">
-  <b>Example reports:</b>&nbsp;
-  <a href="https://calebevans.github.io/mulder/examples/nist-data-leakage/sonnet/nist-data-leakage.report.html">NIST Data Leakage</a> · <a href="https://calebevans.github.io/mulder/examples/ngdc/sonnet/ngdc.report.html">National Gallery DC</a>
+  <b>Example report:</b>&nbsp;
+  <a href="examples/srl-2018/SRL-2018.report.html">SRL-2018 APT Investigation</a> — <a href="https://www.sans.org/cyber-security-courses/advanced-incident-response-threat-hunting-training">SANS FOR508</a> enterprise intrusion capstone (395 sources, 99 findings, 80 MITRE ATT&CK techniques, 3.9 hours)
 </p>
 
 ## Features
@@ -33,31 +29,22 @@ Mulder is an [MCP](https://modelcontextprotocol.io/) server and SDK orchestrator
 
 ### Example Output
 
-From the agent's live terminal during a [NIST insider threat investigation](examples/nist-data-leakage/):
+From an automated investigation of the [SANS FOR508 enterprise intrusion capstone](https://www.sans.org/cyber-security-courses/advanced-incident-response-threat-hunting-training) (18 Windows systems, memory + disk + event logs):
 
 ```
-BOMBSHELL: Informant's Downloads folder contains:
-  - googledrivesync.exe + Zone.Identifier (downloaded from internet!)
-  - icloudsetup.exe + Zone.Identifier (also downloaded from internet!)
+Scope: 395 evidence sources (101 memory, 178 disk, 116 other) | 2250 tool calls | 3.9 hours
+Results: 99 findings (13 critical, 41 high) | 80 MITRE ATT&CK techniques | 56 confirmed, 43 inference
+Timeline: 2018-04-25 to 2018-09-07
 
-  Multi-vector exfiltration: USB drives (x2), CD-R burn, Google Drive cloud
-  sync, and possibly iCloud!
-
-SMOKING GUN: Browser Search Queries Show Premeditation:
-  search?q=anti-forensic+tools      (n=85)
-  search?q=ccleaner                 (n=65)
-  search?q=cd+burning+method        (n=64)
-  search?q=external+device+forensics (n=65)
-  search?q=DLP+DRM                  (n=90)
-  search?q=e-mail+investigation     (n=88)
-
-  The informant researched how to cover their tracks AND how forensic
-  investigations work. This is deliberate, premeditated data theft.
+Key Threats:
+  - RAT C2 URL (psykooo.ddns.net/rat.php) carved from Domain Controller
+  - 8+ nation-state malware families in memory (Codoso, HTran, PlugX, Industroyer)
+  - C2 infrastructure: gicia.info, masgio.info, 174.122.240.164
+  - PowerShell encoded command spawned via WMI
+  - Anti-forensics: timestomping, log clearing, DLL unlinking
 ```
 
-From a single Sonnet run: 14 findings, 9 critical, 34 minutes. Report with narrative, IOCs, and MITRE ATT&CK mappings generated automatically.
-
-See [examples/](examples/) for reports from multiple forensic datasets with ground truth comparisons, including runs on both Opus and Sonnet.
+See [examples/srl-2018/](examples/srl-2018/) for the full HTML and Markdown reports.
 
 ## Getting Started
 
