@@ -85,9 +85,12 @@ class TestProxyManager:
         assert pm.port == 8080
         assert "8080" in pm.env_overrides["ANTHROPIC_BASE_URL"]
 
+    @patch("shutil.which", return_value="/usr/local/bin/litellm")
     @patch("mulder.orchestrator.proxy._wait_for_health", return_value=True)
     @patch("subprocess.Popen")
-    def test_start_success(self, mock_popen: MagicMock, mock_health: MagicMock) -> None:
+    def test_start_success(
+        self, mock_popen: MagicMock, mock_health: MagicMock, mock_which: MagicMock
+    ) -> None:
         mock_proc = MagicMock()
         mock_popen.return_value = mock_proc
 
@@ -98,10 +101,15 @@ class TestProxyManager:
         mock_health.assert_called_once_with(4000)
         assert pm._process is mock_proc
 
+    @patch("shutil.which", return_value="/usr/local/bin/litellm")
     @patch("mulder.orchestrator.proxy._wait_for_health", return_value=False)
     @patch("subprocess.Popen")
-    def test_start_health_check_fails(self, mock_popen: MagicMock, mock_health: MagicMock) -> None:
+    def test_start_health_check_fails(
+        self, mock_popen: MagicMock, mock_health: MagicMock, mock_which: MagicMock
+    ) -> None:
         mock_proc = MagicMock()
+        mock_proc.stderr = MagicMock()
+        mock_proc.stderr.read.return_value = b"error"
         mock_popen.return_value = mock_proc
 
         pm = ProxyManager(models=["bedrock/meta.llama3-1-70b"], port=4000)
@@ -110,9 +118,12 @@ class TestProxyManager:
 
         mock_proc.terminate.assert_called_once()
 
+    @patch("shutil.which", return_value="/usr/local/bin/litellm")
     @patch("mulder.orchestrator.proxy._wait_for_health", return_value=True)
     @patch("subprocess.Popen")
-    def test_stop_terminates_process(self, mock_popen: MagicMock, mock_health: MagicMock) -> None:
+    def test_stop_terminates_process(
+        self, mock_popen: MagicMock, mock_health: MagicMock, mock_which: MagicMock
+    ) -> None:
         mock_proc = MagicMock()
         mock_proc.wait.return_value = 0
         mock_popen.return_value = mock_proc
@@ -128,9 +139,12 @@ class TestProxyManager:
         pm = ProxyManager(models=["bedrock/test"], port=4000)
         pm.stop()  # Should not raise
 
+    @patch("shutil.which", return_value="/usr/local/bin/litellm")
     @patch("mulder.orchestrator.proxy._wait_for_health", return_value=True)
     @patch("subprocess.Popen")
-    def test_context_manager(self, mock_popen: MagicMock, mock_health: MagicMock) -> None:
+    def test_context_manager(
+        self, mock_popen: MagicMock, mock_health: MagicMock, mock_which: MagicMock
+    ) -> None:
         mock_proc = MagicMock()
         mock_proc.wait.return_value = 0
         mock_popen.return_value = mock_proc
