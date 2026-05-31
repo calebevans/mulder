@@ -1,199 +1,226 @@
 # Architecture
 
-Mulder is an MCP (Model Context Protocol) server that exposes digital forensic tooling to AI agents. It wraps dozens of external forensic binaries and Python libraries behind a uniform MCP tool interface, indexes all extracted evidence into a per-case SQLite database with full-text search, maintains an append-only audit log for provenance, and generates structured investigation reports.
+Mulder is a forensic investigation platform consisting of two core components: an MCP server that exposes 110+ typed forensic tools with no shell access, and an SDK orchestrator that runs multi-phase investigations with quality gates using the Claude Agent SDK.
 
-## 📁 Project Structure
-
-```
-src/mulder/
-├── __init__.py                   # Package version
-├── cli.py                        # Click CLI (serve, report)
-├── db.py                         # Per-case SQLite lifecycle, schema, queries, WriteQueue
-├── models.py                     # Pydantic models (WindowRow, Finding, AuditSummary, etc.)
-├── audit.py                      # Append-only JSONL audit log
-├── extractors/
-│   ├── __init__.py
-│   ├── classifier.py             # Evidence directory scanner and artifact type detection
-│   ├── base.py                   # Extractor Protocol, ExtractionResult, ExtractorRegistry
-│   ├── volatility.py             # Volatility 3 wrapper
-│   ├── sleuthkit.py              # Sleuthkit (fls, icat, mmls) wrapper
-│   ├── plaso.py                  # Plaso (log2timeline) wrapper
-│   ├── bulk.py                   # bulk_extractor wrapper
-│   ├── disk.py                   # Disk image helpers (mount, unmount, walk, extraction)
-│   ├── logs.py                   # Log file ingestion
-│   └── eztools.py                # Eric Zimmerman tools wrapper
-├── index/
-│   ├── __init__.py
-│   └── correlator.py             # Cross-source time-range joins
-├── report/
-│   ├── __init__.py
-│   ├── renderer.py               # Jinja2 report builder, IOC extraction, MITRE rollups
-│   ├── redactor.py               # Sensitive data redaction helpers
-│   ├── data/
-│   │   └── attack_tactics.json   # MITRE ATT&CK technique-to-tactic mapping data
-│   └── templates/
-│       ├── report.md.j2          # Markdown report template
-│       └── report.html.j2        # HTML report template (dark/light, sidebar nav)
-└── server/
-    ├── __init__.py
-    ├── app.py                    # FastMCP instance, init, concurrency wrappers, run_parallel
-    ├── helpers.py                # Shared helpers (hashing, batch IDs, output formatting)
-    ├── jobs.py                   # Background JobStore for async extraction batches
-    ├── extract_helpers.py        # Common extraction utilities (extract_and_index, mount_disk_image)
-    ├── tools_case.py             # scan_evidence, open_case, list_cases, verify_evidence_integrity, extract_archive
-    ├── tools_extract.py          # Extraction tool registry and dispatch
-    ├── tools_extract_volatility.py  # Volatility memory analysis tools
-    ├── tools_extract_tsk.py      # Sleuthkit disk image tools
-    ├── tools_extract_evtx.py     # Windows event log extraction and indexing
-    ├── tools_extract_registry.py # Windows registry parsing tools
-    ├── tools_extract_plaso.py    # Plaso super-timeline extraction
-    ├── tools_extract_pcap.py     # Network capture (PCAP) analysis tools
-    ├── tools_extract_carving.py  # File carving (foremost, scalpel, photorec) tools
-    ├── tools_extract_misc.py     # Miscellaneous extraction tools (strings, exiftool, etc.)
-    ├── tools_core.py             # search, correlate, list_sources, process/memory queries, decode_payload
-    ├── tools_composite.py        # Composite tool registry and shared utilities
-    ├── tools_composite_core.py   # Core composite analysis (correlation, timeline)
-    ├── tools_composite_process.py   # Process analysis (suspicious processes, execution chains)
-    ├── tools_composite_persistence.py  # Persistence mechanism detection
-    ├── tools_composite_lateral.py   # Lateral movement indicator detection
-    ├── tools_composite_exfil.py  # Data exfiltration indicator detection
-    ├── tools_composite_execution.py  # Execution evidence and timeline analysis
-    ├── tools_composite_misc.py   # Defense evasion, recovery assessment
-    ├── tools_findings.py         # submit_finding, submit_narrative, get_findings, finalize_report
-    ├── tools_review.py           # Pre-report self-review (audit_evidence_coverage, audit_tool_coverage)
-    ├── tools_plaso.py            # Plaso timeline filtering and export
-    ├── tools_hayabusa.py         # Hayabusa Windows event log analysis
-    ├── tools_yara.py             # YARA scanning (files, memory, Volatility integration)
-    ├── tools_tsk.py              # Sleuthkit convenience tools (partitions, deleted files, inodes)
-    ├── tools_eztools.py          # Eric Zimmerman artifact parsers (generated from config table)
-    ├── tools_bulk.py             # Bulk extractor IOC summary
-    ├── tools_phone.py            # Mobile forensics (Android, iOS, SQLCipher)
-    ├── tools_artifacts.py        # Browser history, plist, SQLite from image, steganography
-    ├── tools_attack.py           # MITRE ATT&CK technique lookup
-    ├── tools_jobs.py             # Extraction batch management
-    ├── tools_hindsight.py        # Hindsight Chrome/Chromium browser forensics
-    └── tools_mvt.py              # MVT mobile spyware detection (Android, iOS)
-```
-
-## 🏗️ High-Level Architecture
+## System Overview
 
 ```mermaid
 flowchart TB
-    Client["MCP Client\n(Claude Desktop, Cursor, Claude Code)"]
-    Server["FastMCP Server\n(mulder serve)"]
-    ToolModules["Tool Modules\n(tools_*.py)"]
-    Extractors["Extractors\n(extractors/)"]
-    Binaries["External Binaries\n(vol3, fls, log2timeline,\nhayabusa, yara, etc.)"]
-    SQLite["Per-Case SQLite\n(FTS5 full-text search)"]
-    AuditLog["Audit Log\n(append-only JSONL)"]
-    Reports["Reports\n(HTML + Markdown)"]
-    Correlator["Correlator\n(cross-source joins)"]
+    subgraph container [Docker Container]
+        CLI["mulder CLI"]
+        Orchestrator["SDK Orchestrator\n(multi-phase pipeline)"]
+        ClaudeCode["Claude Code\n(Agent SDK)"]
+        MCPServer["MCP Server\n(FastMCP, 110+ tools)"]
+        DB["SQLite + FTS5\n(per-case database)"]
+        AuditLog["Audit Log\n(append-only JSONL)"]
+        Extractors["Extractors\n(forensic binaries)"]
+        Reports["Report Renderer\n(HTML + Markdown)"]
+    end
 
-    Client -->|"MCP (stdio / HTTP)"| Server
-    Server --> ToolModules
-    ToolModules --> Extractors
-    Extractors --> Binaries
-    ToolModules -->|"read / write"| SQLite
-    ToolModules -->|"append"| AuditLog
-    ToolModules --> Correlator
-    Correlator -->|"query"| SQLite
-    ToolModules -->|"render"| Reports
-    Reports -.->|"reads"| SQLite
-    Reports -.->|"reads"| AuditLog
+    subgraph binaries [Forensic Toolchain]
+        Vol3["Volatility 3"]
+        TSK["Sleuthkit"]
+        Plaso["Plaso"]
+        Hayabusa["Hayabusa"]
+        YARA["YARA"]
+        BulkExt["bulk_extractor"]
+        EZTools["EZ Tools"]
+        Others["40+ more tools"]
+    end
+
+    Evidence["/evidence\n(read-only mount)"]
+
+    CLI --> Orchestrator
+    Orchestrator --> ClaudeCode
+    ClaudeCode -->|"MCP (stdio)"| MCPServer
+    MCPServer --> Extractors
+    Extractors --> binaries
+    Extractors -->|"read"| Evidence
+    MCPServer -->|"read/write"| DB
+    MCPServer -->|"append"| AuditLog
+    MCPServer --> Reports
+    Reports -->|"reads"| DB
+    Reports -->|"reads"| AuditLog
 ```
 
-## 🔄 Server Lifecycle
+## MCP Server Architecture
 
-### Startup
+The MCP server (`mulder serve`) uses [FastMCP](https://github.com/jlowin/fastmcp) to expose forensic tools over the Model Context Protocol. It supports both `stdio` and `streamable-http` transports.
 
-The `mulder serve` command in `cli.py` performs the following sequence:
-
-1. Expands `--db-dir` (default `~/.mulder/cases`) and creates it if missing
-2. Configures file logging to `{db_dir}/mulder.log`
-3. Calls `init_server()` which creates:
-   - A `ServerConfig` dataclass holding immutable settings (db_dir, max_workers, resource limits)
-   - A `JobStore` for background extraction batches
-   - Optionally pre-loads a case if `--case-id` is given
-4. Calls `mcp.run(transport=...)` to start listening for MCP messages
-
-### ServerConfig vs ServerContext
-
-`ServerConfig` is created once at startup and never changes. It holds the database directory path, worker count, and resource limits.
-
-`ServerContext` is created each time a case is loaded (via `scan_evidence`, `open_case`, or `--case-id`). It holds:
-- `case_id`: the active case identifier
-- `db`: a `CaseDB` instance connected to `{case_id}.db`
-- `correlator`: a `Correlator` instance for cross-source queries
-- `audit`: an `AuditLog` instance writing to `{case_id}.audit.jsonl`
-
-Only one case can be active at a time. Loading a new case closes the previous context.
-
-### Case Creation
-
-```mermaid
-sequenceDiagram
-    participant Agent as AI Agent
-    participant Server as MCP Server
-    participant DB as SQLite
-    participant Audit as Audit Log
-
-    Agent->>Server: scan_evidence(evidence_dir)
-    Server->>Server: EvidenceClassifier scans directory
-    Server->>DB: Create {case_id}.db with schema
-    Server->>Audit: Create {case_id}.audit.jsonl
-    Server->>Server: Build ServerContext
-    Server-->>Agent: Classification results + case_id
-
-    Agent->>Server: run_volatility(plugin, memory_path)
-    Server->>Server: Execute vol3 binary
-    Server->>DB: Insert WindowRows
-    Server->>Audit: Log tool_call with ID + output hash
-    Server-->>Agent: Extraction results + tool_call_id
-```
-
-## ⚙️ Tool Execution Model
-
-### Sync-to-Async Wrapping
-
-All MCP tools are registered through a custom `mcp.tool()` decorator that wraps synchronous tool functions in an async shell. The wrapper:
-
-1. Calls `async_wait_for_resources()` to check memory/CPU pressure, yielding to the event loop via `anyio.sleep` if thresholds are exceeded
-2. Dispatches the sync function to a worker thread via `anyio.to_thread.run_sync` with a shared `CapacityLimiter`
-
-This keeps the MCP event loop responsive to heartbeats and new requests while tools perform blocking I/O.
+### Tool Categories
 
 ```mermaid
 flowchart LR
-    MCPRequest["MCP Request"] --> AsyncWrapper["Async Wrapper"]
-    AsyncWrapper --> ResourceCheck{"Memory/CPU\nunder limit?"}
-    ResourceCheck -->|"No"| Wait["anyio.sleep\n(5s intervals)"]
-    Wait --> ResourceCheck
-    ResourceCheck -->|"Yes"| ThreadPool["Worker Thread\n(CapacityLimiter)"]
-    ThreadPool --> SyncTool["Sync Tool Function"]
-    SyncTool --> Result["Return Result"]
+    subgraph caseTools [Case Management]
+        scanEvidence["scan_evidence"]
+        openCase["open_case"]
+        listCases["list_cases"]
+        extractArchive["extract_archive"]
+    end
+
+    subgraph extractionTools [Extraction Tools]
+        runVolatility["run_volatility\nrun_volatility_batch"]
+        runFls["run_fls / run_mmls\nrun_fsstat / mactime"]
+        runPlaso["run_plaso"]
+        runEvtx["run_evtx_parser\nindex_evtx_file"]
+        runRegistry["run_registry_parser\nrun_regripper"]
+        runPcap["run_pcap_analysis"]
+        runBulk["run_bulk_extractor"]
+        runYara["yara_scan_files\nyara_scan_memory"]
+        runCarving["run_foremost\nrun_scalpel\nrun_photorec"]
+        runMisc["run_clamav / run_exiftool\nrun_strings / run_radare2"]
+    end
+
+    subgraph compositeTools [Composite Analysis]
+        findPersistence["find_persistence_mechanisms"]
+        findLateral["find_lateral_movement_indicators"]
+        findExfil["find_data_exfiltration_indicators"]
+        findExecution["find_execution_evidence"]
+        findEvasion["find_defense_evasion"]
+        findProc["find_suspicious_processes"]
+        correlate["correlate_across_sources"]
+        reconstruct["reconstruct_execution_chains"]
+    end
+
+    subgraph queryTools [Query and Search]
+        search["search (FTS5)"]
+        getTimeline["get_timeline"]
+        getRawOutput["get_raw_output"]
+        listSources["list_sources"]
+        getSourceStats["get_source_stats"]
+    end
+
+    subgraph findingsTools [Findings and Reporting]
+        submitFinding["submit_finding"]
+        submitNarrative["submit_narrative"]
+        finalizeReport["finalize_report"]
+        checkReadiness["check_finalize_readiness"]
+        auditCoverage["audit_evidence_coverage\naudit_tool_coverage"]
+    end
 ```
-
-### CapacityLimiter
-
-The `CapacityLimiter` is bounded by the `--workers` flag (default 8). This limits how many tool functions execute concurrently in worker threads, preventing resource exhaustion when the agent dispatches many tools at once.
 
 ### Resource Throttling
 
-Before each tool execution, Mulder checks system memory and CPU usage via `psutil` (falling back to `/proc/meminfo` and `/proc/loadavg` on Linux). If either metric exceeds the configured threshold (default 90%), the tool waits in 5-second intervals for up to 5 minutes before proceeding anyway.
+Every tool call passes through an async resource gate before execution:
 
-Two variants exist:
-- `async_wait_for_resources()` uses `anyio.sleep` for MCP tool calls (keeps the event loop alive)
-- `wait_for_resources()` uses `time.sleep` for background `JobStore` threads
+```mermaid
+flowchart LR
+    request["MCP Request"] --> asyncWrapper["Async Wrapper"]
+    asyncWrapper --> resourceCheck{"Memory/CPU\nunder limit?"}
+    resourceCheck -->|"No"| wait["anyio.sleep\n(5s intervals)"]
+    wait --> resourceCheck
+    resourceCheck -->|"Yes"| threadPool["Worker Thread\n(CapacityLimiter)"]
+    threadPool --> syncTool["Sync Tool Function"]
+    syncTool --> result["Return Result"]
+```
 
-### run_parallel
+The `CapacityLimiter` bounds concurrent tool execution to the `--workers` count (default 8). The `--mem-limit` and `--cpu-limit` flags set thresholds (default 90%) above which tools wait before proceeding.
 
-The `run_parallel` meta-tool accepts a list of `{tool, args}` objects and executes them concurrently in an `anyio` task group. Tools listed in `_SEQUENTIAL_ONLY` (currently just `run_bulk_extractor`) are run sequentially after the parallel batch completes, to avoid overwhelming system resources.
+## SDK Orchestrator Pipeline
 
-## 🗄️ Data Model
+The orchestrator (`mulder investigate`) uses the Claude Agent SDK to run six investigation phases sequentially. Most phases use a three-agent pipeline (planner/executor/analyst) while catalog and report use single-agent sessions.
+
+```mermaid
+flowchart TD
+    start["mulder investigate /evidence/path"] --> catalog
+    catalog["Phase 1: Catalog\n(Planner model, single agent)"]
+    catalog --> catalogGate{"Catalog Gate\nCase created?"}
+    catalogGate -->|"Pass"| identifySystems["Identify Systems\nfrom Catalog Output"]
+    catalogGate -->|"Fail"| retryC["Retry (1.5x turn limit)"]
+    retryC --> catalog
+
+    identifySystems --> extraction
+
+    subgraph extraction [Phase 2: Extraction - per system]
+        ep["Planner\n(decides tools)"]
+        ee["Executor\n(calls tools)"]
+        ea["Analyst\n(submits findings)"]
+        ep --> ee --> ea
+        ea -->|"follow-up"| ep
+    end
+
+    extraction --> extractionGate{"Extraction Gate\nSources indexed?"}
+    extractionGate -->|"Pass"| crossSystem
+    extractionGate -->|"Fail"| retryE["Retry (1.5x turn limit)"]
+    retryE --> extraction
+
+    subgraph crossSystem [Phase 3: Cross-System Analysis]
+        cp["Planner"] --> ce["Executor"] --> ca["Analyst"]
+        ca -->|"follow-up"| cp
+    end
+
+    crossSystem --> crossGate{"Cross-System Gate\nFindings + MITRE?"}
+    crossGate -->|"Pass"| altNarrative
+    crossGate -->|"Fail"| retryCS["Retry (1.5x turn limit)"]
+    retryCS --> crossSystem
+
+    subgraph altNarrative [Phase 3.5: Alternative Narrative]
+        np["Planner"] --> ne["Executor"] --> na["Analyst"]
+    end
+
+    altNarrative --> audit
+
+    subgraph audit [Phase 4: Audit]
+        ap["Planner"] --> ae["Executor"] --> aa["Analyst"]
+    end
+
+    audit --> auditGate{"Audit Gate\nAll finalize gates pass?"}
+    auditGate -->|"Pass"| report
+    auditGate -->|"Fail"| retryA["Retry (1.5x turn limit)"]
+    retryA --> audit
+
+    report["Phase 5: Report\n(Analyst model, single agent)"]
+    report --> reportGate{"Report Gate\nfinalize_report called?"}
+    reportGate -->|"Pass"| done["Investigation Complete"]
+    reportGate -->|"Fail"| retryR["Retry (1.5x turn limit)"]
+    retryR --> report
+```
+
+### Phase Configuration
+
+Each phase is defined by a `PhaseConfig` dataclass specifying:
+
+- **Pipeline mode**: Either `split` (planner/executor/analyst) or `single` (one agent session)
+- **Tool whitelist**: Per-role tool access; planners get discovery tools, executors get action tools, analysts get query tools
+- **Model assignment**: Each role resolves its model via `ModelConfig.resolve(phase, role)` with support for per-phase overrides via config file
+- **Turn limit**: Maximum tool-use round trips per role session
+- **Follow-up limit**: Maximum planner/executor cycles the analyst can request before being capped
+- **Workers**: Configurable via `--workers` for concurrent extraction sessions
+- **Auto-compaction**: When context is exhausted mid-phase, the orchestrator restarts with a compact prompt that recovers state from the database
+- **Finding validator**: CRITICAL/HIGH findings are validated against cited evidence before acceptance; unsupported findings are rejected or downgraded
+- **Retry policy**: Maximum retries with 1.5x turn limit multiplier on each retry
+
+### Phase Gates
+
+```mermaid
+flowchart LR
+    subgraph gates [Quality Gates]
+        catalogGate["Catalog Gate"]
+        extractionGate["Extraction Gate"]
+        crossSystemGate["Cross-System Gate"]
+        auditGate["Audit Gate"]
+        reportGate["Report Gate"]
+    end
+
+    catalogGate --- catalogChecks["Case exists in DB"]
+    extractionGate --- extractionChecks["Sources indexed > 0"]
+    crossSystemGate --- crossChecks["Findings submitted > 0\nMITRE mappings present"]
+    auditGate --- auditChecks["All finalize_report gates pass\n(except narrative, deferred to report)"]
+    reportGate --- reportChecks["finalize_report called successfully"]
+```
+
+When a gate fails, the orchestrator retries the phase with:
+- 1.5x the original turn limit
+- Gap-specific instructions prepended to the prompt (e.g., "No sources indexed after extraction")
+- Up to 2 retries per phase (configurable)
+
+## Database Schema
+
+Each investigation case uses a dedicated SQLite database with WAL mode for concurrent reads and a serialized write queue for thread safety.
 
 ```mermaid
 erDiagram
-    case_metadata {
+    caseMetadata {
         text case_id PK
         text ingested_at
         text evidence_root
@@ -222,7 +249,7 @@ erDiagram
         text raw_text
     }
 
-    windows_fts {
+    windowsFts {
         text raw_text
     }
 
@@ -241,7 +268,7 @@ erDiagram
         text submitted_at
     }
 
-    evidence_registry {
+    evidenceRegistry {
         int id PK
         text file_path
         text sha256
@@ -249,256 +276,243 @@ erDiagram
         text registered_at
     }
 
-    case_metadata ||--o{ sources : "has"
+    bookmarks {
+        int id PK
+        int window_id FK
+        text source_name
+        text note
+        text created_at
+    }
+
+    progress {
+        int id PK
+        text system_name
+        text tools_completed
+        text questions_addressed
+        text notes
+        text recorded_at
+    }
+
+    caseMetadata ||--o{ sources : "has"
     sources ||--o{ windows : "contains"
-    windows ||--|| windows_fts : "indexed by"
+    windows ||--|| windowsFts : "indexed by"
+    windows ||--o{ bookmarks : "flagged by"
 ```
 
-### Tables
+### Key Tables
 
-- **case_metadata**: one row per case, storing the evidence root path, extractor version info, and an optional long-form investigation narrative (set via `submit_narrative`)
-- **sources**: one row per ingested evidence source (a Volatility plugin output, a disk image FLS listing, etc.), keyed to a case. The `windows_hash` column stores a BLAKE2b hash of all window content for fast integrity verification.
-- **windows**: character-budget chunks from extractor output, each belonging to a source. The primary unit of searchable evidence. Each window is up to 4,096 characters (a character budget, not a line count).
-- **windows_fts**: an FTS5 virtual table that mirrors `windows.raw_text` for full-text search
-- **findings**: agent-submitted investigation findings with severity, confidence, MITRE ATT&CK IDs, and evidence references
+- **case_metadata**: One row per case with evidence root path, extractor versions, and the investigation narrative (set via `submit_narrative`)
+- **sources**: One row per ingested evidence source (a Volatility plugin output, an FLS listing, etc.). The `windows_hash` column stores a BLAKE2b digest of all window content for integrity verification.
+- **windows**: Character-budget chunks (4,096 chars each) from extractor output. The primary unit of searchable evidence.
+- **windows_fts**: FTS5 virtual table mirroring `windows.raw_text` for full-text keyword search
+- **findings**: Agent-submitted investigation findings with severity, confidence, MITRE ATT&CK IDs, timestamps, and evidence references
 - **evidence_registry**: SHA-256 chain-of-custody records for original evidence files
+- **bookmarks**: Agent-flagged windows of interest for later review
+- **progress**: Per-system records of tools executed and questions addressed
 
-## 🔬 Evidence Pipeline
+### Write Safety
+
+SQLite does not support concurrent writers. Mulder serializes all writes through a `WriteQueue`: a dedicated daemon thread that drains a queue of write callables. Worker threads submit operations and block until completion. This eliminates `SQLITE_BUSY` errors entirely.
+
+Read operations bypass the queue since WAL mode allows concurrent readers.
+
+## Rich Live Dashboard
+
+The orchestrator displays a real-time terminal dashboard using Rich's Live display:
+
+```
++----------------------------------------- Mulder ------------------------------------------+
+| [3/7] Phase 2: Deep Extraction: HOST01                                                    |
+| claude-sonnet-4-6 | max turns: 75                                                        |
+| Tools: 47          Findings: 5          Tokens: 1.2M          20.1K/min                   |
+| CPU: 45%           MEM: 6.2/16 GB (39%)   12:34                                          |
+|   sonnet-4-6       890K in / 312K out     1.2M                                            |
+|   haiku-4          15K in / 3K out        18K                                             |
++-------------------------------------------------------------------------------------------+
+| ==========================================================                                |
+|   [3/7] Phase 2: Deep Extraction: HOST01                                                  |
+|   Model: claude-sonnet-4-6 | Max turns: 75                                               |
+|   > run_volatility_batch                                                                  |
+|   > run_evtx_parser                                                                       |
+|   [HIGH] Persistence Mechanism Detected                                                   |
+|   > search                                                                                |
+|   PASS  Phase 2: Deep Extraction: HOST01 (42 turns)                                      |
++-------------------------------------------------------------------------------------------+
+```
+
+The dashboard has two panels:
+- **Stats header**: Current phase, tool count, finding count, token usage (total and per-model), throughput, system resources, elapsed time
+- **Scrolling log**: Assistant reasoning, tool calls, findings (color-coded by severity), gate results
+
+## Evidence Classification and Extractor Framework
+
+The `EvidenceClassifier` scans evidence directories and categorizes files by type:
+
+| Evidence Type | Extensions / Indicators | Primary Tools |
+|---------------|------------------------|---------------|
+| Memory dump | `.mem`, `.vmem`, `.dmp`, `.raw` (large) | Volatility 3, YARA |
+| Disk image | `.e01`, `.dd`, `.vmdk`, `.vhd`, `.img` | Sleuthkit, Plaso, bulk_extractor |
+| Windows event log | `.evtx` | python-evtx, Hayabusa |
+| Network capture | `.pcap`, `.pcapng` | tshark, tcpflow |
+| Phone dump | Android/iOS directory structures | MVT |
+| Archive | `.zip`, `.7z`, `.tar`, `.gz` | Internal extraction |
+| Log directory | `/var/log/*`, text files | Native parsing |
+
+Each extractor normalizes output into `WindowRow` objects (source_id, line_start, line_end, event_time, raw_text) for uniform database storage and FTS indexing.
+
+## Docker Deployment Architecture
 
 ```mermaid
-flowchart TD
-    ScanDir["scan_evidence(evidence_dir)"]
-    Classify["EvidenceClassifier\nwalks directory tree"]
-    ArtifactMap["Artifact Map\n(memory dumps, disk images,\nEVTX, PCAPs, logs, etc.)"]
-    AgentDecides["Agent decides which\nextractions to run"]
-    RunTool["Agent calls extraction tool\n(run_volatility, run_fls,\nrun_plaso, etc.)"]
-    ExtBinary["Extractor runs\nexternal binary"]
-    ParseOutput["Output parsed into\nWindowRow objects\n(character-budget chunking)"]
-    RegisterSource["register_source()\nrecords source metadata + hash"]
-    InsertWindows["insert_windows()\nbatch insert via WriteQueue"]
-    FTSSync["FTS5 triggers sync\nsearchable text"]
-    AuditEntry["Audit log records\ntool_call_id + output_hash"]
+flowchart TB
+    subgraph host [Host System]
+        evidenceDir["/path/to/evidence"]
+        casesDir["~/mulder-cases"]
+        claudeDir["~/.claude"]
+        creds["API credentials"]
+    end
 
-    ScanDir --> Classify
-    Classify --> ArtifactMap
-    ArtifactMap --> AgentDecides
-    AgentDecides --> RunTool
-    RunTool --> ExtBinary
-    ExtBinary --> ParseOutput
-    ParseOutput --> RegisterSource
-    RegisterSource --> InsertWindows
-    InsertWindows --> FTSSync
-    RunTool --> AuditEntry
+    subgraph container [Container (ubuntu:22.04)]
+        subgraph runtime [Runtime Layer]
+            entrypoint["entrypoint.sh\n(credential setup, permission fixups)"]
+            mulderUser["mulder user (non-root)"]
+        end
+
+        subgraph app [Application Layer]
+            mulderCLI["mulder CLI"]
+            orchestrator2["SDK Orchestrator"]
+            claudeCode2["Claude Code + Agent SDK"]
+            mcpServer2["MCP Server (FastMCP)"]
+        end
+
+        subgraph tools [Forensic Tools Layer]
+            python312["Python 3.12"]
+            node22["Node.js 22"]
+            forensicBins["vol3, fls, plaso, hayabusa,\nyara, bulk_extractor, EZ tools,\nradare2, clamav, mvt, ..."]
+            symbolTables["Volatility symbols\n(Windows + Linux)"]
+            yaraRules["YARA rules\n(signature-base + yara-rules)"]
+            attackData["MITRE ATT&CK STIX data"]
+        end
+    end
+
+    evidenceDir -->|":ro mount"| mulderCLI
+    casesDir -->|"mount"| mcpServer2
+    claudeDir -->|"mount"| claudeCode2
+    creds -->|"env vars"| entrypoint
+    entrypoint --> mulderUser
+    mulderUser --> mulderCLI
 ```
 
-The key design choice is that the agent controls which extractions run. `scan_evidence` only classifies files by type (memory dump, disk image, EVTX, PCAP, etc.); it does not automatically run any extractors. The agent then selectively calls Tier 2 extraction tools to populate the database.
+The container runs with `--privileged` (or `--cap-add SYS_ADMIN`) to support disk image mounting via `ewfmount`, `guestmount`, and `mount`.
 
-## 🧰 Extractors
+## Finding Validator
 
-Each extractor module wraps one or more external forensic tools and normalizes their output into `WindowRow` objects for database insertion.
+The orchestrator includes a synchronous finding validator that checks submitted findings against their cited evidence in real time. This is a detect-and-compensate guardrail (the server-side prevention version is a future improvement).
 
-| Module | External Tool(s) | Artifact Types |
-|--------|-------------------|----------------|
-| `volatility.py` | Volatility 3 (`vol`) | Memory dumps (.mem, .vmem, .dmp) |
-| `sleuthkit.py` | Sleuthkit (`fls`, `icat`, `mmls`, `fsstat`, `mactime`) | Disk images (.e01, .dd, .img) |
-| `plaso.py` | Plaso (`log2timeline`, `psort`) | Super-timeline from any supported format |
-| `bulk.py` | `bulk_extractor` | Carved IOCs (emails, URLs, credit cards, etc.) |
-| `eztools.py` | Eric Zimmerman .NET tools (`PECmd`, `AmcacheParser`, `AppCompatCacheParser`, `EvtxECmd`, `JLECmd`, `LECmd`, `MFTECmd`, `RBCmd`, `RECmd`, `SBECmd`, `SrumECmd`) | Windows artifacts (prefetch, amcache, shimcache, EVTX, jump lists, LNK, MFT, recycle bin, registry, shellbags, SRUM, USN journal) |
-| `logs.py` | None (Python native) | Plain text log files |
-| `disk.py` | Sleuthkit utilities | Disk image metadata and file extraction |
+### Validation Tiers
 
-Additional tools invoked from dedicated `tools_extract_*.py` submodules:
+| Severity | Validation | Evidence | Model | Latency |
+|----------|-----------|----------|-------|---------|
+| CRITICAL / HIGH | Full evidence check | Fetched by tc_ ref from the audit log | Utility model | 10-20s per finding |
+| MEDIUM / LOW | Source type check | Label only (no fetch) | Utility model | 2-3s per finding |
+| INFORMATIONAL | Skipped | None | None | 0 |
 
-| Module | Tools |
-|--------|-------|
-| `tools_extract_volatility.py` | Volatility 3 memory analysis (`run_volatility`, `run_volatility_batch`) |
-| `tools_extract_tsk.py` | Sleuthkit (`run_fls`, `run_mmls`, `run_fsstat`, `mactime`) |
-| `tools_extract_evtx.py` | Windows EVTX parsing and indexing (`run_evtx_parser`, `index_evtx_file`) |
-| `tools_extract_registry.py` | Registry parsing (`run_registry_parser`, `run_regripper`) |
-| `tools_extract_plaso.py` | Plaso super-timeline (`run_plaso`) |
-| `tools_extract_pcap.py` | PCAP analysis, tunneling detection, PCAP-host correlation (`run_pcap_analysis`) |
-| `tools_extract_carving.py` | File carving and recovery (`foremost`, `scalpel`, `photorec`) |
-| `tools_extract_misc.py` | `exiftool`, `clamav`, `hashdeep`, `ssdeep`, `binwalk`, `chkrootkit`, `strings`, `stegdetect`/`steghide`, `radare2`, `tcpflow`/`tcpxtract`, `dislocker`/`bdeinfo`, `fvdeinfo` |
+### Verdicts
 
-Standalone tool modules for specialized forensic tools:
+- **VALIDATED**: Evidence directly supports the claims. Finding accepted as-is.
+- **DOWNGRADE**: Evidence supports presence but the confidence level is too strong. Confidence is flipped to "inference" via `update_finding` and tracked in a durable set so the audit phase does not re-promote without new evidence.
+- **REJECT**: Claims are not supported by the cited evidence. The finding is deleted via `delete_finding` and the rejection reason is logged prominently so the agent can revise.
 
-| Module | Tools |
-|--------|-------|
-| `tools_hayabusa.py` | Hayabusa Windows event log threat hunting with Sigma rules |
-| `tools_yara.py` | YARA pattern matching across files, memory, or Volatility output |
-| `tools_hindsight.py` | Chrome/Chromium browser forensics |
-| `tools_mvt.py` | MVT mobile spyware detection (Android, iOS) |
+### Design Decisions
 
-## 📜 Audit and Provenance
+- **Synchronous for high-severity**: CRITICAL/HIGH findings block the message loop so rejection reasons re-enter the agent's context causally. The agent sees the rejection and can self-correct in real time.
+- **Severity-only gating**: The deep validation tier is gated on severity alone, not stated confidence, because mislabeled confidence is one of the errors being caught.
+- **Evidence by tc_ ref**: Evidence is fetched by the specific `tool_call_id` from the finding's `evidence_refs`, not by source name, so the validator sees exactly what produced the claim.
+- **Durable downgrades**: Downgraded findings are tracked in `_validator_downgraded` so the audit phase respects the downgrade.
 
-### Audit Log
+### Global Consistency Pass
 
-Each case has an append-only JSONL file (`{case_id}.audit.jsonl`) that records three entry types:
+Before the audit phase, the orchestrator builds code-driven indexes from all findings:
 
-1. **tool_call**: every MCP tool invocation, with `tool_call_id`, parameters, SHA-256 hash of the output, timestamp, duration, and optional `batch_id` (set when the call was dispatched via `run_parallel`)
-2. **ingestion**: each source extraction, recording source path, hash, extractor name, window count, and duration
-3. **finding**: each finding submission, recording the finding ID and its evidence references
+1. **Dedup index**: Groups findings by shared IOCs (IPs, file paths, process names) extracted via regex to identify per-host duplicates of the same artifact.
+2. **Contradiction index**: Identifies entities that appear in findings with conflicting classifications (one finding says legitimate, another says malicious).
 
-The log is append-only and never modified after writing. An in-memory index of all `tool_call_id` values is maintained for fast lookups.
+These indexes are prepended to the audit phase prompt so the agent acts on code-discovered clusters rather than re-deriving them from raw text.
 
-### Audit Summary
+## Security Model
 
-The `AuditLog.summary()` method produces an `AuditSummary` with aggregate statistics used in reports:
+### No Shell Access
 
-- **tool_call_counts**: per-tool invocation counts
-- **tool_durations**: per-tool cumulative execution time
-- **total_duration_ms** / **wall_clock_ms**: total tool execution time and wall-clock investigation duration
-- **estimated_input_tokens**, **estimated_output_tokens**, **estimated_cost_usd**: API cost estimates derived from the session log
+The MCP server exposes only typed tool functions. Shell, Bash, and arbitrary command execution are explicitly blocked in both the MCP server permissions and in each phase's `disallowed_tools` list. All evidence access goes through audited MCP tools.
 
-### Anti-Hallucination Guardrail
+### Read-Only SQLite Authorizer
 
-When the agent calls `submit_finding`, every entry in the `evidence_refs` list is validated against the audit log's set of recorded `tool_call_id` values. If any reference does not match a real tool invocation, the finding is rejected. This prevents the agent from fabricating evidence citations.
+The `query_sqlite_from_image` tool allows SQL queries against SQLite databases found in evidence. A custom authorizer callback restricts the connection to read-only operations, blocking `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `ATTACH`, `DETACH`, `CREATE`, and `load_extension` at the SQLite engine level.
 
-### Provenance Chains
+### Evidence Reference Validation
 
-The `get_provenance_chain()` method traces a finding back through:
+When the agent calls `submit_finding`, every entry in `evidence_refs` is validated against the audit log's set of recorded `tool_call_id` values. If any reference does not match a real tool invocation, the finding is rejected. This prevents hallucinated evidence citations.
 
-1. The `evidence_refs` tool call IDs cited by the finding
-2. The tool call parameters (which contain source names)
-3. The `sources` table in the database (original file paths and SHA-256 hashes)
+### Path Traversal Protection
 
-This produces a full chain from finding to tool invocation to original evidence file.
-
-## 🔗 Cross-Source Correlation
-
-The `Correlator` class in `index/correlator.py` performs time-bounded joins across evidence sources. Given a time range and an optional list of source names, it queries the `windows` table for each source and returns all matching windows grouped by source.
-
-This lets the agent answer questions like "at timestamp T, what did each artifact type observe?" by pulling memory analysis, disk timeline, event logs, and network captures into a single correlated view.
-
-## 📄 Report Generation
-
-The `ReportRenderer` in `report/renderer.py` uses Jinja2 templates to produce Markdown and HTML reports.
-
-### Narrative
-
-The agent can call `submit_narrative` to store a long-form incident report (markdown) in the `case_metadata.narrative` column. This narrative is rendered as a dedicated "Report" page in the HTML output and as a top-level section in the Markdown output. It can be called multiple times; each call replaces the previous narrative.
-
-### Rendering Pipeline
-
-1. **Aggregate findings** sorted by severity (critical, high, medium, low, info)
-2. **Extract IOCs** from finding descriptions using regex patterns for IP addresses, ports, file paths, hashes, and email addresses
-3. **Build MITRE ATT&CK rollups** using `report/data/attack_tactics.json` (a packaged lookup table mapping technique IDs to tactic names, generated from MITRE ATT&CK STIX data by `scripts/extract_attack_tactics.py`)
-4. **Convert finding descriptions** from markdown to HTML (for the HTML report) using the `markdown` library
-5. **Generate executive summary** text from findings counts and severity distribution
-6. **Render template** with case metadata, narrative, findings, IOC tables, audit summary, evidence integrity records, and source listings
-
-### Templates
-
-- **`report.md.j2`**: Markdown report with sections for executive summary, severity overview, evidence integrity, attack timeline, detailed findings, ruled-out findings, IOC tables, MITRE coverage, audit metrics, and sources appendix
-- **`report.html.j2`**: Self-contained HTML page (~1500 lines) with dark/light theme toggle, sidebar navigation, and the same content sections. Source window samples are capped at 50 per source to keep file size manageable.
-
-## 🔍 Self-Review Tools
-
-The `tools_review.py` module exposes two MCP tools designed to be called before `finalize_report` as a quality gate. They help the agent identify blind spots in its investigation.
-
-### audit_evidence_coverage
-
-Compares the set of indexed evidence sources against the sources cited by submitted findings. Returns:
-
-- A list of **uncited sources** (extracted and indexed but never referenced in any finding), each with sample content so the agent can assess relevance
-- Coverage percentage and counts
-
-The agent is expected to either submit additional findings for overlooked sources or document why they are not relevant.
-
-### audit_tool_coverage
-
-Re-runs the `EvidenceClassifier` on the original evidence directory and cross-references the applicable tools for each artifact type (defined in `_EVIDENCE_TOOL_MAP`) against the tools actually invoked during the session (from the audit log). Returns:
-
-- Per-evidence-item lists of tools that were run vs. not run
-- Total gap count
-
-The agent is expected to either run the missing tools or justify their omission before finalizing.
-
-## 🔒 Concurrency and Write Safety
-
-### WriteQueue
-
-SQLite does not support concurrent writers. Mulder handles this with a `_WriteQueue`: a dedicated daemon thread that drains a `queue.Queue` of write callables. Worker threads submit write operations via `_WriteQueue.submit()` and block until the writer thread executes them and signals completion.
-
-This eliminates `SQLITE_BUSY` errors entirely because only one thread ever holds the write lock.
-
-### SQLite Configuration
-
-Each new database connection sets three PRAGMAs:
-
-- **`journal_mode=WAL`**: allows concurrent readers while one writer holds the lock
-- **`foreign_keys=ON`**: enforces referential integrity between tables
-- **`busy_timeout=30000`**: if the write lock is held (which should not happen with the WriteQueue, but serves as a safety net), SQLite retries for up to 30 seconds before returning `SQLITE_BUSY`
-
-The engine uses `NullPool` so each `engine.begin()` / `engine.connect()` gets a fresh connection. The PRAGMA listener fires on every new connection since NullPool discards connections after use.
-
-### Thread Safety
-
-- `ServerContext` is protected by a `threading.Lock` for safe case switching
-- The `AuditLog` uses a `threading.Lock` around file appends and index updates
-- The `_WriteQueue` serializes all database mutations through a single thread
-- Read operations (search, correlation, listing) go directly through SQLAlchemy without the WriteQueue since WAL mode allows concurrent reads
-
-## 🔐 Security Architecture
-
-### SQL Authorizer
-
-The `query_sqlite_from_image` tool allows agents to run arbitrary SQL against SQLite databases extracted from evidence. To prevent abuse, a custom SQLite authorizer callback (`_readonly_authorizer`) restricts the connection to read-only operations. This blocks `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `ATTACH`, `DETACH`, `CREATE`, and `load_extension` calls at the SQLite engine level, regardless of how the query is constructed.
-
-### Path Validation
-
-The `read_evidence_file` and `list_directory` tools validate that requested paths resolve to locations under allowed roots (the evidence directory and the case database directory). This prevents path traversal attacks that could read arbitrary filesystem contents. The validation uses `Path.resolve()` to canonicalize symlinks before checking containment.
-
-### Archive Extraction Filters
-
-- **Zip files**: Member paths are checked for path traversal (`..` components, absolute paths) before extraction to prevent Zip Slip attacks.
-- **Tar files**: A custom filter rejects members with `..` in both `name` and `linkname` fields, blocking relative symlink traversal.
+`read_evidence_file` and `list_directory` validate that requested paths resolve to allowed roots using `Path.resolve()` for symlink canonicalization. Archive extraction filters prevent Zip Slip and tar traversal attacks.
 
 ### FTS5 Query Sanitization
 
-Full-text search queries are sanitized before being passed to FTS5 to prevent FTS syntax injection. Special characters that have meaning in FTS5 query syntax are escaped or removed.
+Full-text search queries are sanitized before execution. Special characters with FTS5 syntax meaning are escaped, and pipe-separated terms (common LLM mistakes) are converted to proper `OR` operators.
 
 ### Non-Root Container
 
-The container creates a `mulder` user and runs all processes (including Claude Code and the MCP server) as that user via `gosu`. An entrypoint script (`scripts/entrypoint.sh`) handles:
+All processes run as the `mulder` user via `gosu`. The entrypoint handles credential copying and ownership fixups before dropping privileges.
 
-1. Copying mounted credential files (e.g., GCP service account JSON) to a mulder-accessible location
-2. Ensuring Claude Code project settings are configured
-3. Setting correct file ownership before dropping privileges
+## Per-Model Token Tracking
 
-### Logging and Error Message Hardening
+The orchestrator uses a planner/executor/analyst role system for model assignment. Each role maps to a CLI flag with built-in defaults:
 
-Log messages and error responses are hardened against injection and data leakage:
-- User-controlled values are repr-escaped in log statements to prevent log injection
-- Error messages returned to the MCP client are sanitized to avoid exposing filesystem paths, SQL details, or stack traces
+| CLI Flag | Role | Default Model | Responsibility |
+|----------|------|--------------|----------------|
+| `--planner-model` | Planner | `claude-sonnet-4-6` | Decides what tools to run, produces execution plans |
+| `--executor-model` | Executor | `claude-haiku-4-5` | Calls tools mechanically, manages waits and retries |
+| `--analyst-model` | Analyst | `claude-sonnet-4-6` | Queries indexed data, reasons about evidence, submits findings |
+| `--model` | Fallback | None | Sets all roles when per-role flags are not specified |
 
-## ⚡ Performance
+Single-mode phases map to roles: catalog uses the planner model, report uses the analyst model. Per-phase overrides can be specified in a YAML config file via `--config`.
 
-### Source Caching in Composite Tools
+All roles inherit from `--model` if not specified individually, enabling single-model deployments (e.g., Bedrock or Vertex with one model identifier).
 
-Composite tools (persistence detection, lateral movement analysis, etc.) previously issued N+1 database queries to check source existence. Source metadata is now cached once per tool invocation, reducing database round-trips from dozens to one.
+Per-model usage is written to a JSON sidecar file (`{case_id}.model_usage.json`) for inclusion in the final report's token usage breakdown. The dashboard displays running per-model totals during the investigation.
 
-### Batch YARA Validation
+## Audit and Provenance
 
-YARA rule validation previously spawned a separate subprocess per rule file (~4,000 files). Validation is now batched to reduce subprocess overhead.
+Each case has an append-only JSONL file (`{case_id}.audit.jsonl`) recording:
 
-### Correlator Query Optimization
+1. **tool_call**: Every MCP tool invocation with `tool_call_id`, parameters, SHA-256 hash of output, timestamp, duration, and optional `batch_id`
+2. **ingestion**: Each source extraction with source path, hash, extractor name, window count, and duration
+3. **finding**: Each finding submission with finding ID and evidence references
 
-The `Correlator` class previously issued one database query per source for time-range joins. Queries are now consolidated to reduce round-trips when many sources are present.
+### Provenance Chain
 
-### Windowing Algorithm
+A finding can be traced back to original evidence through:
+1. `evidence_refs` tool call IDs cited by the finding
+2. Tool call parameters (containing source names)
+3. `sources` table (original file paths and SHA-256 hashes)
+4. `evidence_registry` table (chain-of-custody SHA-256 records)
 
-Evidence text is chunked into windows using a **character budget** (4,096 characters per window) rather than a fixed line count. This produces more uniform window sizes regardless of line length variation in the source data, improving FTS search relevance and reducing storage overhead for sources with very short or very long lines.
+## Cross-Source Correlation
 
-### Integrity Verification
+The `Correlator` class performs time-bounded joins across evidence sources. Given a time range, it queries the `windows` table for events from all sources and returns them grouped by source name. This enables the agent to answer "at timestamp T, what did each artifact type observe?" by correlating memory analysis, disk timeline, event logs, and network captures.
 
-Evidence integrity verification uses a fast DB-only approach: BLAKE2b hashes of all window content are computed and stored in the `windows_hash` column of the `sources` table at ingestion time. The `verify_evidence_integrity` tool recomputes hashes from stored windows and compares against the recorded values without needing to re-read original evidence files from disk.
+## Report Generation
 
-## 🧩 Shared Helpers
+The `ReportRenderer` uses Jinja2 templates to produce both Markdown and HTML reports:
 
-Common utility functions that were previously duplicated across multiple tool modules are consolidated into `server/helpers.py` and `server/extract_helpers.py`:
+1. Aggregate findings sorted by severity
+2. Extract IOCs from descriptions using regex patterns
+3. Build MITRE ATT&CK tactic rollups from technique IDs
+4. Convert finding descriptions from markdown to HTML
+5. Generate executive summary from severity distribution
+6. Render template with all case data, narrative, findings, audit metrics, and source listings
 
-- **Partition offset parsing**: Unified `parse_partition_offset()` replaces 5 independent implementations
-- **PID/module extraction**: `_extract_pid()` and `_extract_module()` shared across composite and core tools
-- **Disk image extensions**: `_DISK_IMAGE_EXTS` defined once and imported where needed
-- **Mount/unmount logic**: Consolidated into `extractors/disk.py` as the single source of truth
+### Output Formats
+
+- **Markdown** (`{case_id}.report.md`): Plain-text report for version control and review
+- **HTML** (`{case_id}.report.html`): Self-contained styled page with dark/light theme toggle, sidebar navigation, per-model token usage breakdown, and collapsible source window samples

@@ -5,7 +5,7 @@
 
 </div>
 
-Mulder is an [MCP](https://modelcontextprotocol.io/) server for digital forensics. It gives an AI agent the ability to create investigation cases, run forensic tools (Volatility 3, Sleuthkit, Plaso, Hayabusa, YARA, and more), index evidence into a searchable SQLite database, submit provenance-tracked findings, and generate investigation reports.
+Mulder is an [MCP](https://modelcontextprotocol.io/) server and SDK orchestrator for digital forensics. It exposes 110+ typed forensic tools (Volatility 3, Sleuthkit, Plaso, Hayabusa, YARA, and more) through the Model Context Protocol with no shell access, and includes a multi-phase SDK orchestrator that runs full investigations autonomously with quality gates between phases.
 
 <p align="center">
   <img src="docs/photos/report-demo.gif" alt="Mulder report demo" width="800">
@@ -18,28 +18,32 @@ Mulder is an [MCP](https://modelcontextprotocol.io/) server for digital forensic
 
 ## Features
 
-- 🔌 **MCP protocol** for connecting to AI clients (tested with Claude Code; should work with any MCP-compatible client)
-- 🧰 **80+ forensic tools** exposed as MCP tool calls covering memory, disk, timeline, Windows event logs, YARA, network capture, mobile, and more
-- 🗄️ **Per-case SQLite database** with FTS5 full-text search across all indexed evidence
-- 📜 **Append-only audit log** that records every tool invocation; findings must cite real tool call IDs to prevent hallucinated evidence citations
-- 🔗 **Cross-source correlation** to join evidence from different artifact types within a time range
-- 📊 **Report generation** producing both Markdown and styled HTML reports with IOC tables, MITRE ATT&CK coverage, and full audit trails
-- ⚙️ **Resource throttling** with configurable memory and CPU limits so extractions do not overwhelm the host
-- ⚡ **Parallel extraction** with a configurable worker pool and a `run_parallel` meta-tool for batch dispatch
+- **MCP server** with 110+ typed forensic tools covering memory, disk, timeline, Windows event logs, YARA, network capture, mobile, steganography, and more
+- **SDK orchestrator** that decomposes investigations into six phases (Catalog, Extraction, Cross-System Analysis, Alternative Narrative, Audit, Report) with hard quality gates between each phase
+- **Per-case SQLite database** with FTS5 full-text search across all indexed evidence
+- **Append-only audit log** that records every tool invocation; findings must cite real tool call IDs to prevent hallucinated evidence citations
+- **Cross-source correlation** to join evidence from different artifact types within a time range
+- **Rich Live dashboard** showing real-time investigation progress, per-model token usage, findings, and throughput
+- **Report generation** producing both Markdown and styled HTML reports with IOC tables, MITRE ATT&CK coverage, and full audit trails
+- **Resource throttling** with configurable memory and CPU limits so extractions do not overwhelm the host
+- **Parallel extraction** with a configurable worker pool, background job management, and a `run_parallel` meta-tool for batch dispatch
+- **Finding validator** that checks CRITICAL/HIGH findings against cited evidence in real time, rejecting unsupported claims and downgrading miscalibrated confidence
+- **Auto-compaction** that detects context window exhaustion and restarts phases with a compact prompt, recovering state from the database
+- **Per-model token tracking** with role-based model assignment (planner, executor, analyst) and per-role usage breakdowns
 
 ### Example Output
 
 From the agent's live terminal during a [NIST insider threat investigation](examples/nist-data-leakage/):
 
 ```
-● BOMBSHELL: Informant's Downloads folder contains:
+BOMBSHELL: Informant's Downloads folder contains:
   - googledrivesync.exe + Zone.Identifier (downloaded from internet!)
   - icloudsetup.exe + Zone.Identifier (also downloaded from internet!)
 
-  Multi-vector exfiltration: USB drives (×2), CD-R burn, Google Drive cloud
+  Multi-vector exfiltration: USB drives (x2), CD-R burn, Google Drive cloud
   sync, and possibly iCloud!
 
-● SMOKING GUN — Browser Search Queries Show Premeditation:
+SMOKING GUN: Browser Search Queries Show Premeditation:
   search?q=anti-forensic+tools      (n=85)
   search?q=ccleaner                 (n=65)
   search?q=cd+burning+method        (n=64)
@@ -49,23 +53,17 @@ From the agent's live terminal during a [NIST insider threat investigation](exam
 
   The informant researched how to cover their tracks AND how forensic
   investigations work. This is deliberate, premeditated data theft.
-
-● EXPLOSIVE FIND: LNK shows network share accessed:
-  \\10.11.11.128\secured_drive\Secret Project Data\final
-  on 2015-03-22T14:52:21Z (drive V:).
-
-  This is the server where the secret project files were stored!
 ```
 
 From a single Sonnet run: 14 findings, 9 critical, 34 minutes. Report with narrative, IOCs, and MITRE ATT&CK mappings generated automatically.
 
 See [examples/](examples/) for reports from multiple forensic datasets with ground truth comparisons, including runs on both Opus and Sonnet.
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Docker/Podman
 
-The container image comes with all forensic tools, dependencies, and [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview) pre-installed. Mulder is already registered as an MCP server in the container, so Claude Code can use it immediately.
+The container image comes with all forensic tools, dependencies, Claude Code, and the Mulder MCP server pre-installed. The SDK orchestrator runs inside the container, launching Claude Code sessions that connect to the MCP server automatically.
 
 ```bash
 docker pull ghcr.io/calebevans/mulder:1.1
@@ -89,9 +87,9 @@ The container expects three volume mounts:
 mkdir -p ~/mulder-cases
 
 docker run -it --privileged \
-  -v /path/to/evidence:/evidence:ro                  `# evidence directory (read-only)` \
-  -v ~/mulder-cases:/home/mulder/.mulder/cases       `# case DBs, audit logs, reports` \
-  -v ~/.claude:/home/mulder/.claude                  `# Claude Code config and sessions` \
+  -v /path/to/evidence:/evidence:ro \
+  -v ~/mulder-cases:/home/mulder/.mulder/cases \
+  -v ~/.claude:/home/mulder/.claude \
   -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
   ghcr.io/calebevans/mulder:1.1
 ```
@@ -102,14 +100,14 @@ docker run -it --privileged \
 mkdir -p ~/mulder-cases
 
 docker run -it --privileged \
-  -v /path/to/evidence:/evidence:ro                  `# evidence directory (read-only)` \
-  -v ~/mulder-cases:/home/mulder/.mulder/cases       `# case DBs, audit logs, reports` \
-  -v ~/.claude:/home/mulder/.claude                  `# Claude Code config and sessions` \
+  -v /path/to/evidence:/evidence:ro \
+  -v ~/mulder-cases:/home/mulder/.mulder/cases \
+  -v ~/.claude:/home/mulder/.claude \
   -e CLAUDE_CODE_USE_VERTEX=1 \
   -e CLOUD_ML_REGION=us-east5 \
   -e ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project-id \
   -e GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcloud-creds.json \
-  -v ~/.config/gcloud/application_default_credentials.json:/tmp/gcloud-creds.json:ro `# GCP credentials` \
+  -v ~/.config/gcloud/application_default_credentials.json:/tmp/gcloud-creds.json:ro \
   ghcr.io/calebevans/mulder:1.1
 ```
 
@@ -119,9 +117,9 @@ docker run -it --privileged \
 mkdir -p ~/mulder-cases
 
 docker run -it --privileged \
-  -v /path/to/evidence:/evidence:ro                  `# evidence directory (read-only)` \
-  -v ~/mulder-cases:/home/mulder/.mulder/cases       `# case DBs, audit logs, reports` \
-  -v ~/.claude:/home/mulder/.claude                  `# Claude Code config and sessions` \
+  -v /path/to/evidence:/evidence:ro \
+  -v ~/mulder-cases:/home/mulder/.mulder/cases \
+  -v ~/.claude:/home/mulder/.claude \
   -e CLAUDE_CODE_USE_BEDROCK=1 \
   -e AWS_REGION=us-east-1 \
   -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
@@ -129,13 +127,21 @@ docker run -it --privileged \
   ghcr.io/calebevans/mulder:1.1
 ```
 
-The container starts Claude Code directly. Once inside, use the `/investigate` slash command to begin:
+#### Starting an Investigation
 
-```
-/investigate /evidence/case-2025-001
+Use the `mulder investigate` command to run a full autonomous investigation:
+
+```bash
+mulder investigate /evidence/case-2025-001
 ```
 
-Point it at the directory where your evidence is mounted. The directory can contain archives (zip, 7z, gz, tar, tar.gz, etc.) — the agent will automatically extract them into a temporary directory and read from there.
+The orchestrator will:
+1. Catalog all evidence files and classify their types
+2. Run per-system extraction (memory analysis, disk forensics, log parsing)
+3. Perform cross-system correlation and MITRE ATT&CK mapping
+4. Challenge the primary narrative with alternative hypotheses
+5. Audit for completeness and tool coverage gaps
+6. Generate a comprehensive investigation report
 
 Case databases and reports are written to the mounted `~/mulder-cases` directory on the host.
 
@@ -143,16 +149,117 @@ Case databases and reports are written to the mounted `~/mulder-cases` directory
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ANTHROPIC_API_KEY` | — | API key for direct Anthropic access |
-| `CLAUDE_CODE_USE_VERTEX` | — | Set to `1` for Google Cloud Vertex AI |
-| `CLAUDE_CODE_USE_BEDROCK` | — | Set to `1` for Amazon Bedrock |
+| `ANTHROPIC_API_KEY` | | API key for direct Anthropic access |
+| `CLAUDE_CODE_USE_VERTEX` | | Set to `1` for Google Cloud Vertex AI |
+| `CLAUDE_CODE_USE_BEDROCK` | | Set to `1` for Amazon Bedrock |
 | `DISABLE_AUTOUPDATE` | `1` | Prevents Claude Code from auto-updating inside the container (set by default in the image) |
+
+## Investigation Pipeline
+
+Each phase (except catalog and report) uses a three-agent pipeline:
+
+1. **Planner** (Sonnet): examines evidence, outputs a structured tool execution plan
+2. **Executor** (Haiku): follows the plan, calls tools, reports results
+3. **Analyst** (Sonnet): interprets results, submits findings
+
+This reduces cost by ~40-60% versus running a single expensive model for the entire phase, while maintaining reasoning quality where it matters.
+
+| Role | Default Model | Responsibility |
+|------|--------------|----------------|
+| Planner | Sonnet | Decides what tools to run, produces execution plans |
+| Executor | Haiku | Calls tools mechanically, manages waits and retries |
+| Analyst | Sonnet | Queries indexed data, reasons about evidence, submits findings |
+
+### Phases
+
+| Phase | Objective | Mode |
+|-------|-----------|------|
+| 1. Catalog | Enumerate and classify all evidence files, identify distinct systems | Single (Planner model) |
+| 2. Extraction | Run all applicable forensic tools per system, submit findings | Split (per system) |
+| 3. Cross-System | Correlate events across systems, map MITRE ATT&CK, consolidate findings | Split |
+| 3.5 Alternative Narrative | Challenge primary narrative, search for counter-evidence | Split |
+| 4. Audit | Verify completeness, fix timestamps, close coverage gaps | Split |
+| 5. Report | Write investigation narrative and generate the final report | Single (Analyst model) |
+
+Each phase passes through a quality gate before proceeding. Failed gates trigger retries with increased turn limits and gap-specific remediation instructions. The analyst can request follow-up cycles (capped at a maximum per phase) when it needs additional tool execution.
 
 ## CLI Reference
 
+### `mulder investigate <evidence_path>`
+
+Runs a full multi-phase forensic investigation using the SDK orchestrator.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--model` | None | Fallback model for all roles |
+| `--planner-model` | `claude-sonnet-4-6` | Model for planner agents (decides what tools to run) |
+| `--executor-model` | `claude-haiku-4-5` | Model for executor agents (calls tools, manages waits) |
+| `--analyst-model` | `claude-sonnet-4-6` | Model for analyst agents (interprets results, submits findings) |
+| `--config` | None | YAML config file for models and settings |
+| `--effort` | `max` | Effort level for Claude Code sessions (`max`, `xhigh`, `high`) |
+| `--workers` | `3` | Maximum parallel extraction sessions |
+| `--db-dir` | `~/.mulder/cases` | Case database directory |
+| `--cwd` | `/mulder-investigation` | Working directory for Claude Code sessions |
+| `--proxy-config` | None | LiteLLM config YAML for custom model routing |
+
+**Cost-optimized (recommended):**
+
+```bash
+mulder investigate /evidence/case-2025-001 \
+  --planner-model claude-sonnet-4-6 \
+  --executor-model claude-haiku-4-5 \
+  --analyst-model claude-sonnet-4-6
+```
+
+**Single model (simple):**
+
+```bash
+mulder investigate /evidence/case-2025-001 --model claude-sonnet-4-6
+```
+
+**Config file:**
+
+```bash
+mulder investigate /evidence/case-2025-001 --config investigation.yaml
+```
+
+All roles inherit from `--model` when not explicitly set, so a single `--model` flag is sufficient for providers that use a unified model identifier.
+
+**Non-Claude models** (via built-in LiteLLM proxy, supports Bedrock, OpenAI, Vertex AI, Ollama):
+
+```bash
+# Use a Bedrock-hosted Llama model for all roles
+mulder investigate /evidence/case-2025-001 \
+  --model bedrock/meta.llama3-1-70b-instruct-v1:0
+
+# Mix providers: Llama for execution, Claude for planning and analysis
+mulder investigate /evidence/case-2025-001 \
+  --executor-model bedrock/meta.llama3-1-70b-instruct-v1:0 \
+  --planner-model claude-sonnet-4-6 \
+  --analyst-model claude-sonnet-4-6
+
+# Use a local Ollama model
+mulder investigate /evidence/case-2025-001 \
+  --model ollama/llama3.1:70b
+```
+
+When any model ID uses a provider prefix (`bedrock/`, `openai/`, `vertex_ai/`, `azure/`, `ollama/`), a local LiteLLM proxy is auto-started to translate between the Anthropic API format and the target provider. No manual proxy setup is required.
+
+For advanced routing, pass a custom LiteLLM config:
+
+```bash
+mulder investigate /evidence/case-2025-001 \
+  --proxy-config ./litellm_config.yaml \
+  --model my-custom-deployment
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--proxy-config` | None | Path to a LiteLLM config YAML for custom model routing |
+
 ### `mulder serve`
 
-Starts the MCP server. Normally you do not need to run this manually; the MCP client configuration handles it.
+Starts the MCP server. Normally invoked automatically by the orchestrator or MCP client configuration.
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -173,7 +280,7 @@ Generates reports offline without starting the MCP server.
 
 Reads `{case_id}.db` and `{case_id}.audit.jsonl` from the database directory and writes `{case_id}.report.md` and `{case_id}.report.html` alongside them.
 
-## 🔬 Supported Forensic Tools
+## Supported Forensic Tools
 
 | Tool | Description |
 |------|-------------|
@@ -206,7 +313,7 @@ Reads `{case_id}.db` and `{case_id}.audit.jsonl` from the database directory and
 | [libfvde](https://github.com/libyal/libfvde) | Apple FileVault encryption metadata extraction |
 | [tcpflow](https://github.com/simsong/tcpflow) / [tcpxtract](https://tcpxtract.sourceforge.net/) | TCP stream reconstruction and file extraction from PCAPs |
 
-## 📄 Report Generation
+## Report Generation
 
 Mulder generates two report formats from the case database and audit log:
 
@@ -217,10 +324,9 @@ Both formats include an executive summary, severity overview, evidence integrity
 
 Reports can be generated in two ways:
 
-1. **MCP tool**: call `finalize_report` while a case is loaded in the server
+1. **Automatically** by the SDK orchestrator at the end of a successful investigation
 2. **CLI**: run `mulder report <case_id>` offline without starting the server
 
-## 🏗️ Architecture
+## Architecture
 
-See [docs/architecture.md](docs/architecture.md) for a detailed technical overview of the server internals, data model, tool execution model, and evidence pipeline.
-
+See [docs/architecture.md](docs/architecture.md) for a detailed technical overview of the server internals, SDK orchestrator pipeline, database schema, and security model.
