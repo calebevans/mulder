@@ -21,6 +21,9 @@ dependencies = [
     "jinja2>=3.1.6",
     "markdown>=3.6",
     "python-evtx>=0.8.1",
+    "claude-agent-sdk>=0.2",
+    "rich>=15.0",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -56,6 +59,12 @@ module = [
     "Evtx.*",
     "pysqlcipher3.*",
     "psutil",
+    "claude_agent_sdk",
+    "claude_agent_sdk.*",
+    "rich",
+    "rich.*",
+    "markdown",
+    "yaml",
 ]
 ignore_missing_imports = true
 

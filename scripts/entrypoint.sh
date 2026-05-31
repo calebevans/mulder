@@ -25,6 +25,18 @@ if [ ! -f "$PROJ_DIR/settings.local.json" ]; then
 SETTINGS
 fi
 
+# Restore Claude config from backup if the primary file is missing.
+# This happens when ~/.claude is bind-mounted from the host and the
+# config file lives only in the backups directory.
+CLAUDE_JSON="$MULDER_HOME/.claude.json"
+if [ ! -f "$CLAUDE_JSON" ]; then
+    BACKUP=$(ls -t "$MULDER_HOME/.claude/backups/.claude.json.backup."* 2>/dev/null | head -n1)
+    if [ -n "$BACKUP" ]; then
+        cp "$BACKUP" "$CLAUDE_JSON"
+        chown mulder:mulder "$CLAUDE_JSON"
+    fi
+fi
+
 chown -R mulder:mulder "$MULDER_CONFIG" 2>/dev/null || true
 chown -R mulder:mulder "$MULDER_HOME/.mulder" 2>/dev/null || true
 # Ensure the cases directory is writable (may be a bind mount from host)

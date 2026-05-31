@@ -9,9 +9,10 @@ import queue
 import re
 import threading
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, TypeVar, cast
+from typing import Any, TypedDict, TypeVar, cast
 
 from sqlalchemy import (
     Column,
@@ -114,6 +115,17 @@ bookmarks_t = Table(
     Column("created_at", Text, nullable=False),
 )
 
+progress_t = Table(
+    "progress",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("system_name", Text, nullable=False),
+    Column("tools_completed", Text, nullable=False),
+    Column("questions_addressed", Text, nullable=False),
+    Column("notes", Text),
+    Column("recorded_at", Text, nullable=False),
+)
+
 _FTS_CREATE = (
     "CREATE VIRTUAL TABLE IF NOT EXISTS windows_fts USING fts5("
     "    raw_text, content=windows, content_rowid=window_id"
@@ -133,10 +145,21 @@ def _sanitize_fts5_query(query: str) -> str:
     """Quote tokens that contain FTS5 special characters.
 
     Preserves FTS5 boolean operators (AND, OR, NOT, NEAR) and
-    already-quoted phrases.  All other tokens containing special
-    characters are wrapped in double quotes so FTS5 treats them
-    as literals.
+    already-quoted phrases.  Converts pipe characters to OR operators
+    (common mistake by LLMs using regex-style syntax).  All other
+    tokens containing special characters are wrapped in double quotes
+    so FTS5 treats them as literals.
     """
+    # Convert pipe-separated queries to FTS5 OR syntax before tokenizing.
+    # e.g., "subject_srv|powershell|cmd" -> "subject_srv OR powershell OR cmd"
+    if "|" in query and "OR" not in query.upper():
+        query = " OR ".join(part.strip() for part in query.split("|") if part.strip())
+    # Also handle escaped pipes from the SDK
+    if "\\|" in query:
+        query = " OR ".join(
+            part.strip() for part in query.replace("\\|", "|").split("|") if part.strip()
+        )
+
     parts = _FTS5_TOKEN_RE.findall(query)
     tokens: list[str] = []
     for token in parts:
@@ -238,10 +261,55 @@ def _migrate_add_bookmarks(conn: Connection) -> None:
     )
 
 
+def _migrate_add_progress(conn: Connection) -> None:
+    """Create the progress table if it doesn't exist yet."""
+    conn.execute(
+        text(
+            "CREATE TABLE IF NOT EXISTS progress ("
+            "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "  system_name TEXT NOT NULL,"
+            "  tools_completed TEXT NOT NULL,"
+            "  questions_addressed TEXT NOT NULL,"
+            "  notes TEXT,"
+            "  recorded_at TEXT NOT NULL"
+            ")"
+        )
+    )
+
+
 _SENTINEL = object()
 
+
+@dataclass
+class _QueueResult:
+    """Holds the return value or exception from a queued writer operation."""
+
+    value: object = None
+    error: BaseException | None = None
+
+
+class ProgressRecord(TypedDict):
+    """Typed representation of a single progress table row."""
+
+    id: int
+    system_name: str
+    tools_completed: list[str]
+    questions_addressed: list[str]
+    notes: str | None
+    recorded_at: str
+
+
+class ProgressSummary(TypedDict):
+    """Aggregated progress across all recorded entries."""
+
+    systems_analyzed: list[str]
+    questions_covered: list[str]
+    tools_used: list[str]
+    total_progress_records: int
+
+
 _QueueItem = tuple[
-    Callable[..., object], tuple[object, ...], dict[str, object], list[object], threading.Event
+    Callable[..., object], tuple[object, ...], dict[str, object], _QueueResult, threading.Event
 ]
 
 
@@ -268,9 +336,9 @@ class _WriteQueue:
             qi = cast(_QueueItem, item)
             fn, args, kwargs, result_holder, done_event = qi
             try:
-                result_holder[0] = fn(*args, **kwargs)
+                result_holder.value = fn(*args, **kwargs)
             except Exception as exc:
-                result_holder[1] = exc
+                result_holder.error = exc
             finally:
                 done_event.set()
                 self._queue.task_done()
@@ -279,23 +347,25 @@ class _WriteQueue:
         """Submit *fn* to the writer thread and block until it completes.
 
         Returns the result of ``fn(*args, **kwargs)`` or re-raises its
-        exception in the calling thread.
+        exception in the calling thread with the original traceback.
         """
-        result_holder: list[object] = [None, None]
+        result_holder = _QueueResult()
         done_event = threading.Event()
         self._queue.put((fn, args, kwargs, result_holder, done_event))
         done_event.wait()
-        if result_holder[1] is not None:
-            raise result_holder[1]  # type: ignore[misc]
-        return result_holder[0]  # type: ignore[return-value]
+        if result_holder.error is not None:
+            raise result_holder.error.with_traceback(result_holder.error.__traceback__)
+        return cast(_T, result_holder.value)
 
     def shutdown(self) -> None:
         """Signal the writer thread to exit and wait for it."""
         self._queue.put(_SENTINEL)
-        self._thread.join(timeout=10)
+        self._thread.join(timeout=10.0)
         if self._thread.is_alive():
+            remaining = self._queue.qsize()
             logger.warning(
-                "DB writer thread did not exit within timeout; remaining queue items may be lost"
+                "DB writer thread did not finish within timeout; %d queued items may be lost",
+                remaining,
             )
 
 
@@ -307,6 +377,7 @@ class CaseDB:
         self._db_path = db_path
         self._engine = _make_engine(db_path)
         self._wq = _WriteQueue()
+        self._case_id_cache: str | None = None
 
     @classmethod
     def create(
@@ -354,6 +425,7 @@ class CaseDB:
             _migrate_add_evidence_registry(conn)
             _migrate_add_windows_hash(conn)
             _migrate_add_bookmarks(conn)
+            _migrate_add_progress(conn)
         return db
 
     def close(self) -> None:
@@ -395,7 +467,10 @@ class CaseDB:
                         ingested_at=now,
                     )
                 )
-                assert result.inserted_primary_key is not None
+                if result.inserted_primary_key is None:
+                    raise RuntimeError(
+                        "INSERT did not return a primary key for source registration"
+                    )
                 return int(result.inserted_primary_key[0])
 
         return int(self._wq.submit(_do_register))
@@ -433,12 +508,12 @@ class CaseDB:
                     {"sid": source_id, "last_id": last_id},
                 )
 
-                all_wins = conn.execute(
+                h = hashlib.blake2b(digest_size=32)
+                stream = conn.execute(
                     text("SELECT raw_text FROM windows WHERE source_id = :sid ORDER BY window_id"),
                     {"sid": source_id},
-                ).fetchall()
-                h = hashlib.blake2b(digest_size=32)
-                for row in all_wins:
+                )
+                for row in stream:
                     h.update(row[0].encode())
                 conn.execute(
                     text("UPDATE sources SET windows_hash = :wh WHERE source_id = :sid"),
@@ -534,6 +609,77 @@ class CaseDB:
             for row in rows
         ]
 
+    def count_search_windows(
+        self,
+        query: str,
+        source_name: str | None = None,
+        time_start: str | None = None,
+        time_end: str | None = None,
+        exclude_source_names: list[str] | None = None,
+    ) -> int:
+        """Return the total number of FTS5 matches without fetching rows.
+
+        Uses the same filtering logic as ``search_windows`` but runs
+        ``SELECT COUNT(*)`` instead of materializing results, making it
+        efficient for pagination metadata.
+
+        Args:
+            query: FTS5 query string.
+            source_name: Optional source name or prefix to scope search.
+            time_start: Optional ISO 8601 lower bound for event_time.
+            time_end: Optional ISO 8601 upper bound for event_time.
+            exclude_source_names: Optional source name prefixes to exclude.
+        """
+        j = windows_t.join(sources_t, windows_t.c.source_id == sources_t.c.source_id)
+        stmt = (
+            select(func.count())
+            .select_from(j)
+            .where(
+                windows_t.c.window_id.in_(
+                    select(text("rowid"))
+                    .select_from(text("windows_fts"))
+                    .where(text("windows_fts MATCH :q"))
+                )
+            )
+        )
+
+        if source_name is not None:
+            stmt = stmt.where(
+                or_(
+                    sources_t.c.source_name == source_name,
+                    sources_t.c.source_name.like(source_name + ".%"),
+                )
+            )
+
+        if time_start is not None:
+            stmt = stmt.where(windows_t.c.event_time >= time_start)
+        if time_end is not None:
+            stmt = stmt.where(windows_t.c.event_time <= time_end)
+
+        if exclude_source_names:
+            for prefix in exclude_source_names:
+                stmt = stmt.where(
+                    ~or_(
+                        sources_t.c.source_name == prefix,
+                        sources_t.c.source_name.like(prefix + ".%"),
+                    )
+                )
+
+        safe_query = _sanitize_fts5_query(query)
+
+        with self._engine.connect() as conn:
+            try:
+                result = conn.execute(stmt, {"q": safe_query}).scalar()
+            except (OperationalError, DatabaseError):
+                logger.warning(
+                    "FTS5 COUNT failed for query %r, returning 0",
+                    query,
+                    exc_info=True,
+                )
+                return 0
+
+        return result or 0
+
     def get_windows_by_source(
         self,
         source_name: str,
@@ -565,6 +711,71 @@ class CaseDB:
             )
             for row in rows
         ]
+
+    def get_capped_windows_by_sources(
+        self,
+        source_names: list[str],
+        max_per_source: int = 50,
+    ) -> dict[str, tuple[list[WindowRow], int]]:
+        """Fetch capped windows for multiple sources in a single query.
+
+        Uses a SQL window function to limit rows per source, avoiding the
+        N+1 query pattern where each source requires a separate round-trip.
+
+        Args:
+            source_names: Source names to retrieve windows for.
+            max_per_source: Maximum windows to return per source.
+
+        Returns:
+            Dict mapping each source_name to a tuple of
+            (capped window list, total window count for that source).
+        """
+        if not source_names:
+            return {}
+
+        placeholders = ", ".join(f":sn{i}" for i in range(len(source_names)))
+        params: dict[str, object] = {f"sn{i}": name for i, name in enumerate(source_names)}
+        params["cap"] = max_per_source
+
+        # ROW_NUMBER partitions by source to cap per-source rows;
+        # COUNT gives the untruncated total for each source.
+        query = text(
+            "WITH ranked AS ("
+            "  SELECT w.*, s.source_name,"
+            "    ROW_NUMBER() OVER (PARTITION BY s.source_id ORDER BY w.window_id) AS rn,"
+            "    COUNT(*) OVER (PARTITION BY s.source_id) AS total_count"
+            "  FROM windows w"
+            "  JOIN sources s ON w.source_id = s.source_id"
+            f"  WHERE s.source_name IN ({placeholders})"
+            ") SELECT * FROM ranked WHERE rn <= :cap"
+            " ORDER BY source_name, window_id"
+        )
+
+        result: dict[str, tuple[list[WindowRow], int]] = {}
+        with self._engine.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+
+        for row in rows:
+            sname: str = row.source_name
+            total: int = row.total_count
+            w = WindowRow(
+                window_id=row.window_id,
+                source_id=row.source_id,
+                line_start=row.line_start,
+                line_end=row.line_end,
+                event_time=row.event_time,
+                raw_text=row.raw_text,
+            )
+            if sname not in result:
+                result[sname] = ([], total)
+            result[sname][0].append(w)
+
+        # Include sources that had zero windows
+        for name in source_names:
+            if name not in result:
+                result[name] = ([], 0)
+
+        return result
 
     def get_windows_by_source_prefix(
         self,
@@ -924,7 +1135,8 @@ class CaseDB:
                         created_at=now,
                     )
                 )
-                assert result.inserted_primary_key is not None
+                if result.inserted_primary_key is None:
+                    raise RuntimeError("INSERT did not return a primary key for bookmark")
                 return int(result.inserted_primary_key[0])
 
         return int(self._wq.submit(_do_insert))
@@ -996,16 +1208,81 @@ class CaseDB:
             )
         return results
 
+    def record_progress(
+        self,
+        system_name: str,
+        tools_completed: list[str],
+        questions_addressed: list[str],
+        notes: str = "",
+    ) -> None:
+        """Insert a progress record for a system analysis step."""
+
+        def _do_insert() -> None:
+            """Persist a single progress row."""
+            now = datetime.now(timezone.utc).isoformat()
+            with self._engine.begin() as conn:
+                conn.execute(
+                    insert(progress_t).values(
+                        system_name=system_name,
+                        tools_completed=json.dumps(tools_completed),
+                        questions_addressed=json.dumps(questions_addressed),
+                        notes=notes,
+                        recorded_at=now,
+                    )
+                )
+
+        self._wq.submit(_do_insert)
+
+    def get_all_progress(self) -> list[ProgressRecord]:
+        """Return all progress records ordered by insertion."""
+        stmt = select(progress_t).order_by(progress_t.c.id)
+        with self._engine.connect() as conn:
+            rows = conn.execute(stmt).fetchall()
+        return [
+            ProgressRecord(
+                id=row.id,
+                system_name=row.system_name,
+                tools_completed=json.loads(row.tools_completed),
+                questions_addressed=json.loads(row.questions_addressed),
+                notes=row.notes,
+                recorded_at=row.recorded_at,
+            )
+            for row in rows
+        ]
+
+    def get_progress_summary(self) -> ProgressSummary:
+        """Return aggregated progress across all recorded entries.
+
+        Collects unique systems analyzed, questions addressed, and tools
+        used from all progress records.
+        """
+        records = self.get_all_progress()
+        systems: set[str] = set()
+        questions_covered: set[str] = set()
+        all_tools: set[str] = set()
+        for r in records:
+            systems.add(r["system_name"])
+            for q in r["questions_addressed"]:
+                questions_covered.add(q)
+            for t in r["tools_completed"]:
+                all_tools.add(t)
+        return ProgressSummary(
+            systems_analyzed=sorted(systems),
+            questions_covered=sorted(questions_covered),
+            tools_used=sorted(all_tools),
+            total_progress_records=len(records),
+        )
+
     def _get_case_id(self) -> str:
         """Read case_id from the case_metadata table (cached after first call)."""
-        if hasattr(self, "_case_id_cache"):
+        if self._case_id_cache is not None:
             return self._case_id_cache
         stmt = select(case_metadata_t.c.case_id).limit(1)
         with self._engine.connect() as conn:
             row = conn.execute(stmt).fetchone()
         if row is None:
             raise RuntimeError("No case metadata found in database")
-        self._case_id_cache: str = str(row[0])
+        self._case_id_cache = str(row[0])
         return self._case_id_cache
 
     def get_windows_by_time_range(
