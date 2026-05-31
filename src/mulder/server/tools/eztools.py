@@ -126,6 +126,11 @@ def _make_ez_tool(source_name: str, tool_name: str) -> Any:
     return tool_fn
 
 
+# EZ Tools are registered dynamically to avoid duplicating 7 identical
+# no-arg tool functions. Each tool queries a different source name but
+# shares the same implementation (_make_ez_tool). The trade-off is that
+# these tools are invisible to @mcp.tool() grep searches and IDE
+# go-to-definition. If you add a new EZ tool, append to _EZ_TOOLS above.
 for _name, _source, _doc in _EZ_TOOLS:
     _fn = _make_ez_tool(_source, _name)
     _fn.__name__ = _name

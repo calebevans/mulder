@@ -57,7 +57,7 @@ def _run_ez_tool(
         alt = tool_dll.replace(".dll", ".exe")
         tool_path = _EZ_TOOLS_DIR / alt
     if not tool_path.exists():
-        logger.info("EZ tool not found: %s -- skipping", _EZ_TOOLS_DIR / tool_dll)
+        logger.info("EZ tool not found: %s, skipping", _EZ_TOOLS_DIR / tool_dll)
         return ""
 
     flag = "-d" if use_dir_flag else "-f"
@@ -196,7 +196,7 @@ class EZToolsExtractor:
         """Mount the image and run all EZ tool parsers against it."""
         if not _ez_available():
             logger.info(
-                "EZ Tools not available (need dotnet + %s) -- skipping %s",
+                "EZ Tools not available (need dotnet + %s), skipping %s",
                 _EZ_TOOLS_DIR,
                 path,
             )
@@ -325,7 +325,7 @@ class EZToolsExtractor:
                 if mft_path_mounted is not None and mft_path_mounted.is_file():
                     mft_path = mft_path_mounted
                 else:
-                    logger.info("Cannot access $MFT for EZ Tools -- skipping MFTECmd")
+                    logger.info("Cannot access $MFT for EZ Tools, skipping MFTECmd")
                     return []
 
             text = self._run_tool_and_parse("MFTECmd.dll", mft_path, "mft.csv")
@@ -344,7 +344,7 @@ class EZToolsExtractor:
                 extracted = False
 
             if not extracted:
-                logger.info("Cannot extract $UsnJrnl:$J -- skipping")
+                logger.info("Cannot extract $UsnJrnl:$J, skipping")
                 return []
 
             text = self._run_tool_and_parse("MFTECmd.dll", usn_path, "usnjrnl.csv")

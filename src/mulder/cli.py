@@ -14,7 +14,7 @@ from mulder.patterns import DEFAULT_DB_DIR
 @click.group()
 @click.version_option(version=__version__, prog_name="mulder")
 def cli() -> None:
-    """Mulder -- forensic MCP server for the SANS SIFT Workstation."""
+    """Mulder: forensic MCP server for the SANS SIFT Workstation."""
 
 
 @cli.command()

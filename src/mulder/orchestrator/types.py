@@ -3,6 +3,13 @@
 Defines the structured types exchanged between planner, executor, and analyst
 agents, plus JSON parsing utilities for extracting structured data from
 unstructured agent output.
+
+These types use @dataclass rather than Pydantic BaseModel because they
+are internal to the orchestrator and never serialized to the MCP wire
+or stored in the database. Pydantic validation overhead is unnecessary
+for in-process data transfer between planner, executor, and analyst.
+
+For types that cross the wire or persist to disk, see mulder.models.
 """
 
 from __future__ import annotations

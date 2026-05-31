@@ -44,7 +44,7 @@ def _parse_evtx_file(
     try:
         from Evtx.Evtx import Evtx
     except ImportError:
-        logger.warning("python-evtx not installed -- skipping %s", evtx_path)
+        logger.warning("python-evtx not installed, skipping %s", evtx_path)
         return "", ""
 
     channel = _channel_from_path(evtx_path)
@@ -124,7 +124,7 @@ def _parse_registry_hive(hive_path: Path) -> str:
     """Run RegRipper on a registry hive if available, else return empty."""
     rip_cmd = _find_regripper_bin()
     if rip_cmd is None:
-        logger.debug("RegRipper not found -- skipping %s", hive_path)
+        logger.debug("RegRipper not found, skipping %s", hive_path)
         return ""
     try:
         proc = subprocess.run(
@@ -158,7 +158,7 @@ def _detect_mount_offset(image_path: str) -> int:
     image has no partition table (i.e. it is a bare filesystem image).
     """
     if not shutil.which("mmls"):
-        logger.debug("mmls not found -- skipping partition offset detection")
+        logger.debug("mmls not found, skipping partition offset detection")
         return 0
 
     try:
@@ -274,14 +274,14 @@ def _mount_image(image_path: Path, mount_point: Path) -> bool:
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
             pass
 
-    logger.error("Could not mount %s -- tried mount and guestmount", image_path)
+    logger.error("Could not mount %s (tried mount and guestmount)", image_path)
     return False
 
 
 def _mount_e01(image_path: Path, mount_point: Path) -> bool:
     """Mount an E01 image via ewfmount -> mount."""
     if not shutil.which("ewfmount"):
-        logger.error("ewfmount not found -- cannot mount E01 images")
+        logger.error("ewfmount not found, cannot mount E01 images")
         return False
 
     ewf_mount = mount_point / "_ewf"
@@ -304,7 +304,7 @@ def _mount_e01(image_path: Path, mount_point: Path) -> bool:
         _unmount_path(ewf_mount)
         return False
 
-    offset_bytes = _detect_mount_offset(str(image_path))
+    offset_bytes = _detect_mount_offset(str(raw_device))
     mount_opts = "ro,loop,noexec,nodev"
     if offset_bytes > 0:
         mount_opts += f",offset={offset_bytes}"
@@ -481,7 +481,7 @@ class DiskImageExtractor:
         try:
             mounted = _mount_image(image_path, mount_point)
             if not mounted:
-                logger.error("Cannot mount %s -- skipping disk extraction", image_path)
+                logger.error("Cannot mount %s, skipping disk extraction", image_path)
                 return []
 
             results: list[ExtractionResult] = []
