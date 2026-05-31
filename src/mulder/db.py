@@ -576,7 +576,6 @@ class CaseDB:
                 )
 
         stmt = stmt.order_by(
-            text("windows_fts.rank"),
             windows_t.c.event_time.asc().nullslast(),
         ).limit(max_results)
 

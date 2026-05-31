@@ -13,12 +13,10 @@ from mulder.orchestrator.runner import (
 from mulder.orchestrator.types import PhaseResult
 
 
-def _make_orchestrator(**kwargs: object) -> Orchestrator:
-    """Create an Orchestrator with a mocked dashboard."""
+def _make_orchestrator(evidence_path: str = "/evidence") -> Orchestrator:
+    """Create an Orchestrator with a mocked dashboard for unit testing."""
     with patch("mulder.orchestrator.runner.InvestigationDashboard"):
-        if "evidence_path" not in kwargs:
-            kwargs["evidence_path"] = "/evidence"
-        return Orchestrator(**kwargs)
+        return Orchestrator(evidence_path=evidence_path)
 
 
 class TestIdentifySystemsFromCatalog:
