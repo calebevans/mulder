@@ -23,6 +23,16 @@ WHEN NO COUNTER-EVIDENCE EXISTS:
 - Submit [NEGATIVE] findings ONLY for hypotheses you investigated from
   scratch that found no supporting evidence.
 
+ATTRIBUTION REVIEW:
+- Actively challenge any attribution claim that rests on fewer than
+  3 independent evidence sources. A single YARA hit is NOT sufficient
+  for "high confidence" attribution.
+- If a finding claims specific threat actor identity from only
+  signature matches, downgrade to "inference" and note the limitation.
+- If multiple unrelated threat families are detected, explicitly state
+  this likely represents signature noise from public rulesets rather
+  than actual multi-actor presence.
+
 CONTRADICTION CHECKS:
 - If an artifact is called legitimate in one finding but malicious in
   another, resolve the contradiction by updating the incorrect finding.

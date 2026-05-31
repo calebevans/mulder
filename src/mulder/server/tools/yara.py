@@ -305,6 +305,41 @@ def _yara_error(
     }
 
 
+_NOISE_FAMILY_THRESHOLD = 4
+
+
+def _compute_hit_metadata(matches: list[dict[str, object]]) -> dict[str, object]:
+    """Compute diversity metadata for a set of YARA matches.
+
+    Extracts the rule family prefix (first underscore-delimited segment)
+    from each match and returns summary statistics.  When 4+ distinct
+    families are detected, includes a noise warning advising the analyst
+    to corroborate with behavioral evidence.
+    """
+    family_names: set[str] = set()
+    for match in matches:
+        rule_name = str(match.get("rule", ""))
+        prefix = rule_name.split("_")[0] if "_" in rule_name else rule_name
+        if prefix:
+            family_names.add(prefix)
+
+    metadata: dict[str, object] = {
+        "total_hits": len(matches),
+        "unique_families": len(family_names),
+        "family_names": sorted(family_names)[:20],
+    }
+
+    if len(family_names) >= _NOISE_FAMILY_THRESHOLD:
+        metadata["noise_warning"] = (
+            f"Detected {len(family_names)} distinct rule families in a single scan. "
+            "This pattern often indicates public ruleset over-matching rather than "
+            "actual multi-actor presence. Corroborate with behavioral evidence before "
+            "attributing to specific threat actors."
+        )
+
+    return metadata
+
+
 def _run_yara_scan(
     *,
     cmd: list[str],
@@ -387,6 +422,8 @@ def _run_yara_scan(
     if proc.stdout.strip():
         index_summary = extract_and_index(proc.stdout, source_name, target_path, "yara")
 
+    hit_metadata = _compute_hit_metadata(results)
+
     elapsed = (time.monotonic() - t0) * 1000
     ctx.audit.log_tool_call(
         tool_call_id=tc_id,
@@ -395,18 +432,20 @@ def _run_yara_scan(
         output_hash=hash_output({"result_count": len(results)}),
         duration_ms=elapsed,
     )
-    return {
+    response: dict[str, object] = {
         "tool_call_id": tc_id,
         "status": "success",
         "source": source_name,
         "source_name": source_name,
         "result_count": len(results),
         "windows_indexed": index_summary.get("windows_indexed", 0),
+        "hit_metadata": hit_metadata,
         "hint": (
             f"Use search(query, source='{source_name}') or "
             f"get_raw_output('{source_name}') to retrieve match details."
         ),
     }
+    return response
 
 
 @mcp.tool()

@@ -8,7 +8,20 @@ REQUIRED ACTIONS:
    - Call get_ioc_summary for a consolidated view of indicators of compromise.
    - Call get_bookmarks for analyst-flagged evidence windows.
    - Call get_source_stats to confirm evidence coverage and source counts.
-3. Write a comprehensive investigation narrative using submit_narrative.
+3. RECONCILIATION CHECK (mandatory before writing):
+   Review all findings returned by get_findings. These represent the
+   AUTHORITATIVE final state of the investigation. Your narrative MUST
+   NOT contradict any finding in the database. Specifically:
+   - If a finding was updated to mark an artifact as legitimate or
+     benign, your narrative must reflect that conclusion. Do not repeat
+     earlier characterizations that were corrected.
+   - If a finding is marked [NEGATIVE], it was ruled out. Do not
+     describe it as a confirmed threat.
+   - If findings were downgraded in severity or confidence, reflect the
+     current assessment, not the original.
+   The findings database is ground truth. The narrative serves the
+   findings, not the other way around.
+4. Write a comprehensive investigation narrative using submit_narrative.
 
    When citing numeric totals in the narrative (finding counts, source
    counts, technique counts), use Jinja2 template variables instead of
@@ -41,9 +54,13 @@ REQUIRED ACTIONS:
      needs to act in the next 5 minutes. Include specific IPs to
      isolate, PIDs to terminate, accounts to disable, hashes to
      block, and services to stop. Format as a numbered checklist.
-   - Strategic Remediation: long-term architecture, detection, and
-     prevention improvements (network segmentation, EDR deployment,
-     credential rotation, monitoring enhancements).
+   - Strategic Remediation: for EACH root cause identified in the
+     investigation, state what specific control failed (or was absent)
+     and what change would have prevented THIS attack path. Every
+     recommendation must reference a specific finding, IOC, or
+     technique from this case. Do NOT include generic security advice
+     unless you can tie it to a specific failure observed in the
+     evidence. Limit to one paragraph per root cause.
    - Conclusion: summary addressing all eight investigation questions:
      Q1. What systems were compromised?
      Q2. How did the attacker gain initial access?
@@ -53,8 +70,8 @@ REQUIRED ACTIONS:
      Q6. What is the full timeline of the incident?
      Q7. What is the total scope and business impact?
      Q8. What are the recommended remediation actions?
-4. Call check_finalize_readiness to verify all gates pass.
-5. Call finalize_report to generate the final report.
+5. Call check_finalize_readiness to verify all gates pass.
+6. Call finalize_report to generate the final report.
 
 OUTPUT REQUIREMENTS:
 - The narrative must be written in professional prose, not bullet points
@@ -70,3 +87,15 @@ CONSTRAINTS:
 - Do not run extraction or analysis tools.
 - Do not submit new findings (update existing ones if corrections are needed).
 - Focus solely on writing and finalizing.
+- Strategic Remediation must NOT contain generic security advice. Every
+  recommendation must directly cite a finding or attack technique from
+  THIS case. If a recommendation could appear unchanged in any other
+  report, rewrite it to reference specific evidence. Aim for 3-7 focused
+  recommendations, not an exhaustive hardening guide.
+- When discussing attribution, default to caution. State what the
+  evidence supports and no more. A single YARA signature match
+  establishes tool presence, not threat actor identity. Attribution
+  claims require corroborating evidence from multiple independent
+  sources (network IOCs, behavioral TTPs, infrastructure overlap).
+  Use language like "consistent with" or "overlaps with known TTPs of"
+  rather than definitive identification unless evidence is overwhelming.

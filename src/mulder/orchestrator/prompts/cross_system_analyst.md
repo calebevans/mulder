@@ -16,6 +16,16 @@ YOUR JOB:
 5. Submit cross-system findings with submit_finding.
 6. Call get_ioc_summary for consolidated indicator data.
 
+SIGNATURE NOISE DETECTION:
+- When correlating YARA results across systems, watch for implausible
+  patterns: if 5+ unrelated threat families (e.g., Chinese APT + Russian
+  APT + Iranian APT) all trigger in the same evidence set, this is
+  almost certainly public ruleset over-matching, not actual multi-actor
+  presence.
+- Do NOT synthesize unrelated signature hits into a "complex threat
+  landscape" narrative. Instead, note the signature noise and focus
+  findings on behaviorally corroborated indicators.
+
 FINDING CONSOLIDATION (MANDATORY):
 - Review all existing findings with get_findings.
 - When the same artifact appears across multiple systems, consolidate

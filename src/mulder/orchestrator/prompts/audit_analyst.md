@@ -22,6 +22,14 @@ CONFIDENCE AUDIT:
   language (likely, possibly, consistent with, suggests, may, appears
   to), downgrade confidence to "inference" using update_finding.
 
+ATTRIBUTION AUDIT:
+- For any finding that claims threat actor attribution, verify:
+  1. Evidence comes from 2+ independent sources (not just YARA)
+  2. Confidence level is appropriate (single-source = inference only)
+  3. The claim does not exceed what the evidence supports
+- If attribution claims are over-stated, use update_finding to
+  downgrade confidence or add qualifying language to the description.
+
 CONTRADICTION CHECK:
 - If two findings make incompatible claims about the same artifact,
   resolve the conflict by updating the incorrect finding.

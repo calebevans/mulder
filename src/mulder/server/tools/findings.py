@@ -249,6 +249,15 @@ def submit_finding(
             error_type="validation",
         )
 
+    thin_evidence_warning: str | None = None
+    if finding.confidence == "confirmed" and len(finding.evidence_refs) < 2:
+        thin_evidence_warning = (
+            "Note: this finding is marked 'confirmed' but cites only "
+            f"{len(finding.evidence_refs)} evidence source(s). Best practice "
+            "requires 2+ independent sources for 'confirmed' confidence. "
+            "Consider whether 'inference' is more appropriate."
+        )
+
     ctx.db.insert_finding(finding)
     ctx.audit.log_finding_submission(finding_id, evidence_refs)
 
@@ -258,6 +267,8 @@ def submit_finding(
         "status": "accepted",
         "confidence": finding.confidence,
     }
+    if thin_evidence_warning:
+        result["hint"] = thin_evidence_warning
     if ts_warnings:
         result["timestamp_warnings"] = ts_warnings
 
