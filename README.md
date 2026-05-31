@@ -27,7 +27,6 @@ Mulder is an [MCP](https://modelcontextprotocol.io/) server and agentic orchestr
 - **Report generation** producing both Markdown and styled HTML reports with IOC tables, MITRE ATT&CK coverage, and full audit trails
 - **Resource throttling** with configurable memory and CPU limits so extractions do not overwhelm the host
 - **Parallel extraction** with a configurable worker pool, background job management, and a `run_parallel` meta-tool for batch dispatch
-- **Finding validator** that checks CRITICAL/HIGH findings against cited evidence in real time, rejecting unsupported claims and downgrading miscalibrated confidence
 - **Auto-compaction** that detects context window exhaustion and restarts phases with a compact prompt, recovering state from the database
 - **Per-model token tracking** with role-based model assignment (planner, executor, analyst) and per-role usage breakdowns
 
@@ -73,6 +72,8 @@ The container expects three volume mounts:
 | `/home/mulder/.claude` | Claude Code configuration and session data |
 
 **With an Anthropic API key:**
+
+> Note: `--privileged` is required for FUSE-based evidence mounting (`ewfmount`, `guestmount`). For environments where this is unacceptable, use `--cap-add SYS_ADMIN --device /dev/fuse` instead.
 
 ```bash
 mkdir -p ~/mulder-cases
@@ -147,13 +148,13 @@ Case databases and reports are written to the mounted `~/mulder-cases` directory
 
 ## Investigation Pipeline
 
-Each phase (except catalog and report) uses a three-agent pipeline:
+Each phase (except catalog and report) uses a **plan-and-execute** pipeline with three specialized roles (planner, executor, analyst):
 
 1. **Planner** (Sonnet): examines evidence, outputs a structured tool execution plan
 2. **Executor** (Haiku): follows the plan, calls tools, reports results
 3. **Analyst** (Sonnet): interprets results, submits findings
 
-This reduces cost by ~40-60% versus running a single expensive model for the entire phase, while maintaining reasoning quality where it matters.
+This reduces cost by routing mechanical tool-calling to a cheaper model while preserving reasoning quality for analysis.
 
 | Role | Default Model | Responsibility |
 |------|--------------|----------------|
@@ -168,9 +169,9 @@ This reduces cost by ~40-60% versus running a single expensive model for the ent
 | 1. Catalog | Enumerate and classify all evidence files, identify distinct systems | Single (Planner model) |
 | 2. Extraction | Run all applicable forensic tools per system, submit findings | Split (per system) |
 | 3. Cross-System | Correlate events across systems, map MITRE ATT&CK, consolidate findings | Split |
-| 3.5 Alternative Narrative | Challenge primary narrative, search for counter-evidence | Split |
-| 4. Audit | Verify completeness, fix timestamps, close coverage gaps | Split |
-| 5. Report | Write investigation narrative and generate the final report | Single (Analyst model) |
+| 4. Alternative Narrative | Challenge primary narrative, search for counter-evidence (advisory, no hard gate) | Split |
+| 5. Audit | Verify completeness, fix timestamps, close coverage gaps | Split |
+| 6. Report | Write investigation narrative and generate the final report | Single (Analyst model) |
 
 Each phase passes through a quality gate before proceeding. Failed gates trigger retries with increased turn limits and gap-specific remediation instructions. The analyst can request follow-up cycles (capped at a maximum per phase) when it needs additional tool execution.
 
@@ -188,7 +189,7 @@ Runs a full multi-phase forensic investigation using the agentic pipeline.
 | `--analyst-model` | `claude-sonnet-4-6` | Model for analyst agents (interprets results, submits findings) |
 | `--config` | None | YAML config file for models and settings |
 | `--effort` | `max` | Effort level for Claude Code sessions (`max`, `xhigh`, `high`) |
-| `--workers` | `3` | Maximum parallel extraction sessions |
+| `--workers` | `3` | Max concurrent extraction agent sessions (not tool threads) |
 | `--db-dir` | `~/.mulder/cases` | Case database directory |
 | `--cwd` | `/mulder-investigation` | Working directory for Claude Code sessions |
 | `--proxy-config` | None | LiteLLM config YAML for custom model routing |
@@ -257,7 +258,7 @@ Starts the MCP server. Normally invoked automatically by the orchestrator or MCP
 | `--case-id` | None | Pre-load an existing case on startup |
 | `--db-dir` | `~/.mulder/cases` | Directory for per-case databases and audit logs |
 | `--transport` | `stdio` | MCP transport (`stdio` or `streamable-http`) |
-| `--workers` | `8` | Number of parallel extraction workers |
+| `--workers` | `8` | Concurrent tool execution threads for the MCP server |
 | `--mem-limit` | `90` | Memory usage % threshold; tools wait when exceeded (0 to disable) |
 | `--cpu-limit` | `90` | CPU usage % threshold; tools wait when exceeded (0 to disable) |
 

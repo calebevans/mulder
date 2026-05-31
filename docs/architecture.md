@@ -118,7 +118,7 @@ The `CapacityLimiter` bounds concurrent tool execution to the `--workers` count 
 
 ## Orchestration Pipeline
 
-The orchestrator (`mulder investigate`) runs six investigation phases sequentially. Most phases use a three-agent pipeline (planner/executor/analyst) while catalog and report use single-agent sessions.
+The orchestrator (`mulder investigate`) runs six investigation phases sequentially. Most phases use a plan-and-execute pipeline (planner/executor/analyst) while catalog and report use single-agent sessions. The orchestrator uses the [Claude Agent SDK](https://docs.anthropic.com/en/docs/agents/claude-code-sdk) (`claude-agent-sdk`) for managing agent sessions.
 
 ```mermaid
 flowchart TD
@@ -154,13 +154,13 @@ flowchart TD
     crossGate -->|"Fail"| retryCS["Retry (1.5x turn limit)"]
     retryCS --> crossSystem
 
-    subgraph altNarrative [Phase 3.5: Alternative Narrative]
+    subgraph altNarrative [Phase 4: Alternative Narrative]
         np["Planner"] --> ne["Executor"] --> na["Analyst"]
     end
 
     altNarrative --> audit
 
-    subgraph audit [Phase 4: Audit]
+    subgraph audit [Phase 5: Audit]
         ap["Planner"] --> ae["Executor"] --> aa["Analyst"]
     end
 
@@ -169,7 +169,7 @@ flowchart TD
     auditGate -->|"Fail"| retryA["Retry (1.5x turn limit)"]
     retryA --> audit
 
-    report["Phase 5: Report\n(Analyst model, single agent)"]
+    report["Phase 6: Report\n(Analyst model, single agent)"]
     report --> reportGate{"Report Gate\nfinalize_report called?"}
     reportGate -->|"Pass"| done["Investigation Complete"]
     reportGate -->|"Fail"| retryR["Retry (1.5x turn limit)"]
@@ -189,7 +189,6 @@ Each phase is defined by a `PhaseConfig` dataclass specifying:
 - **Follow-up limit**: Maximum planner/executor cycles the analyst can request before being capped
 - **Workers**: Configurable via `--workers` for concurrent extraction sessions
 - **Auto-compaction**: When context is exhausted mid-phase, the orchestrator restarts with a compact prompt that recovers state from the database
-- **Finding validator**: CRITICAL/HIGH findings are validated against cited evidence before acceptance; unsupported findings are rejected or downgraded
 - **Retry policy**: Maximum retries with 1.5x turn limit multiplier on each retry
 
 ### Deferred Retry System
@@ -417,39 +416,13 @@ flowchart TB
 
 The container runs with `--privileged` (or `--cap-add SYS_ADMIN`) to support disk image mounting via `ewfmount`, `guestmount`, and `mount`.
 
-## Finding Validator
+## Evidence Reference Validation
 
-The orchestrator includes a synchronous finding validator that checks submitted findings against their cited evidence in real time. This is a detect-and-compensate guardrail (the server-side prevention version is a future improvement).
+The `submit_finding` tool performs server-side evidence-ref validation: every `tool_call_id` cited in a finding's `evidence_refs` is verified against the append-only audit log. Findings that reference non-existent tool invocations are rejected, preventing hallucinated evidence citations.
 
-### Validation Tiers
+### Global Consistency Analysis
 
-| Severity | Validation | Evidence | Model | Latency |
-|----------|-----------|----------|-------|---------|
-| CRITICAL / HIGH | Full evidence check | Fetched by tc_ ref from the audit log | Planner model (lightweight query) | 10-20s per finding |
-| MEDIUM / LOW | Source type check | Label only (no fetch) | Planner model (lightweight query) | 2-3s per finding |
-| INFORMATIONAL | Skipped | None | None | 0 |
-
-### Verdicts
-
-- **VALIDATED**: Evidence directly supports the claims. Finding accepted as-is.
-- **DOWNGRADE**: Evidence supports presence but the confidence level is too strong. Confidence is flipped to "inference" via `update_finding` and tracked in a durable set so the audit phase does not re-promote without new evidence.
-- **REJECT**: Claims are not supported by the cited evidence. The finding is deleted via `delete_finding` and the rejection reason is logged prominently so the agent can revise.
-
-### Design Decisions
-
-- **Synchronous for high-severity**: CRITICAL/HIGH findings block the message loop so rejection reasons re-enter the agent's context causally. The agent sees the rejection and can self-correct in real time.
-- **Severity-only gating**: The deep validation tier is gated on severity alone, not stated confidence, because mislabeled confidence is one of the errors being caught.
-- **Evidence by tc_ ref**: Evidence is fetched by the specific `tool_call_id` from the finding's `evidence_refs`, not by source name, so the validator sees exactly what produced the claim.
-- **Durable downgrades**: Downgraded findings are tracked in `_validator_downgraded` so the audit phase respects the downgrade.
-
-### Global Consistency Pass
-
-Before the audit phase, the orchestrator builds code-driven indexes from all findings:
-
-1. **Dedup index**: Groups findings by shared IOCs (IPs, file paths, process names) extracted via regex to identify per-host duplicates of the same artifact.
-2. **Contradiction index**: Identifies entities that appear in findings with conflicting classifications (one finding says legitimate, another says malicious).
-
-These indexes are prepended to the audit phase prompt so the agent acts on code-discovered clusters rather than re-deriving them from raw text.
+Before the audit phase, the orchestrator builds a dedup index from all findings, grouping them by shared IOCs (IPs, file paths, process names) extracted via regex to identify per-host duplicates of the same artifact. This consistency analysis is prepended to the audit phase prompt so the agent acts on code-discovered clusters rather than re-deriving them from raw text.
 
 ## Security Model
 

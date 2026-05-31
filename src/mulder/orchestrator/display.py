@@ -517,8 +517,10 @@ class InvestigationDashboard:
         if not self._tasks_active or not self._tasks:
             return None
 
-        self._spinner_frame = (self._spinner_frame + 1) % len(_SPINNER_FRAMES)
-        spinner = _SPINNER_FRAMES[self._spinner_frame]
+        # Derive spinner frame from wall clock so it always animates
+        # even when the panel isn't being rebuilt frequently
+        spinner_idx = int(time.monotonic() * 8) % len(_SPINNER_FRAMES)
+        spinner = _SPINNER_FRAMES[spinner_idx]
 
         terminal_height = shutil.get_terminal_size().lines
         # Panel border + title take ~3 lines; header takes ~8
