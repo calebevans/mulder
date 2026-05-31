@@ -7,7 +7,13 @@ from pathlib import Path
 import pytest
 from sqlalchemy import text
 
-from mulder.db import CaseDB, _sanitize_fts5_query
+from mulder.db import (
+    CaseDB,
+    ProgressRecord,
+    ProgressSummary,
+    _QueueResult,
+    _sanitize_fts5_query,
+)
 from mulder.models import Finding, WindowRow
 
 
@@ -289,6 +295,72 @@ class TestMigrations:
         db2.close()
 
 
+class TestProgress:
+    """Tests for the progress table CRUD methods."""
+
+    def test_record_and_get_all_progress(self, tmp_case_db: CaseDB) -> None:
+        """Recorded progress entries should be retrievable in insertion order."""
+        tmp_case_db.record_progress(
+            system_name="memory",
+            tools_completed=["run_volatility"],
+            questions_addressed=["Q1"],
+            notes="Analyzed memory dump",
+        )
+        tmp_case_db.record_progress(
+            system_name="disk",
+            tools_completed=["run_fls", "run_bulk_extractor"],
+            questions_addressed=["Q2", "Q3"],
+        )
+        records = tmp_case_db.get_all_progress()
+        assert len(records) == 2
+        assert records[0]["system_name"] == "memory"
+        assert records[0]["tools_completed"] == ["run_volatility"]
+        assert records[0]["questions_addressed"] == ["Q1"]
+        assert records[0]["notes"] == "Analyzed memory dump"
+        assert records[0]["recorded_at"] is not None
+        assert records[1]["system_name"] == "disk"
+        assert records[1]["tools_completed"] == ["run_fls", "run_bulk_extractor"]
+
+    def test_get_all_progress_empty(self, tmp_case_db: CaseDB) -> None:
+        """Empty database should return an empty list."""
+        assert tmp_case_db.get_all_progress() == []
+
+    def test_get_progress_summary(self, tmp_case_db: CaseDB) -> None:
+        """Summary should aggregate systems, questions, and tools across records."""
+        tmp_case_db.record_progress("memory", ["run_volatility"], ["Q1", "Q2"])
+        tmp_case_db.record_progress("disk", ["run_fls"], ["Q2", "Q3"])
+        summary = tmp_case_db.get_progress_summary()
+        assert summary["systems_analyzed"] == ["disk", "memory"]
+        assert summary["questions_covered"] == ["Q1", "Q2", "Q3"]
+        assert summary["tools_used"] == ["run_fls", "run_volatility"]
+        assert summary["total_progress_records"] == 2
+
+    def test_get_progress_summary_empty(self, tmp_case_db: CaseDB) -> None:
+        """Summary of empty progress should return empty collections."""
+        summary = tmp_case_db.get_progress_summary()
+        assert summary["systems_analyzed"] == []
+        assert summary["questions_covered"] == []
+        assert summary["total_progress_records"] == 0
+
+    def test_record_progress_empty_notes(self, tmp_case_db: CaseDB) -> None:
+        """Default empty notes should be stored correctly."""
+        tmp_case_db.record_progress("net", ["run_pcap_analysis"], ["Q4"])
+        records = tmp_case_db.get_all_progress()
+        assert records[0]["notes"] == ""
+
+    def test_progress_survives_reopen(self, tmp_path: Path) -> None:
+        """Progress records should persist across database close/reopen."""
+        db1 = CaseDB.create(case_id="progress-persist", evidence_root="/ev", db_dir=tmp_path)
+        db1.record_progress("memory", ["run_volatility"], ["Q1"])
+        db1.close()
+
+        db2 = CaseDB.open("progress-persist", tmp_path)
+        records = db2.get_all_progress()
+        assert len(records) == 1
+        assert records[0]["system_name"] == "memory"
+        db2.close()
+
+
 class TestWindowsByTimeRange:
     """Tests for get_windows_by_time_range grouping and filtering."""
 
@@ -351,3 +423,133 @@ class TestWindowsByTimeRange:
             "2025-01-15T10:00:00Z", "2025-01-15T14:00:00Z"
         )
         assert result == {}
+
+
+class TestQueueResult:
+    """Tests for the _QueueResult dataclass."""
+
+    def test_defaults(self) -> None:
+        """Fresh _QueueResult should have None value and no error."""
+        qr = _QueueResult()
+        assert qr.value is None
+        assert qr.error is None
+
+    def test_stores_value(self) -> None:
+        qr = _QueueResult()
+        qr.value = 42
+        assert qr.value == 42
+        assert qr.error is None
+
+    def test_stores_error(self) -> None:
+        exc = ValueError("boom")
+        qr = _QueueResult(error=exc)
+        assert qr.error is exc
+        assert qr.value is None
+
+
+class TestCappedWindowsBySources:
+    """Tests for get_capped_windows_by_sources batch query."""
+
+    def test_returns_capped_windows_across_sources(self, tmp_case_db: CaseDB) -> None:
+        """Multiple sources should each return at most max_per_source windows."""
+        sid1 = tmp_case_db.register_source("alpha", "/p1", "h1", "ext", 10)
+        sid2 = tmp_case_db.register_source("beta", "/p2", "h2", "ext", 10)
+
+        wins1 = [
+            WindowRow(
+                source_id=sid1, line_start=i, line_end=i + 1, event_time=None, raw_text=f"a{i}"
+            )
+            for i in range(5)
+        ]
+        wins2 = [
+            WindowRow(
+                source_id=sid2, line_start=i, line_end=i + 1, event_time=None, raw_text=f"b{i}"
+            )
+            for i in range(3)
+        ]
+        tmp_case_db.insert_windows(sid1, wins1)
+        tmp_case_db.insert_windows(sid2, wins2)
+
+        result = tmp_case_db.get_capped_windows_by_sources(["alpha", "beta"], max_per_source=2)
+        assert len(result["alpha"][0]) == 2
+        assert result["alpha"][1] == 5
+        assert len(result["beta"][0]) == 2
+        assert result["beta"][1] == 3
+
+    def test_empty_sources_list(self, tmp_case_db: CaseDB) -> None:
+        """Empty input should return empty dict."""
+        assert tmp_case_db.get_capped_windows_by_sources([]) == {}
+
+    def test_missing_source_returns_zero(self, tmp_case_db: CaseDB) -> None:
+        """Source with no windows should appear with ([], 0)."""
+        tmp_case_db.register_source("empty_src", "/p", "h", "ext", 0)
+        result = tmp_case_db.get_capped_windows_by_sources(["empty_src"])
+        assert result["empty_src"] == ([], 0)
+
+    def test_cap_larger_than_total(self, tmp_case_db: CaseDB) -> None:
+        """When max_per_source exceeds available windows, return all."""
+        sid = tmp_case_db.register_source("small", "/p", "h", "ext", 3)
+        wins = [
+            WindowRow(
+                source_id=sid, line_start=i, line_end=i + 1, event_time=None, raw_text=f"w{i}"
+            )
+            for i in range(3)
+        ]
+        tmp_case_db.insert_windows(sid, wins)
+
+        result = tmp_case_db.get_capped_windows_by_sources(["small"], max_per_source=100)
+        assert len(result["small"][0]) == 3
+        assert result["small"][1] == 3
+
+
+class TestStreamingHash:
+    """Verify that the streaming hash computation produces correct results."""
+
+    def test_hash_consistent_across_batches(self, tmp_case_db: CaseDB) -> None:
+        """Hash after two batch inserts should equal hash of all windows together."""
+        import hashlib
+
+        sid = tmp_case_db.register_source("hash_test", "/p", "h", "ext", 10)
+
+        batch1 = [
+            WindowRow(source_id=sid, line_start=0, line_end=5, event_time=None, raw_text="hello"),
+        ]
+        batch2 = [
+            WindowRow(source_id=sid, line_start=5, line_end=10, event_time=None, raw_text="world"),
+        ]
+        tmp_case_db.insert_windows(sid, batch1)
+        tmp_case_db.insert_windows(sid, batch2)
+
+        sources = tmp_case_db.get_sources()
+        src = next(s for s in sources if s.source_name == "hash_test")
+
+        h = hashlib.blake2b(digest_size=32)
+        h.update(b"hello")
+        h.update(b"world")
+        expected = "blake2b:" + h.hexdigest()
+        assert src.windows_hash == expected
+
+
+class TestProgressTypedDicts:
+    """Verify ProgressRecord and ProgressSummary TypedDicts."""
+
+    def test_get_all_progress_returns_typed_records(self, tmp_case_db: CaseDB) -> None:
+        tmp_case_db.record_progress("net", ["run_pcap"], ["Q1"], notes="note")
+        records = tmp_case_db.get_all_progress()
+        assert len(records) == 1
+
+        r: ProgressRecord = records[0]
+        assert r["system_name"] == "net"
+        assert r["tools_completed"] == ["run_pcap"]
+        assert r["questions_addressed"] == ["Q1"]
+        assert r["notes"] == "note"
+        assert isinstance(r["id"], int)
+        assert isinstance(r["recorded_at"], str)
+
+    def test_get_progress_summary_returns_typed(self, tmp_case_db: CaseDB) -> None:
+        tmp_case_db.record_progress("memory", ["run_vol"], ["Q1"])
+        summary: ProgressSummary = tmp_case_db.get_progress_summary()
+        assert summary["systems_analyzed"] == ["memory"]
+        assert summary["tools_used"] == ["run_vol"]
+        assert summary["questions_covered"] == ["Q1"]
+        assert summary["total_progress_records"] == 1
