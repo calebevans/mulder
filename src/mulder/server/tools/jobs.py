@@ -273,22 +273,53 @@ def get_completed_results(
 def wait(
     seconds: int = 300,
     batch_id: str | None = None,
+    job_id: str | None = None,
 ) -> dict[str, object]:
-    """Wait for extraction batches to complete without burning context.
+    """Wait for extraction batches or individual jobs to complete.
 
-    If *batch_id* is provided, polls every 30 seconds until that batch
-    reports all_done, then returns the final status. Much better than
-    calling check_extraction_status in a loop.
-
-    If no batch_id, sleeps for *seconds* and returns.
+    If *batch_id* is provided, polls until that batch reports all_done.
+    If *job_id* is provided, polls until that specific job completes.
+    If neither, sleeps for *seconds* and returns.
 
     Args:
         seconds: Max seconds to wait (default 300, max 1800 = 30 min).
-            Ignored when batch_id is provided and batch completes sooner.
+            Used as timeout when waiting for batch_id or job_id.
         batch_id: Optional batch to wait for. Returns as soon as it
             completes instead of waiting the full duration.
+        job_id: Optional individual job to wait for. Returns as soon
+            as that job reaches a terminal state.
     """
     max_wait = min(max(seconds, 10), 1800)
+
+    if job_id is not None:
+        store = _get_job_store()
+        t0 = time.monotonic()
+        deadline = t0 + max_wait
+        while time.monotonic() < deadline:
+            with store._lock:
+                job = store._jobs.get(job_id)
+                if job is None:
+                    return {
+                        "status": "error",
+                        "error_message": f"Unknown job: {job_id}",
+                    }
+                if job.status in ("completed", "failed", "deferred"):
+                    elapsed = int(time.monotonic() - t0)
+                    return {
+                        "status": "done",
+                        "job_id": job_id,
+                        "job_status": job.status,
+                        "waited_seconds": elapsed,
+                        "result": job.result,
+                    }
+            time.sleep(5)
+        elapsed = int(time.monotonic() - t0)
+        return {
+            "status": "timeout",
+            "job_id": job_id,
+            "waited_seconds": elapsed,
+            "message": f"Job {job_id} still running after {elapsed}s",
+        }
 
     if batch_id is not None:
         store = _get_job_store()

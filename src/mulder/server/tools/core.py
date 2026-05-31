@@ -211,6 +211,8 @@ def search(
             "result_count": 0,
         }
 
+    total_matches: int | None = None
+
     if regex:
         combined_pattern = "|".join(all_terms)
         _MAX_REGEX_LEN = 500
@@ -234,11 +236,13 @@ def search(
             }
         _CHUNK = 5000
         matches: list[dict[str, object]] = []
+        total_regex_matches = 0
         cursor = 0
         src_prefix = source or ""
         source_map: dict[int, str] = {s.source_id: s.source_name for s in ctx.db.get_sources()}
         exclude_set = exclude_sources or []
-        while len(matches) < max_results:
+        scanning = True
+        while scanning:
             chunk, _total = ctx.db.get_windows_page(src_prefix, after_id=cursor, limit=_CHUNK)
             if not chunk:
                 break
@@ -253,18 +257,26 @@ def search(
                 if t_end and w.event_time and w.event_time > t_end:
                     continue
                 if pattern.search(w.raw_text):
-                    matches.append(
-                        {
-                            "window": _truncated_window(w),
-                            "source_name": src_name,
-                        }
-                    )
-                    if len(matches) >= max_results:
-                        break
+                    total_regex_matches += 1
+                    if len(matches) < max_results:
+                        matches.append(
+                            {
+                                "window": _truncated_window(w),
+                                "source_name": src_name,
+                            }
+                        )
             cursor = chunk[-1].window_id or 0
+        total_matches = total_regex_matches
         results = matches
     else:
         combined_fts = " OR ".join(all_terms)
+        total_matches = ctx.db.count_search_windows(
+            combined_fts,
+            source_name=source,
+            time_start=t_start,
+            time_end=t_end,
+            exclude_source_names=exclude_sources,
+        )
         raw_matches = ctx.db.search_windows(
             combined_fts,
             source_name=source,
@@ -296,16 +308,29 @@ def search(
         output_hash=hash_output(results),
         duration_ms=elapsed,
     )
-    return {
+    effective_total = total_matches if total_matches is not None else len(results)
+    remaining = max(0, effective_total - len(results))
+    response: dict[str, object] = {
         "tool_call_id": tc_id,
         "status": "success",
         "results": results,
         "source": source,
         "result_count": len(results),
+        "total_matches": effective_total,
+        "returned": len(results),
+        "has_more": effective_total > len(results),
+        "remaining": remaining,
         "sources_matched": sources_matched,
-        "has_more": len(results) == max_results,
         "hint": "Use get_raw_output(source_name, offset, limit) to retrieve full evidence text.",
     }
+    if remaining > 0:
+        response["hint"] = (
+            f"Showing {len(results)} of {effective_total} matches "
+            f"({remaining} remaining). Increase max_results or narrow with "
+            "source/time filters to see more. "
+            "Use get_raw_output(source_name, offset, limit) to retrieve full evidence text."
+        )
+    return response
 
 
 @mcp.tool()
