@@ -6,7 +6,6 @@ import logging
 from unittest.mock import patch
 
 from mulder.orchestrator.display import (
-    _SPINNER_FRAMES,
     _SYSTEM_COLORS,
     InvestigationDashboard,
     TaskItem,
