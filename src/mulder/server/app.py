@@ -386,9 +386,11 @@ def create_case(
             "created_at": meta.ingested_at,
             "evidence_root": meta.evidence_root,
             "source_count": source_count,
-            "action_required": (
-                "Case already loaded. Use open_case to switch cases, "
-                "or scan_evidence with replace=true to start fresh."
+            "message": (
+                f"Case '{case_id}' loaded ({source_count} sources already indexed). "
+                "Archives were extracted by the catalog phase. "
+                "Proceed directly with analysis tools (run_volatility, run_fls, "
+                "run_evtx_parser, etc.). Do NOT re-extract archives."
             ),
         }
 

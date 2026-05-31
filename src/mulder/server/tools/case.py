@@ -163,8 +163,10 @@ def _scan_evidence_inner(ev_path: Path, case_id: str, replace: bool) -> dict[str
     if archive_count > 0:
         message += (
             f" NOTE: {archive_count} compressed archive(s) detected. "
-            "Call extract_archive() on each to unpack evidence files inside, "
-            "then scan_evidence() on the extracted directory."
+            "If you need to unpack them, use extract_archive with the "
+            "full path shown in the evidence tree. If archives were already "
+            "extracted by a prior phase, skip this step and proceed with "
+            "analysis tools directly."
         )
 
     return {
@@ -370,6 +372,24 @@ def extract_archive(
     else:
         cfg = get_cfg()
         dest = cfg.db_dir / "extracted" / archive.stem
+
+    # Idempotent: if already extracted, return the existing files
+    if dest.exists() and any(dest.iterdir()):
+        existing_files = [str(f.relative_to(dest)) for f in dest.rglob("*") if f.is_file()]
+        return {
+            "status": "already_extracted",
+            "archive": str(archive),
+            "extracted_to": str(dest),
+            "files": existing_files,
+            "message": (
+                f"Archive already extracted to {dest}. "
+                f"Use this path for analysis tools "
+                f"(e.g., memory_path='{dest}/{existing_files[0]}' "
+                "for run_volatility)."
+                if existing_files
+                else ""
+            ),
+        }
 
     dest.mkdir(parents=True, exist_ok=True)
 
