@@ -42,7 +42,7 @@ def _normalize_source(s: SourceRow | dict[str, Any]) -> SourceRow:
     return SourceRow(**s)
 
 
-_SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+_SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4, "informational": 4}
 
 _ATTACK_TACTICS_PATH = Path(__file__).resolve().parent / "data" / "attack_tactics.json"
 
@@ -555,7 +555,7 @@ def _build_executive_summary_md(
     sev_str = " (" + ", ".join(sev_parts) + ")" if sev_parts else ""
 
     results_line = f"**Results:** {finding_count} findings{sev_str}"
-    results_line += f" -- {confirmed_count} confirmed, {inference_count} inference"
+    results_line += f" | {confirmed_count} confirmed, {inference_count} inference"
     if negative_count:
         results_line += (
             f" | {negative_count} "
@@ -1223,5 +1223,5 @@ class ReportRenderer:
             source_windows=source_windows,
         )
         md_text = self._render_markdown(ctx)
-        html_text = self._render_html(ctx)
+        html_text = self._render_html(dict(ctx))
         return md_text, html_text

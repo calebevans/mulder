@@ -152,13 +152,9 @@ def _sanitize_fts5_query(query: str) -> str:
     """
     # Convert pipe-separated queries to FTS5 OR syntax before tokenizing.
     # e.g., "subject_srv|powershell|cmd" -> "subject_srv OR powershell OR cmd"
-    if "|" in query and "OR" not in query.upper():
-        query = " OR ".join(part.strip() for part in query.split("|") if part.strip())
-    # Also handle escaped pipes from the SDK
-    if "\\|" in query:
-        query = " OR ".join(
-            part.strip() for part in query.replace("\\|", "|").split("|") if part.strip()
-        )
+    if "|" in query:
+        segments = query.replace("\\|", "|").split("|")
+        query = " OR ".join(part.strip() for part in segments if part.strip())
 
     parts = _FTS5_TOKEN_RE.findall(query)
     tokens: list[str] = []
@@ -318,7 +314,7 @@ class _WriteQueue:
 
     Worker threads submit callables via ``submit`` and block until the
     writer thread executes them.  This eliminates SQLite ``BUSY`` errors
-    entirely -- only one thread ever holds the write lock.
+    entirely; only one thread ever holds the write lock.
     """
 
     def __init__(self) -> None:
@@ -579,7 +575,10 @@ class CaseDB:
                     )
                 )
 
-        stmt = stmt.order_by(windows_t.c.line_start).limit(max_results)
+        stmt = stmt.order_by(
+            text("windows_fts.rank"),
+            windows_t.c.event_time.asc().nullslast(),
+        ).limit(max_results)
 
         safe_query = _sanitize_fts5_query(query)
 

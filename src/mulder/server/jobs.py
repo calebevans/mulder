@@ -168,7 +168,11 @@ class JobStore:
             result = fn(**job.args)
 
             is_timeout = isinstance(result, dict) and result.get("error_type") == "timeout"
-            is_error = isinstance(result, dict) and "error" in result
+            is_error = isinstance(result, dict) and (
+                result.get("status") == "error"
+                or bool(result.get("error"))
+                or bool(result.get("error_message"))
+            )
 
             if is_timeout:
                 error_detail = _extract_error_detail(result, "timeout")
@@ -192,7 +196,7 @@ class JobStore:
                 with self._lock:
                     job.status = "failed"
                     job.result = result
-                    job.error = result.get("error") if isinstance(result, dict) else None
+                    job.error = _extract_error_detail(result, "unknown error")
                     job.completed_at = time.monotonic()
                 logger.warning("Job %s (%s) returned error: %s", job_id, tool_name, job.error)
             else:
@@ -290,7 +294,9 @@ class JobStore:
                 wait_for_resources(tool_name)
                 result = fn(**job.args)
                 is_error = isinstance(result, dict) and (
-                    "error" in result or result.get("status") == "error"
+                    bool(result.get("error"))
+                    or result.get("status") == "error"
+                    or bool(result.get("error_message"))
                 )
                 with self._lock:
                     job.status = "failed" if is_error else "completed"
@@ -370,11 +376,12 @@ class JobStore:
                 elif job.status == "deferred":
                     deferred_jobs.append({"tool": job.tool_name, "error": job.error})
 
+        still_active = counts["pending"] + counts["running"] + counts["deferred"]
         result: dict[str, Any] = {
             "batch_id": batch_id,
             "total": len(batch.job_ids),
             **counts,
-            "all_done": (counts["completed"] + counts["failed"]) == len(batch.job_ids),
+            "all_done": still_active == 0,
         }
         if running_jobs:
             result["running_jobs"] = running_jobs

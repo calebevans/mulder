@@ -93,6 +93,7 @@ def _parse_timestamp(text: str, reference_year: int | None = None) -> str | None
         except ValueError:
             pass
 
+    logger.debug("No timestamp pattern matched in window text (first 80 chars): %r", text[:80])
     return None
 
 
@@ -136,8 +137,11 @@ def extract_and_index(
 
     original_line_count = raw_output.count("\n") + 1
 
-    raw_bytes = raw_output.encode()
-    content_hash = "blake2b:" + hashlib.blake2b(raw_bytes, digest_size=32).hexdigest()
+    h = hashlib.blake2b(digest_size=32)
+    chunk_size = 65536
+    for i in range(0, len(raw_output), chunk_size):
+        h.update(raw_output[i : i + chunk_size].encode())
+    content_hash = "blake2b:" + h.hexdigest()
 
     source_id = ctx.db.register_source(
         source_name=source_name,
