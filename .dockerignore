@@ -11,3 +11,5 @@ examples/
 *.egg-info
 .cursor/
 reports/
+rocba/
+cases/

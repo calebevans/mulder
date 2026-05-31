@@ -451,9 +451,7 @@ class Orchestrator:
                     f"RETRY (attempt {attempt + 1}/{1 + phase.max_retries}). "
                     f"{retry_prompt}{gap_info}"
                 )
-                self.dashboard.log_info(
-                    f"Retry {attempt}/{phase.max_retries}"
-                )
+                self.dashboard.log_info(f"Retry {attempt}/{phase.max_retries}")
 
             phase_result = await self._execute_query(
                 system_prompt=phase.single_system_prompt,

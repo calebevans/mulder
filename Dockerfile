@@ -303,7 +303,8 @@ RUN python3 -m venv /opt/litellm \
     && /opt/litellm/bin/pip install --no-cache-dir 'litellm[proxy]' pyyaml \
     && ln -s /opt/litellm/bin/litellm /usr/local/bin/litellm
 
-RUN cp /app/.mcp.json /mulder-investigation/.mcp.json \
+RUN mkdir -p /mulder-investigation \
+    && cp /app/.mcp.json /mulder-investigation/.mcp.json \
     && cd /mulder-investigation && git init && git config user.email "mulder@local" && git config user.name "mulder" && git add -A && git commit -m "init"
 
 RUN chown -R mulder:mulder /home/mulder /mulder-investigation
