@@ -230,6 +230,83 @@ def _detect_mount_offset(image_path: str) -> int:
     return 0
 
 
+_FLS_LINE_RE = re.compile(
+    r"^[rd]/[rd*]\s+(\d+(?:-\d+-\d+)?):\s+(.+)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+_TSK_EVTX_INDICATORS = ("winevt/logs/", ".evtx")
+_TSK_REGISTRY_INDICATORS = (
+    "system32/config/system",
+    "system32/config/software",
+    "system32/config/sam",
+    "system32/config/security",
+    "system32/config/default",
+)
+_TSK_PREFETCH_INDICATORS = ("windows/prefetch/",)
+
+
+def _detect_sector_offset(image_path: str) -> int:
+    """Return the partition sector offset for TSK tools (fls, icat).
+
+    Wraps ``_detect_mount_offset`` and converts the byte offset to sectors.
+    Returns 0 when no partition table is found or ``mmls`` is unavailable.
+    """
+    return _detect_mount_offset(image_path) // _SECTOR_SIZE
+
+
+def _tsk_list_files(image_path: str, sector_offset: int) -> str:
+    """Run ``fls -r -p`` on a disk image and return the file listing.
+
+    Returns an empty string if ``fls`` is unavailable or produces no output.
+    TSK reads E01 images natively through libewf, so no mounting is required.
+    """
+    if not shutil.which("fls"):
+        logger.debug("fls not found; TSK file listing unavailable")
+        return ""
+    cmd = ["fls", "-r", "-p"]
+    if sector_offset > 0:
+        cmd.extend(["-o", str(sector_offset)])
+    cmd.append(image_path)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, timeout=300, check=False)
+        if proc.returncode == 0:
+            return proc.stdout.decode("utf-8", errors="replace")
+        logger.warning(
+            "fls exited %d for %s (offset=%d)",
+            proc.returncode,
+            image_path,
+            sector_offset,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        logger.warning("fls failed on %s: %s", image_path, exc)
+    return ""
+
+
+def _tsk_icat_file(
+    image_path: str,
+    inode: str,
+    sector_offset: int,
+    dest: Path,
+) -> bool:
+    """Extract a single file by inode via ``icat`` and write to *dest*.
+
+    Returns True when the file was extracted and has content.
+    """
+    cmd = ["icat"]
+    if sector_offset > 0:
+        cmd.extend(["-o", str(sector_offset)])
+    cmd.extend([image_path, inode])
+    try:
+        proc = subprocess.run(cmd, capture_output=True, timeout=60, check=False)
+        if proc.returncode == 0 and proc.stdout:
+            dest.write_bytes(proc.stdout)
+            return True
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+    return False
+
+
 def _mount_image(image_path: Path, mount_point: Path) -> bool:
     """Mount *image_path* read-only at *mount_point*. Returns True on success."""
     ext = image_path.suffix.lower()
@@ -279,48 +356,91 @@ def _mount_image(image_path: Path, mount_point: Path) -> bool:
 
 
 def _mount_e01(image_path: Path, mount_point: Path) -> bool:
-    """Mount an E01 image via ewfmount -> mount."""
-    if not shutil.which("ewfmount"):
-        logger.error("ewfmount not found, cannot mount E01 images")
-        return False
+    """Mount an E01 image read-only, trying multiple strategies.
 
+    Strategy 1: ``ewfmount`` exposes a raw device, then ``mount -o loop``
+    mounts the partition.  Strategy 2 (fallback): ``guestmount`` handles
+    E01 images natively via libguestfs and auto-detects partitions.
+    """
     ewf_mount = mount_point / "_ewf"
-    ewf_mount.mkdir(parents=True, exist_ok=True)
+    ewf_mounted = False
 
-    try:
-        subprocess.run(
-            ["ewfmount", str(image_path), str(ewf_mount)],
-            capture_output=True,
-            timeout=60,
-            check=True,
-        )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        logger.error("ewfmount failed on %s: %s", image_path, exc)
-        return False
+    if shutil.which("ewfmount"):
+        ewf_mount.mkdir(parents=True, exist_ok=True)
+        try:
+            subprocess.run(
+                ["ewfmount", str(image_path), str(ewf_mount)],
+                capture_output=True,
+                timeout=120,
+                check=True,
+            )
+            ewf_mounted = True
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            stderr = ""
+            if isinstance(exc, subprocess.CalledProcessError) and exc.stderr:
+                stderr = exc.stderr.decode("utf-8", errors="replace")[:300]
+            logger.warning(
+                "ewfmount failed on %s: %s %s",
+                image_path,
+                exc,
+                stderr,
+            )
+            shutil.rmtree(ewf_mount, ignore_errors=True)
+    else:
+        logger.warning("ewfmount not found; will try guestmount for E01")
 
-    raw_device = ewf_mount / "ewf1"
-    if not raw_device.exists():
-        logger.error("ewfmount did not produce ewf1 device in %s", ewf_mount)
-        _unmount_path(ewf_mount)
-        return False
+    if ewf_mounted:
+        raw_device = ewf_mount / "ewf1"
+        if not raw_device.exists():
+            logger.error("ewfmount did not produce ewf1 device in %s", ewf_mount)
+            _unmount_path(ewf_mount)
+            shutil.rmtree(ewf_mount, ignore_errors=True)
+        else:
+            offset_bytes = _detect_mount_offset(str(raw_device))
+            mount_opts = "ro,loop,noexec,nodev"
+            if offset_bytes > 0:
+                mount_opts += f",offset={offset_bytes}"
+            try:
+                subprocess.run(
+                    ["mount", "-o", mount_opts, str(raw_device), str(mount_point)],
+                    capture_output=True,
+                    timeout=60,
+                    check=True,
+                )
+                return True
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+                logger.warning(
+                    "Loop mount of ewf device %s failed: %s",
+                    raw_device,
+                    exc,
+                )
+                _unmount_path(ewf_mount)
+                shutil.rmtree(ewf_mount, ignore_errors=True)
 
-    offset_bytes = _detect_mount_offset(str(raw_device))
-    mount_opts = "ro,loop,noexec,nodev"
-    if offset_bytes > 0:
-        mount_opts += f",offset={offset_bytes}"
+    if shutil.which("guestmount"):
+        try:
+            subprocess.run(
+                [
+                    "guestmount",
+                    "-a",
+                    str(image_path),
+                    "-i",
+                    "--ro",
+                    str(mount_point),
+                ],
+                capture_output=True,
+                timeout=180,
+                check=True,
+            )
+            return True
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            logger.warning("guestmount failed on E01 %s: %s", image_path, exc)
 
-    try:
-        subprocess.run(
-            ["mount", "-o", mount_opts, str(raw_device), str(mount_point)],
-            capture_output=True,
-            timeout=60,
-            check=True,
-        )
-        return True
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        logger.error("Failed to mount ewf device %s: %s", raw_device, exc)
-        _unmount_path(ewf_mount)
-        return False
+    logger.error(
+        "Could not mount E01 %s (tried ewfmount+mount and guestmount)",
+        image_path,
+    )
+    return False
 
 
 def _unmount_path(path: Path) -> None:
@@ -474,27 +594,34 @@ class DiskImageExtractor:
         ]
 
     def _extract_disk_image(self, image_path: Path, case_id: str) -> list[ExtractionResult]:
-        """Mount a disk image and extract all supported artifacts."""
+        """Mount a disk image and extract all supported artifacts.
+
+        When FUSE or loop mounting fails, falls back to TSK direct access
+        (fls + icat), which reads E01 images natively through libewf.
+        """
         mount_point = Path(tempfile.mkdtemp(prefix=f"mulder_{case_id}_mount_"))
         mounted = False
 
         try:
             mounted = _mount_image(image_path, mount_point)
-            if not mounted:
-                logger.error("Cannot mount %s, skipping disk extraction", image_path)
-                return []
+            if mounted:
+                results: list[ExtractionResult] = []
+                results.extend(self._extract_evtx_from_mount(mount_point, image_path))
+                results.extend(self._extract_prefetch(mount_point, image_path))
+                results.extend(self._extract_registry(mount_point, image_path))
+                results.extend(self._extract_logs_from_mount(mount_point, image_path))
+                return results
 
-            results: list[ExtractionResult] = []
-            results.extend(self._extract_evtx_from_mount(mount_point, image_path))
-            results.extend(self._extract_prefetch(mount_point, image_path))
-            results.extend(self._extract_registry(mount_point, image_path))
-            results.extend(self._extract_logs_from_mount(mount_point, image_path))
-            return results
+            logger.warning(
+                "Mount failed for %s; attempting TSK direct extraction",
+                image_path,
+            )
+            return self._extract_disk_image_via_tsk(image_path)
         finally:
             if mounted:
                 _unmount_image(mount_point)
             with contextlib.suppress(OSError):
-                mount_point.rmdir()
+                shutil.rmtree(mount_point, ignore_errors=True)
 
     def _extract_evtx_from_mount(self, root: Path, image_path: Path) -> list[ExtractionResult]:
         """Parse all EVTX logs found under the mounted filesystem."""
@@ -572,6 +699,187 @@ class DiskImageExtractor:
                     )
                 )
         return results
+
+    # ------------------------------------------------------------------
+    # TSK fallback: extract artifacts directly via fls + icat
+    # ------------------------------------------------------------------
+
+    def _extract_disk_image_via_tsk(
+        self,
+        image_path: Path,
+    ) -> list[ExtractionResult]:
+        """Extract artifacts directly from a disk image using TSK fls + icat.
+
+        TSK reads E01 images natively through libewf, so no FUSE or loop
+        mounting is required. Used as a fallback when all mount strategies
+        fail.
+        """
+        image_str = str(image_path)
+        sector_offset = _detect_sector_offset(image_str)
+        fls_output = _tsk_list_files(image_str, sector_offset)
+        if not fls_output:
+            logger.error(
+                "TSK fallback failed: fls produced no output for %s (sector offset %d)",
+                image_path,
+                sector_offset,
+            )
+            return []
+
+        entries: list[tuple[str, str]] = []
+        seen_inodes: set[str] = set()
+        for m in _FLS_LINE_RE.finditer(fls_output):
+            inode = m.group(1).split("-")[0]
+            rel_path = m.group(2).strip()
+            if inode not in seen_inodes:
+                seen_inodes.add(inode)
+                entries.append((inode, rel_path))
+
+        extract_dir = Path(tempfile.mkdtemp(prefix="mulder_tsk_fallback_"))
+        results: list[ExtractionResult] = []
+
+        try:
+            results.extend(
+                self._tsk_parse_evtx(image_str, entries, sector_offset, extract_dir, image_path)
+            )
+            results.extend(
+                self._tsk_parse_registry(
+                    image_str,
+                    entries,
+                    sector_offset,
+                    extract_dir,
+                    image_path,
+                )
+            )
+            results.extend(
+                self._tsk_parse_prefetch(
+                    image_str,
+                    entries,
+                    sector_offset,
+                    extract_dir,
+                    image_path,
+                )
+            )
+
+            if results:
+                logger.info(
+                    "TSK fallback extracted %d artifact sources from %s",
+                    len(results),
+                    image_path,
+                )
+            else:
+                logger.warning(
+                    "TSK fallback found no parseable artifacts in %s",
+                    image_path,
+                )
+        finally:
+            shutil.rmtree(extract_dir, ignore_errors=True)
+
+        return results
+
+    def _tsk_parse_evtx(
+        self,
+        image_str: str,
+        entries: list[tuple[str, str]],
+        sector_offset: int,
+        extract_dir: Path,
+        image_path: Path,
+    ) -> list[ExtractionResult]:
+        """Extract EVTX files via icat and parse with python-evtx."""
+        results: list[ExtractionResult] = []
+        evtx_entries = [
+            (inode, rel)
+            for inode, rel in entries
+            if any(pat in rel.lower() for pat in _TSK_EVTX_INDICATORS)
+        ]
+
+        for inode, rel_path in evtx_entries:
+            safe_name = rel_path.replace("/", "_").replace("\\", "_")
+            dest = extract_dir / safe_name
+            if _tsk_icat_file(image_str, inode, sector_offset, dest):
+                channel, text = _parse_evtx_file(dest)
+                if text:
+                    results.append(
+                        ExtractionResult(
+                            source_name=f"evtx.{channel}",
+                            source_path=str(image_path),
+                            extractor="python-evtx (tsk-fallback)",
+                            text_output=text,
+                            line_count=text.count("\n") + 1,
+                        )
+                    )
+        return results
+
+    def _tsk_parse_registry(
+        self,
+        image_str: str,
+        entries: list[tuple[str, str]],
+        sector_offset: int,
+        extract_dir: Path,
+        image_path: Path,
+    ) -> list[ExtractionResult]:
+        """Extract registry hives via icat and parse with RegRipper."""
+        results: list[ExtractionResult] = []
+        reg_entries = [
+            (inode, rel)
+            for inode, rel in entries
+            if any(pat in rel.lower() for pat in _TSK_REGISTRY_INDICATORS)
+        ]
+
+        for inode, rel_path in reg_entries:
+            safe_name = rel_path.replace("/", "_").replace("\\", "_")
+            dest = extract_dir / safe_name
+            if _tsk_icat_file(image_str, inode, sector_offset, dest):
+                hive_name = Path(rel_path).name.lower()
+                text = _parse_registry_hive(dest)
+                if text:
+                    results.append(
+                        ExtractionResult(
+                            source_name=f"registry.{hive_name}",
+                            source_path=str(image_path),
+                            extractor="regripper (tsk-fallback)",
+                            text_output=text,
+                            line_count=text.count("\n") + 1,
+                        )
+                    )
+        return results
+
+    def _tsk_parse_prefetch(
+        self,
+        image_str: str,
+        entries: list[tuple[str, str]],
+        sector_offset: int,
+        extract_dir: Path,
+        image_path: Path,
+    ) -> list[ExtractionResult]:
+        """Extract Prefetch files via icat and parse metadata."""
+        pf_entries = [
+            (inode, rel)
+            for inode, rel in entries
+            if any(pat in rel.lower() for pat in _TSK_PREFETCH_INDICATORS)
+            and rel.lower().endswith(_PREFETCH_EXT)
+        ]
+        if not pf_entries:
+            return []
+
+        pf_dir = extract_dir / "prefetch"
+        pf_dir.mkdir(exist_ok=True)
+
+        for inode, rel_path in pf_entries:
+            dest = pf_dir / Path(rel_path).name
+            _tsk_icat_file(image_str, inode, sector_offset, dest)
+
+        text = _parse_prefetch_dir(pf_dir)
+        if not text:
+            return []
+        return [
+            ExtractionResult(
+                source_name="prefetch.all",
+                source_path=str(image_path),
+                extractor="prefetch-parser (tsk-fallback)",
+                text_output=text,
+                line_count=text.count("\n") + 1,
+            )
+        ]
 
 
 def _has_evtx() -> bool:

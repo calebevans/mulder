@@ -322,7 +322,8 @@ def run_mft_parser(image_path: str) -> dict[str, object]:
     """Parse the $MFT from a disk image using MFTECmd (EZ Tools).
 
     The Master File Table contains timestamps, sizes, and parent
-    directories for every file on an NTFS volume.
+    directories for every file on an NTFS volume. Falls back to TSK
+    extraction when mounting fails.
 
     Args:
         image_path: Path to the disk image.
@@ -355,10 +356,31 @@ def run_mft_parser(image_path: str) -> dict[str, object]:
                 params,
                 t0,
             )
-    except RuntimeError as exc:
+    except RuntimeError:
+        pass
+
+    extracted = _tsk_extract_files(image_path, ["$MFT"])
+    mft_files = [
+        (r, p) for r, p in extracted if p.name.upper() == "$MFT" or "mft" in p.name.lower()
+    ]
+    if not mft_files:
         return error_response(
-            tc_id, "run_mft_parser", params, str(exc), (time.monotonic() - t0) * 1000
+            tc_id,
+            "run_mft_parser",
+            params,
+            "Mount failed and $MFT not found via TSK extraction",
+            (time.monotonic() - t0) * 1000,
         )
+    return _run_ez_tool(
+        "MFTECmd.dll",
+        ["-f", str(mft_files[0][1])],
+        "ez.mft",
+        image_path,
+        tc_id,
+        "run_mft_parser",
+        params,
+        t0,
+    )
 
 
 # ---------------------------------------------------------------------------

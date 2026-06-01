@@ -23,7 +23,11 @@ from mulder.server.helpers import (
     tool_response,
 )
 from mulder.server.tools.extract.misc import _DOTNET, _find_ez_tool
-from mulder.server.tools.extract.tsk import _parse_partition_offset, _tsk_extract_dirs
+from mulder.server.tools.extract.tsk import (
+    _ensure_fls_indexed,
+    _parse_partition_offset,
+    _tsk_extract_dirs,
+)
 
 __all__ = [
     "_cleanup_temp_dirs",
@@ -40,10 +44,12 @@ _evtx_extract_dirs: dict[str, str] = {}
 def _extract_evtx_from_image(image_path: str, dest_dir: str) -> list[Path]:
     """Extract .evtx files from a disk image to *dest_dir* using TSK icat.
 
-    Uses the fls listing already indexed for the case to locate EVTX
-    inodes, then extracts each with icat.  Works on E01 and raw images
-    without mounting.
+    Uses the fls listing indexed for the case to locate EVTX inodes, then
+    extracts each with icat. Runs ``fls`` automatically if the listing has
+    not been indexed yet. Works on E01 and raw images without mounting.
     """
+    _ensure_fls_indexed(image_path)
+
     ctx = get_ctx()
     sources = ctx.db.get_sources()
     fls_source = next((s for s in sources if s.source_name == "tsk.filelist"), None)

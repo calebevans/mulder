@@ -21,6 +21,7 @@ from mulder.server.helpers import (
 )
 
 __all__ = [
+    "_ensure_fls_indexed",
     "_parse_partition_offset",
     "_tsk_extract_dirs",
     "_tsk_extract_files",
@@ -79,18 +80,75 @@ def _parse_partition_offset(mmls_text: str) -> int:
 _tsk_extract_dirs: list[str] = []
 
 
+def _ensure_fls_indexed(image_path: str) -> bool:
+    """Verify the fls listing is indexed, running ``fls`` if needed.
+
+    When MCP tools fall back to TSK extraction after a mount failure, they
+    need the fls file listing to locate artifacts by inode. This function
+    ensures that listing exists, running ``fls`` with auto-detected
+    partition offset if it has not yet been indexed.
+
+    Args:
+        image_path: Path to the disk image (E01, dd, img).
+
+    Returns:
+        True if the listing is available (pre-existing or freshly created),
+        False if ``fls`` is unavailable or produces no output.
+    """
+    ctx = get_ctx()
+    sources = ctx.db.get_sources()
+    if any(s.source_name == "tsk.filelist" for s in sources):
+        return True
+
+    if not require_binary("fls"):
+        return False
+
+    offset = _detect_partition_offset(image_path)
+    cmd = ["fls", "-r", "-p"]
+    if offset > 0:
+        cmd.extend(["-o", str(offset)])
+    cmd.append(image_path)
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            timeout=TOOL_TIMEOUT,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning("fls timed out during auto-indexing for %s", image_path)
+        return False
+
+    stdout_text = proc.stdout.decode("utf-8", errors="replace")
+    if not stdout_text.strip():
+        logger.warning(
+            "fls produced no output for %s (auto-index, offset=%d)",
+            image_path,
+            offset,
+        )
+        return False
+
+    extract_and_index(stdout_text.strip(), "tsk.filelist", image_path, "sleuthkit")
+    logger.info("Auto-indexed fls listing for %s (%d lines)", image_path, stdout_text.count("\n"))
+    return True
+
+
 def _tsk_extract_files(
     image_path: str,
     path_patterns: list[str],
 ) -> list[tuple[str, Path]]:
     """Extract files from a disk image via TSK fls + icat.
 
-    Searches the pre-indexed ``tsk.filelist`` for entries matching any of
-    the *path_patterns* (case-insensitive substring match), then extracts
-    each via ``icat`` to a temp directory.
+    Searches the ``tsk.filelist`` source for entries matching any of the
+    *path_patterns* (case-insensitive substring match), then extracts each
+    via ``icat`` to a temp directory. If ``tsk.filelist`` has not been
+    indexed yet, runs ``fls`` automatically.
 
     Returns a list of ``(relative_path, extracted_path)`` tuples.
     """
+    _ensure_fls_indexed(image_path)
+
     ctx = get_ctx()
     sources = ctx.db.get_sources()
     fls_source = next((s for s in sources if s.source_name == "tsk.filelist"), None)
