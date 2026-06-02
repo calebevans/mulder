@@ -293,21 +293,16 @@ def _parse_evtx_with_python_fallback(evtx_path: str, evtx_dir: str | None) -> li
 @mcp.tool()
 @tool_access(Role.EXTRACT_EXECUTOR)
 def run_evtx_parser(evtx_path: str, force: bool = False) -> dict[str, object]:
-    """Extract and list Windows Event Log (.evtx) files from a disk image.
+    """Extract .evtx files from a disk image and return a prioritized manifest.
 
-    When given a disk image (E01/raw), extracts ALL .evtx files to a
-    persistent temp directory and returns a manifest with file names and
-    sizes. Does NOT parse or index them; use ``index_evtx_file`` to
-    selectively parse the most relevant logs.
+    Call after run_fls on disk images. For disk images, extracts all .evtx
+    files but does NOT parse them; use index_evtx_file selectively on the
+    most relevant logs. For directories or single .evtx files, parses
+    immediately.
 
-    When given a directory or single .evtx file, parses it immediately.
-
-    Recommended workflow for disk images:
-    1. Call ``run_evtx_parser("<image_path>")`` to extract and list files
-    2. Review the manifest: start with Security.evtx, System.evtx,
-       PowerShell.evtx, Sysmon.evtx
-    3. Call ``index_evtx_file("<filename>")`` on each relevant log
-    4. Only index archived/rotated logs if you need historical data
+    Returns a manifest with filenames, sizes, and priority ratings (HIGH
+    for Security/System/PowerShell/Sysmon). Follow up with
+    index_evtx_file on HIGH priority files first.
 
     Args:
         evtx_path: Path to an EVTX file, directory, or disk image.
@@ -416,25 +411,15 @@ def index_evtx_file(
     event_ids: list[int] | None = None,
     image_path: str = "",
 ) -> dict[str, object]:
-    """Parse and index a specific EVTX file from a previous extraction.
+    """Parse and index a specific EVTX file from a prior run_evtx_parser extraction.
 
-    Call ``run_evtx_parser`` on a disk image first to extract all EVTX
-    files. Then call this tool on specific files you want to analyze.
-    The filename should match one from the manifest returned by
-    ``run_evtx_parser``.
+    Call only after run_evtx_parser has extracted .evtx files from a disk
+    image. The filename must match one from the manifest. Pass event_ids
+    for dramatically faster parsing (seconds vs minutes on large logs).
 
-    Pass *event_ids* to extract only specific Event IDs.  This is
-    **dramatically faster** on large logs: a Security.evtx with 200k
-    events takes minutes to parse fully but seconds when filtered to
-    the 10-15 forensically relevant Event IDs.
-
-    Recommended order:
-    1. Security.evtx (logon events, account changes, privilege use)
-    2. System.evtx (service installs, driver loads)
-    3. Windows PowerShell.evtx (PowerShell commands)
-    4. Sysmon logs (if present: detailed process/network activity)
-    5. WinRM, TaskScheduler, RDP logs (lateral movement)
-    6. Archived logs only if you need to check a specific time window
+    Indexes as ``evtx.<channel>`` (e.g. ``evtx.security``). Searchable
+    via search() and get_raw_output(). Recommended order: Security,
+    System, PowerShell, Sysmon, then WinRM/TaskScheduler/RDP.
 
     Args:
         filename: Name of the .evtx file to parse (from the manifest).

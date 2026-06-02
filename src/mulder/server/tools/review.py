@@ -90,14 +90,14 @@ def _get_source_samples(db: CaseDB, source_name: str) -> list[str]:
 @mcp.tool()
 @tool_access(Role.NARRATIVE_PLANNER | Role.NARRATIVE_ANALYST)
 def audit_evidence_coverage() -> dict[str, object]:
-    """Identify indexed evidence sources not cited by any finding.
+    """Identify indexed evidence sources not cited by any submitted finding.
 
-    Returns a list of sources that were extracted and indexed but never
-    referenced in a submitted finding.  Each uncited source includes a
-    sample of its content so you can assess whether it contains relevant
-    evidence that was overlooked.
+    Call before finalize_report to catch blind spots. Requires at least
+    some findings to have been submitted for meaningful results.
 
-    Run this before ``finalize_report()`` to catch blind spots.
+    Returns uncited sources grouped by extractor, with content samples.
+    Review each uncited source with search() to verify nothing relevant
+    was overlooked.
     """
     ctx = get_ctx()
     tc_id = make_tool_call_id()
@@ -171,14 +171,14 @@ def audit_evidence_coverage() -> dict[str, object]:
 @mcp.tool()
 @tool_access(Role.NARRATIVE_PLANNER | Role.NARRATIVE_ANALYST)
 def audit_tool_coverage() -> dict[str, object]:
-    """Report applicable forensic tools that were never invoked.
+    """Report applicable forensic tools that were never invoked during the investigation.
 
-    Re-classifies the evidence directory and compares the applicable
-    tools for each artifact type against the tools actually invoked
-    (from the audit log).  Returns per-item coverage and a list of gaps.
+    Call before finalize_report to ensure no applicable analysis was
+    skipped. Re-classifies the evidence directory and compares applicable
+    tools against the audit log.
 
-    Run this before ``finalize_report()`` to ensure no applicable
-    analysis was skipped.
+    Returns per-evidence-item tool coverage with tools_run and
+    tools_not_run lists, plus total_gaps count.
     """
     ctx = get_ctx()
     tc_id = make_tool_call_id()
@@ -362,9 +362,11 @@ def track_progress(
 def get_investigation_summary() -> dict[str, object]:
     """Return a compact progress dashboard for the current investigation.
 
-    Shows systems analyzed, findings by severity, extraction batch
-    status, and investigation question coverage. Call this periodically
-    to stay oriented during long investigations. Read-only.
+    Call periodically during analysis to stay oriented, or after context
+    compaction to recover overall investigation state. No prerequisites.
+
+    Returns sources indexed, findings by severity, finalize readiness
+    gates, and a remaining_work checklist of outstanding tasks.
     """
     ctx = get_ctx()
     tc_id = make_tool_call_id()

@@ -25,15 +25,15 @@ _BULK_FEATURE_CAP = 15
 @mcp.tool()
 @tool_access(Role.CROSS_EXECUTOR)
 def get_carved_iocs(feature: str | None = None) -> dict[str, object]:
-    """Return IOC data carved by bulk_extractor during ingest.
+    """Retrieve IOC data carved by bulk_extractor from the case database.
 
-    When *feature* is ``None``, returns a summary with the number of
-    windows for each ``bulk.*`` source (email, url, domain, ip, etc.).
+    Call after run_bulk_extractor has indexed feature files. Pass no
+    feature for a summary of all available IOC types, or specify a
+    feature (e.g. "email", "url") for sample windows.
 
-    When *feature* is specified (e.g. ``"email"``, ``"url"``), returns
-    a capped, truncated sample of windows from the ``bulk.<feature>``
-    source.  Use ``search()`` or ``get_raw_output()`` for full data.
-    Read-only.
+    Returns per-feature window counts in summary mode, or capped sample
+    windows in detail mode. Use search() or get_raw_output() for the
+    full dataset.
     """
     ctx = get_ctx()
     tc_id = make_tool_call_id()

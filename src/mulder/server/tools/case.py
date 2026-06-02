@@ -6,6 +6,7 @@ Tier 1 tools: help the agent orient before running any extractions.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 import tarfile
@@ -76,7 +77,7 @@ def scan_evidence(
         )
 
     if case_id is None:
-        case_id = slugify(ev_path.name)
+        case_id = os.environ.get("MULDER_CASE_ID") or slugify(ev_path.name)
 
     try:
         result = _scan_evidence_inner(ev_path, case_id, replace)
@@ -448,15 +449,15 @@ def extract_archive(
     archive_path: str,
     extract_to: str | None = None,
 ) -> dict[str, object]:
-    """Extract a compressed evidence archive (zip, tar, gz, bz2, 7z, rar).
+    """Extract a compressed evidence archive to make its contents accessible.
 
-    Extracts the archive contents so that evidence files inside become
-    accessible to extraction and analysis tools.  Extracts to a writable
-    temporary directory under the mulder cases directory; the original
-    evidence is never modified.
+    Call when the evidence catalog includes compressed archives (zip, tar,
+    gz, bz2, 7z, rar). Idempotent: returns existing files if already
+    extracted. The original evidence is never modified.
 
-    After extraction, call ``scan_evidence`` on the extracted directory
-    to classify the newly available evidence files.
+    Outputs to a writable directory under the mulder cases directory.
+    Follow up with extraction tools (run_volatility_batch, run_fls, etc.)
+    on the extracted files.
 
     Args:
         archive_path: Path to the compressed archive.

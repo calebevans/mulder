@@ -532,6 +532,11 @@ def _run_yara_scan(
             f"Use search(query, source='{source_name}') or "
             f"get_raw_output('{source_name}') to retrieve match details."
         ),
+        "caveat": (
+            "Rule names do not confirm malware. Inspect the matched "
+            "strings/bytes to determine if they are malware-specific or "
+            "generic content found in legitimate software."
+        ),
     }
     return response
 
@@ -543,18 +548,15 @@ def yara_scan_files(
     rules: str | None = None,
     ruleset: str = "builtin",
 ) -> dict[str, object]:
-    """Scan files on a mounted filesystem or extracted directory with YARA.
+    """Scan a mounted filesystem or extracted directory for malware using YARA rules.
 
-    *target_path* is scanned recursively.  *rules* can be a path to a
-    ``.yar`` file, a YARA rule string, or None to use the built-in
-    Neo23x0/signature-base ruleset (~4,000 rules covering major APT
-    families, malware, and hack tools).
+    Call after extracting files from a disk image or archive. Uses the
+    Neo23x0/signature-base ruleset (~4,000 rules) by default, or provide
+    custom rules via the rules parameter. Requires ``yara`` on PATH.
 
-    The *ruleset* parameter is accepted for API compatibility but all
-    levels resolve to signature-base.
-
-    Rules are auto-updated on first use if network is available.
-    Requires ``yara`` on PATH.  Read-only.
+    Indexes matches as ``yara.files``; use search(source='yara.files') to
+    review match details. Rule names alone do not confirm malware; inspect
+    matched strings to distinguish from generic content.
     """
     ctx = get_ctx()
     tc_id = make_tool_call_id()
@@ -613,18 +615,15 @@ def yara_scan_memory(
     rules: str | None = None,
     ruleset: str = "builtin",
 ) -> dict[str, object]:
-    """Scan the ingested memory image with YARA.
+    """Scan the memory dump with YARA rules for malware signatures.
 
-    The memory image path is resolved from the case's Volatility sources.
-    *rules* can be a path to a ``.yar`` file, a YARA rule string, or None
-    to use the built-in Neo23x0/signature-base ruleset (~4,000 rules
-    covering major APT families, malware, and hack tools).
+    Call after run_volatility_batch has indexed memory sources (the memory
+    path is resolved automatically from Volatility source metadata). Uses
+    signature-base (~4,000 rules) by default. Requires ``yara`` on PATH.
 
-    The *ruleset* parameter is accepted for API compatibility but all
-    levels resolve to signature-base.
-
-    Rules are auto-updated on first use if network is available.
-    Requires ``yara`` on PATH.  Read-only.
+    Indexes matches as ``yara.memory``; use search(source='yara.memory')
+    to review. Multiple rule family matches often indicate over-matching
+    rather than multi-actor presence.
     """
     ctx = get_ctx()
     tc_id = make_tool_call_id()
@@ -691,12 +690,14 @@ def yara_scan_memory(
 def yara_scan_with_volatility(
     pid: int | None = None, rules: str | None = None
 ) -> dict[str, object]:
-    """Scan process memory using Volatility 3's vadyarascan plugin.
+    """Scan process virtual address descriptors with YARA via Volatility 3's vadyarascan.
 
-    Scans all processes by default, or a single process when *pid* is
-    given.  *rules* can be a path to a ``.yar`` file, a YARA rule string,
-    or None to use built-in detection rules.  Requires Volatility 3 on
-    PATH.  Read-only.
+    Call after run_volatility_batch when you need per-process YARA
+    scanning (more precise than raw memory scan). Optionally target a
+    single PID. Requires Volatility 3 on PATH.
+
+    Indexes matches as ``yara.volatility``; results include PID and
+    virtual address for each match, enabling targeted process analysis.
     """
     from mulder.extractors.volatility import _find_vol_binary
 

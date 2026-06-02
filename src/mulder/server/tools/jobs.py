@@ -38,22 +38,16 @@ def _get_job_store() -> JobStore:
 @mcp.tool()
 @tool_access(Role.CATALOG | Role.EXTRACT_EXECUTOR)
 def start_extraction_batch(tasks: list[dict[str, Any]]) -> dict[str, Any]:
-    """Launch slow extraction tools in the background and return immediately.
+    """Submit long-running extraction tools for background execution and return immediately.
 
-    Use this instead of ``run_parallel`` for long-running Tier-2 extraction
-    tools (Volatility, Plaso, bulk_extractor, fls, EVTX, registry, EZ
-    Tools, etc.).  The tools run concurrently in background threads while
-    you continue with fast analysis (search, correlate, submit_finding,
-    composite tools).
+    Call after open_case when you have a plan with slow Tier-2 tools
+    (Volatility, Plaso, bulk_extractor, fls, EVTX, registry). Tools
+    already indexed are auto-skipped. Use run_parallel for fast tools
+    (extract_archive, run_mmls, composite tools).
 
-    Tools whose output sources already exist in the case database are
-    skipped automatically (reported in ``tasks_skipped``).
-
-    Poll progress with ``check_extraction_status(batch_id)`` and retrieve
-    results with ``get_completed_results(batch_id)``.
-
-    Keep using ``run_parallel`` for fast operations like ``extract_archive``,
-    ``run_mmls``, ``run_hayabusa``, composite tools, and searches.
+    Returns a batch_id for tracking. Poll with
+    check_extraction_status(batch_id) and retrieve results with
+    get_completed_results(batch_id).
 
     Args:
         tasks: List of objects, each with ``tool`` (tool name string) and
@@ -186,12 +180,15 @@ def start_extraction_batch(tasks: list[dict[str, Any]]) -> dict[str, Any]:
 @mcp.tool()
 @tool_access(Role.CATALOG | Role.EXTRACT_EXECUTOR)
 def check_extraction_status(batch_id: str) -> dict[str, Any]:
-    """Check progress of a background extraction batch.
+    """Poll the progress of a background extraction batch.
 
-    Returns how many tasks are completed, running, pending, and failed.
-    For completed tasks, includes the ``tool_call_id`` so you can
-    reference them in findings.  Call this periodically while doing
-    other analysis work.
+    Call periodically after start_extraction_batch while continuing
+    fast analysis work. Do NOT proceed to cross-system analysis until
+    all batches report all_done.
+
+    Returns counts of completed, running, pending, and failed tasks.
+    Completed tasks include tool_call_ids usable as evidence_refs in
+    submit_finding.
 
     Args:
         batch_id: The batch ID returned by ``start_extraction_batch``.
@@ -260,12 +257,14 @@ def get_completed_results(
     batch_id: str,
     tool_names: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Retrieve full results from completed background extraction jobs.
+    """Retrieve extraction summaries from completed background jobs.
 
-    Returns the extraction summaries (windows indexed, source names, etc.)
-    for jobs that have finished.  By default only returns results you
-    haven't retrieved before (so you can call this repeatedly as more
-    jobs complete without seeing duplicates).
+    Call after check_extraction_status shows completed tasks. Only returns
+    results not previously retrieved (safe to call repeatedly as more
+    jobs finish).
+
+    Returns per-tool metadata: source_name, windows_indexed, line_count,
+    and tool_call_id for use as evidence_refs in submit_finding.
 
     Args:
         batch_id: The batch ID returned by ``start_extraction_batch``.

@@ -258,23 +258,15 @@ def run_bulk_extractor(
 ) -> dict[str, object]:
     """Carve IOCs (URLs, emails, domains, IPs) from a disk image using bulk_extractor.
 
-    Runs bulk_extractor and indexes each feature file as a separate
-    source (bulk.email, bulk.url, bulk.domain, etc.).
+    Call on any disk image or raw partition. No prerequisite tools
+    required. Pass specific scanners for faster runs (e.g.
+    ``scanners=["email", "net", "httplogs"]``). Use max_depth=2 for a
+    quick first pass. NOTE: there is no "url" scanner; URLs come from
+    "email" and "httplogs". IPs/domains come from "net".
 
-    Pass *scanners* to run only specific bulk_extractor scanners,
-    which is significantly faster than the default (all scanners).
-    For IOC-focused investigations, ``scanners=["email", "net",
-    "exif", "winpe", "winlnk", "httplogs"]`` skips expensive
-    scanners like zip decompression and NTFS parsing.
-
-    Available scanner names: accts, aes, base64, elf, email, evtx,
-    exif, facebook, find, gps, gzip, httplogs, json, kml_carved,
-    msxml, net, ntfsindx, ntfslogfile, ntfsmft, ntfsusn, pdf, rar,
-    sqlite, utmp, vcard_carved, vin, windirs, winlnk, winpe,
-    winprefetch, zip.
-
-    NOTE: There is no "url" scanner. URLs are extracted by the
-    "email" and "httplogs" scanners. IPs/domains come from "net".
+    Indexes each feature type as ``bulk.<feature>`` (e.g. ``bulk.email``,
+    ``bulk.url``). Use get_carved_iocs() for a summary or search() to
+    query specific features.
 
     Args:
         image_path: Path to the disk image.

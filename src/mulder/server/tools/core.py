@@ -83,11 +83,13 @@ def _serialize_scored(scored: list[Any]) -> list[dict[str, object]]:
 )
 @audited_tool("list_sources")
 def list_sources() -> dict[str, object]:
-    """List every evidence source indexed for the active case.
+    """List all evidence sources currently indexed in the active case.
 
-    Returns source names, file paths, hash digests, extractors used,
-    and line counts.  Initially empty for a new case; grows as the
-    agent runs Tier 2 extraction tools.  Read-only.
+    Call to understand what data is available before running queries or
+    submitting findings. Initially empty; grows as extraction tools run.
+
+    Returns source names, file paths, hash digests, extractor names,
+    and line counts for each indexed source.
     """
     ctx = get_ctx()
     sources = ctx.db.get_sources()
@@ -118,11 +120,13 @@ def list_sources() -> dict[str, object]:
 )
 @audited_tool("get_source_stats")
 def get_source_stats() -> dict[str, object]:
-    """Return per-source statistics for the current case.
+    """Return per-source statistics including citation coverage.
 
-    Shows window counts, time ranges, and whether each source is cited
-    by any finding. Useful for understanding what data is available and
-    identifying analysis gaps. Read-only.
+    Call during analysis to identify which sources have data and which
+    are not yet cited by any finding. Helps identify analysis gaps.
+
+    Returns window counts, time ranges, and cited_by_finding flag for
+    each source, plus summary counts of cited vs uncited sources.
     """
     ctx = get_ctx()
 
@@ -280,12 +284,15 @@ def search(
     queries: list[str] | None = None,
     exclude_sources: list[str] | None = None,
 ) -> dict[str, object]:
-    """Keyword or regex search across all ingested evidence.
+    """Search all ingested evidence for keywords or regex patterns.
 
-    Searches the raw text of all stored windows for *query*.  Use
-    *source* to scope to a specific source name or prefix (e.g.
-    ``"volatility.netscan"``).  Use *regex=True* for regular
-    expression matching.  Read-only.
+    Call after extraction tools have indexed evidence. Use the source
+    parameter to scope to a specific source (e.g.
+    ``source='volatility.netscan'``). For large sources, prefer this
+    over paginating get_raw_output.
+
+    Returns matching windows with source names, match counts, and
+    truncated raw text. Use get_raw_output(source_name) for full content.
 
     Args:
         query: Search term (substring match) or regex pattern.
@@ -378,12 +385,15 @@ def correlate_across_sources(
     t_end: str,
     sources: list[str] | None = None,
 ) -> dict[str, object]:
-    """Cross-reference evidence from multiple sources in a time window.
+    """Cross-reference all evidence sources within a time window.
 
-    For every source (or the specified subset), retrieves all windows
-    whose timestamps fall within [t_start, t_end] and groups them by
-    source.  Use this to answer: "at this point in time, what did each
-    artifact type see?"  Read-only.
+    Call during cross-system analysis to answer: "what did each artifact
+    type observe during this time period?" Requires multiple sources to
+    have timestamped data indexed.
+
+    Returns windows grouped by source, with counts of sources with and
+    without data in the range. Use get_raw_output() for full text of
+    interesting windows.
     """
     ctx = get_ctx()
     tc_id = make_tool_call_id()
@@ -581,11 +591,13 @@ def get_amcache() -> dict[str, object]:
 @mcp.tool()
 @tool_access(Role.CROSS_EXECUTOR)
 def scan_hidden_processes() -> dict[str, object]:
-    """Detect hidden processes by comparing psscan (pool-tag scan) against pslist (linked list).
+    """Detect processes hidden from the linked list by comparing psscan against pslist.
 
-    PIDs present in psscan but absent from pslist may be hidden or unlinked
-    by a rootkit.  Returns the discrepancy set with supporting evidence
-    windows from psscan.  Read-only.
+    Call after run_volatility_batch has indexed both pslist and psscan
+    plugins. PIDs present only in psscan may be unlinked by a rootkit.
+
+    Returns the discrepancy set with supporting evidence windows from
+    psscan. Empty results when psscan or pslist data is not yet indexed.
     """
     ctx = get_ctx()
     tc_id = make_tool_call_id()
@@ -848,15 +860,15 @@ def get_raw_output(
     after_id: int = 0,
     limit: int = _DEFAULT_SEARCH_LIMIT,
 ) -> dict[str, object]:
-    """Retrieve raw extraction output for a source, with cursor pagination.
+    """Retrieve full raw text from a specific evidence source with cursor pagination.
 
-    Returns windows for the given source ordered by ID.  Pass
-    ``after_id`` from the previous response's ``next_after_id`` to
-    get the next page.  Every page is equally fast regardless of
-    position in the source.
+    Call when you need to read the complete output from an extraction
+    tool (e.g. volatility.pslist, tsk.filelist). For finding specific
+    content in large sources, prefer search(query, source=source_name).
 
-    For finding specific content in large sources, prefer
-    ``search(query, source=source_name)`` over paginating.
+    Returns raw_text with keyset pagination. Pass ``next_after_id`` from
+    the response to get subsequent pages. Every page is equally fast
+    regardless of position.
 
     Args:
         source_name: Exact source name or prefix (e.g. "volatility.pslist"
@@ -1175,12 +1187,14 @@ def get_timeline(
     t_end: str,
     limit: int = 50,
 ) -> dict[str, object]:
-    """Return a unified chronological timeline across all sources.
+    """Merge events from all indexed sources into a single chronological view.
 
-    Merges events from all indexed sources (volatility, EVTX, filesystem,
-    bulk_extractor, etc.) into a single time-sorted view. Use this to
-    understand what happened across ALL systems at a specific time.
-    Read-only.
+    Call during cross-system analysis when you need to understand what
+    happened across ALL artifact types at a specific time. Requires at
+    least some extraction tools to have indexed timestamped data.
+
+    Returns time-sorted events with source_name and truncated raw_text.
+    Narrow the time range or increase limit when results are truncated.
 
     Args:
         t_start: ISO 8601 start time.

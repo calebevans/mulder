@@ -187,24 +187,17 @@ def submit_finding(
     event_time_start: str | None = None,
     event_time_end: str | None = None,
 ) -> dict[str, object]:
-    """Submit a validated forensic finding backed by evidence references.
+    """Record a forensic finding with validated evidence references and metadata.
 
-    Every value in *evidence_refs* must be a ``tool_call_id`` returned by
-    a previous tool invocation in this session.  The server validates
-    each reference against the audit log and rejects the finding if any
-    are invalid.  *severity* must be one of critical/high/medium/low/info.
-    *confidence* must be "confirmed" (corroborated by 2+ sources) or
-    "inference".  *mitre_attack_ids* is an optional list of MITRE ATT&CK
-    technique IDs (e.g. ``["T1059.001", "T1570"]``).
+    Call after discovering evidence worth reporting. Every evidence_ref
+    must be a tool_call_id from a prior tool invocation (validated against
+    the audit log). Timestamps must be precise ISO-8601 values copied
+    from tool output; pass null rather than fabricating. Day-precision
+    placeholders are auto-nullified.
 
-    **Timestamps:** ``event_time_start`` and ``event_time_end`` must be
-    precise ISO-8601 values copied from tool output.  If you do not have
-    a precise timestamp, pass ``null`` rather than fabricating one.
-    Day-precision placeholders (e.g. ``2018-08-01T00:00:00Z``) are
-    automatically nullified.
-
-    Returns an acceptance confirmation on success, or an error dict with
-    guidance on how to fix the submission.
+    Returns finding_id on acceptance. Severity must be
+    critical/high/medium/low/info. Confidence must be "confirmed"
+    (corroborated by 2+ sources) or "inference".
     """
     ctx = get_ctx()
     tc_id = make_tool_call_id()
@@ -500,10 +493,14 @@ def submit_narrative(narrative: str) -> dict[str, object]:
     ANALYSTS | Role.CROSS_PLANNER | Role.NARRATIVE_PLANNER | Role.NARRATIVE_EXECUTOR | Role.REPORT
 )
 def get_findings(limit: int = 20, offset: int = 0) -> dict[str, object]:
-    """Retrieve findings submitted so far in this case.
+    """Retrieve paginated findings submitted in this case.
 
-    Returns paginated findings with id, title, severity, confidence,
-    evidence references, sources, and time range.  Read-only.
+    Call at any point to review current findings. Useful before
+    submitting new findings (to check for duplicates) and during
+    analysis to track investigation progress.
+
+    Returns finding metadata: id, title, severity, confidence,
+    evidence_refs, sources, MITRE IDs, and time range.
 
     Args:
         limit: Maximum findings to return (default 20).

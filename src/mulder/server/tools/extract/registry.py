@@ -225,11 +225,15 @@ def run_registry_parser(
     hive: str | None = None,
     force: bool = False,
 ) -> dict[str, object]:
-    """Parse Windows registry hives from a disk image.
+    """Parse Windows registry hives from a disk image using RECmd or RegRipper.
 
-    Uses RECmd (EZ Tools) when available, falls back to RegRipper.
-    Parses all standard hives (SYSTEM, SOFTWARE, SAM, SECURITY,
-    NTUSER.DAT) unless a specific hive is requested.
+    Call after run_fls on disk images containing Windows installations.
+    Extracts hive files via TSK, then parses all standard hives (SYSTEM,
+    SOFTWARE, SAM, SECURITY) unless a specific hive is requested.
+
+    Indexes as ``registry.<hive>`` (e.g. ``registry.system``). Contains
+    service configurations, installed software, user accounts, and
+    autorun entries.
 
     Args:
         image_path: Path to the disk image.

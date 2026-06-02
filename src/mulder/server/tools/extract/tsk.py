@@ -220,8 +220,11 @@ def _tsk_extract_files(
 def run_mmls(image_path: str) -> dict[str, object]:
     """List partitions in a disk image using TSK mmls.
 
-    Shows partition layout including type, start sector, and size.
-    Indexes the output for later reference.
+    Call first on any disk image to discover partition layout before
+    running run_fls or other disk extraction tools.
+
+    Indexes as ``tsk.partitions``; provides the sector offsets needed
+    by downstream tools.
 
     Args:
         image_path: Path to the disk image (E01, dd, img).
@@ -262,11 +265,14 @@ def run_fls(
     partition_offset: int | None = None,
     force: bool = False,
 ) -> dict[str, object]:
-    """Run recursive file listing on a disk image using TSK fls.
+    """List all files and directories (including deleted) from a disk image.
 
-    Lists all files and directories (including deleted entries marked
-    with ``*``).  Indexes the output for searching and deleted file
-    detection.
+    Call after run_mmls on disk images. Partition offset is auto-detected
+    if omitted. Required before run_evtx_parser and run_registry_parser
+    which use the file listing to locate artifacts via inode extraction.
+
+    Indexes as ``tsk.filelist``; entries marked with ``*`` are deleted
+    files. Searchable via search(query, source='tsk.filelist').
 
     Args:
         image_path: Path to the disk image.
@@ -335,10 +341,14 @@ def run_fls(
 @mcp.tool()
 @tool_access(Role.EXTRACT_EXECUTOR)
 def run_mactime(image_path: str, time_range: str | None = None) -> dict[str, object]:
-    """Generate a MAC timeline from a disk image using TSK fls + mactime.
+    """Generate a filesystem MAC timeline from a disk image using TSK fls + mactime.
 
-    Creates a filesystem timeline showing file creation, modification,
-    access, and change times.  Optionally filter to a date range.
+    Call on disk images when you need file modification/access/change
+    timestamps. Automatically detects partition offset. Use time_range
+    to narrow to an incident window.
+
+    Indexes as ``tsk.timeline``; timestamps are in mactime CSV format,
+    queryable via search() and get_timeline().
 
     Args:
         image_path: Path to the disk image.
@@ -393,9 +403,13 @@ def run_mactime(image_path: str, time_range: str | None = None) -> dict[str, obj
 @mcp.tool()
 @tool_access(Role.EXTRACT_EXECUTOR)
 def run_fsstat(image_path: str) -> dict[str, object]:
-    """Get filesystem statistics from a disk image using TSK fsstat.
+    """Retrieve filesystem metadata (type, block size, volume label) from a disk image.
 
-    Shows filesystem type, block size, volume label, and other metadata.
+    Call on disk images to identify the filesystem type and configuration
+    before deeper analysis. Useful for confirming NTFS vs FAT vs ext.
+
+    Indexes as ``tsk.fsstat``; output includes filesystem version, cluster
+    size, and volume serial number.
 
     Args:
         image_path: Path to the disk image.
