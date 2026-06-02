@@ -126,6 +126,14 @@ progress_t = Table(
     Column("recorded_at", Text, nullable=False),
 )
 
+kv_store_t = Table(
+    "kv_store",
+    metadata,
+    Column("key", Text, primary_key=True),
+    Column("value", Text, nullable=False),
+    Column("updated_at", Text, nullable=False),
+)
+
 _FTS_CREATE = (
     "CREATE VIRTUAL TABLE IF NOT EXISTS windows_fts USING fts5("
     "    raw_text, content=windows, content_rowid=window_id"
@@ -268,6 +276,19 @@ def _migrate_add_progress(conn: Connection) -> None:
             "  questions_addressed TEXT NOT NULL,"
             "  notes TEXT,"
             "  recorded_at TEXT NOT NULL"
+            ")"
+        )
+    )
+
+
+def _migrate_add_kv_store(conn: Connection) -> None:
+    """Create the kv_store table if it doesn't exist yet."""
+    conn.execute(
+        text(
+            "CREATE TABLE IF NOT EXISTS kv_store ("
+            "  key TEXT PRIMARY KEY,"
+            "  value TEXT NOT NULL,"
+            "  updated_at TEXT NOT NULL"
             ")"
         )
     )
@@ -422,6 +443,7 @@ class CaseDB:
             _migrate_add_windows_hash(conn)
             _migrate_add_bookmarks(conn)
             _migrate_add_progress(conn)
+            _migrate_add_kv_store(conn)
         return db
 
     def close(self) -> None:
@@ -1298,6 +1320,44 @@ class CaseDB:
             tools_used=sorted(all_tools),
             total_progress_records=len(records),
         )
+
+    def set_kv(self, key: str, value: str) -> None:
+        """Store a key-value pair, replacing any existing value for the key.
+
+        Args:
+            key: Unique string identifier.
+            value: String value to persist.
+        """
+
+        def _do_upsert() -> None:
+            now = datetime.now(timezone.utc).isoformat()
+            with self._engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "INSERT INTO kv_store (key, value, updated_at) "
+                        "VALUES (:key, :value, :updated_at) "
+                        "ON CONFLICT(key) DO UPDATE SET value=:value, updated_at=:updated_at"
+                    ),
+                    {"key": key, "value": value, "updated_at": now},
+                )
+
+        self._wq.submit(_do_upsert)
+
+    def get_kv(self, key: str) -> str | None:
+        """Retrieve a value by key, or None if not stored.
+
+        Args:
+            key: The key to look up.
+
+        Returns:
+            The stored value string, or None if the key does not exist.
+        """
+        with self._engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT value FROM kv_store WHERE key = :key"),
+                {"key": key},
+            ).fetchone()
+        return row[0] if row else None
 
     def _get_case_id(self) -> str:
         """Read case_id from the case_metadata table (cached after first call)."""

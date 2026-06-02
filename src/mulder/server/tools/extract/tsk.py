@@ -176,6 +176,8 @@ def _tsk_extract_files(
     extract_dir = Path(tempfile.mkdtemp(prefix="mulder_tsk_extract_"))
     with _tsk_lock:
         _tsk_extract_dirs.append(str(extract_dir))
+    ctx = get_ctx()
+    ctx.db.set_kv("tsk_extract_dir", str(extract_dir))
     extracted: list[tuple[str, Path]] = []
     seen: set[str] = set()
 

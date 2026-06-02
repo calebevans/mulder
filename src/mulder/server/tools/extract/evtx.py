@@ -343,6 +343,9 @@ def run_evtx_parser(evtx_path: str, force: bool = False) -> dict[str, object]:
         extract_dir = tempfile.mkdtemp(prefix="mulder_evtx_extract_")
         with _evtx_lock:
             _evtx_extract_dirs[evtx_path] = extract_dir
+        ctx = get_ctx()
+        ctx.db.set_kv("evtx_extract_dir", extract_dir)
+        ctx.db.set_kv(f"evtx_extract_dir:{evtx_path}", extract_dir)
         evtx_files = _extract_evtx_from_image(evtx_path, extract_dir)
         if not evtx_files:
             evtx_files = _find_carved_evtx(extract_dir)
@@ -454,6 +457,13 @@ def index_evtx_file(
             extract_dir = next(reversed(_evtx_extract_dirs.values()))
         else:
             extract_dir = ""
+
+    if not extract_dir:
+        ctx = get_ctx()
+        if image_path:
+            extract_dir = ctx.db.get_kv(f"evtx_extract_dir:{image_path}") or ""
+        if not extract_dir:
+            extract_dir = ctx.db.get_kv("evtx_extract_dir") or ""
 
     if not extract_dir or not Path(extract_dir).is_dir():
         return error_response(
