@@ -13,39 +13,131 @@ YOUR JOB:
 3. Produce a JSON plan using the tool reference below.
 
 IMPORTANT:
-- Archives are ALREADY extracted. Memory .img files are listed in the
-  evidence context above.
+- Top-level archives are ALREADY extracted. Memory .img/.raw/.vmem
+  files are listed in the evidence context above.
 - Do NOT call get_tool_guide.
 - If the evidence context lists file paths, use them directly. Do NOT
   call list_directory.
 - If the evidence context says "No pre-populated paths available", call
   list_directory on the evidence path to discover files, then plan.
-- Do NOT include extract_archive in your plan.
+- If the evidence context shows NESTED ARCHIVES (e.g., .7z or .zip
+  inside an already-extracted archive), include extract_archive for
+  those files FIRST. Mark them with "group": "prerequisite". Then plan
+  Volatility against the expected extracted path. Volatility requires
+  raw memory dumps (.raw, .vmem, .mem, .img, .dmp, .lime), not
+  compressed archives.
+- Do NOT include extract_archive for top-level evidence files.
 
-TOOL REFERENCE:
-- Memory: run_volatility_batch(plugins=[...], memory_path="<path>")
-  Common plugins: pslist, netscan, malfind, dlllist, handles, cmdline,
-  filescan, ldrmodules
-  Do NOT create separate tasks per plugin. ONE task, multiple plugins.
-- Disk (.E01): run_fls(image_path="..."), run_mmls(image_path="...")
-  Windows: run_evtx_parser, run_hayabusa, run_registry_parser,
-  run_prefetch_parser, run_amcache_parser, run_shimcache_parser,
-  run_mft_parser
-  Linux/macOS: run_strings, log extraction, browser history
-  Mobile: run_mvt_android/ios, parse_android/ios_artifacts
-- Carving: run_bulk_extractor(image_path="...",
-  scanners=["email","net","httplogs"], max_depth=2)
-- Scanning: yara_scan_files, yara_scan_memory, run_clamav
-- Use start_extraction_batch for multiple slow tools (runs concurrently).
+STANDARD TOOLSETS BY EVIDENCE TYPE:
+
+When the evidence includes a MEMORY DUMP, always plan:
+- run_volatility_batch with plugins appropriate to the detected OS.
+  Volatility auto-detects the profile; choose plugins that exist for
+  that platform (e.g., pslist/netscan/malfind for Windows,
+  linux_pslist/linux_netscan for Linux, mac_pslist for macOS).
+- yara_scan_memory (signature scanning against memory)
+
+When the evidence includes a DISK IMAGE, always plan:
+- run_fls, run_mmls (filesystem listing and partition table)
+- run_bulk_extractor (IOC carving)
+- yara_scan_files (signature scanning on disk)
+- Additional tools based on the detected OS and filesystem:
+  Windows: run_evtx_parser, run_hayabusa, run_chainsaw,
+    run_registry_parser, run_prefetch_parser, run_amcache_parser,
+    run_shimcache_parser, run_mft_parser
+  Linux: run_zircolite (Auditd/Sysmon Sigma), log parsers for
+    syslog/auth/journal, run_chkrootkit
+  macOS: run_plaso (unified log timeline), parse_plist
+
+When the evidence includes NETWORK CAPTURES, always plan:
+- run_pcap_analysis (protocol analysis)
+- run_zeek_analysis (structured protocol logs)
+- run_suricata (IDS signature matching)
+
+When the evidence includes MOBILE DATA, plan:
+- run_aleapp (Android, 300+ artifacts) or run_ileapp (iOS, 200+)
+- run_mvt_android/ios (spyware detection)
+
+ADDITIONAL TOOLS (include when relevant):
+- Binary: triage_binary, run_capa, run_floss, run_detect_it_easy,
+  run_radare2 (reverse engineering)
+- Documents: analyze_office_document, analyze_pdf
+- Email: parse_pst (Outlook PST/OST parsing)
+- Metadata: run_exiftool (file metadata, GPS, timestamps)
+- Steganography: detect_steganography, extract_steganography
+- Browser: run_hindsight (Chrome/Chromium), run_pasco (IE history),
+  parse_browser_history
+- Linux logs: run_zircolite (Auditd/Sysmon Sigma)
+- Encryption: run_bdeinfo (BitLocker metadata), run_fvdeinfo (FileVault),
+  run_dislocker (BitLocker decryption), run_vshadow_info (Volume Shadow)
+- Carving: run_foremost, run_scalpel, run_photorec, run_binwalk,
+  carve_sqlite_from_raw
+- Network: run_tcpflow (TCP stream reconstruction),
+  run_tcpxtract (file extraction from PCAPs)
+- Memory (advanced): yara_scan_with_volatility (per-process YARA),
+  scan_files_in_memory, scan_hidden_processes, scan_kernel_modules
+- Filesystem: run_fsstat, run_mactime, extract_mft_timeline,
+  parse_mft, parse_usn_journal, parse_prefetch
+- Timeline: run_plaso (super-timeline generation)
+- Mobile (direct): parse_android_artifacts, parse_ios_artifacts,
+  parse_plist
+- General: run_strings, run_clamav, run_ssdeep, run_hashdeep,
+  run_chkrootkit, run_regripper, query_sqlite_from_image
+
+BATCH DEPENDENCIES:
+Tools must be grouped into ordered batches to respect data dependencies.
+Mark each task with a "group" field to indicate which batch it belongs to.
+
+Group 1 ("foundation"): tools with no dependencies, run first.
+  Memory analysis, filesystem indexing (fls/mmls), and IOC carving
+  (bulk_extractor) belong here. These produce the indexes and raw
+  outputs that later tools consume.
+
+Group 2 ("dependent"): tools that need filesystem index results.
+  Log parsers, artifact parsers, registry/config analysis, and
+  signature scanning belong here. These read from the filesystem
+  index produced in Group 1. Choose specific tools based on the
+  detected OS and evidence type.
+
+Group 3 ("post-extraction"): tools that need Group 2 outputs.
+  Log indexing for specific events belongs here (e.g., index_evtx_file
+  for Windows EVTX, or targeted log queries for syslog/journal).
+  The analyst decides which files and event IDs matter.
+
+The executor MUST wait for ALL Group 1 ("foundation") batches to complete
+before submitting Group 2 ("dependent") batches.
+
+DOCUMENT & IMAGE FORENSICS:
+Always include in your plan when the evidence contains documents or images
+in suspicious locations (temp dirs, recently modified, carved files, email
+attachments, user Desktop/Downloads):
+- run_exiftool: extract metadata from PDFs, Office docs, and images
+- detect_steganography: check images (jpg, png, bmp, gif, tiff) for hidden data
+- analyze_office_document: inspect macros/OLE in .docx/.xlsx/.pptx
+- analyze_pdf: inspect embedded JS, actions, and streams in PDFs
+
+Target these tools at files in suspicious contexts rather than scanning
+every file. Use the filesystem listing to identify candidates.
+
+TOOL USAGE NOTES:
+- run_volatility_batch: ONE task with multiple plugins, not separate tasks
+- run_bulk_extractor: pass specific scanners, e.g. ["email","net","httplogs"]
+- Use start_extraction_batch for concurrent execution
+- Do NOT create separate tasks per plugin
 
 OUTPUT (MANDATORY):
 Your FINAL message MUST be ONLY valid JSON. No text before or after it.
 No markdown fences. Just raw JSON:
 
-{"tasks": [{"tool": "run_volatility_batch", "args": {"plugins": ["pslist", "netscan", "malfind"], "memory_path": "/path/to/file.img"}, "purpose": "Analyze memory"}], "investigation_questions": ["What processes were running?", "Any suspicious network connections?"], "expected_sources": ["volatility.pslist", "volatility.netscan"]}
+{"tasks": [{"tool": "run_volatility_batch", "args": {"plugins": ["<plugins appropriate to OS>"], "memory_path": "/path/to/file.img"}, "group": "foundation", "purpose": "Analyze memory"}], "investigation_questions": ["What processes were running?", "Any suspicious network connections?"], "expected_sources": ["volatility.<plugin_name>"]}
 
 The JSON MUST have these keys:
 - "tasks": array of objects with "tool", "args", "purpose"
+  Each task may include an optional "group" field with values
+  "foundation" or "dependent" to indicate execution order.
+  All "foundation" tasks run first; "dependent" tasks run after
+  foundation completes. Tasks within the same group can run in
+  parallel.
 - "investigation_questions": array of strings
 - "expected_sources": array of strings
 

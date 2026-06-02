@@ -159,17 +159,39 @@ class VolatilityExtractor:
         return "windows"
 
     def extract(self, path: Path, _case_id: str) -> list[ExtractionResult]:
-        """Run all plugins against *path* and return one result per successful plugin."""
-        vol_cmd = self._vol_command()
+        """Run all plugins against *path* and return one result per successful plugin.
+
+        Catches binary-not-found errors gracefully so a missing Volatility
+        installation does not cascade into upstream failures.
+        """
+        try:
+            vol_cmd = self._vol_command()
+        except RuntimeError:
+            logger.error(
+                "Volatility 3 binary not found; skipping memory analysis for %s",
+                path,
+            )
+            return []
+
         detected_os = self._detect_os(vol_cmd, path)
         plugins = self.PLUGINS if detected_os == "windows" else self.LINUX_PLUGINS
-        logger.info("Running %d %s plugins against %s", len(plugins), detected_os, path)
+        from mulder.server.helpers import adaptive_timeout
+
+        timeout = adaptive_timeout(path, base=_PLUGIN_TIMEOUT_SECONDS)
+        logger.info(
+            "Running %d %s plugins against %s (timeout=%ds)",
+            len(plugins),
+            detected_os,
+            path,
+            timeout,
+        )
 
         results: list[ExtractionResult] = []
 
         with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as pool:
             futures = {
-                pool.submit(self._run_plugin, vol_cmd, path, plugin): plugin for plugin in plugins
+                pool.submit(self._run_plugin, vol_cmd, path, plugin, timeout): plugin
+                for plugin in plugins
             }
             for future in as_completed(futures):
                 plugin = futures[future]
@@ -205,8 +227,17 @@ class VolatilityExtractor:
         return self._cached_version
 
     @staticmethod
-    def _run_plugin(vol_cmd: list[str], dump_path: Path, plugin: str) -> ExtractionResult | None:
-        """Execute a single Volatility plugin and return its output as an ExtractionResult."""
+    def _run_plugin(
+        vol_cmd: list[str],
+        dump_path: Path,
+        plugin: str,
+        timeout: int = _PLUGIN_TIMEOUT_SECONDS,
+    ) -> ExtractionResult | None:
+        """Execute a single Volatility plugin and return its output.
+
+        Captures partial stdout when the plugin times out so that any
+        lines already produced are preserved rather than discarded.
+        """
         short = _plugin_short_name(plugin)
         cmd = [*vol_cmd, "-f", str(dump_path), plugin]
 
@@ -215,14 +246,35 @@ class VolatilityExtractor:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=_PLUGIN_TIMEOUT_SECONDS,
+                timeout=timeout,
                 check=False,
             )
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as exc:
+            partial_stdout = exc.stdout or ""
+            if isinstance(partial_stdout, bytes):
+                partial_stdout = partial_stdout.decode("utf-8", errors="replace")
+            partial_stdout = partial_stdout.strip()
+
+            if partial_stdout and partial_stdout.count("\n") > 1:
+                logger.warning(
+                    "Plugin %s timed out after %ds on %s; indexing %d lines of partial output",
+                    plugin,
+                    timeout,
+                    dump_path,
+                    partial_stdout.count("\n") + 1,
+                )
+                return ExtractionResult(
+                    source_name=f"volatility.{short}",
+                    source_path=str(dump_path),
+                    extractor="volatility3",
+                    text_output=partial_stdout,
+                    line_count=partial_stdout.count("\n") + 1,
+                )
+
             logger.error(
-                "Plugin %s timed out after %ds on %s",
+                "Plugin %s timed out after %ds on %s with no usable output",
                 plugin,
-                _PLUGIN_TIMEOUT_SECONDS,
+                timeout,
                 dump_path,
             )
             return None

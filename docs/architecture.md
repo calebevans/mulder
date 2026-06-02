@@ -1,6 +1,6 @@
 # Architecture
 
-Mulder is a forensic investigation platform consisting of two core components: an MCP server that exposes 110+ typed forensic tools with no shell access, and an agentic orchestrator that runs multi-phase investigations with quality gates.
+Mulder is a forensic investigation platform consisting of two core components: an MCP server that exposes 140+ typed forensic tools with no shell access, and an agentic orchestrator that runs multi-phase investigations with quality gates.
 
 ## System Overview
 
@@ -10,11 +10,11 @@ flowchart TB
         CLI["mulder CLI"]
         Orchestrator["Orchestrator\n(multi-phase pipeline)"]
         AgentSDK["Agent SDK\n(Session Runtime)"]
-        MCPServer["MCP Server\n(FastMCP, 110+ tools)"]
+        MCPServer["MCP Server\n(FastMCP, 140+ tools)"]
         DB["SQLite + FTS5\n(per-case database)"]
         AuditLog["Audit Log\n(append-only JSONL)"]
         Extractors["Extractors\n(forensic binaries)"]
-        Reports["Report Renderer\n(HTML + Markdown)"]
+        Reports["Report Renderer\n(HTML + Markdown + PDF)"]
     end
 
     subgraph binaries [Forensic Toolchain]
@@ -25,7 +25,7 @@ flowchart TB
         YARA["YARA"]
         BulkExt["bulk_extractor"]
         EZTools["EZ Tools"]
-        Others["40+ more tools"]
+        Others["60+ more tools"]
     end
 
     Evidence["/evidence\n(read-only mount)"]
@@ -64,11 +64,31 @@ flowchart LR
         runPlaso["run_plaso"]
         runEvtx["run_evtx_parser\nindex_evtx_file"]
         runRegistry["run_registry_parser\nrun_regripper"]
-        runPcap["run_pcap_analysis"]
+        runPcap["run_pcap_analysis\nrun_zeek_analysis\nrun_suricata"]
         runBulk["run_bulk_extractor"]
         runYara["yara_scan_files\nyara_scan_memory"]
         runCarving["run_foremost\nrun_scalpel\nrun_photorec"]
         runMisc["run_clamav / run_exiftool\nrun_strings / run_radare2"]
+    end
+
+    subgraph binaryTools [Binary Analysis]
+        runBinary["triage_binary\nrun_capa\nrun_floss\nrun_detect_it_easy"]
+    end
+
+    subgraph docTools [Document and Email Forensics]
+        runDocs["analyze_office_document\nanalyze_pdf\nparse_pst"]
+    end
+
+    subgraph logTools [Log and SIEM Analysis]
+        runLogs["run_chainsaw\nrun_zircolite\nparse_journal"]
+    end
+
+    subgraph mobileTools [Mobile Forensics]
+        runMobile["run_aleapp\nrun_ileapp\nrun_mvt_android\nrun_mvt_ios"]
+    end
+
+    subgraph enrichTools [Enrichment and Quality]
+        runEnrich["enrich_iocs\nget_evidence_gaps\ndeduplicate_findings"]
     end
 
     subgraph compositeTools [Composite Analysis]
@@ -118,7 +138,7 @@ The `CapacityLimiter` bounds concurrent tool execution to the `--workers` count 
 
 ## Orchestration Pipeline
 
-The orchestrator (`mulder investigate`) runs six investigation phases sequentially. Most phases use a plan-and-execute pipeline (planner/executor/analyst) while catalog and report use single-agent sessions. The orchestrator uses the [Claude Agent SDK](https://docs.anthropic.com/en/docs/agents/claude-code-sdk) (`claude-agent-sdk`) for managing agent sessions.
+The orchestrator (`mulder investigate`) runs five investigation phases sequentially. Most phases use a plan-and-execute pipeline (planner/executor/analyst) while catalog and report use single-agent sessions. The orchestrator uses the [Claude Agent SDK](https://docs.anthropic.com/en/docs/agents/claude-code-sdk) (`claude-agent-sdk`) for managing agent sessions.
 
 ```mermaid
 flowchart TD
@@ -144,7 +164,7 @@ flowchart TD
     extractionGate -->|"Fail"| retryE["Retry (1.5x turn limit)"]
     retryE --> extraction
 
-    subgraph crossSystem [Phase 3: Cross-System Analysis]
+    subgraph crossSystem [Phase 3: Cross-System Analysis + TI Enrichment]
         cp["Planner"] --> ce["Executor"] --> ca["Analyst"]
         ca -->|"follow-up"| cp
     end
@@ -154,29 +174,24 @@ flowchart TD
     crossGate -->|"Fail"| retryCS["Retry (1.5x turn limit)"]
     retryCS --> crossSystem
 
-    subgraph altNarrative [Phase 4: Alternative Narrative]
+    subgraph altNarrative [Phase 4: Alternative Narrative + Audit]
         np["Planner"] --> ne["Executor"] --> na["Analyst"]
+        na -->|"follow-up"| np
     end
 
-    altNarrative --> audit
+    altNarrative --> narrativeGate{"Narrative Gate\nAll finalize gates pass?"}
+    narrativeGate -->|"Pass"| report
+    narrativeGate -->|"Fail"| retryN["Retry (1.5x turn limit)"]
+    retryN --> altNarrative
 
-    subgraph audit [Phase 5: Audit]
-        ap["Planner"] --> ae["Executor"] --> aa["Analyst"]
-    end
-
-    audit --> auditGate{"Audit Gate\nAll finalize gates pass?"}
-    auditGate -->|"Pass"| report
-    auditGate -->|"Fail"| retryA["Retry (1.5x turn limit)"]
-    retryA --> audit
-
-    report["Phase 6: Report\n(Analyst model, single agent)"]
+    report["Phase 5: Report\n(Analyst model, single agent)"]
     report --> reportGate{"Report Gate\nfinalize_report called?"}
     reportGate -->|"Pass"| done["Investigation Complete"]
     reportGate -->|"Fail"| retryR["Retry (1.5x turn limit)"]
     retryR --> report
 ```
 
-The Alternative Narrative phase (Phase 4) is advisory: it has no hard quality gate and always proceeds to the audit phase regardless of output.
+The Alternative Narrative phase (Phase 4) combines counter-analysis with audit responsibilities (evidence coverage, tool coverage, deduplication). Its gate checks finalize readiness before proceeding to the report phase.
 
 ### Phase Configuration
 
@@ -210,14 +225,14 @@ flowchart LR
         catalogGate["Catalog Gate"]
         extractionGate["Extraction Gate"]
         crossSystemGate["Cross-System Gate"]
-        auditGate["Audit Gate"]
+        narrativeGate["Narrative Gate"]
         reportGate["Report Gate"]
     end
 
     catalogGate --- catalogChecks["Case exists in DB"]
     extractionGate --- extractionChecks["Sources indexed > 0"]
     crossSystemGate --- crossChecks["Findings submitted > 0\nMITRE mappings present"]
-    auditGate --- auditChecks["All finalize_report gates pass\n(except narrative, deferred to report)"]
+    narrativeGate --- narrativeChecks["All finalize_report gates pass\n(except narrative, deferred to report)"]
     reportGate --- reportChecks["finalize_report called successfully"]
 ```
 
@@ -364,11 +379,16 @@ The `EvidenceClassifier` scans evidence directories and categorizes files by typ
 |---------------|------------------------|---------------|
 | Memory dump | `.mem`, `.vmem`, `.dmp`, `.raw` (large) | Volatility 3, YARA |
 | Disk image | `.e01`, `.dd`, `.vmdk`, `.vhd`, `.img` | Sleuthkit, Plaso, bulk_extractor |
-| Windows event log | `.evtx` | python-evtx, Hayabusa |
-| Network capture | `.pcap`, `.pcapng` | tshark, tcpflow |
-| Phone dump | Android/iOS directory structures | MVT |
+| Windows event log | `.evtx` | python-evtx, Hayabusa, Chainsaw |
+| Network capture | `.pcap`, `.pcapng` | tshark, tcpflow, Zeek, Suricata |
+| Binary / executable | `.exe`, `.dll`, `.elf`, `.so` | CAPA, FLOSS, Detect-It-Easy, radare2 |
+| Office document | `.doc`, `.docx`, `.xls`, `.ppt` | oletools |
+| PDF document | `.pdf` | Didier Stevens PDF tools |
+| Email archive | `.pst`, `.ost` | pst-utils / libpst |
+| Phone dump (Android) | Android directory structures | MVT, ALEAPP |
+| Phone dump (iOS) | iOS directory structures | MVT, iLEAPP |
+| Linux logs | `/var/log/*`, journal files | Zircolite, native parsing |
 | Archive | `.zip`, `.7z`, `.tar`, `.gz` | Internal extraction |
-| Log directory | `/var/log/*`, text files | Native parsing |
 
 Each extractor normalizes output into `WindowRow` objects (source_id, line_start, line_end, event_time, raw_text) for uniform database storage and FTS indexing.
 
@@ -400,7 +420,7 @@ flowchart TB
             node22["Node.js 22"]
             forensicBins["vol3, fls, plaso, hayabusa,\nyara, bulk_extractor, EZ tools,\nradare2, clamav, mvt, ..."]
             symbolTables["Volatility symbols\n(Windows + Linux)"]
-            yaraRules["YARA rules\n(signature-base + yara-rules)"]
+            yaraRules["YARA rules\n(signature-base)"]
             attackData["MITRE ATT&CK STIX data"]
         end
     end
@@ -420,7 +440,15 @@ The `submit_finding` tool performs server-side evidence-ref validation: every `t
 
 ### Global Consistency Analysis
 
-Before the audit phase, the orchestrator builds a dedup index from all findings, grouping them by shared IOCs (IPs, file paths, process names) extracted via regex to identify per-host duplicates of the same artifact. This consistency analysis is prepended to the audit phase prompt so the agent acts on code-discovered clusters rather than re-deriving them from raw text.
+Before the alternative narrative phase, the orchestrator builds a dedup index from all findings, grouping them by shared IOCs (IPs, file paths, process names) extracted via regex to identify per-host duplicates of the same artifact. This consistency analysis is prepended to the narrative phase prompt so the agent acts on code-discovered clusters rather than re-deriving them from raw text.
+
+### Cross-Phase Enrichment Steps
+
+Several automated enrichment steps run at phase boundaries:
+
+- **TI enrichment** (cross-system phase): The `enrich_iocs` tool queries public threat intelligence sources for context on extracted indicators (IPs, domains, file hashes), annotating findings with reputation data and known campaign associations.
+- **Evidence gap detection** (narrative phase): The `get_evidence_gaps` tool identifies artifact types that were present but not examined, coverage blind spots, and systems with incomplete extraction. Gap reports are surfaced to the narrative planner and extraction analyst for remediation.
+- **Finding deduplication** (narrative phase): The `deduplicate_findings` tool merges duplicate findings that describe the same artifact observed on multiple hosts, consolidating evidence references while preserving source attribution.
 
 ## Security Model
 
@@ -485,7 +513,7 @@ The `Correlator` class performs time-bounded joins across evidence sources. Give
 
 ## Report Generation
 
-The `ReportRenderer` uses Jinja2 templates to produce both Markdown and HTML reports:
+The `ReportRenderer` uses Jinja2 templates to produce Markdown, HTML, and PDF reports:
 
 1. Aggregate findings sorted by severity
 2. Extract IOCs from descriptions using regex patterns
@@ -493,11 +521,17 @@ The `ReportRenderer` uses Jinja2 templates to produce both Markdown and HTML rep
 4. Convert finding descriptions from markdown to HTML
 5. Generate executive summary from severity distribution
 6. Render template with all case data, narrative, findings, audit metrics, and source listings
+7. Export IOCs in STIX 2.1 and CSV formats
+8. Generate MITRE ATT&CK Navigator layer JSON
 
 ### Output Formats
 
 - **Markdown** (`{case_id}.report.md`): Plain-text report for version control and review
 - **HTML** (`{case_id}.report.html`): Self-contained styled page with dark/light theme toggle, sidebar navigation, per-model token usage breakdown, and collapsible source window samples
+- **PDF** (`{case_id}.report.pdf`): Formal report for distribution and archival
+- **STIX 2.1** (`{case_id}.stix.json`): Machine-readable IOC bundle for threat intelligence platforms
+- **CSV** (`{case_id}.iocs.csv`): Flat IOC export for import into SIEMs and blocklists
+- **ATT&CK Navigator** (`{case_id}.navigator.json`): Layer file for MITRE ATT&CK Navigator visualization
 
 ## Limitations and Known Considerations
 

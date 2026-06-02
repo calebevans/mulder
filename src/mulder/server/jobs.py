@@ -29,6 +29,8 @@ from mulder.server.timeouts import should_defer
 
 logger = logging.getLogger(__name__)
 
+_JOB_COMPLETE_MARKER = "[JOB_COMPLETE]"
+
 
 @dataclass
 class Job:
@@ -158,6 +160,7 @@ class JobStore:
                 job.status = "failed"
                 job.error = f"Unknown tool: {tool_name}"
                 job.completed_at = time.monotonic()
+            logger.info("%s %s|%s|%s", _JOB_COMPLETE_MARKER, tool_name, "failed", job.error)
             return
 
         from mulder.server.app import wait_for_resources
@@ -185,6 +188,13 @@ class JobStore:
                         job.error = f"Deferred: {error_detail}"
                         job.completed_at = time.monotonic()
                     logger.warning("Job %s (%s) deferred for retry", job_id, tool_name)
+                    logger.info(
+                        "%s %s|%s|%s",
+                        _JOB_COMPLETE_MARKER,
+                        tool_name,
+                        "deferred",
+                        error_detail,
+                    )
                 else:
                     with self._lock:
                         job.status = "failed"
@@ -192,6 +202,13 @@ class JobStore:
                         job.error = error_detail
                         job.completed_at = time.monotonic()
                     logger.warning("Job %s (%s) timed out under low load", job_id, tool_name)
+                    logger.info(
+                        "%s %s|%s|%s",
+                        _JOB_COMPLETE_MARKER,
+                        tool_name,
+                        "failed",
+                        error_detail,
+                    )
             elif is_error:
                 with self._lock:
                     job.status = "failed"
@@ -199,12 +216,14 @@ class JobStore:
                     job.error = _extract_error_detail(result, "unknown error")
                     job.completed_at = time.monotonic()
                 logger.warning("Job %s (%s) returned error: %s", job_id, tool_name, job.error)
+                logger.info("%s %s|%s|%s", _JOB_COMPLETE_MARKER, tool_name, "failed", job.error)
             else:
                 with self._lock:
                     job.status = "completed"
                     job.result = result
                     job.completed_at = time.monotonic()
                 logger.info("Job %s (%s) completed", job_id, tool_name)
+                logger.info("%s %s|%s|", _JOB_COMPLETE_MARKER, tool_name, "completed")
 
         except Exception as exc:
             logger.exception("Job %s (%s) failed", job_id, tool_name)
@@ -212,6 +231,7 @@ class JobStore:
                 job.status = "failed"
                 job.error = f"{tool_name} failed: {exc}"
                 job.completed_at = time.monotonic()
+            logger.info("%s %s|%s|%s", _JOB_COMPLETE_MARKER, tool_name, "failed", job.error)
         finally:
             current_batch_id.set(None)
             self._check_batch_done(job.batch_id)
@@ -311,14 +331,29 @@ class JobStore:
                         tool_name,
                         job.error,
                     )
+                    logger.info(
+                        "%s %s|%s|%s",
+                        _JOB_COMPLETE_MARKER,
+                        tool_name,
+                        "failed",
+                        job.error,
+                    )
                 else:
                     logger.info("Job %s (%s) completed on retry", job_id, tool_name)
+                    logger.info("%s %s|%s|", _JOB_COMPLETE_MARKER, tool_name, "completed")
             except Exception as exc:
                 logger.exception("Job %s (%s) failed on retry", job_id, tool_name)
                 with self._lock:
                     job.status = "failed"
                     job.error = f"{tool_name} retry failed: {exc}"
                     job.completed_at = time.monotonic()
+                logger.info(
+                    "%s %s|%s|%s",
+                    _JOB_COMPLETE_MARKER,
+                    tool_name,
+                    "failed",
+                    job.error,
+                )
             finally:
                 current_batch_id.set(None)
 

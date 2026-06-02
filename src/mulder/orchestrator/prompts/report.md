@@ -40,12 +40,11 @@ REQUIRED ACTIONS:
    - Key Findings: detailed discussion of each significant finding,
      grouped by category (e.g., malware families, C2 infrastructure,
      lateral movement, persistence, anti-forensics).
-   - Threat Intelligence and Attribution: synthesize YARA signature
-     hits, known tool signatures (e.g., htran, Cobalt Strike,
-     Meterpreter), and TTP patterns into a cohesive attribution
-     profile. Reference historical threat group activity where
-     applicable. If attribution is uncertain, state the confidence
-     level and reasoning.
+   - Threat Intelligence and Attribution: synthesize detection
+     results, tool signatures, and TTP patterns into a cohesive
+     attribution profile. Reference historical threat group or
+     campaign activity where applicable. If attribution is uncertain,
+     state the confidence level and reasoning.
    - Impact Assessment: scope and severity of the incident, including
      number of compromised systems, data at risk, credential exposure,
      and persistence depth.
@@ -61,7 +60,9 @@ REQUIRED ACTIONS:
      technique from this case. Do NOT include generic security advice
      unless you can tie it to a specific failure observed in the
      evidence. Limit to one paragraph per root cause.
-   - Conclusion: summary addressing all eight investigation questions:
+   - Conclusion: summary addressing the investigation questions below.
+     Not all questions apply to every case type; mark inapplicable
+     questions as N/A and explain briefly why they do not apply.
      Q1. What systems were compromised?
      Q2. How did the attacker gain initial access?
      Q3. What lateral movement occurred?
@@ -93,9 +94,15 @@ CONSTRAINTS:
   report, rewrite it to reference specific evidence. Aim for 3-7 focused
   recommendations, not an exhaustive hardening guide.
 - When discussing attribution, default to caution. State what the
-  evidence supports and no more. A single YARA signature match
-  establishes tool presence, not threat actor identity. Attribution
-  claims require corroborating evidence from multiple independent
-  sources (network IOCs, behavioral TTPs, infrastructure overlap).
-  Use language like "consistent with" or "overlaps with known TTPs of"
-  rather than definitive identification unless evidence is overwhelming.
+  evidence supports and no more. A single detection from one tool
+  establishes presence of that artifact, not threat actor identity.
+  Attribution claims require corroborating evidence from multiple
+  independent sources (e.g., behavioral TTPs, network indicators,
+  infrastructure overlap). Use language like "consistent with" or
+  "overlaps with known TTPs of" rather than definitive identification
+  unless evidence is overwhelming.
+- Distinguish between "what happened" and "who did it." Convergent
+  evidence from multiple sources can confirm that activity occurred
+  (e.g., unauthorized access) even when attribution to a specific
+  actor remains uncertain. Do not let attribution uncertainty suppress
+  the reporting of confirmed activity.

@@ -27,6 +27,8 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from mulder.patterns import format_token_count
+
 logger = logging.getLogger(__name__)
 
 _SEVERITY_STYLES: dict[str, str] = {
@@ -82,22 +84,6 @@ class TaskItem:
     status: Literal["pending", "running", "done", "failed"] = "pending"
     elapsed_seconds: float | None = None
     error: str | None = None
-
-
-def _format_tokens(count: int) -> str:
-    """Format token count with K/M suffix.
-
-    Args:
-        count: Raw token count.
-
-    Returns:
-        Human-readable string with appropriate suffix.
-    """
-    if count >= 1_000_000:
-        return f"{count / 1_000_000:.1f}M"
-    if count >= 1_000:
-        return f"{count / 1_000:.1f}K"
-    return str(count)
 
 
 def _format_elapsed(start: float) -> str:
@@ -250,7 +236,7 @@ class InvestigationDashboard:
         self._log_lines.append(separator)
         phase_line = Text(f"  [{phase_num}/{total_phases}] {label}", style="bold")
         self._log_lines.append(phase_line)
-        detail = Text(f"  {model} | Max turns: {max_turns}", style="dim")
+        detail = Text(f"  {model}", style="dim")
         self._log_lines.append(detail)
         self._log_lines.append(separator)
 
@@ -332,7 +318,9 @@ class InvestigationDashboard:
             turns: Number of turns consumed.
             tokens: Total tokens used in the phase.
         """
-        msg = f"  Done: {tool_count} tool calls, {turns} turns, {_format_tokens(tokens)} tokens"
+        msg = (
+            f"  Done: {tool_count} tool calls, {turns} turns, {format_token_count(tokens)} tokens"
+        )
         logger.info("[dashboard] %s", msg.strip())
         line = Text(msg, style="bold dim")
         self._log_lines.append(line)
@@ -545,10 +533,13 @@ class InvestigationDashboard:
             if all(t.status in ("done", "failed") for t in system_tasks[s])
         ]
 
+        num_active = max(len(active_systems), 1)
+        per_system_budget = max(4, (available_lines - num_active) // num_active)
+
         def _system_line_count(system: str) -> int:
-            """Header line + visible tasks (max 8) + overflow line + separator."""
-            task_count = min(len(system_tasks[system]), 8)
-            overflow = 1 if len(system_tasks[system]) > 8 else 0
+            """Header line + visible tasks + overflow line + separator."""
+            task_count = min(len(system_tasks[system]), per_system_budget)
+            overflow = 1 if len(system_tasks[system]) > per_system_budget else 0
             return 1 + task_count + overflow + 1
 
         content = Text()
@@ -558,7 +549,13 @@ class InvestigationDashboard:
             needed = _system_line_count(system)
             if lines_used + needed > available_lines and lines_used > 0:
                 break
-            self._append_system_block(content, system, system_tasks[system], spinner)
+            self._append_system_block(
+                content,
+                system,
+                system_tasks[system],
+                spinner,
+                per_system_budget,
+            )
             lines_used += needed
 
         remaining_space = available_lines - lines_used
@@ -567,7 +564,13 @@ class InvestigationDashboard:
             needed = _system_line_count(system)
             if remaining_space < needed + 1:
                 break
-            self._append_system_block(content, system, system_tasks[system], spinner)
+            self._append_system_block(
+                content,
+                system,
+                system_tasks[system],
+                spinner,
+                per_system_budget,
+            )
             remaining_space -= needed
             shown_done += 1
 
@@ -584,6 +587,7 @@ class InvestigationDashboard:
         system: str,
         tasks: list[TaskItem],
         spinner: str,
+        max_tasks: int = 8,
     ) -> None:
         """Append a system header and its task rows to the panel content.
 
@@ -592,8 +596,8 @@ class InvestigationDashboard:
             system: System identifier.
             tasks: Task items belonging to this system.
             spinner: Current spinner character for running tasks.
+            max_tasks: Maximum task rows to display for this system.
         """
-        _MAX_TASKS_SHOWN = 8
 
         if content.plain:
             content.append("\n")
@@ -604,8 +608,8 @@ class InvestigationDashboard:
         active_tasks = [t for t in tasks if t.status in ("running", "pending")]
         done_tasks = [t for t in tasks if t.status in ("done", "failed")]
         prioritized = active_tasks + done_tasks
-        visible_tasks = prioritized[:_MAX_TASKS_SHOWN]
-        hidden_count = len(prioritized) - _MAX_TASKS_SHOWN
+        visible_tasks = prioritized[:max_tasks]
+        hidden_count = len(prioritized) - max_tasks
 
         for task in visible_tasks:
             if task.status == "pending":
@@ -721,7 +725,7 @@ class InvestigationDashboard:
 
         model_str = self._phase_model or "pending"
         table.add_row(
-            f"[dim]{model_str} | max turns: {self._phase_max_turns}[/]",
+            f"[dim]{model_str}[/]",
             "",
             "",
             "",
@@ -730,8 +734,8 @@ class InvestigationDashboard:
         table.add_row(
             f"[green]Tools: {self._tool_count}[/]",
             f"[yellow]Findings: {self._total_findings}[/]",
-            f"Tokens: {_format_tokens(total_tok)}",
-            f"{_format_tokens(tpm)}/min",
+            f"Tokens: {format_token_count(total_tok)}",
+            f"{format_token_count(tpm)}/min",
         )
 
         cpu, mem_used_gb, mem_total_gb = self._get_system_stats()
@@ -826,11 +830,11 @@ class InvestigationDashboard:
         summary.add_row("Turns", str(result.total_turns))
         summary.add_row(
             "Tokens",
-            f"{_format_tokens(total_tok)} "
-            f"(in: {_format_tokens(total_in)}, "
-            f"out: {_format_tokens(total_out)})",
+            f"{format_token_count(total_tok)} "
+            f"(in: {format_token_count(total_in)}, "
+            f"out: {format_token_count(total_out)})",
         )
-        summary.add_row("Throughput", f"{_format_tokens(tpm)}/min")
+        summary.add_row("Throughput", f"{format_token_count(tpm)}/min")
         summary.add_row("Findings", self._format_findings_summary())
         summary.add_row("Elapsed", elapsed_str)
 
@@ -843,9 +847,9 @@ class InvestigationDashboard:
                 continue
             short_name = model_name.replace("claude-", "").replace("-2025", "")
             detail = (
-                f"{_format_tokens(m_in)} in / "
-                f"{_format_tokens(m_out)} out = "
-                f"{_format_tokens(m_total)}"
+                f"{format_token_count(m_in)} in / "
+                f"{format_token_count(m_out)} out = "
+                f"{format_token_count(m_total)}"
             )
             summary.add_row(f"  {short_name}", detail)
 

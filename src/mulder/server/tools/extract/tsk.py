@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
+import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -17,14 +20,19 @@ from mulder.server.helpers import (
     error_response,
     make_tool_call_id,
     require_binary,
+    sources_already_indexed,
     tool_response,
 )
+from mulder.server.tool_access import Role, tool_access
 
 __all__ = [
-    "_ensure_fls_indexed",
+    "_cleanup_tsk_extract_dir",
+    "_detect_partition_offset",
     "_parse_partition_offset",
+    "_run_fls_inline",
     "_tsk_extract_dirs",
     "_tsk_extract_files",
+    "_tsk_lock",
     "run_fls",
     "run_fsstat",
     "run_mactime",
@@ -78,60 +86,43 @@ def _parse_partition_offset(mmls_text: str) -> int:
 
 
 _tsk_extract_dirs: list[str] = []
+_tsk_lock = threading.Lock()
 
 
-def _ensure_fls_indexed(image_path: str) -> bool:
-    """Verify the fls listing is indexed, running ``fls`` if needed.
+def _cleanup_tsk_extract_dir(dir_path: str) -> None:
+    """Remove a TSK extraction temp directory and deregister it.
 
-    When MCP tools fall back to TSK extraction after a mount failure, they
-    need the fls file listing to locate artifacts by inode. This function
-    ensures that listing exists, running ``fls`` with auto-detected
-    partition offset if it has not yet been indexed.
+    Callers should invoke this after consuming extracted files so that
+    disk space is reclaimed promptly rather than at process exit.
 
     Args:
-        image_path: Path to the disk image (E01, dd, img).
-
-    Returns:
-        True if the listing is available (pre-existing or freshly created),
-        False if ``fls`` is unavailable or produces no output.
+        dir_path: Absolute path to the temp directory to remove.
     """
-    ctx = get_ctx()
-    sources = ctx.db.get_sources()
-    if any(s.source_name == "tsk.filelist" for s in sources):
-        return True
+    shutil.rmtree(dir_path, ignore_errors=True)
+    with _tsk_lock, contextlib.suppress(ValueError):
+        _tsk_extract_dirs.remove(dir_path)
 
+
+def _run_fls_inline(image_path: str) -> str:
+    """Run fls directly and return the output text without indexing to DB.
+
+    Used when the pre-indexed ``tsk.filelist`` is not yet available
+    (e.g. when extraction tools run concurrently with ``run_fls``).
+    """
     if not require_binary("fls"):
-        return False
-
+        return ""
     offset = _detect_partition_offset(image_path)
     cmd = ["fls", "-r", "-p"]
     if offset > 0:
         cmd.extend(["-o", str(offset)])
     cmd.append(image_path)
-
     try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            timeout=TOOL_TIMEOUT,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        logger.warning("fls timed out during auto-indexing for %s", image_path)
-        return False
-
-    stdout_text = proc.stdout.decode("utf-8", errors="replace")
-    if not stdout_text.strip():
-        logger.warning(
-            "fls produced no output for %s (auto-index, offset=%d)",
-            image_path,
-            offset,
-        )
-        return False
-
-    extract_and_index(stdout_text.strip(), "tsk.filelist", image_path, "sleuthkit")
-    logger.info("Auto-indexed fls listing for %s (%d lines)", image_path, stdout_text.count("\n"))
-    return True
+        proc = subprocess.run(cmd, capture_output=True, timeout=TOOL_TIMEOUT, check=False)
+        if proc.returncode == 0:
+            return proc.stdout.decode("utf-8", errors="replace")
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+    return ""
 
 
 def _tsk_extract_files(
@@ -140,28 +131,42 @@ def _tsk_extract_files(
 ) -> list[tuple[str, Path]]:
     """Extract files from a disk image via TSK fls + icat.
 
-    Searches the ``tsk.filelist`` source for entries matching any of the
-    *path_patterns* (case-insensitive substring match), then extracts each
-    via ``icat`` to a temp directory. If ``tsk.filelist`` has not been
-    indexed yet, runs ``fls`` automatically.
+    Searches the pre-indexed ``tsk.filelist`` for entries matching any of
+    the *path_patterns* (case-insensitive substring match), then extracts
+    each via ``icat`` to a temp directory.
+
+    When the DB has no ``tsk.filelist`` source (e.g. ``run_fls`` has not
+    completed yet), runs fls inline so the fallback is self-contained.
 
     Returns a list of ``(relative_path, extracted_path)`` tuples.
     """
-    _ensure_fls_indexed(image_path)
-
     ctx = get_ctx()
     sources = ctx.db.get_sources()
     fls_source = next((s for s in sources if s.source_name == "tsk.filelist"), None)
-    if fls_source is None:
-        return []
 
-    windows = ctx.db.get_windows_by_source("tsk.filelist")
-    part_src = next((s for s in sources if s.source_name == "tsk.partitions"), None)
+    fls_text_chunks: list[str] = []
     offset = 0
-    if part_src:
-        part_windows = ctx.db.get_windows_by_source("tsk.partitions")
-        mmls_text = "\n".join(w.raw_text for w in part_windows)
-        offset = _parse_partition_offset(mmls_text)
+
+    if fls_source is not None:
+        windows = ctx.db.get_windows_by_source("tsk.filelist")
+        fls_text_chunks = [w.raw_text for w in windows]
+        part_src = next((s for s in sources if s.source_name == "tsk.partitions"), None)
+        if part_src:
+            part_windows = ctx.db.get_windows_by_source("tsk.partitions")
+            mmls_text = "\n".join(w.raw_text for w in part_windows)
+            offset = _parse_partition_offset(mmls_text)
+    else:
+        logger.info(
+            "tsk.filelist not yet indexed; running fls inline for TSK extraction from %s",
+            image_path,
+        )
+        inline_output = _run_fls_inline(image_path)
+        if inline_output:
+            fls_text_chunks = [inline_output]
+            offset = _detect_partition_offset(image_path)
+
+    if not fls_text_chunks:
+        return []
 
     inode_re = re.compile(
         r"^[rd]/[rd*]\s+(\d+(?:-\d+-\d+)?):\s+(.+)\s*$",
@@ -169,12 +174,13 @@ def _tsk_extract_files(
     )
 
     extract_dir = Path(tempfile.mkdtemp(prefix="mulder_tsk_extract_"))
-    _tsk_extract_dirs.append(str(extract_dir))
+    with _tsk_lock:
+        _tsk_extract_dirs.append(str(extract_dir))
     extracted: list[tuple[str, Path]] = []
     seen: set[str] = set()
 
-    for w in windows:
-        for m in inode_re.finditer(w.raw_text):
+    for chunk in fls_text_chunks:
+        for m in inode_re.finditer(chunk):
             inode_str = m.group(1).split("-")[0]
             rel_path = m.group(2).strip()
             rel_lower = rel_path.lower().replace("\\", "/")
@@ -208,6 +214,7 @@ def _tsk_extract_files(
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def run_mmls(image_path: str) -> dict[str, object]:
     """List partitions in a disk image using TSK mmls.
 
@@ -247,7 +254,12 @@ def run_mmls(image_path: str) -> dict[str, object]:
 
 
 @mcp.tool()
-def run_fls(image_path: str, partition_offset: int | None = None) -> dict[str, object]:
+@tool_access(Role.EXTRACT_EXECUTOR)
+def run_fls(
+    image_path: str,
+    partition_offset: int | None = None,
+    force: bool = False,
+) -> dict[str, object]:
     """Run recursive file listing on a disk image using TSK fls.
 
     Lists all files and directories (including deleted entries marked
@@ -258,10 +270,27 @@ def run_fls(image_path: str, partition_offset: int | None = None) -> dict[str, o
         image_path: Path to the disk image.
         partition_offset: Sector offset of the partition.  Auto-detected
             via mmls if omitted.
+        force: Re-run extraction even if sources already exist.
     """
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
-    params = {"image_path": image_path, "partition_offset": partition_offset}
+    params = {"image_path": image_path, "partition_offset": partition_offset, "force": force}
+
+    if not force:
+        existing = sources_already_indexed(["tsk.filelist"], evidence_path=image_path)
+        if existing:
+            return tool_response(
+                tc_id,
+                "run_fls",
+                params,
+                {
+                    "status": "skipped",
+                    "reason": "Sources already indexed from prior extraction",
+                    "existing_sources": existing,
+                },
+                "tsk.filelist",
+                0.0,
+            )
 
     if not require_binary("fls"):
         return error_response(
@@ -302,6 +331,7 @@ def run_fls(image_path: str, partition_offset: int | None = None) -> dict[str, o
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def run_mactime(image_path: str, time_range: str | None = None) -> dict[str, object]:
     """Generate a MAC timeline from a disk image using TSK fls + mactime.
 
@@ -359,6 +389,7 @@ def run_mactime(image_path: str, time_range: str | None = None) -> dict[str, obj
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def run_fsstat(image_path: str) -> dict[str, object]:
     """Get filesystem statistics from a disk image using TSK fsstat.
 

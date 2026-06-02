@@ -24,6 +24,7 @@ from mulder.server.helpers import (
     _DEFAULT_SEARCH_LIMIT,
     _HINT_CHAR_LIMIT,
     _PREVIEW_CHAR_LIMIT,
+    audited_tool,
     extract_module_names,
     extract_pid,
     extract_pids_from_windows,
@@ -32,6 +33,7 @@ from mulder.server.helpers import (
     serialize_windows,
     windowed_response,
 )
+from mulder.server.tool_access import PLANNERS, Role, tool_access
 
 _SRC_PSLIST = _sn.SRC_PSLIST
 _SRC_PSTREE = _sn.SRC_PSTREE
@@ -71,6 +73,15 @@ def _serialize_scored(scored: list[Any]) -> list[dict[str, object]]:
 
 
 @mcp.tool()
+@tool_access(
+    Role.CATALOG
+    | PLANNERS
+    | Role.EXTRACT_ANALYST
+    | Role.CROSS_ANALYST
+    | Role.NARRATIVE_EXECUTOR
+    | Role.REPORT
+)
+@audited_tool("list_sources")
 def list_sources() -> dict[str, object]:
     """List every evidence source indexed for the active case.
 
@@ -79,22 +90,10 @@ def list_sources() -> dict[str, object]:
     agent runs Tier 2 extraction tools.  Read-only.
     """
     ctx = get_ctx()
-    tc_id = make_tool_call_id()
-    t0 = time.monotonic()
-
     sources = ctx.db.get_sources()
     results = [s.model_dump() for s in sources]
 
-    elapsed = (time.monotonic() - t0) * 1000
-    ctx.audit.log_tool_call(
-        tool_call_id=tc_id,
-        tool_name="list_sources",
-        params={},
-        output_hash=hash_output(results),
-        duration_ms=elapsed,
-    )
     response: dict[str, object] = {
-        "tool_call_id": tc_id,
         "status": "success",
         "results": results,
         "source": None,
@@ -109,6 +108,15 @@ def list_sources() -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(
+    Role.CATALOG
+    | Role.EXTRACT_ANALYST
+    | Role.CROSS_PLANNER
+    | Role.CROSS_ANALYST
+    | Role.NARRATIVE_EXECUTOR
+    | Role.REPORT
+)
+@audited_tool("get_source_stats")
 def get_source_stats() -> dict[str, object]:
     """Return per-source statistics for the current case.
 
@@ -117,8 +125,6 @@ def get_source_stats() -> dict[str, object]:
     identifying analysis gaps. Read-only.
     """
     ctx = get_ctx()
-    tc_id = make_tool_call_id()
-    t0 = time.monotonic()
 
     source_rows = ctx.db.get_source_stats()
     findings = ctx.db.get_findings()
@@ -143,18 +149,8 @@ def get_source_stats() -> dict[str, object]:
             }
         )
 
-    elapsed = (time.monotonic() - t0) * 1000
-    ctx.audit.log_tool_call(
-        tool_call_id=tc_id,
-        tool_name="get_source_stats",
-        params={},
-        output_hash=hash_output(stats),
-        duration_ms=elapsed,
-    )
-
     cited_count = sum(1 for s in stats if s["cited_by_finding"])
     return {
-        "tool_call_id": tc_id,
         "status": "success",
         "total_sources": len(stats),
         "cited_sources": cited_count,
@@ -163,7 +159,117 @@ def get_source_stats() -> dict[str, object]:
     }
 
 
+def _search_regex(
+    db: Any,
+    terms: list[str],
+    source: str | None,
+    exclude_sources: list[str] | None,
+    t_start: str | None,
+    t_end: str | None,
+    max_results: int,
+) -> tuple[list[dict[str, object]], int] | dict[str, object]:
+    """Regex search path across ingested evidence windows.
+
+    Returns ``(results, total_matches)`` on success, or an error dict
+    if the pattern is invalid.
+    """
+    combined_pattern = "|".join(terms)
+    _MAX_REGEX_LEN = 500
+    if len(combined_pattern) > _MAX_REGEX_LEN:
+        return {
+            "status": "error",
+            "error_message": f"Regex pattern too long (max {_MAX_REGEX_LEN} chars)",
+            "results": [],
+            "result_count": 0,
+        }
+    try:
+        pattern = re.compile(combined_pattern, re.IGNORECASE)
+    except re.error as exc:
+        return {
+            "status": "error",
+            "error_message": f"Invalid regex: {exc}",
+            "results": [],
+            "result_count": 0,
+        }
+
+    _CHUNK = 5000
+    matches: list[dict[str, object]] = []
+    total_regex_matches = 0
+    cursor = 0
+    src_prefix = source or ""
+    source_map: dict[int, str] = {s.source_id: s.source_name for s in db.get_sources()}
+    exclude_set = exclude_sources or []
+
+    while True:
+        chunk, _total = db.get_windows_page(src_prefix, after_id=cursor, limit=_CHUNK)
+        if not chunk:
+            break
+        for w in chunk:
+            src_name = source_map.get(w.source_id, source or "unknown")
+            if exclude_set and any(
+                src_name == ex or src_name.startswith(ex + ".") for ex in exclude_set
+            ):
+                continue
+            if t_start and w.event_time and w.event_time < t_start:
+                continue
+            if t_end and w.event_time and w.event_time > t_end:
+                continue
+            if pattern.search(w.raw_text):
+                total_regex_matches += 1
+                if len(matches) < max_results:
+                    matches.append(
+                        {
+                            "window": _truncated_window(w),
+                            "source_name": src_name,
+                        }
+                    )
+        cursor = chunk[-1].window_id or 0
+
+    return matches, total_regex_matches
+
+
+def _search_fts(
+    db: Any,
+    terms: list[str],
+    source: str | None,
+    exclude_sources: list[str] | None,
+    t_start: str | None,
+    t_end: str | None,
+    max_results: int,
+) -> tuple[list[dict[str, object]], int]:
+    """Full-text search path using the database FTS index.
+
+    Returns ``(results, total_matches)``.
+    """
+    combined_fts = " OR ".join(terms)
+    total_matches = db.count_search_windows(
+        combined_fts,
+        source_name=source,
+        time_start=t_start,
+        time_end=t_end,
+        exclude_source_names=exclude_sources,
+    )
+    raw_matches = db.search_windows(
+        combined_fts,
+        source_name=source,
+        max_results=max_results,
+        time_start=t_start,
+        time_end=t_end,
+        exclude_source_names=exclude_sources,
+    )
+    results = [{"window": _truncated_window(w), "source_name": sname} for w, sname in raw_matches]
+    return results, total_matches
+
+
 @mcp.tool()
+@tool_access(
+    Role.EXTRACT_ANALYST
+    | Role.CROSS_EXECUTOR
+    | Role.CROSS_ANALYST
+    | Role.NARRATIVE_EXECUTOR
+    | Role.NARRATIVE_ANALYST
+    | Role.REPORT
+)
 def search(
     query: str = "",
     source: str | None = None,
@@ -193,8 +299,6 @@ def search(
         exclude_sources: Optional list of source name prefixes to exclude
             from results (e.g. ["tsk.filelist"] to skip file listings).
     """
-    import re as _re
-
     ctx = get_ctx()
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
@@ -211,83 +315,18 @@ def search(
             "result_count": 0,
         }
 
-    total_matches: int | None = None
-
     if regex:
-        combined_pattern = "|".join(all_terms)
-        _MAX_REGEX_LEN = 500
-        if len(combined_pattern) > _MAX_REGEX_LEN:
-            return {
-                "tool_call_id": tc_id,
-                "status": "error",
-                "error_message": f"Regex pattern too long (max {_MAX_REGEX_LEN} chars)",
-                "results": [],
-                "result_count": 0,
-            }
-        try:
-            pattern = _re.compile(combined_pattern, _re.IGNORECASE)
-        except _re.error as exc:
-            return {
-                "tool_call_id": tc_id,
-                "status": "error",
-                "error_message": f"Invalid regex: {exc}",
-                "results": [],
-                "result_count": 0,
-            }
-        _CHUNK = 5000
-        matches: list[dict[str, object]] = []
-        total_regex_matches = 0
-        cursor = 0
-        src_prefix = source or ""
-        source_map: dict[int, str] = {s.source_id: s.source_name for s in ctx.db.get_sources()}
-        exclude_set = exclude_sources or []
-        scanning = True
-        while scanning:
-            chunk, _total = ctx.db.get_windows_page(src_prefix, after_id=cursor, limit=_CHUNK)
-            if not chunk:
-                break
-            for w in chunk:
-                src_name = source_map.get(w.source_id, source or "unknown")
-                if exclude_set and any(
-                    src_name == ex or src_name.startswith(ex + ".") for ex in exclude_set
-                ):
-                    continue
-                if t_start and w.event_time and w.event_time < t_start:
-                    continue
-                if t_end and w.event_time and w.event_time > t_end:
-                    continue
-                if pattern.search(w.raw_text):
-                    total_regex_matches += 1
-                    if len(matches) < max_results:
-                        matches.append(
-                            {
-                                "window": _truncated_window(w),
-                                "source_name": src_name,
-                            }
-                        )
-            cursor = chunk[-1].window_id or 0
-        total_matches = total_regex_matches
-        results = matches
+        outcome = _search_regex(
+            ctx.db, all_terms, source, exclude_sources, t_start, t_end, max_results
+        )
+        if isinstance(outcome, dict):
+            outcome["tool_call_id"] = tc_id
+            return outcome
+        results, total_matches = outcome
     else:
-        combined_fts = " OR ".join(all_terms)
-        total_matches = ctx.db.count_search_windows(
-            combined_fts,
-            source_name=source,
-            time_start=t_start,
-            time_end=t_end,
-            exclude_source_names=exclude_sources,
+        results, total_matches = _search_fts(
+            ctx.db, all_terms, source, exclude_sources, t_start, t_end, max_results
         )
-        raw_matches = ctx.db.search_windows(
-            combined_fts,
-            source_name=source,
-            max_results=max_results,
-            time_start=t_start,
-            time_end=t_end,
-            exclude_source_names=exclude_sources,
-        )
-        results = [
-            {"window": _truncated_window(w), "source_name": sname} for w, sname in raw_matches
-        ]
 
     sources_matched = sorted({str(r["source_name"]) for r in results})
 
@@ -308,24 +347,23 @@ def search(
         output_hash=hash_output(results),
         duration_ms=elapsed,
     )
-    effective_total = total_matches if total_matches is not None else len(results)
-    remaining = max(0, effective_total - len(results))
+    remaining = max(0, total_matches - len(results))
     response: dict[str, object] = {
         "tool_call_id": tc_id,
         "status": "success",
         "results": results,
         "source": source,
         "result_count": len(results),
-        "total_matches": effective_total,
+        "total_matches": total_matches,
         "returned": len(results),
-        "has_more": effective_total > len(results),
+        "has_more": total_matches > len(results),
         "remaining": remaining,
         "sources_matched": sources_matched,
         "hint": "Use get_raw_output(source_name, offset, limit) to retrieve full evidence text.",
     }
     if remaining > 0:
         response["hint"] = (
-            f"Showing {len(results)} of {effective_total} matches "
+            f"Showing {len(results)} of {total_matches} matches "
             f"({remaining} remaining). Increase max_results or narrow with "
             "source/time filters to see more. "
             "Use get_raw_output(source_name, offset, limit) to retrieve full evidence text."
@@ -334,6 +372,7 @@ def search(
 
 
 @mcp.tool()
+@tool_access(Role.CROSS_EXECUTOR | Role.NARRATIVE_EXECUTOR)
 def correlate_across_sources(
     t_start: str,
     t_end: str,
@@ -412,6 +451,7 @@ def correlate_across_sources(
 
 
 @mcp.tool()
+@tool_access(Role.CROSS_EXECUTOR)
 def list_processes_from_memory() -> dict[str, object]:
     """List all processes captured in the memory dump (Volatility pslist).
 
@@ -430,6 +470,7 @@ def list_processes_from_memory() -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.CROSS_EXECUTOR)
 def get_process_tree() -> dict[str, object]:
     """Return the process parent-child tree from memory (Volatility pstree).
 
@@ -447,6 +488,7 @@ def get_process_tree() -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.CROSS_EXECUTOR)
 def get_eventlog_anomalies(
     channel: str,
     t_start: str,
@@ -478,6 +520,7 @@ def get_eventlog_anomalies(
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR | Role.CROSS_ANALYST)
 def extract_mft_timeline(t_start: str, t_end: str) -> dict[str, object]:
     """Extract the Plaso super-timeline for a time range.
 
@@ -501,6 +544,7 @@ def extract_mft_timeline(t_start: str, t_end: str) -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR | Role.CROSS_ANALYST)
 def parse_prefetch() -> dict[str, object]:
     """Return all parsed Windows Prefetch data.
 
@@ -518,6 +562,7 @@ def parse_prefetch() -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR | Role.CROSS_ANALYST)
 def get_amcache() -> dict[str, object]:
     """Return parsed AmCache / registry system hive data.
 
@@ -534,6 +579,7 @@ def get_amcache() -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.CROSS_EXECUTOR)
 def scan_hidden_processes() -> dict[str, object]:
     """Detect hidden processes by comparing psscan (pool-tag scan) against pslist (linked list).
 
@@ -547,6 +593,27 @@ def scan_hidden_processes() -> dict[str, object]:
 
     psscan_wins = ctx.db.get_windows_by_source(_SRC_PSSCAN)
     pslist_wins = ctx.db.get_windows_by_source(_SRC_PSLIST)
+
+    if not psscan_wins and not pslist_wins:
+        elapsed = (time.monotonic() - t0) * 1000
+        ctx.audit.log_tool_call(
+            tool_call_id=tc_id,
+            tool_name="scan_hidden_processes",
+            params={},
+            output_hash=hash_output([]),
+            duration_ms=elapsed,
+        )
+        return {
+            "tool_call_id": tc_id,
+            "status": "success",
+            "results": [],
+            "source": _SRC_PSSCAN,
+            "result_count": 0,
+            "hint": (
+                "No pslist or psscan data indexed yet. Run "
+                "run_volatility_batch(['pslist', 'psscan'], memory_path) first."
+            ),
+        }
 
     psscan_pids = extract_pids_from_windows(psscan_wins)
     pslist_pids = extract_pids_from_windows(pslist_wins)
@@ -569,16 +636,23 @@ def scan_hidden_processes() -> dict[str, object]:
         output_hash=hash_output(results),
         duration_ms=elapsed,
     )
-    return {
+    response: dict[str, object] = {
         "tool_call_id": tc_id,
         "status": "success",
         "results": results,
         "source": _SRC_PSSCAN,
         "result_count": len(results),
     }
+    if not psscan_wins:
+        response["hint"] = (
+            "psscan data not indexed. Run "
+            "run_volatility('psscan', memory_path) to enable full comparison."
+        )
+    return response
 
 
 @mcp.tool()
+@tool_access(Role.CROSS_EXECUTOR | Role.CROSS_ANALYST)
 def get_process_environment(pid: int) -> dict[str, object]:
     """Return environment variables for a specific process from memory.
 
@@ -600,6 +674,7 @@ def get_process_environment(pid: int) -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.CROSS_EXECUTOR | Role.CROSS_ANALYST)
 def get_process_privileges(pid: int) -> dict[str, object]:
     """Return token privileges for a specific process from memory.
 
@@ -621,6 +696,7 @@ def get_process_privileges(pid: int) -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.CROSS_EXECUTOR)
 def scan_kernel_modules() -> dict[str, object]:
     """Detect hidden kernel modules by comparing modscan (pool-tag) against modules (linked list).
 
@@ -634,6 +710,27 @@ def scan_kernel_modules() -> dict[str, object]:
 
     modules_wins = ctx.db.get_windows_by_source(_SRC_MODULES)
     modscan_wins = ctx.db.get_windows_by_source(_SRC_MODSCAN)
+
+    if not modules_wins and not modscan_wins:
+        elapsed = (time.monotonic() - t0) * 1000
+        ctx.audit.log_tool_call(
+            tool_call_id=tc_id,
+            tool_name="scan_kernel_modules",
+            params={},
+            output_hash=hash_output([]),
+            duration_ms=elapsed,
+        )
+        return {
+            "tool_call_id": tc_id,
+            "status": "success",
+            "results": [],
+            "source": _SRC_MODSCAN,
+            "result_count": 0,
+            "hint": (
+                "No modules or modscan data indexed yet. Run "
+                "run_volatility_batch(['modules', 'modscan'], memory_path) first."
+            ),
+        }
 
     linked_mods = extract_module_names(modules_wins)
     scanned_mods = extract_module_names(modscan_wins)
@@ -656,16 +753,23 @@ def scan_kernel_modules() -> dict[str, object]:
         output_hash=hash_output(results),
         duration_ms=elapsed,
     )
-    return {
+    response: dict[str, object] = {
         "tool_call_id": tc_id,
         "status": "success",
         "results": results,
         "source": _SRC_MODSCAN,
         "result_count": len(results),
     }
+    if not modscan_wins:
+        response["hint"] = (
+            "modscan data not indexed. Run "
+            "run_volatility('modscan', memory_path) to enable full comparison."
+        )
+    return response
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR | Role.CROSS_ANALYST)
 def get_userassist() -> dict[str, object]:
     """Return UserAssist registry entries extracted from memory.
 
@@ -682,6 +786,7 @@ def get_userassist() -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.CROSS_EXECUTOR | Role.CROSS_ANALYST)
 def scan_files_in_memory() -> dict[str, object]:
     """Return a summary of file objects cached in the memory dump (Volatility filescan).
 
@@ -729,6 +834,15 @@ def scan_files_in_memory() -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(
+    Role.EXTRACT_ANALYST
+    | Role.CROSS_EXECUTOR
+    | Role.CROSS_ANALYST
+    | Role.NARRATIVE_EXECUTOR
+    | Role.NARRATIVE_ANALYST
+    | Role.REPORT
+)
+@audited_tool("get_raw_output")
 def get_raw_output(
     source_name: str,
     after_id: int = 0,
@@ -753,24 +867,12 @@ def get_raw_output(
         limit: Maximum number of windows to return.
     """
     ctx = get_ctx()
-    tc_id = make_tool_call_id()
-    t0 = time.monotonic()
-
     page, total = ctx.db.get_windows_page(source_name, after_id=after_id, limit=limit)
     raw_text = "\n".join(w.raw_text for w in page)
 
     next_after = page[-1].window_id if page else after_id
 
-    elapsed = (time.monotonic() - t0) * 1000
-    ctx.audit.log_tool_call(
-        tool_call_id=tc_id,
-        tool_name="get_raw_output",
-        params={"source_name": source_name, "after_id": after_id, "limit": limit},
-        output_hash=hash_output({"total": total, "returned": len(page)}),
-        duration_ms=elapsed,
-    )
     result: dict[str, object] = {
-        "tool_call_id": tc_id,
         "status": "success",
         "source_name": source_name,
         "total_windows": total,
@@ -794,6 +896,7 @@ _B64_EXTRACT_RE = re.compile(r"[A-Za-z0-9+/=]{20,}")
 
 
 @mcp.tool()
+@tool_access(Role.CROSS_EXECUTOR)
 def decode_payload(
     data: str = "",
     encoding: str = "auto",
@@ -1057,6 +1160,16 @@ _TIMELINE_TEXT_CAP = 500
 
 
 @mcp.tool()
+@tool_access(
+    Role.EXTRACT_ANALYST
+    | Role.CROSS_PLANNER
+    | Role.CROSS_EXECUTOR
+    | Role.CROSS_ANALYST
+    | Role.NARRATIVE_PLANNER
+    | Role.NARRATIVE_EXECUTOR
+    | Role.NARRATIVE_ANALYST
+    | Role.REPORT
+)
 def get_timeline(
     t_start: str,
     t_end: str,
@@ -1126,6 +1239,10 @@ def get_timeline(
 
 
 @mcp.tool()
+@tool_access(
+    Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR | Role.CROSS_ANALYST | Role.NARRATIVE_ANALYST
+)
+@audited_tool("bookmark_window")
 def bookmark_window(
     window_id: int,
     note: str,
@@ -1144,21 +1261,9 @@ def bookmark_window(
         source_name: Source name for context (optional).
     """
     ctx = get_ctx()
-    tc_id = make_tool_call_id()
-    t0 = time.monotonic()
-
     bookmark_id = ctx.db.add_bookmark(window_id, source_name, note)
 
-    elapsed = (time.monotonic() - t0) * 1000
-    ctx.audit.log_tool_call(
-        tool_call_id=tc_id,
-        tool_name="bookmark_window",
-        params={"window_id": window_id, "note": note, "source_name": source_name},
-        output_hash=hash_output({"bookmark_id": bookmark_id}),
-        duration_ms=elapsed,
-    )
     return {
-        "tool_call_id": tc_id,
         "status": "success",
         "bookmark_id": bookmark_id,
         "window_id": window_id,
@@ -1167,6 +1272,7 @@ def bookmark_window(
 
 
 @mcp.tool()
+@tool_access(Role.CROSS_PLANNER | Role.CROSS_ANALYST | Role.REPORT)
 def get_bookmarks() -> dict[str, object]:
     """Retrieve all bookmarked windows with their notes.
 
@@ -1181,17 +1287,25 @@ def get_bookmarks() -> dict[str, object]:
     bookmarks = ctx.db.get_bookmarks()
 
     enriched: list[dict[str, object]] = []
+    window_ids = [int(str(bm["window_id"])) for bm in bookmarks]
+    window_map: dict[int, Any] = {}
+    if window_ids:
+        with ctx.db._engine.connect() as conn:
+            rows = conn.execute(
+                sa_select(windows_t).where(windows_t.c.window_id.in_(window_ids))
+            ).fetchall()
+        window_map = {row.window_id: row for row in rows}
+
     for bm in bookmarks:
         entry: dict[str, object] = dict(bm)
         wid = int(str(bm["window_id"]))
-        with ctx.db._engine.connect() as conn:
-            row = conn.execute(sa_select(windows_t).where(windows_t.c.window_id == wid)).fetchone()
-            if row:
-                raw = row.raw_text
-                if len(raw) > _TIMELINE_TEXT_CAP:
-                    raw = raw[:_TIMELINE_TEXT_CAP] + "..."
-                entry["raw_text"] = raw
-                entry["event_time"] = row.event_time
+        row = window_map.get(wid)
+        if row:
+            raw = row.raw_text
+            if len(raw) > _TIMELINE_TEXT_CAP:
+                raw = raw[:_TIMELINE_TEXT_CAP] + "..."
+            entry["raw_text"] = raw
+            entry["event_time"] = row.event_time
         enriched.append(entry)
 
     elapsed = (time.monotonic() - t0) * 1000
@@ -1211,6 +1325,8 @@ def get_bookmarks() -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_ANALYST | Role.CROSS_ANALYST | Role.NARRATIVE_ANALYST)
+@audited_tool("remove_bookmark")
 def remove_bookmark(bookmark_id: int) -> dict[str, object]:
     """Remove a bookmark by ID.
 
@@ -1218,21 +1334,9 @@ def remove_bookmark(bookmark_id: int) -> dict[str, object]:
         bookmark_id: The bookmark ID to remove.
     """
     ctx = get_ctx()
-    tc_id = make_tool_call_id()
-    t0 = time.monotonic()
-
     removed = ctx.db.remove_bookmark(bookmark_id)
 
-    elapsed = (time.monotonic() - t0) * 1000
-    ctx.audit.log_tool_call(
-        tool_call_id=tc_id,
-        tool_name="remove_bookmark",
-        params={"bookmark_id": bookmark_id},
-        output_hash=hash_output({"removed": removed}),
-        duration_ms=elapsed,
-    )
     return {
-        "tool_call_id": tc_id,
         "status": "success" if removed else "not_found",
         "bookmark_id": bookmark_id,
         "removed": removed,
@@ -1256,6 +1360,7 @@ _VALID_CATEGORIES = frozenset(_TOOL_GUIDE.keys())
 
 
 @mcp.tool()
+@tool_access(Role.CROSS_PLANNER)
 def get_tool_guide(category: str = "all") -> dict[str, object]:
     """Return a reference guide of available forensic tools and their relationships.
 

@@ -5,13 +5,25 @@ from __future__ import annotations
 import logging
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
+from concurrent.futures import TimeoutError as _FuturesTimeoutError
 from pathlib import Path
 from typing import Any
 
-from mulder.extractors.volatility import _find_vol_binary, _plugin_short_name
+from mulder.extractors.volatility import (
+    _find_vol_binary,
+    _plugin_short_name,
+)
 from mulder.server.app import mcp
 from mulder.server.extract_helpers import extract_and_index
-from mulder.server.helpers import error_response, make_tool_call_id, tool_response
+from mulder.server.helpers import (
+    adaptive_timeout,
+    error_response,
+    make_tool_call_id,
+    sources_already_indexed,
+    tool_response,
+)
+from mulder.server.tool_access import Role, tool_access
 
 __all__ = [
     "run_volatility",
@@ -71,26 +83,52 @@ def _is_xp_unsupported_error(stderr: str) -> bool:
     )
 
 
-def _run_single_vol_plugin(vol_cmd: list[str], memory_path: str, plugin: str) -> dict[str, object]:
+def _run_single_vol_plugin(
+    vol_cmd: list[str],
+    memory_path: str,
+    plugin: str,
+    timeout: int = _PLUGIN_TIMEOUT,
+) -> dict[str, object]:
     """Run one Volatility plugin, index the output, return summary.
 
     For netscan (Vista+), automatically falls back to connscan / sockscan
     when the plugin fails, which covers Windows XP memory images.
+
+    Captures partial stdout on timeout so that any lines already produced
+    by the plugin are indexed rather than discarded.
     """
     short = _plugin_short_name(plugin)
     cmd = [*vol_cmd, "-f", memory_path, plugin]
 
     try:
-        proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=_PLUGIN_TIMEOUT, check=False
-        )
-    except subprocess.TimeoutExpired:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+    except subprocess.TimeoutExpired as exc:
+        partial_stdout = exc.stdout or ""
+        if isinstance(partial_stdout, bytes):
+            partial_stdout = partial_stdout.decode("utf-8", errors="replace")
+        partial_stdout = partial_stdout.strip()
+
+        if partial_stdout and partial_stdout.count("\n") > 1:
+            summary = extract_and_index(
+                raw_output=partial_stdout,
+                source_name=f"volatility.{short}",
+                source_path=memory_path,
+                extractor_name="volatility3",
+            )
+            summary["plugin"] = plugin
+            summary["status"] = "partial"
+            summary["error_type"] = "timeout"
+            summary["error_message"] = (
+                f"{plugin} timed out after {timeout}s; partial results indexed"
+            )
+            return summary
+
         return {
             "plugin": plugin,
             "status": "error",
             "error_type": "timeout",
             "source_name": f"volatility.{short}",
-            "error_message": f"{plugin} timed out after {_PLUGIN_TIMEOUT}s",
+            "error_message": f"{plugin} timed out after {timeout}s",
         }
 
     stderr_text = proc.stderr or ""
@@ -105,7 +143,7 @@ def _run_single_vol_plugin(vol_cmd: list[str], memory_path: str, plugin: str) ->
                         fb_cmd,
                         capture_output=True,
                         text=True,
-                        timeout=_PLUGIN_TIMEOUT,
+                        timeout=timeout,
                         check=False,
                     )
                 except subprocess.TimeoutExpired:
@@ -164,6 +202,7 @@ def _run_single_vol_plugin(vol_cmd: list[str], memory_path: str, plugin: str) ->
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def run_volatility(plugin: str, memory_path: str) -> dict[str, object]:
     """Run a single Volatility 3 plugin against a memory dump.
 
@@ -206,8 +245,9 @@ def run_volatility(plugin: str, memory_path: str) -> dict[str, object]:
         )
 
     plugin = _resolve_plugin_name(plugin)
+    timeout = adaptive_timeout(memory_path, base=_PLUGIN_TIMEOUT)
 
-    result = _run_single_vol_plugin(vol_cmd, memory_path, plugin)
+    result = _run_single_vol_plugin(vol_cmd, memory_path, plugin, timeout)
     elapsed = (time.monotonic() - t0) * 1000
     source_name = result.get("source_name")
     return tool_response(
@@ -410,10 +450,168 @@ def _run_netscan_fallback_batch(
     return None
 
 
+def _run_batch_plugin_timed(
+    vol_ctx: Any,
+    automagics: Any,
+    plugin_class: Any,
+    plugin_name: str,
+    memory_path: str,
+    timeout: int,
+) -> dict[str, Any]:
+    """Execute a batch plugin with a per-plugin timeout via thread pool.
+
+    If the plugin exceeds *timeout* seconds, returns an error dict.  The
+    underlying thread may continue running in the background, but the
+    batch is not blocked.
+
+    Args:
+        vol_ctx: Pre-built Volatility context.
+        automagics: Automagic modules for the context.
+        plugin_class: The resolved plugin class to execute.
+        plugin_name: Fully-qualified plugin name.
+        memory_path: Path to the memory dump file.
+        timeout: Maximum seconds to wait for the plugin.
+
+    Returns:
+        Plugin result dict on success, or an error dict on timeout.
+    """
+    short = _plugin_short_name(plugin_name)
+    executor = _ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(
+        _run_batch_plugin, vol_ctx, automagics, plugin_class, plugin_name, memory_path
+    )
+    try:
+        result: dict[str, Any] = future.result(timeout=timeout)
+        return result
+    except (_FuturesTimeoutError, TimeoutError):
+        logger.warning(
+            "Batch plugin %s exceeded %ds timeout (Python API)",
+            plugin_name,
+            timeout,
+        )
+        return {
+            "plugin": plugin_name,
+            "status": "error",
+            "error_type": "timeout",
+            "source_name": f"volatility.{short}",
+            "error_message": (f"{plugin_name} timed out after {timeout}s (Python API)"),
+        }
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
+def _aggregate_batch_results(
+    results: dict[str, dict[str, object]],
+    plugins: list[str],
+    tc_id: str,
+    params: dict[str, object],
+    t0: float,
+    *,
+    fallback_used: bool = False,
+) -> dict[str, object]:
+    """Compute summary statistics from per-plugin results and build the response.
+
+    Args:
+        results: Mapping of plugin short names to their result dicts.
+        plugins: Original list of requested plugin names.
+        tc_id: Tool call ID for audit logging.
+        params: Original tool parameters for audit logging.
+        t0: Monotonic start time for elapsed calculation.
+        fallback_used: If True, marks the response as using subprocess fallback.
+
+    Returns:
+        Standard batch tool response dict.
+    """
+    succeeded = sum(
+        1 for r in results.values() if r.get("status") not in ("error", "empty", "header_only")
+    )
+    header_only_count = sum(1 for r in results.values() if r.get("status") == "header_only")
+    failed = len(results) - succeeded - header_only_count
+
+    total_windows = 0
+    total_lines = 0
+    for r in results.values():
+        wi = r.get("windows_indexed", 0)
+        lc = r.get("line_count", 0)
+        total_windows += wi if isinstance(wi, int) else 0
+        total_lines += lc if isinstance(lc, int) else 0
+        r.pop("source_id", None)
+        r.pop("source_name", None)
+
+    payload: dict[str, object] = {
+        "plugins_requested": len(plugins),
+        "plugins_succeeded": succeeded,
+        "plugins_header_only": header_only_count,
+        "plugins_failed": failed,
+        "total_windows_indexed": total_windows,
+        "total_lines": total_lines,
+        "per_plugin": results,
+    }
+    if fallback_used:
+        payload["execution_mode"] = "subprocess_fallback"
+
+    elapsed = (time.monotonic() - t0) * 1000
+    return tool_response(
+        tc_id,
+        "run_volatility_batch",
+        params,
+        payload,
+        "volatility.batch",
+        elapsed,
+    )
+
+
+def _run_batch_subprocess_fallback(
+    plugins: list[str],
+    memory_path: str,
+    tc_id: str,
+    t0: float,
+    params: dict[str, object],
+) -> dict[str, object]:
+    """Execute batch plugins via subprocess when the Python API fails.
+
+    Provides a fallback path when the Volatility 3 Python library is
+    importable but context construction fails (e.g., missing ISF symbols,
+    corrupt layer stacking).  Each plugin runs in its own subprocess, so
+    a failure in one does not affect the others.
+
+    Args:
+        plugins: List of plugin names (short or full form).
+        memory_path: Path to the memory dump file.
+        tc_id: Tool call ID for the parent batch request.
+        t0: Monotonic start time for elapsed calculation.
+        params: Original tool parameters for audit logging.
+
+    Returns:
+        Standard batch result dict.
+    """
+    try:
+        vol_cmd = _find_vol_binary()
+    except RuntimeError as exc:
+        return error_response(
+            tc_id,
+            "run_volatility_batch",
+            params,
+            str(exc),
+            error_type="binary_missing",
+            suggestion="Install Volatility 3: pip install volatility3",
+        )
+
+    timeout = adaptive_timeout(memory_path, base=_PLUGIN_TIMEOUT)
+    results: dict[str, dict[str, object]] = {}
+    for plugin_name in plugins:
+        full_name = _resolve_plugin_name(plugin_name)
+        results[plugin_name] = _run_single_vol_plugin(vol_cmd, memory_path, full_name, timeout)
+
+    return _aggregate_batch_results(results, plugins, tc_id, params, t0, fallback_used=True)
+
+
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def run_volatility_batch(
     plugins: list[str],
     memory_path: str,
+    force: bool = False,
 ) -> dict[str, object]:
     """Run multiple Volatility 3 plugins against a memory dump in one call.
 
@@ -426,6 +624,10 @@ def run_volatility_batch(
     Each plugin's output is indexed separately.  Failed plugins are
     reported individually without stopping the batch.
 
+    If the Volatility Python API is unavailable or context construction
+    fails, automatically falls back to subprocess execution so that a
+    library-level issue does not prevent any analysis.
+
     For netscan, automatically falls back to connscan/sockscan if the
     plugin is unsupported (e.g. Windows XP memory images).
 
@@ -434,10 +636,27 @@ def run_volatility_batch(
             ``["pslist", "pstree", "cmdline", "netscan", "malfind",
             "psscan", "dlllist", "svcscan"]``.
         memory_path: Path to the memory dump file.
+        force: If True, skip the already-indexed check and re-run.
     """
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
-    params = {"plugins": plugins, "memory_path": memory_path}
+    params: dict[str, object] = {"plugins": plugins, "memory_path": memory_path}
+
+    if not force:
+        existing = sources_already_indexed(["volatility."], evidence_path=memory_path)
+        if existing:
+            return tool_response(
+                tc_id,
+                "run_volatility_batch",
+                params,
+                {
+                    "status": "skipped",
+                    "reason": "Sources already indexed from prior extraction",
+                    "existing_sources": existing,
+                },
+                "volatility",
+                0.0,
+            )
 
     if not Path(memory_path).exists():
         return error_response(
@@ -450,19 +669,25 @@ def run_volatility_batch(
 
     try:
         ctx, automagics, plugin_list = _build_volatility_context(memory_path)
-    except ImportError as exc:
-        return error_response(
-            tc_id,
-            "run_volatility_batch",
-            params,
-            f"Volatility 3 Python library not available: {exc}",
-            error_type="binary_missing",
+    except ImportError:
+        logger.info(
+            "Volatility 3 Python library not available; falling back to subprocess execution"
         )
+        return _run_batch_subprocess_fallback(plugins, memory_path, tc_id, t0, params)
+    except Exception as exc:
+        logger.warning(
+            "Volatility Python API context build failed (%s); "
+            "falling back to subprocess execution",
+            exc,
+        )
+        return _run_batch_subprocess_fallback(plugins, memory_path, tc_id, t0, params)
 
+    timeout = adaptive_timeout(memory_path, base=_PLUGIN_TIMEOUT)
     logger.info(
-        "Volatility batch: context built for %r, running %d plugins",
+        "Volatility batch: context built for %r, running %d plugins (timeout=%ds)",
         memory_path,
         len(plugins),
+        timeout,
     )
 
     results: dict[str, dict[str, object]] = {}
@@ -482,8 +707,8 @@ def run_volatility_batch(
             continue
 
         try:
-            results[plugin_name] = _run_batch_plugin(
-                ctx, automagics, plugin_class, full_name, memory_path
+            results[plugin_name] = _run_batch_plugin_timed(
+                ctx, automagics, plugin_class, full_name, memory_path, timeout
             )
         except Exception as exc:
             err_msg = str(exc)[:300]
@@ -515,39 +740,9 @@ def run_volatility_batch(
                 }
 
         logger.info(
-            "Volatility batch: %s -> %s", short, results.get(plugin_name, {}).get("status", "?")
+            "Volatility batch: %s -> %s",
+            short,
+            results.get(plugin_name, {}).get("status", "?"),
         )
 
-    succeeded = sum(
-        1 for r in results.values() if r.get("status") not in ("error", "empty", "header_only")
-    )
-    header_only_count = sum(1 for r in results.values() if r.get("status") == "header_only")
-    failed = len(results) - succeeded - header_only_count
-
-    total_windows = 0
-    total_lines = 0
-    for r in results.values():
-        wi = r.get("windows_indexed", 0)
-        lc = r.get("line_count", 0)
-        total_windows += wi if isinstance(wi, int) else 0
-        total_lines += lc if isinstance(lc, int) else 0
-        r.pop("source_id", None)
-        r.pop("source_name", None)
-
-    elapsed = (time.monotonic() - t0) * 1000
-    return tool_response(
-        tc_id,
-        "run_volatility_batch",
-        params,
-        {
-            "plugins_requested": len(plugins),
-            "plugins_succeeded": succeeded,
-            "plugins_header_only": header_only_count,
-            "plugins_failed": failed,
-            "total_windows_indexed": total_windows,
-            "total_lines": total_lines,
-            "per_plugin": results,
-        },
-        "volatility.batch",
-        elapsed,
-    )
+    return _aggregate_batch_results(results, plugins, tc_id, params, t0)

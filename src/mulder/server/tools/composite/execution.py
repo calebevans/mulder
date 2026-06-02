@@ -13,6 +13,7 @@ from mulder.server.helpers import (
     make_tool_call_id,
     slim_window,
 )
+from mulder.server.tool_access import Role, tool_access
 from mulder.server.tools.composite.core import (
     _SRC_EZ_AMCACHE,
     _SRC_EZ_JUMPLISTS,
@@ -186,6 +187,7 @@ def _annotate_execution_anomalies(
 
 
 @mcp.tool()
+@tool_access(Role.CROSS_EXECUTOR)
 def find_execution_evidence() -> dict[str, object]:
     """Build a unified execution evidence view from multiple artifact sources.
 
@@ -265,6 +267,7 @@ def find_execution_evidence() -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.CROSS_EXECUTOR)
 def analyze_execution_timeline() -> dict[str, object]:
     """Build a unified execution timeline from prefetch, amcache, and shimcache.
 

@@ -13,6 +13,7 @@ from mulder.server.helpers import (
     make_tool_call_id,
     slim_window,
 )
+from mulder.server.tool_access import Role, tool_access
 from mulder.server.tools.composite.core import (
     _LATERAL_PORTS,
     _SRC_EVTX_SECURITY,
@@ -296,6 +297,7 @@ def _correlate_by_timestamp(
 
 
 @mcp.tool()
+@tool_access(Role.CROSS_EXECUTOR)
 def find_lateral_movement_indicators() -> dict[str, object]:
     """Detect lateral movement by correlating logon events, network connections, and RDP artifacts.
 

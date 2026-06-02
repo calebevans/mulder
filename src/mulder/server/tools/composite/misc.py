@@ -7,7 +7,7 @@ from collections import deque
 from typing import Any
 
 from mulder.models import WindowRow
-from mulder.patterns import SUSPICIOUS_PATHS
+from mulder.patterns import IP_RE, SUSPICIOUS_PATHS
 from mulder.server.app import get_ctx, mcp
 from mulder.server.helpers import (
     _HINT_CHAR_LIMIT,
@@ -18,8 +18,8 @@ from mulder.server.helpers import (
     make_tool_call_id,
     slim_window,
 )
+from mulder.server.tool_access import Role, tool_access
 from mulder.server.tools.composite.core import (
-    _IP_RE,
     _PORT_RE,
     _SRC_CMDLINE,
     _SRC_DLLLIST,
@@ -413,7 +413,7 @@ def _extract_pcap_indicators(
     """
     pcap_ips: set[str] = set()
     pcap_ports: set[int] = set()
-    ip_re = _IP_RE
+    ip_re = IP_RE
     port_re = _PORT_RE
 
     for pcap_src in pcap_sources:
@@ -453,7 +453,7 @@ def _correlate_with_netscan(
 
     netscan_wins, tc_net = _query_source(_SRC_NETSCAN, caller_name)
     sub_call_ids.append(tc_net)
-    ip_re = _IP_RE
+    ip_re = IP_RE
 
     for w in netscan_wins:
         netscan_ips = {m.group() for m in ip_re.finditer(w.raw_text)}
@@ -613,6 +613,7 @@ def _build_recovery_assessment(
 
 
 @mcp.tool()
+@tool_access(Role.CROSS_EXECUTOR)
 def find_defense_evasion() -> dict[str, object]:
     """Detect defense evasion techniques across memory, filesystem, and event logs.
 
@@ -668,6 +669,7 @@ def find_defense_evasion() -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.CROSS_EXECUTOR)
 def reconstruct_execution_chains() -> dict[str, object]:
     """Reconstruct parent-child process execution chains from memory forensics.
 
@@ -753,6 +755,7 @@ def reconstruct_execution_chains() -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.CROSS_EXECUTOR)
 def assess_recovery() -> dict[str, object]:
     """Assess evidence recoverability by cross-referencing deleted files,
     carving results, and anti-forensics indicators.
@@ -800,6 +803,7 @@ def assess_recovery() -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.CROSS_EXECUTOR)
 def correlate_pcap_with_host(
     t_start: str | None = None,
     t_end: str | None = None,
@@ -842,7 +846,7 @@ def correlate_pcap_with_host(
             )
             sub_call_ids.append(tc_evtx)
             for w in evtx_wins:
-                evtx_ips = {m.group() for m in _IP_RE.finditer(w.raw_text)}
+                evtx_ips = {m.group() for m in IP_RE.finditer(w.raw_text)}
                 overlap = evtx_ips & pcap_ips
                 if overlap:
                     correlations.append(

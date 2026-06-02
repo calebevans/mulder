@@ -23,6 +23,7 @@ from mulder.server.helpers import (
     make_tool_call_id,
     windowed_response,
 )
+from mulder.server.tool_access import Role, tool_access
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,7 @@ def _resolve_psort_prerequisites(
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR)
 def get_plaso_stats() -> dict[str, object]:
     """Return Plaso parser hit statistics collected during ingest.
 
@@ -118,6 +120,7 @@ def get_plaso_stats() -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR | Role.CROSS_ANALYST)
 def filter_timeline(
     t_start: str,
     t_end: str,
@@ -206,6 +209,7 @@ def _apply_keyword_filter(output: str, keyword: str) -> str:
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR)
 def export_timeline_slice(timestamp: str) -> dict[str, object]:
     """Export a 5-minute timeline slice centred on a timestamp.
 

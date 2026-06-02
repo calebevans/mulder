@@ -82,3 +82,11 @@ class TestSafeTarFilter:
         result = _safe_tar_filter(member, "/tmp/dest")
         assert result is not None
         assert result.linkname == "target.txt"
+
+    def test_symlink_resolving_outside_target_blocked(self) -> None:
+        """Symlink whose relative target resolves outside extraction root is blocked."""
+        member = tarfile.TarInfo("subdir/escape_link")
+        member.type = tarfile.SYMTYPE
+        member.linkname = "../../etc/shadow"
+        result = _safe_tar_filter(member, "/tmp/dest")
+        assert result is None

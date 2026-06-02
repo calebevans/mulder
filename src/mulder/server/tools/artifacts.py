@@ -21,6 +21,7 @@ from pathlib import Path
 from mulder.server.app import get_cfg, get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import hash_output, make_tool_call_id
+from mulder.server.tool_access import Role, tool_access
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +125,7 @@ def _find_inodes_by_pattern(pattern: str) -> list[tuple[str, str]]:
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR | Role.CROSS_ANALYST)
 def parse_browser_history() -> dict[str, object]:
     """Extract browser history from Chrome, Firefox, and Safari databases.
 
@@ -227,6 +229,7 @@ def parse_browser_history() -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR | Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR)
 def parse_plist(plist_filter: str | None = None) -> dict[str, object]:
     """Extract and parse macOS plist files from a disk image.
 
@@ -302,6 +305,7 @@ def parse_plist(plist_filter: str | None = None) -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR | Role.EXTRACT_ANALYST)
 def query_sqlite_from_image(inode: int, query: str, description: str = "") -> dict[str, object]:
     """Extract a SQLite database from a disk image and run a SQL query.
 
@@ -398,6 +402,7 @@ def query_sqlite_from_image(inode: int, query: str, description: str = "") -> di
 
 
 @mcp.tool()
+@tool_access(Role.CATALOG | Role.EXTRACT_PLANNER | Role.EXTRACT_EXECUTOR)
 def list_directory(
     path: str,
     recursive: bool = False,
@@ -487,6 +492,7 @@ def list_directory(
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR | Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR)
 def read_evidence_file(
     file_path: str = "",
     max_bytes: int = 1_048_576,
@@ -614,6 +620,7 @@ def _convert_heic_to_jpeg(heic_files: list[Path], tmpdir: str) -> list[Path]:
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR | Role.EXTRACT_ANALYST)
 def detect_steganography(target_path: str) -> dict[str, object]:
     """Scan image files for hidden steganographic content.
 
@@ -788,6 +795,7 @@ def detect_steganography(target_path: str) -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def extract_steganography(
     image_path: str,
     passwords: list[str] | None = None,

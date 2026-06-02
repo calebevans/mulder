@@ -19,8 +19,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from mulder.extractors import DISK_IMAGE_EXTS
 from mulder.extractors.base import ExtractionResult
+from mulder.patterns import DISK_IMAGE_EXTS
 
 logger = logging.getLogger(__name__)
 

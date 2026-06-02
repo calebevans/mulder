@@ -505,12 +505,19 @@ class CaseDB:
                 )
 
                 h = hashlib.blake2b(digest_size=32)
-                stream = conn.execute(
-                    text("SELECT raw_text FROM windows WHERE source_id = :sid ORDER BY window_id"),
-                    {"sid": source_id},
-                )
-                for row in stream:
-                    h.update(row[0].encode())
+                if last_id > 0:
+                    prior = conn.execute(
+                        text(
+                            "SELECT raw_text FROM windows "
+                            "WHERE source_id = :sid AND window_id <= :last_id "
+                            "ORDER BY window_id"
+                        ),
+                        {"sid": source_id, "last_id": last_id},
+                    )
+                    for prior_row in prior:
+                        h.update(prior_row[0].encode())
+                for w in windows:
+                    h.update(w.raw_text.encode())
                 conn.execute(
                     text("UPDATE sources SET windows_hash = :wh WHERE source_id = :sid"),
                     {"wh": "blake2b:" + h.hexdigest(), "sid": source_id},
@@ -1172,14 +1179,33 @@ class CaseDB:
     def verify_evidence_integrity(self) -> list[dict[str, object]]:
         """Verify indexed source data against stored window hashes.
 
-        For each source, recomputes BLAKE2b from stored windows and compares
-        to the windows_hash recorded at ingestion. This is a fast DB-only
-        operation that verifies the indexed data has not been tampered with.
+        Recomputes BLAKE2b from stored windows in a single streaming query
+        ordered by source_id, comparing each hash to the windows_hash
+        recorded at ingestion. Sources without a stored hash are reported
+        as ``no_hash_recorded``.
         """
         sources = self.get_sources()
+        no_hash_ids = {s.source_id for s in sources if not s.windows_hash}
+
+        computed: dict[int, tuple[Any, int]] = {}
+
+        with self._engine.connect() as conn:
+            stream = conn.execute(
+                text("SELECT source_id, raw_text FROM windows ORDER BY source_id, window_id")
+            )
+            for row in stream:
+                sid: int = row[0]
+                if sid in no_hash_ids:
+                    continue
+                if sid not in computed:
+                    computed[sid] = (hashlib.blake2b(digest_size=32), 0)
+                h, count = computed[sid]
+                h.update(row[1].encode())
+                computed[sid] = (h, count + 1)
+
         results: list[dict[str, object]] = []
         for src in sources:
-            if not src.windows_hash:
+            if src.source_id in no_hash_ids:
                 results.append(
                     {
                         "source_name": src.source_name,
@@ -1190,17 +1216,19 @@ class CaseDB:
                     }
                 )
                 continue
-            windows = self.get_windows_by_source(src.source_name)
-            h = hashlib.blake2b(digest_size=32)
-            for w in windows:
-                h.update(w.raw_text.encode())
-            actual = "blake2b:" + h.hexdigest()
+            entry = computed.get(src.source_id)
+            if entry is None:
+                actual = "blake2b:" + hashlib.blake2b(digest_size=32).hexdigest()
+                window_count = 0
+            else:
+                h, window_count = entry
+                actual = "blake2b:" + h.hexdigest()
             results.append(
                 {
                     "source_name": src.source_name,
                     "expected_hash": src.windows_hash,
                     "actual_hash": actual,
-                    "window_count": len(windows),
+                    "window_count": window_count,
                     "status": "verified" if actual == src.windows_hash else "modified",
                 }
             )

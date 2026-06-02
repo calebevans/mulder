@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from mulder.extractors import DISK_IMAGE_EXTS
+from mulder.patterns import DISK_IMAGE_EXTS
 
 logger = logging.getLogger(__name__)
 

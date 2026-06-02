@@ -20,9 +20,9 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from mulder.extractors import DISK_IMAGE_EXTS
 from mulder.extractors.base import ExtractionResult
 from mulder.extractors.disk import _mount_image, _unmount_image
+from mulder.patterns import DISK_IMAGE_EXTS
 
 logger = logging.getLogger(__name__)
 _EZ_TOOLS_DIR = Path("/opt/zimmermantools")
@@ -61,7 +61,7 @@ def _run_ez_tool(
         return ""
 
     flag = "-d" if use_dir_flag else "-f"
-    cmd = [str(tool_path)] if tool_path.suffix == ".exe" else ["dotnet", str(tool_path)]
+    cmd = ["dotnet", str(tool_path)]
     cmd.extend([flag, str(input_path), "--csv", str(csv_dir), "--csvf", csv_filename])
     if extra_args:
         cmd.extend(extra_args)

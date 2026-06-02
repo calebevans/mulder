@@ -11,6 +11,7 @@ from mulder.server.helpers import (
     make_tool_call_id,
     slim_window,
 )
+from mulder.server.tool_access import Role, tool_access
 from mulder.server.tools.composite.core import (
     _EXE_CMD,
     _EXE_POWERSHELL,
@@ -249,6 +250,7 @@ def _collect_startup_files(
 
 
 @mcp.tool()
+@tool_access(Role.CROSS_EXECUTOR)
 def find_persistence_mechanisms() -> dict[str, object]:
     """Detect persistence mechanisms across registry, services, event logs, and timeline.
 

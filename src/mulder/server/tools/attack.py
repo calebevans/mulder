@@ -17,6 +17,7 @@ from typing import Any
 
 from mulder.server.app import mcp
 from mulder.server.helpers import error_response, make_tool_call_id, tool_response
+from mulder.server.tool_access import Role, tool_access
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +132,7 @@ def _search_techniques(
 
 
 @mcp.tool()
+@tool_access(Role.CROSS_ANALYST)
 def lookup_attack_technique(
     query: str,
     max_results: int = 5,

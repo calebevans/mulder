@@ -14,6 +14,20 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+_consecutive_extraction_failures: int = 0
+_consecutive_cross_system_failures: int = 0
+
+
+def reset_gate_failure_counters() -> None:
+    """Reset consecutive failure counters for extraction and cross-system gates.
+
+    Call between investigations or in test fixtures to ensure gate state
+    does not leak across runs.
+    """
+    global _consecutive_extraction_failures, _consecutive_cross_system_failures  # noqa: PLW0603
+    _consecutive_extraction_failures = 0
+    _consecutive_cross_system_failures = 0
+
 
 @dataclass
 class GateCheck:
@@ -47,43 +61,63 @@ class GateResult:
     gaps: list[str] = field(default_factory=list)
 
 
-def validate_catalog(summary: dict[str, Any]) -> GateResult:
-    """Validate that the catalog phase created a case with evidence.
+def validate_catalog(catalog_json: dict[str, Any]) -> GateResult:
+    """Validate that the catalog phase produced structured JSON output.
 
-    The catalog phase classifies evidence files and creates the case
-    in the database. It does NOT index sources (that happens during
-    extraction). This gate verifies the case exists and evidence was
-    discovered.
+    The catalog agent must emit a final JSON message containing
+    ``case_id``, ``evidence_root``, and a non-empty ``systems`` array.
+    This gate validates that structure directly rather than scanning
+    assistant text for keywords.
 
     Args:
-        summary: Output from ``get_investigation_summary`` after cataloging.
+        catalog_json: Parsed JSON from the catalog agent's final message,
+            or an empty dict if parsing failed.
 
     Returns:
-        GateResult indicating whether a case was created.
+        GateResult indicating whether the catalog output is valid.
     """
     checks: list[GateCheck] = []
     gaps: list[str] = []
 
-    # If we got a non-empty summary back, the case exists
-    case_exists = bool(summary) and summary.get("case_id") is not None
+    case_exists = bool(catalog_json) and catalog_json.get("case_id") is not None
     check_case = GateCheck(
         name="case_created",
         passed=case_exists,
-        detail="Case created" if case_exists else "No case found",
+        detail="Case created" if case_exists else "No case_id in catalog JSON",
     )
     checks.append(check_case)
     if not check_case.passed:
-        gaps.append("No case was created during cataloging. scan_evidence may have failed.")
+        gaps.append(
+            "Catalog did not output valid JSON with a case_id. "
+            "Ensure the final message is raw JSON matching the required schema."
+        )
 
-    evidence_found = bool(summary.get("evidence_root"))
+    evidence_found = bool(catalog_json.get("evidence_root"))
     check_evidence = GateCheck(
         name="evidence_discovered",
         passed=evidence_found,
-        detail="Evidence root set" if evidence_found else "No evidence root in summary",
+        detail="Evidence root set" if evidence_found else "No evidence_root in catalog JSON",
     )
     checks.append(check_evidence)
     if not check_evidence.passed:
-        gaps.append("Catalog completed but no evidence_root was set.")
+        gaps.append("Catalog JSON is missing the evidence_root field.")
+
+    systems = catalog_json.get("systems", [])
+    has_systems = isinstance(systems, list) and len(systems) > 0
+    system_count = len(systems) if has_systems else 0
+    check_systems = GateCheck(
+        name="systems_identified",
+        passed=has_systems,
+        detail=(
+            f"{system_count} system(s) identified" if has_systems else "No systems in catalog JSON"
+        ),
+    )
+    checks.append(check_systems)
+    if not check_systems.passed:
+        gaps.append(
+            "Catalog JSON must include a non-empty 'systems' array. "
+            "Each entry needs at minimum a 'name' field."
+        )
 
     return GateResult(
         passed=all(c.passed for c in checks),
@@ -98,8 +132,9 @@ def validate_extraction(summary: dict[str, Any] | None) -> GateResult:
 
     The extraction gate is intentionally lenient per-system: indexing
     sources is required, but findings may come from later systems or
-    the cross-system phase. If the summary query failed (None or empty),
-    the gate passes to avoid blocking on transient MCP issues.
+    the cross-system phase. If the summary query fails on the first
+    attempt, the gate passes with an advisory warning. On consecutive
+    failures, the gate fails to prevent indefinite silent auto-passes.
 
     Args:
         summary: Output from ``get_investigation_summary`` after extraction,
@@ -108,11 +143,30 @@ def validate_extraction(summary: dict[str, Any] | None) -> GateResult:
     Returns:
         GateResult indicating extraction completeness.
     """
+    global _consecutive_extraction_failures  # noqa: PLW0603
+
     checks: list[GateCheck] = []
     gaps: list[str] = []
 
     if not summary:
-        detail = "Summary query failed; passing gate to avoid false block"
+        if _consecutive_extraction_failures >= 1:
+            detail = "Summary query failed on retry; cannot validate extraction"
+            logger.error("Extraction gate: %s", detail)
+            _consecutive_extraction_failures += 1
+            return GateResult(
+                passed=False,
+                phase_name="extraction",
+                checks=[
+                    GateCheck(
+                        name="summary_unavailable",
+                        passed=False,
+                        detail=detail,
+                    )
+                ],
+                gaps=["Summary query failed on retry; cannot validate phase"],
+            )
+        _consecutive_extraction_failures += 1
+        detail = "Summary query failed; passing gate with advisory warning"
         logger.warning("Extraction gate: %s", detail)
         return GateResult(
             passed=True,
@@ -124,8 +178,10 @@ def validate_extraction(summary: dict[str, Any] | None) -> GateResult:
                     detail=detail,
                 )
             ],
-            gaps=[],
+            gaps=["ADVISORY: summary check skipped due to query failure"],
         )
+
+    _consecutive_extraction_failures = 0
 
     sources_indexed = summary.get("sources_indexed", 0)
     check_sources = GateCheck(
@@ -148,8 +204,9 @@ def validate_extraction(summary: dict[str, Any] | None) -> GateResult:
 def validate_cross_system(summary: dict[str, Any] | None) -> GateResult:
     """Validate that cross-system analysis was performed.
 
-    If the summary query failed (None or empty), the gate passes with
-    a warning to avoid blocking on transient MCP issues.
+    If the summary query fails on the first attempt, the gate passes with
+    an advisory warning. On consecutive failures, the gate fails to prevent
+    indefinite silent auto-passes.
 
     Args:
         summary: Output from ``get_investigation_summary`` after cross-system
@@ -158,11 +215,30 @@ def validate_cross_system(summary: dict[str, Any] | None) -> GateResult:
     Returns:
         GateResult indicating cross-system completeness.
     """
+    global _consecutive_cross_system_failures  # noqa: PLW0603
+
     checks: list[GateCheck] = []
     gaps: list[str] = []
 
     if not summary:
-        detail = "Summary query failed; passing gate to avoid false block"
+        if _consecutive_cross_system_failures >= 1:
+            detail = "Summary query failed on retry; cannot validate cross-system"
+            logger.error("Cross-system gate: %s", detail)
+            _consecutive_cross_system_failures += 1
+            return GateResult(
+                passed=False,
+                phase_name="cross_system",
+                checks=[
+                    GateCheck(
+                        name="summary_unavailable",
+                        passed=False,
+                        detail=detail,
+                    )
+                ],
+                gaps=["Summary query failed on retry; cannot validate phase"],
+            )
+        _consecutive_cross_system_failures += 1
+        detail = "Summary query failed; passing gate with advisory warning"
         logger.warning("Cross-system gate: %s", detail)
         return GateResult(
             passed=True,
@@ -174,8 +250,10 @@ def validate_cross_system(summary: dict[str, Any] | None) -> GateResult:
                     detail=detail,
                 )
             ],
-            gaps=[],
+            gaps=["ADVISORY: summary check skipped due to query failure"],
         )
+
+    _consecutive_cross_system_failures = 0
 
     findings_submitted = summary.get("findings_submitted", 0)
     check_findings = GateCheck(
@@ -205,14 +283,17 @@ def validate_cross_system(summary: dict[str, Any] | None) -> GateResult:
     )
 
 
-def validate_audit(
+def validate_narrative(
     summary: dict[str, Any] | None,
     readiness: dict[str, Any] | None,
 ) -> GateResult:
-    """Validate that the audit phase resolved quality gaps.
+    """Validate that the narrative phase resolved quality gaps.
 
-    Requires at least one gate check to be evaluated; an empty readiness
-    response fails the gate to prevent vacuous passes.
+    The alternative narrative phase now includes audit responsibilities.
+    This gate checks finalize readiness to confirm the investigation is
+    ready for the report phase. Requires at least one gate check to be
+    evaluated; an empty readiness response fails the gate to prevent
+    vacuous passes.
 
     Args:
         summary: Output from ``get_investigation_summary``, or None.
@@ -225,11 +306,11 @@ def validate_audit(
     gaps: list[str] = []
 
     if not readiness:
-        detail = "Readiness query failed; cannot verify audit"
-        logger.warning("Audit gate: %s", detail)
+        detail = "Readiness query failed; cannot verify narrative phase"
+        logger.warning("Narrative gate: %s", detail)
         return GateResult(
             passed=False,
-            phase_name="audit",
+            phase_name="alternative_narrative",
             checks=[GateCheck(name="readiness_unavailable", passed=False, detail=detail)],
             gaps=[detail],
         )
@@ -283,21 +364,21 @@ def validate_audit(
 
     return GateResult(
         passed=len(checks) > 0 and all(c.passed for c in checks),
-        phase_name="audit",
+        phase_name="alternative_narrative",
         checks=checks,
         gaps=gaps,
     )
 
 
-def validate_report(result_messages: list[dict[str, Any]]) -> GateResult:
-    """Validate that finalize_report succeeded.
+def validate_report(tool_names: list[str]) -> GateResult:
+    """Validate that finalize_report was invoked during the report phase.
 
-    Checks for indicators in the assistant text that the report was
-    generated. Uses broad matching since Claude describes the outcome
-    in natural language rather than echoing exact tool output keys.
+    Checks the structured tool call log for a ``finalize_report``
+    invocation rather than scanning assistant prose for text indicators.
 
     Args:
-        result_messages: Collected assistant messages from the report phase.
+        tool_names: List of MCP tool short names invoked during the
+            report phase (captured from ToolUseBlock events).
 
     Returns:
         GateResult indicating whether the report was generated.
@@ -305,33 +386,18 @@ def validate_report(result_messages: list[dict[str, Any]]) -> GateResult:
     checks: list[GateCheck] = []
     gaps: list[str] = []
 
-    _SUCCESS_INDICATORS = (
-        "report_path",
-        "finalize_report",
-        ".report.md",
-        ".report.html",
-        "report has been",
-        "successfully finalized",
-        "finalization complete",
-        "report generated",
-        "finalized",
-    )
-
-    finalized = False
-    for msg in result_messages:
-        text = str(msg.get("text", "")).lower()
-        if any(indicator in text for indicator in _SUCCESS_INDICATORS):
-            finalized = True
-            break
+    finalized = "finalize_report" in tool_names
 
     check = GateCheck(
         name="report_finalized",
         passed=finalized,
-        detail="Report generated" if finalized else "finalize_report was not called or failed",
+        detail=(
+            "finalize_report was called" if finalized else "finalize_report was never invoked"
+        ),
     )
     checks.append(check)
     if not check.passed:
-        gaps.append("The report was not finalized. Ensure all gates pass and retry.")
+        gaps.append("The report was not finalized. Call finalize_report to generate it.")
 
     return GateResult(
         passed=all(c.passed for c in checks),

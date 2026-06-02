@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 from collections import defaultdict
 from collections.abc import Mapping
@@ -43,6 +44,14 @@ class AuditLog:
         self._tool_call_ids: set[str] = set()
         self._tool_calls: dict[str, dict[str, object]] = {}
         self._finding_entries: dict[str, dict[str, object]] = {}
+        self._total_tool_calls: int = 0
+        self._total_findings: int = 0
+        self._total_duration_ms: float = 0.0
+        self._tool_call_counts: dict[str, int] = defaultdict(int)
+        self._tool_durations: dict[str, float] = defaultdict(float)
+        self._estimated_input_tokens: int = 0
+        self._estimated_output_tokens: int = 0
+        self._timestamps: list[str] = []
         self._load_existing()
 
     def _load_existing(self) -> None:
@@ -70,7 +79,11 @@ class AuditLog:
             )
 
     def _index_entry(self, entry: dict[str, object]) -> None:
-        """Index a parsed audit entry by type (tool_call or finding)."""
+        """Index a parsed audit entry by type and update summary accumulators."""
+        ts = entry.get("timestamp")
+        if isinstance(ts, str) and ts:
+            self._timestamps.append(ts)
+
         entry_type = entry.get("type")
         if entry_type == "tool_call" and "tool_call_id" in entry:
             tcid = entry["tool_call_id"]
@@ -78,11 +91,25 @@ class AuditLog:
                 return
             self._tool_call_ids.add(tcid)
             self._tool_calls[tcid] = entry
+            tool_name = entry.get("tool_name", "unknown")
+            if isinstance(tool_name, str) and tool_name != "run_parallel":
+                self._total_tool_calls += 1
+                dur = entry.get("duration_ms", 0)
+                dur_f = float(dur) if isinstance(dur, int | float) else 0.0
+                self._tool_call_counts[tool_name] += 1
+                self._tool_durations[tool_name] += dur_f
+                self._total_duration_ms += dur_f
+                params_str = json.dumps(entry.get("params", {}))
+                self._estimated_input_tokens += len(params_str) // 4
+                self._estimated_output_tokens += max(
+                    len(params_str) // 2, _MIN_OUTPUT_TOKEN_ESTIMATE
+                )
         elif entry_type == "finding" and "finding_id" in entry:
             fid = entry["finding_id"]
             if not isinstance(fid, str):
                 return
             self._finding_entries[fid] = entry
+            self._total_findings += 1
 
     def _append(self, entry: dict[str, object]) -> None:
         """Append ``entry`` to the JSONL log file and update in-memory indexes."""
@@ -90,6 +117,8 @@ class AuditLog:
             self._log_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self._log_path, "a") as fh:
                 fh.write(json.dumps(entry, separators=(",", ":")) + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
             self._index_entry(entry)
 
     def log_tool_call(
@@ -252,17 +281,8 @@ class AuditLog:
         ]
 
     def summary(self) -> AuditSummary:
-        """Compute aggregate statistics over the full audit log."""
-        total_tool_calls = 0
-        total_findings = 0
-        tool_call_counts: dict[str, int] = defaultdict(int)
-        tool_durations: dict[str, float] = defaultdict(float)
-        total_duration_ms = 0.0
-        timestamps: list[str] = []
-        estimated_input_tokens = 0
-        estimated_output_tokens = 0
-
-        if not self._log_path.exists():
+        """Compute aggregate statistics from in-memory accumulators."""
+        if not self._timestamps and self._total_tool_calls == 0:
             return AuditSummary(
                 total_tool_calls=0,
                 total_findings=0,
@@ -272,64 +292,32 @@ class AuditLog:
                 last_timestamp="",
             )
 
-        with open(self._log_path) as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-
-                ts = entry.get("timestamp")
-                if ts:
-                    timestamps.append(ts)
-
-                entry_type = entry.get("type")
-                if entry_type == "tool_call":
-                    tool_name = entry.get("tool_name", "unknown")
-                    if tool_name == "run_parallel":
-                        continue
-                    total_tool_calls += 1
-                    dur = entry.get("duration_ms", 0)
-                    tool_call_counts[tool_name] += 1
-                    tool_durations[tool_name] += dur
-                    total_duration_ms += dur
-                    params_str = json.dumps(entry.get("params", {}))
-                    estimated_input_tokens += len(params_str) // 4
-                    estimated_output_tokens += max(
-                        len(params_str) // 2, _MIN_OUTPUT_TOKEN_ESTIMATE
-                    )
-                elif entry_type == "finding":
-                    total_findings += 1
-
         cost_per_mtok_in = _COST_PER_MTOK_INPUT
         cost_per_mtok_out = _COST_PER_MTOK_OUTPUT
         estimated_cost = (
-            estimated_input_tokens / 1_000_000 * cost_per_mtok_in
-            + estimated_output_tokens / 1_000_000 * cost_per_mtok_out
+            self._estimated_input_tokens / 1_000_000 * cost_per_mtok_in
+            + self._estimated_output_tokens / 1_000_000 * cost_per_mtok_out
         )
 
-        wall_clock_ms = total_duration_ms
-        if len(timestamps) >= 2:
+        wall_clock_ms = self._total_duration_ms
+        if len(self._timestamps) >= 2:
             try:
-                t0 = datetime.fromisoformat(timestamps[0])
-                t1 = datetime.fromisoformat(timestamps[-1])
+                t0 = datetime.fromisoformat(self._timestamps[0])
+                t1 = datetime.fromisoformat(self._timestamps[-1])
                 wall_clock_ms = (t1 - t0).total_seconds() * 1000
             except (ValueError, TypeError):
                 pass
 
         return AuditSummary(
-            total_tool_calls=total_tool_calls,
-            total_findings=total_findings,
-            tool_call_counts=dict(tool_call_counts),
-            tool_durations=dict(tool_durations),
-            total_duration_ms=total_duration_ms,
+            total_tool_calls=self._total_tool_calls,
+            total_findings=self._total_findings,
+            tool_call_counts=dict(self._tool_call_counts),
+            tool_durations=dict(self._tool_durations),
+            total_duration_ms=self._total_duration_ms,
             wall_clock_ms=wall_clock_ms,
-            first_timestamp=timestamps[0] if timestamps else "",
-            last_timestamp=timestamps[-1] if timestamps else "",
-            estimated_input_tokens=estimated_input_tokens,
-            estimated_output_tokens=estimated_output_tokens,
+            first_timestamp=self._timestamps[0] if self._timestamps else "",
+            last_timestamp=self._timestamps[-1] if self._timestamps else "",
+            estimated_input_tokens=self._estimated_input_tokens,
+            estimated_output_tokens=self._estimated_output_tokens,
             estimated_cost_usd=round(estimated_cost, 4),
         )

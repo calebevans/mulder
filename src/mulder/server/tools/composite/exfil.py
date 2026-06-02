@@ -11,6 +11,7 @@ from mulder.server.helpers import (
     make_tool_call_id,
     slim_window,
 )
+from mulder.server.tool_access import Role, tool_access
 from mulder.server.tools.composite.core import (
     _LATERAL_PORTS,
     _SRC_BULK_DOMAIN,
@@ -259,6 +260,7 @@ def _collect_pcap_exfil_http(sub_call_ids: list[str]) -> list[dict[str, Any]]:
 
 
 @mcp.tool()
+@tool_access(Role.CROSS_EXECUTOR)
 def find_data_exfiltration_indicators() -> dict[str, object]:
     """Detect potential data exfiltration by correlating network, URL, and file access artifacts.
 

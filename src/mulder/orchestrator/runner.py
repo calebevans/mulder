@@ -14,6 +14,8 @@ import contextlib
 import json
 import logging
 import re
+import threading
+import time
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -29,16 +31,15 @@ from claude_agent_sdk.types import (
 from mulder.orchestrator.display import InvestigationDashboard
 from mulder.orchestrator.gates import (
     GateResult,
-    validate_audit,
     validate_catalog,
     validate_cross_system,
     validate_extraction,
+    validate_narrative,
     validate_report,
 )
 from mulder.orchestrator.models import ModelConfig
 from mulder.orchestrator.phases import (
     ALTERNATIVE_NARRATIVE,
-    AUDIT,
     CATALOG,
     CROSS_SYSTEM,
     EXTRACTION,
@@ -52,15 +53,69 @@ from mulder.orchestrator.types import (
     InvestigationResult,
     PhaseResult,
     Plan,
+    extract_catalog_result,
     extract_executor_results,
     extract_follow_up_request,
+    extract_json_from_text,
     extract_json_plan,
+)
+from mulder.patterns import (
+    DEFAULT_DB_DIR,
+    DISK_IMAGE_EXTS,
+    extract_iocs_from_text,
 )
 
 logger = logging.getLogger(__name__)
 
 _RETRY_BUDGET_MULTIPLIER: float = 1.5
 _MAX_COMPACTIONS: int = 3
+
+_TASK_PANEL_SKIP: frozenset[str] = frozenset(
+    {
+        "search",
+        "get_raw_output",
+        "get_findings",
+        "get_investigation_summary",
+        "get_source_stats",
+        "get_timeline",
+        "get_bookmarks",
+        "open_case",
+        "list_cases",
+        "list_sources",
+        "track_progress",
+        "check_extraction_status",
+        "get_completed_results",
+        "wait",
+        "wait_all",
+        "submit_finding",
+        "update_finding",
+        "bookmark_window",
+    }
+)
+
+
+def _sanitize_for_prompt(text: str, max_len: int = 200) -> str:
+    """Strip control characters and cap length for prompt-safe content.
+
+    Evidence content (filenames, registry keys, event messages) may contain
+    control characters or adversarial payloads. This function removes
+    non-printable characters (preserving newlines and tabs) and truncates
+    to a safe maximum length before injection into agent prompts.
+
+    Args:
+        text: Raw text from evidence-derived content.
+        max_len: Maximum allowed character length.
+
+    Returns:
+        Sanitized string safe for prompt injection.
+    """
+    if not text:
+        return ""
+    cleaned = "".join(c for c in text if c.isprintable() or c in ("\n", "\t"))
+    if len(cleaned) > max_len:
+        cleaned = cleaned[:max_len] + "..."
+    return cleaned
+
 
 _MAX_SIMPLE_SYSTEMS_PER_SESSION: int = 4
 _MAX_BUFFER_SIZE_BYTES: int = 50 * 1024 * 1024  # 50 MB
@@ -113,30 +168,37 @@ class Orchestrator:
         self._proxy_config = proxy_config
         self._proxy: ProxyManager | None = None
         self._using_proxy = False
+        self._running = False
+        self._active_systems: list[str] = []
+        self._cached_catalog_data: dict[str, Any] | None = None
         self.dashboard = InvestigationDashboard()
 
     async def run(self) -> InvestigationResult:
         """Execute the full investigation pipeline.
 
         Runs phases sequentially: catalog, extraction (per system),
-        cross-system analysis, alternative narrative, audit, and report.
+        cross-system analysis, alternative narrative, and report.
         Each phase is validated by a quality gate before proceeding.
 
         Returns:
             InvestigationResult with all phase results and aggregate metrics.
         """
         result = InvestigationResult()
-        self._total_phases = 6
+        self._total_phases = 5
         self._phase_counter = 0
 
         self._start_proxy_if_needed()
+        self._running = True
+        self._start_log_tailer()
         self.dashboard.start()
 
         try:
             return await self._run_pipeline(result)
         finally:
+            self._running = False
             self.dashboard.stop()
             self._stop_proxy()
+            self._cleanup_server_context()
 
     def _start_proxy_if_needed(self) -> None:
         """Start a LiteLLM proxy if any configured model requires one."""
@@ -175,6 +237,75 @@ class Orchestrator:
             self._proxy = None
 
     # ------------------------------------------------------------------
+    # Log file tailer for real-time task panel updates
+    # ------------------------------------------------------------------
+
+    def _start_log_tailer(self) -> None:
+        """Start a daemon thread that tails mulder.log for job completions.
+
+        The MCP server writes structured ``[JOB_COMPLETE]`` markers to
+        mulder.log whenever a background job finishes. This tailer reads
+        new lines from the log and pushes status updates to the dashboard
+        task panel in real time.
+        """
+        log_path = Path(DEFAULT_DB_DIR).expanduser() / "mulder.log"
+        if not log_path.exists():
+            logger.debug("mulder.log not found at %s; tailer will wait", log_path)
+
+        def _tail() -> None:
+            """Poll the log file for new [JOB_COMPLETE] lines."""
+            while self._running:
+                if not log_path.exists():
+                    time.sleep(1.0)
+                    continue
+                try:
+                    with open(log_path, encoding="utf-8", errors="replace") as f:
+                        f.seek(0, 2)
+                        while self._running:
+                            line = f.readline()
+                            if not line:
+                                time.sleep(0.5)
+                                continue
+                            if "[JOB_COMPLETE]" in line:
+                                self._handle_job_completion(line)
+                except OSError:
+                    logger.debug("Log tailer encountered IO error", exc_info=True)
+                    time.sleep(1.0)
+
+        thread = threading.Thread(target=_tail, daemon=True, name="log-tailer")
+        thread.start()
+
+    def _handle_job_completion(self, line: str) -> None:
+        """Parse a job completion log line and update the dashboard task panel.
+
+        Expected format after the marker:
+            ``[JOB_COMPLETE] tool_name|status|error_or_empty``
+
+        Args:
+            line: Full log line containing the JOB_COMPLETE marker.
+        """
+        marker = "[JOB_COMPLETE] "
+        try:
+            idx = line.index(marker) + len(marker)
+        except ValueError:
+            return
+
+        parts = line[idx:].strip().split("|", 2)
+        if len(parts) < 2:
+            return
+
+        tool_name = parts[0]
+        status = parts[1]
+        error = parts[2] if len(parts) > 2 and parts[2] else None
+
+        _SUCCESS_STATUSES = ("completed", "ok", "success")
+        for system in list(self._active_systems):
+            if status in _SUCCESS_STATUSES:
+                self.dashboard.update_task(system, tool_name, "done")
+            elif status == "failed":
+                self.dashboard.update_task(system, tool_name, "failed", error=error)
+
+    # ------------------------------------------------------------------
     # Pipeline
     # ------------------------------------------------------------------
 
@@ -202,11 +333,14 @@ class Orchestrator:
         self._last_session_id = catalog_result.session_id
         self._case_id = await self._discover_case_id()
 
-        systems = self._identify_systems_from_catalog(catalog_result)
+        systems, catalog_data = self._identify_systems_from_catalog(catalog_result)
+        if not systems:
+            logger.error("No systems identified from catalog output; cannot proceed.")
+            return result
 
         # Phase 2: Extraction (split-mode, rolling worker pool)
-        groups = self._group_systems(systems, catalog_result)
-        self._total_phases = 6
+        groups = self._group_systems(systems, catalog_data)
+        self._total_phases = 5
         self.dashboard.log_info(
             f"Extraction plan: {len(groups)} session(s) for {len(systems)} systems"
             f" (workers: {self._parallel_extractions})"
@@ -229,19 +363,14 @@ class Orchestrator:
         result.phases.append(cross_result)
         self._accumulate(result, cross_result)
 
-        # Phase 4: Alternative narrative (split-mode)
-        alt_result = await self._run_split_phase(ALTERNATIVE_NARRATIVE)
+        # Phase 4: Alternative narrative + audit (split-mode, with consistency preamble)
+        consistency_report = await self._build_consistency_report()
+        narrative_vars = {"consistency_report": consistency_report or ""}
+        alt_result = await self._run_split_phase(ALTERNATIVE_NARRATIVE, prompt_vars=narrative_vars)
         result.phases.append(alt_result)
         self._accumulate(result, alt_result)
 
-        # Phase 5: Audit (split-mode, with consistency preamble)
-        consistency_report = await self._build_consistency_report()
-        audit_vars = {"consistency_report": consistency_report or ""}
-        audit_result = await self._run_split_phase(AUDIT, prompt_vars=audit_vars)
-        result.phases.append(audit_result)
-        self._accumulate(result, audit_result)
-
-        # Phase 6: Report (single-mode)
+        # Phase 5: Report (single-mode)
         report_result = await self._run_single_phase(REPORT)
         result.phases.append(report_result)
         self._accumulate(result, report_result)
@@ -262,6 +391,10 @@ class Orchestrator:
         is injected into the planner prompt so it can plan without calling
         list_directory.
 
+        Recursively scans the extracted directory to handle nested archive
+        structures (e.g., zip containing a 7z). Classifies files as raw
+        memory dumps or nested archives that need further extraction.
+
         Args:
             system_name: Identifier for the target system (e.g. "base-dc").
 
@@ -272,7 +405,10 @@ class Orchestrator:
         evidence_path = Path(self.evidence_path)
         extracted_dir = Path.home() / ".mulder" / "cases" / "extracted"
 
-        _DISK_EXTENSIONS = frozenset((".e01", ".raw", ".dd", ".img", ".vmdk", ".vhd", ".vhdx"))
+        _MEMORY_EXTENSIONS = frozenset((".raw", ".vmem", ".mem", ".img", ".dmp", ".lime"))
+        _ARCHIVE_EXTENSIONS = frozenset(
+            (".7z", ".zip", ".gz", ".tar", ".xz", ".bz2", ".rar", ".zst")
+        )
         sys_lower = system_name.lower()
 
         disk_images: list[str] = []
@@ -281,28 +417,41 @@ class Orchestrator:
                 if (
                     f.is_file()
                     and sys_lower in f.name.lower()
-                    and f.suffix.lower() in _DISK_EXTENSIONS
+                    and f.suffix.lower() in DISK_IMAGE_EXTS
                 ):
                     disk_images.append(str(f))
 
-        memory_files: list[str] = []
+        memory_dumps: list[str] = []
+        nested_archives: list[str] = []
         if extracted_dir.is_dir():
             for subdir in extracted_dir.iterdir():
                 if subdir.is_dir() and sys_lower in subdir.name.lower():
-                    for f in subdir.iterdir():
-                        if f.is_file():
-                            memory_files.append(str(f))
+                    for f in subdir.rglob("*"):
+                        if not f.is_file():
+                            continue
+                        ext = f.suffix.lower()
+                        if ext in _ARCHIVE_EXTENSIONS:
+                            nested_archives.append(str(f))
+                        elif ext in _MEMORY_EXTENSIONS or f.stat().st_size > 100 * 1024 * 1024:
+                            memory_dumps.append(str(f))
 
         lines: list[str] = [f"System: {system_name}"]
         if disk_images:
             lines.append("Disk images:")
             for p in sorted(disk_images):
                 lines.append(f"  {p}")
-        if memory_files:
-            lines.append("Extracted memory dumps:")
-            for p in sorted(memory_files):
+        if memory_dumps:
+            lines.append("Extracted memory dumps (ready for Volatility):")
+            for p in sorted(memory_dumps):
                 lines.append(f"  {p}")
-        if not disk_images and not memory_files:
+        if nested_archives:
+            lines.append(
+                "NESTED ARCHIVES (must be extracted before analysis; "
+                "likely contain raw memory dumps):"
+            )
+            for p in sorted(nested_archives):
+                lines.append(f"  {p}")
+        if not disk_images and not memory_dumps and not nested_archives:
             lines.append(
                 "(No pre-populated paths available. "
                 f"Call list_directory on {self.evidence_path} to discover files.)"
@@ -341,6 +490,7 @@ class Orchestrator:
             async with semaphore:
                 async with lock:
                     active_count += 1
+                    self._active_systems.extend(group)
                     self.dashboard.set_extraction_counts(total, done_count, active_count)
                 try:
                     evidence_context = self._build_evidence_context(group[0])
@@ -360,6 +510,9 @@ class Orchestrator:
                     async with lock:
                         done_count += 1
                         active_count -= 1
+                        for system_name in group:
+                            if system_name in self._active_systems:
+                                self._active_systems.remove(system_name)
                         self.dashboard.set_extraction_counts(total, done_count, active_count)
 
         tasks = [_extract_one(group) for group in groups]
@@ -484,6 +637,7 @@ class Orchestrator:
                 )
                 accumulated_turns += continuation.turns_used
                 phase_result.messages.extend(continuation.messages)
+                phase_result.tool_names.extend(continuation.tool_names)
                 phase_result.turns_used = accumulated_turns
 
             gate = await self._validate_phase(phase, phase_result)
@@ -561,6 +715,7 @@ class Orchestrator:
         for attempt in range(1 + phase.max_retries):
             follow_up_count = 0
             follow_up_context: str = ""
+            follow_up_history: list[dict[str, Any]] = []
 
             while True:
                 # Step 1: Planner
@@ -586,6 +741,9 @@ class Orchestrator:
                     phase, plan, log_prefix, task_system=task_sys
                 )
 
+                # Step 2.5: Wait for all background batches to finish
+                await self._ensure_batches_complete(exec_results, log_prefix)
+
                 # Step 3: Analyst
                 self._update_dashboard_sub_step(phase, "Analyzing", log_prefix)
                 analyst_out = await self._run_analyst(
@@ -600,7 +758,13 @@ class Orchestrator:
                 # Check for follow-up request
                 if analyst_out.follow_up_request and follow_up_count < phase.max_follow_ups:
                     follow_up_count += 1
-                    follow_up_context = json.dumps(analyst_out.follow_up_request)
+                    follow_up_history.append(analyst_out.follow_up_request)
+                    follow_up_context = json.dumps(
+                        {
+                            "previous_follow_ups": follow_up_history[:-1],
+                            "current_request": analyst_out.follow_up_request,
+                        }
+                    )
                     self.dashboard.log_info(
                         f"Follow-up {follow_up_count}/{phase.max_follow_ups}: "
                         f"{analyst_out.follow_up_request.get('reason', '')}"
@@ -729,10 +893,11 @@ class Orchestrator:
         messages: list[str],
         phase_name: str,
     ) -> dict[str, Any] | None:
-        """Attempt to repair malformed JSON from planner output using utility model.
+        """Attempt to repair malformed JSON from planner output.
 
-        Sends the raw planner output to a cheap model with instructions to
-        extract and fix the JSON. Returns parsed dict or None if repair fails.
+        Tries deterministic extraction first (regex + brace matching via
+        ``extract_json_from_text``). Falls back to an LLM utility session
+        only when deterministic parsing fails.
 
         Args:
             messages: Raw text messages from the planner session.
@@ -741,9 +906,15 @@ class Orchestrator:
         Returns:
             Parsed JSON plan dict, or None if repair failed.
         """
-        raw_text = "\n".join(messages[-3:])  # last few messages most likely have the plan
+        raw_text = "\n".join(messages[-3:])
         if not raw_text.strip():
             return None
+
+        deterministic = extract_json_from_text(raw_text)
+        if deterministic and "tasks" in deterministic:
+            logger.info("[%s] Deterministic JSON extraction succeeded", phase_name)
+            self.dashboard.log_info("JSON repair succeeded (deterministic)")
+            return deterministic
 
         self.dashboard.log_info("Attempting JSON repair via utility model...")
         logger.info("[%s] Attempting JSON repair on planner output", phase_name)
@@ -818,47 +989,44 @@ class Orchestrator:
         )
 
         # Handle context exhaustion with compaction restarts
-        compaction_count = 0
-        total_turns = result.turns_used
-        while result.context_exhausted and compaction_count < _MAX_COMPACTIONS:
-            compaction_count += 1
-            self.dashboard.log_info(
-                f"Executor auto-compacting (#{compaction_count}/{_MAX_COMPACTIONS})"
-            )
-            compact_prompt = (
+        extra_turns = await self._compaction_loop(
+            result=result,
+            system_prompt=phase.executor_system_prompt,
+            model=model,
+            allowed_tools=phase.executor_allowed_tools,
+            disallowed_tools=phase.disallowed_tools,
+            max_turns=phase.executor_max_turns,
+            max_budget=phase.executor_max_budget_usd,
+            continuation_prompt=(
                 "CONTINUATION: The previous executor session exhausted its "
-                "context window. All tool results have been saved. Review "
-                "progress and continue executing any remaining tasks from "
-                "the plan. Do NOT re-run tools that already succeeded."
-            )
-            continuation = await self._execute_query(
-                system_prompt=phase.executor_system_prompt,
-                prompt=compact_prompt,
-                model=model,
-                allowed_tools=phase.executor_allowed_tools,
-                disallowed_tools=phase.disallowed_tools,
-                max_turns=phase.executor_max_turns,
-                max_budget=phase.executor_max_budget_usd,
-                log_prefix=log_prefix,
-                task_system=task_system,
-            )
-            total_turns += continuation.turns_used
-            result.messages.extend(continuation.messages)
-            result.context_exhausted = continuation.context_exhausted
+                "context window. All tool results have been saved. Continue "
+                "executing remaining tasks from this plan that have not yet "
+                "succeeded.\n\n"
+                f"ORIGINAL PLAN:\n{plan_text}\n\n"
+                "Do NOT re-run tools that already succeeded."
+            ),
+            role_label="Executor",
+            log_prefix=log_prefix,
+            task_system=task_system,
+        )
+        total_turns = result.turns_used + extra_turns
 
         results_json = extract_executor_results(result.messages)
 
-        # Update task panel with final statuses from executor results
+        # Update task panel with final statuses from executor results.
+        # The executor model may use various status strings; only treat
+        # explicit error/failure indicators as failed.
+        _FAILURE_STATUSES = {"error", "failed"}
         if task_system and results_json:
             for r in results_json.get("results", []):
                 tool_name = str(r.get("tool", ""))
                 if not tool_name:
                     continue
-                if r.get("status") == "ok":
-                    self.dashboard.update_task(task_system, tool_name, "done")
-                else:
+                if r.get("status") in _FAILURE_STATUSES:
                     error_msg = str(r.get("error", "")) or None
                     self.dashboard.update_task(task_system, tool_name, "failed", error=error_msg)
+                else:
+                    self.dashboard.update_task(task_system, tool_name, "done")
 
         return ExecutionResults(
             plan_id=plan.plan_id,
@@ -867,7 +1035,72 @@ class Orchestrator:
             has_failures=any(
                 r.get("status") == "error" for r in (results_json or {}).get("results", [])
             ),
+            messages=result.messages,
+            batch_ids=result.batch_ids,
         )
+
+    _BATCH_ID_RE = re.compile(r"\bbg_[a-f0-9]{8}\b")
+
+    async def _ensure_batches_complete(
+        self,
+        exec_results: ExecutionResults,
+        log_prefix: str = "",
+    ) -> None:
+        """Block until all extraction batches from the executor finish.
+
+        Prefers structurally captured batch IDs from tool_result blocks.
+        Falls back to regex scanning executor messages when no structural
+        IDs were captured (backward compatibility with older sessions).
+
+        This method still delegates to ``_run_utility_query`` because the
+        ``wait_all`` MCP tool polls the in-process ``JobStore`` that lives
+        in the MCP server subprocess. The orchestrator cannot access that
+        store directly.
+
+        Args:
+            exec_results: Results from the executor session.
+            log_prefix: Optional prefix for dashboard log lines.
+        """
+        batch_ids: set[str] = set(exec_results.batch_ids)
+        if not batch_ids:
+            for msg in exec_results.messages:
+                batch_ids.update(self._BATCH_ID_RE.findall(msg))
+
+        if not batch_ids:
+            return
+
+        ids_list = sorted(batch_ids)
+        pfx = f"[{log_prefix}] " if log_prefix else ""
+        self.dashboard.log_info(
+            f"{pfx}Waiting for {len(ids_list)} extraction batch(es) to complete"
+        )
+
+        ids_json = json.dumps(ids_list)
+        result = await self._run_utility_query(
+            prompt=(
+                f'Call open_case with case_id="{self._case_id}", '
+                f"then call wait_all with batch_ids={ids_json}. "
+                "Return only its raw JSON output."
+            ),
+            allowed_tools=[
+                "mcp__mulder__wait_all",
+                "mcp__mulder__open_case",
+                "mcp__mulder__list_cases",
+            ],
+            label="wait_all_batches",
+            max_turns=5,
+            budget=1.50,
+        )
+
+        if result and result.get("all_done"):
+            self.dashboard.log_info(f"{pfx}All extraction batches confirmed complete")
+        elif result and result.get("status") == "timeout":
+            still = result.get("still_running", [])
+            self.dashboard.log_info(
+                f"{pfx}Batch wait timed out; {len(still)} batch(es) still running"
+            )
+        else:
+            self.dashboard.log_info(f"{pfx}Batch wait returned; proceeding to analysis")
 
     async def _run_analyst(
         self,
@@ -894,8 +1127,17 @@ class Orchestrator:
         """
         model = self.model_config.resolve(phase.name, "analyst")
 
+        sanitized_results = [
+            {
+                "tool": _sanitize_for_prompt(r.get("tool", ""), 100),
+                "status": r.get("status", ""),
+                "source": _sanitize_for_prompt(r.get("source", ""), 150),
+            }
+            for r in exec_results.results
+        ]
+
         context: dict[str, str] = {
-            "execution_results": json.dumps(exec_results.results, indent=2),
+            "execution_results": json.dumps(sanitized_results),
             "investigation_questions": json.dumps(plan.investigation_questions),
         }
         if prompt_vars:
@@ -921,35 +1163,27 @@ class Orchestrator:
         )
 
         # Handle context exhaustion with compaction restarts
-        compaction_count = 0
-        total_turns = result.turns_used
-        while result.context_exhausted and compaction_count < _MAX_COMPACTIONS:
-            compaction_count += 1
-            self.dashboard.log_info(
-                f"Analyst auto-compacting (#{compaction_count}/{_MAX_COMPACTIONS})"
-            )
-            compact_prompt = (
+        extra_turns = await self._compaction_loop(
+            result=result,
+            system_prompt=phase.analyst_system_prompt,
+            model=model,
+            allowed_tools=phase.analyst_allowed_tools,
+            disallowed_tools=phase.disallowed_tools,
+            max_turns=phase.analyst_max_turns,
+            max_budget=phase.analyst_max_budget_usd,
+            continuation_prompt=(
                 "CONTINUATION: The previous analyst session exhausted its "
                 "context window. All submitted findings are saved. Review "
                 "the investigation summary and continue analysis. Submit "
                 "any remaining findings. Do NOT re-submit existing findings."
-            )
-            continuation = await self._execute_query(
-                system_prompt=phase.analyst_system_prompt,
-                prompt=compact_prompt,
-                model=model,
-                allowed_tools=phase.analyst_allowed_tools,
-                disallowed_tools=phase.disallowed_tools,
-                max_turns=phase.analyst_max_turns,
-                max_budget=phase.analyst_max_budget_usd,
-                log_prefix=log_prefix,
-            )
-            total_turns += continuation.turns_used
-            result.messages.extend(continuation.messages)
-            result.context_exhausted = continuation.context_exhausted
+            ),
+            role_label="Analyst",
+            log_prefix=log_prefix,
+        )
+        total_turns = result.turns_used + extra_turns
 
         follow_up = extract_follow_up_request(result.messages)
-        findings_count = _count_finding_submissions(result)
+        findings_count = result.tool_names.count("submit_finding")
 
         return AnalystResult(
             findings_submitted=findings_count,
@@ -957,6 +1191,71 @@ class Orchestrator:
             messages=result.messages,
             turns_used=total_turns,
         )
+
+    # ------------------------------------------------------------------
+    # Compaction loop (shared by executor and analyst)
+    # ------------------------------------------------------------------
+
+    async def _compaction_loop(
+        self,
+        result: PhaseResult,
+        system_prompt: str,
+        model: str,
+        allowed_tools: list[str],
+        disallowed_tools: list[str],
+        max_turns: int,
+        max_budget: float,
+        continuation_prompt: str,
+        role_label: str = "",
+        log_prefix: str = "",
+        task_system: str = "",
+    ) -> int:
+        """Run compaction retries when a session exhausts its context window.
+
+        Spawns continuation sessions until context is no longer exhausted
+        or ``_MAX_COMPACTIONS`` is reached. Continuation messages, tool names,
+        and batch IDs are merged back into *result* in place.
+
+        Args:
+            result: Phase result to extend with continuation data (mutated).
+            system_prompt: System prompt for continuation sessions.
+            model: Model identifier.
+            allowed_tools: Tool whitelist.
+            disallowed_tools: Tool blocklist.
+            max_turns: Maximum tool-use turns per continuation.
+            max_budget: Spend cap per continuation in USD.
+            continuation_prompt: Prompt for the continuation session.
+            role_label: Role name for dashboard messages (e.g. "Executor").
+            log_prefix: Prefix for SDK query log lines.
+            task_system: Task panel system name for tool tracking.
+
+        Returns:
+            Additional turns consumed across all compaction attempts.
+        """
+        compaction_count = 0
+        additional_turns = 0
+        while result.context_exhausted and compaction_count < _MAX_COMPACTIONS:
+            compaction_count += 1
+            self.dashboard.log_info(
+                f"{role_label} auto-compacting (#{compaction_count}/{_MAX_COMPACTIONS})"
+            )
+            continuation = await self._execute_query(
+                system_prompt=system_prompt,
+                prompt=continuation_prompt,
+                model=model,
+                allowed_tools=allowed_tools,
+                disallowed_tools=disallowed_tools,
+                max_turns=max_turns,
+                max_budget=max_budget,
+                log_prefix=log_prefix,
+                task_system=task_system,
+            )
+            additional_turns += continuation.turns_used
+            result.messages.extend(continuation.messages)
+            result.tool_names.extend(continuation.tool_names)
+            result.context_exhausted = continuation.context_exhausted
+            result.batch_ids.update(continuation.batch_ids)
+        return additional_turns
 
     # ------------------------------------------------------------------
     # Low-level SDK query execution
@@ -995,13 +1294,6 @@ class Orchestrator:
         Returns:
             PhaseResult with collected messages and usage information.
         """
-        effective_prompt = prompt
-        if self._case_id:
-            effective_prompt = (
-                f'FIRST: Call open_case with case_id="{self._case_id}" '
-                f"to load the active investigation. Then proceed.\n\n{prompt}"
-            )
-
         options = ClaudeAgentOptions(
             system_prompt=system_prompt,
             model=model,
@@ -1018,6 +1310,8 @@ class Orchestrator:
         )
 
         messages: list[str] = []
+        collected_tool_names: list[str] = []
+        collected_batch_ids: set[str] = set()
         turns_used = 0
         session_id = ""
 
@@ -1036,13 +1330,14 @@ class Orchestrator:
         hit_context_limit = False
 
         try:
-            async for message in query(prompt=effective_prompt, options=options):
+            async for message in query(prompt=prompt, options=options):
                 if isinstance(message, AssistantMessage):
                     delta_in, delta_out, delta_tools, ctx_hit = self._process_assistant_message(
                         message,
                         log_prefix,
                         seen_message_ids,
                         messages,
+                        tool_names_out=collected_tool_names,
                         task_system=task_system,
                     )
                     phase_in_tokens += delta_in
@@ -1066,6 +1361,8 @@ class Orchestrator:
                         phase_in_tokens,
                         phase_out_tokens,
                     )
+
+                self._extract_batch_ids_from_message(message, collected_batch_ids)
         except KeyboardInterrupt:
             raise
         except SystemExit:
@@ -1100,9 +1397,11 @@ class Orchestrator:
             phase_name="query",
             success=False,
             messages=messages,
+            tool_names=collected_tool_names,
             turns_used=turns_used,
             session_id=session_id,
             context_exhausted=hit_context_limit,
+            batch_ids=collected_batch_ids,
         )
 
     def _process_assistant_message(
@@ -1111,6 +1410,7 @@ class Orchestrator:
         log_prefix: str,
         seen_message_ids: set[str],
         messages: list[str],
+        tool_names_out: list[str] | None = None,
         task_system: str = "",
     ) -> tuple[int, int, int, bool]:
         """Process content blocks from an AssistantMessage.
@@ -1120,6 +1420,8 @@ class Orchestrator:
             log_prefix: Prefix for dashboard log lines.
             seen_message_ids: Set of already-processed message IDs (mutated).
             messages: Accumulator for text block content (mutated).
+            tool_names_out: When provided, MCP tool short names are
+                appended here for structured gate validation (mutated).
             task_system: When non-empty, tool use blocks update the
                 dashboard task panel for this system.
 
@@ -1173,7 +1475,8 @@ class Orchestrator:
                                 )
                             elif "results" in parsed:
                                 results = parsed["results"]
-                                ok_count = sum(1 for r in results if r.get("status") == "ok")
+                                _ok = ("ok", "success")
+                                ok_count = sum(1 for r in results if r.get("status") in _ok)
                                 fail_count = len(results) - ok_count
                                 status = f"{ok_count}/{len(results)} ok"
                                 if fail_count:
@@ -1189,6 +1492,8 @@ class Orchestrator:
             elif isinstance(block, ToolUseBlock):
                 tool_count += 1
                 tool_short = block.name.replace("mcp__mulder__", "")
+                if tool_names_out is not None:
+                    tool_names_out.append(tool_short)
                 if tool_short == "submit_finding":
                     tool_input = getattr(block, "input", None) or {}
                     severity = str(tool_input.get("severity", "unknown"))
@@ -1196,7 +1501,7 @@ class Orchestrator:
                     self.dashboard.log_finding(severity, f"{pfx}{title}" if pfx else title)
                 else:
                     self.dashboard.log_tool(f"{pfx}{tool_short}" if pfx else tool_short)
-                if task_system:
+                if task_system and tool_short not in _TASK_PANEL_SKIP:
                     if tool_short == "start_extraction_batch":
                         tool_input = getattr(block, "input", None) or {}
                         batch_tools = tool_input.get("tasks", [])
@@ -1208,6 +1513,62 @@ class Orchestrator:
                         self.dashboard.update_task(task_system, tool_short, "running")
 
         return delta_in, delta_out, tool_count, hit_context
+
+    @staticmethod
+    def _extract_tokens(message: Any) -> tuple[int, int]:
+        """Extract (input_tokens, output_tokens) from a ResultMessage.
+
+        Checks ``message.usage`` first, then falls back to ``model_usage``
+        aggregation for SDK versions that report per-model token counts.
+
+        Args:
+            message: A ResultMessage (or any object with usage/model_usage).
+
+        Returns:
+            Tuple of (input_tokens, output_tokens).
+        """
+        usage = getattr(message, "usage", None) or {}
+        tok_in: int = usage.get("input_tokens", 0) or 0
+        tok_out: int = usage.get("output_tokens", 0) or 0
+        if not tok_in and not tok_out:
+            mu = getattr(message, "model_usage", None)
+            if mu and isinstance(mu, dict):
+                for _mname, mvals in mu.items():
+                    if isinstance(mvals, dict):
+                        tok_in += mvals.get("inputTokens", 0) or 0
+                        tok_out += mvals.get("outputTokens", 0) or 0
+        return tok_in, tok_out
+
+    @staticmethod
+    def _extract_batch_ids_from_message(message: Any, batch_ids: set[str]) -> None:
+        """Extract batch IDs from tool_result content blocks in a message.
+
+        Inspects any message with a ``content`` attribute for blocks whose
+        ``type`` is ``"tool_result"``. When the block content is a JSON string
+        containing a ``batch_id`` field, that ID is added to the accumulator.
+
+        Args:
+            message: A streamed message from the SDK (any type).
+            batch_ids: Accumulator set to add discovered IDs to (mutated).
+        """
+        content = getattr(message, "content", None)
+        if not content:
+            return
+        if not isinstance(content, list):
+            return
+
+        for block in content:
+            if getattr(block, "type", None) != "tool_result":
+                continue
+            block_content = getattr(block, "content", None)
+            if not isinstance(block_content, str):
+                continue
+            try:
+                data = json.loads(block_content)
+                if isinstance(data, dict) and "batch_id" in data:
+                    batch_ids.add(data["batch_id"])
+            except (json.JSONDecodeError, TypeError):
+                pass
 
     def _process_result_message(
         self,
@@ -1235,17 +1596,7 @@ class Orchestrator:
         turns_used = getattr(message, "num_turns", 0) or 0
         session_id: str = getattr(message, "session_id", "") or ""
 
-        usage = getattr(message, "usage", None) or {}
-        result_in: int = usage.get("input_tokens", 0) or 0
-        result_out: int = usage.get("output_tokens", 0) or 0
-
-        if not result_in and not result_out:
-            mu = getattr(message, "model_usage", None)
-            if mu and isinstance(mu, dict):
-                for _mname, mvals in mu.items():
-                    if isinstance(mvals, dict):
-                        result_in += mvals.get("inputTokens", 0) or 0
-                        result_out += mvals.get("outputTokens", 0) or 0
+        result_in, result_out = self._extract_tokens(message)
 
         correction_in = result_in - phase_in_tokens
         correction_out = result_out - phase_out_tokens
@@ -1315,23 +1666,9 @@ class Orchestrator:
             GateResult from the validation, or None if no gate exists.
         """
         if phase.name == "catalog":
-            full_text = " ".join(phase_result.messages).lower()
-            has_evidence = any(
-                kw in full_text
-                for kw in (
-                    "evidence",
-                    "case",
-                    "scan_evidence",
-                    "classified",
-                    "memory dump",
-                )
-            )
-            has_root = "evidence root" in full_text or "evidence_root" in full_text
-            summary: dict[str, Any] = {
-                "case_id": "pending" if has_evidence else None,
-                "evidence_root": "/evidence" if has_root or has_evidence else None,
-            }
-            return validate_catalog(summary)
+            catalog_json = extract_catalog_result(phase_result.messages)
+            self._cached_catalog_data = catalog_json
+            return validate_catalog(catalog_json or {})
 
         if phase.name == "extraction":
             summary_result = await self._get_summary()
@@ -1341,81 +1678,147 @@ class Orchestrator:
             summary_result = await self._get_summary()
             return validate_cross_system(summary_result)
 
-        if phase.name == "audit":
+        if phase.name == "alternative_narrative":
             summary_result = await self._get_summary()
             readiness = await self._get_readiness()
-            return validate_audit(summary_result, readiness)
+            return validate_narrative(summary_result, readiness)
 
         if phase.name == "report":
-            msg_dicts = [{"text": m} for m in phase_result.messages]
-            return validate_report(msg_dicts)
+            return validate_report(phase_result.tool_names)
 
         return None
 
     # ------------------------------------------------------------------
-    # Utility queries
+    # Server context for direct tool invocations
+    # ------------------------------------------------------------------
+
+    def _ensure_server_context(self) -> None:
+        """Initialize a local server context for direct tool invocations.
+
+        Sets up the server configuration and loads the active case so that
+        MCP tool functions (which read from the case database) can be called
+        directly without spawning an LLM agent session.
+
+        The context is created once per case and reused across calls. The
+        orchestrator opens its own read connection to the same SQLite
+        database that the MCP server uses; WAL mode ensures concurrent
+        reads are safe.
+        """
+        import mulder.server.app as server_app
+
+        if server_app._cfg is None:
+            from mulder.server.app import ServerConfig
+
+            db_dir = Path(DEFAULT_DB_DIR).expanduser()
+            server_app._cfg = ServerConfig(db_dir=db_dir)
+
+        if self._case_id:
+            ctx = server_app._ctx
+            if ctx is not None and ctx.case_id == self._case_id:
+                return
+            server_app.load_case(self._case_id)
+
+    def _cleanup_server_context(self) -> None:
+        """Close the local server context opened for direct tool calls."""
+        try:
+            import mulder.server.app as server_app
+
+            if server_app._ctx is not None:
+                server_app._close_current_ctx()
+        except Exception:
+            logger.debug("Error cleaning up orchestrator server context", exc_info=True)
+
+    # ------------------------------------------------------------------
+    # Direct tool invocations (zero LLM cost)
     # ------------------------------------------------------------------
 
     async def _get_summary(self) -> dict[str, Any] | None:
-        """Retrieve the investigation summary via a lightweight SDK query.
+        """Retrieve the investigation summary via the MCP server subprocess.
+
+        Routes through ``_run_utility_query`` so the query executes in the
+        MCP server process that owns the database connections and indexed
+        data. Direct in-process calls can miss data due to cross-process
+        SQLite WAL visibility issues.
 
         Returns:
             Parsed dictionary from ``get_investigation_summary``, or None.
         """
         return await self._run_utility_query(
-            prompt=self._build_tool_prompt("get_investigation_summary"),
+            prompt=(
+                f'Call open_case with case_id="{self._case_id}", '
+                "then call get_investigation_summary. "
+                "Return only its raw JSON output."
+            ),
             allowed_tools=[
                 "mcp__mulder__get_investigation_summary",
                 "mcp__mulder__open_case",
                 "mcp__mulder__list_cases",
             ],
-            label="get_investigation_summary",
+            label="get_summary",
+            max_turns=5,
+            budget=1.00,
         )
 
     async def _get_readiness(self) -> dict[str, Any] | None:
-        """Retrieve finalize readiness via a lightweight SDK query.
+        """Retrieve finalize readiness via the MCP server subprocess.
+
+        Routes through ``_run_utility_query`` so the query executes in the
+        MCP server process that owns the database connections and indexed
+        data. Direct in-process calls can miss data due to cross-process
+        SQLite WAL visibility issues.
 
         Returns:
             Parsed dictionary from ``check_finalize_readiness``, or None.
         """
         return await self._run_utility_query(
-            prompt=self._build_tool_prompt("check_finalize_readiness"),
+            prompt=(
+                f'Call open_case with case_id="{self._case_id}", '
+                "then call check_finalize_readiness. "
+                "Return only its raw JSON output."
+            ),
             allowed_tools=[
                 "mcp__mulder__check_finalize_readiness",
                 "mcp__mulder__open_case",
                 "mcp__mulder__list_cases",
             ],
-            label="check_finalize_readiness",
+            label="get_readiness",
+            max_turns=5,
+            budget=1.00,
         )
 
-    def _build_tool_prompt(
-        self,
-        tool_name: str,
-        args: dict[str, Any] | None = None,
-    ) -> str:
-        """Build a utility query prompt for a single MCP tool invocation.
+    async def _discover_case_id(self) -> str:
+        """Discover the case ID created during the catalog phase.
 
-        Args:
-            tool_name: The MCP tool to invoke.
-            args: Optional arguments to pass to the tool.
+        Calls ``list_cases`` directly against the local server config,
+        avoiding a full LLM agent session.
 
         Returns:
-            Formatted prompt string.
+            The case ID string for use with ``open_case``.
         """
-        args_clause = ""
-        if args:
-            args_clause = f" with arguments {json.dumps(args)}"
+        try:
+            self._ensure_server_context()
+            from mulder.server.app import _tool_dispatch_sync
 
-        if self._case_id:
-            return (
-                f'Call open_case with case_id="{self._case_id}", '
-                f"then call {tool_name}{args_clause} and return only its "
-                f"raw JSON output. Do not add any commentary."
-            )
-        return (
-            f"Call {tool_name}{args_clause} and return only its raw JSON "
-            f"output. Do not add any commentary."
-        )
+            fn = _tool_dispatch_sync["list_cases"]
+            result = fn()
+            cases = result.get("results", [])
+            if cases and isinstance(cases, list):
+                case_id = str(
+                    cases[0].get("case_id", "") if isinstance(cases[0], dict) else cases[0]
+                )
+                if case_id:
+                    logger.info("Discovered case_id: %s", case_id)
+                    return case_id
+        except Exception:
+            logger.warning("Direct list_cases query failed", exc_info=True)
+
+        fallback = Path(self.evidence_path).name
+        logger.warning("Could not discover case_id, using fallback: %s", fallback)
+        return fallback
+
+    # ------------------------------------------------------------------
+    # MCP-delegated utility query (wait_all only)
+    # ------------------------------------------------------------------
 
     async def _run_utility_query(
         self,
@@ -1427,7 +1830,9 @@ class Orchestrator:
     ) -> dict[str, Any] | None:
         """Run a lightweight utility query against the MCP server.
 
-        Uses the planner model at low effort for fast, cheap queries.
+        Used only for operations that require the MCP server's in-process
+        state (e.g., ``wait_all`` which polls the ``JobStore``). All other
+        utility queries use direct tool invocations instead.
 
         Args:
             prompt: The prompt to send.
@@ -1467,38 +1872,8 @@ class Orchestrator:
             return None
 
         full_text = "\n".join(collected_text)
-        parsed = _parse_json_from_text(full_text)
+        parsed = extract_json_from_text(full_text)
         return parsed if parsed else None
-
-    async def _discover_case_id(self) -> str:
-        """Discover the case ID created during the catalog phase.
-
-        Returns:
-            The case ID string for use with ``open_case``.
-        """
-        parsed = await self._run_utility_query(
-            prompt=(
-                "Call list_cases and return only its raw JSON output. Do not add any commentary."
-            ),
-            allowed_tools=["mcp__mulder__list_cases"],
-            label="list_cases",
-            max_turns=3,
-            budget=1.0,
-        )
-
-        if parsed:
-            cases = parsed.get("cases", [])
-            if cases and isinstance(cases, list):
-                case_id = str(
-                    cases[0].get("case_id", "") if isinstance(cases[0], dict) else cases[0]
-                )
-                if case_id:
-                    logger.info("Discovered case_id: %s", case_id)
-                    return case_id
-
-        fallback = Path(self.evidence_path).name
-        logger.warning("Could not discover case_id, using fallback: %s", fallback)
-        return fallback
 
     def _track_utility_tokens(self, result: ResultMessage, label: str) -> None:
         """Extract token usage from a utility query's ResultMessage.
@@ -1507,17 +1882,7 @@ class Orchestrator:
             result: The ResultMessage from the utility query.
             label: Human-readable label for log messages.
         """
-        usage = getattr(result, "usage", None) or {}
-        tok_in: int = usage.get("input_tokens", 0) or 0
-        tok_out: int = usage.get("output_tokens", 0) or 0
-
-        if not tok_in and not tok_out:
-            mu = getattr(result, "model_usage", None)
-            if mu and isinstance(mu, dict):
-                for _mname, mvals in mu.items():
-                    if isinstance(mvals, dict):
-                        tok_in += mvals.get("inputTokens", 0) or 0
-                        tok_out += mvals.get("outputTokens", 0) or 0
+        tok_in, tok_out = self._extract_tokens(result)
 
         if tok_in or tok_out:
             self.dashboard.add_tokens(tok_in, tok_out)
@@ -1527,80 +1892,54 @@ class Orchestrator:
             self.dashboard.add_model_usage(model_usage)
 
     # ------------------------------------------------------------------
-    # Consistency report for audit phase
+    # Consistency report for narrative phase
     # ------------------------------------------------------------------
 
     async def _build_consistency_report(self) -> str:
         """Build a consistency report identifying dedup clusters.
 
-        Queries all findings, extracts IOCs using regex, groups findings
-        by shared IOCs, and returns a formatted report.
+        Reads all findings directly from the case database, extracts IOCs
+        using regex, groups findings by shared IOCs, and returns a
+        formatted report. Bypasses the MCP tool layer entirely for zero
+        LLM cost.
 
         Returns:
-            Formatted string for the audit planner prompt, or empty string.
+            Formatted string for the narrative planner prompt, or empty string.
         """
-        findings_data = await self._run_utility_query(
-            prompt=self._build_tool_prompt("get_findings"),
-            allowed_tools=[
-                "mcp__mulder__get_findings",
-                "mcp__mulder__open_case",
-                "mcp__mulder__list_cases",
-            ],
-            label="get_findings",
-        )
-        if findings_data is None:
+        try:
+            self._ensure_server_context()
+            from mulder.server.app import get_ctx
+
+            findings = get_ctx().db.get_findings()
+        except Exception:
+            logger.warning("Failed to query findings for consistency report", exc_info=True)
             return ""
 
-        findings_list = findings_data.get("findings", [])
-        if not findings_list or not isinstance(findings_list, list):
+        if not findings:
             return ""
-
-        ip_re = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
-        path_re = re.compile(
-            r"(?:[A-Z]:\\[^\s,\"']+|"
-            r"/(?:usr|var|etc|home|tmp|opt|root|proc|sys|run|mnt|media)[^\s,\"']+)"
-        )
-        proc_re = re.compile(
-            r"\b(\w+\.exe|"
-            r"(?:sshd|cron|bash|sh|python[23]?|perl|ruby|java|node|nginx|"
-            r"apache2?|httpd|mysqld|postgres|systemd|init|kworker|"
-            r"iptables|netcat|nc|ncat|wget|curl|chmod|chown|dd|"
-            r"rsync|ssh|scp|sftp|su|sudo))\b",
-            re.IGNORECASE,
-        )
-        hash_re = re.compile(r"\b[a-f0-9]{32,64}\b")
-        domain_re = re.compile(
-            r"\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
-            r"(?:com|net|org|io|info|biz|xyz|top|ru|cn|uk|de|fr|"
-            r"onion|local)\b",
-            re.IGNORECASE,
-        )
 
         ioc_to_findings: dict[str, list[str]] = {}
 
-        for f in findings_list:
-            if not isinstance(f, dict):
-                continue
-            fid = f.get("finding_id", "")
-            text = f"{f.get('title', '')} {f.get('description', '')}"
+        for f in findings:
+            text = f"{f.title} {f.description}"
 
+            ioc_set = extract_iocs_from_text(text)
             iocs: set[str] = set()
-            for ip in ip_re.findall(text):
-                if ip not in ("0.0.0.0", "127.0.0.1", "255.255.255.255"):
-                    iocs.add(f"ip:{ip}")
-            for path in path_re.findall(text):
+            for ip in ioc_set.ips:
+                iocs.add(f"ip:{ip}")
+            for path in ioc_set.paths:
                 iocs.add(f"path:{path[:60]}")
-            for proc in proc_re.findall(text):
+            for proc in ioc_set.processes:
                 iocs.add(f"proc:{proc.lower()}")
-            for h in hash_re.findall(text):
+            for h in ioc_set.hashes:
                 iocs.add(f"hash:{h}")
-            for domain in domain_re.findall(text):
+            for domain in ioc_set.domains:
                 iocs.add(f"domain:{domain.lower()}")
 
             for ioc in iocs:
                 if ioc not in ioc_to_findings:
                     ioc_to_findings[ioc] = []
-                ioc_to_findings[ioc].append(fid)
+                ioc_to_findings[ioc].append(f.finding_id)
 
         clusters: list[str] = []
         seen_clusters: set[frozenset[str]] = set()
@@ -1666,203 +2005,78 @@ class Orchestrator:
     def _identify_systems_from_catalog(
         self,
         catalog_result: PhaseResult,
-    ) -> list[str]:
-        """Extract system names from the catalog phase output.
+    ) -> tuple[list[str], dict[str, Any]]:
+        """Extract system names from the catalog phase's structured JSON.
 
-        Uses a multi-strategy approach:
-        1. Looks for a structured SYSTEMS section.
-        2. Falls back to labeled patterns (System:, Device:, Host:).
-        3. Final fallback: treats the evidence path as a single system.
+        Uses cached catalog data from gate validation when available,
+        falling back to parsing the messages directly. Returns an empty
+        list if the catalog did not produce valid structured output (the
+        gate should have caught this, but this provides a defensive
+        safety net).
 
         Args:
             catalog_result: The completed catalog phase result.
 
         Returns:
-            List of system identifiers for per-system extraction phases.
+            Tuple of (system name list, full catalog JSON dict). Returns
+            ([], {}) if no valid catalog JSON was found.
         """
-        full_text = "\n".join(catalog_result.messages)
-
-        systems = self._parse_structured_systems_section(full_text)
-        if systems:
-            logger.info(
-                "Identified %d systems from structured section: %s",
-                len(systems),
-                systems,
+        catalog_data = self._cached_catalog_data
+        self._cached_catalog_data = None
+        if catalog_data is None:
+            catalog_data = extract_catalog_result(catalog_result.messages)
+        if catalog_data is None:
+            logger.error(
+                "Catalog did not produce valid JSON with a 'systems' array. "
+                "Cannot identify systems for extraction."
             )
-            return systems
+            return [], {}
 
-        label_pattern = (
-            r"(?:system|device|host|machine|computer|hostname)"
-            r"[:\s]+[`*]*([a-zA-Z0-9][\w.\-]+)[`*]*"
+        systems = [str(s["name"]) for s in catalog_data["systems"]]
+        logger.info(
+            "Identified %d system(s) from catalog JSON: %s",
+            len(systems),
+            systems,
         )
-        labeled = re.findall(label_pattern, full_text, re.IGNORECASE)
-
-        bold_pattern = r"\*\*([a-zA-Z0-9][\w.\-]+)\*\*"
-        tick_pattern = r"`([a-zA-Z0-9][\w.\-]+)`"
-        formatted_candidates = re.findall(bold_pattern, full_text) + re.findall(
-            tick_pattern, full_text
-        )
-
-        _NON_SYSTEM_TOKENS = {
-            "e01",
-            "7z",
-            "raw",
-            "mem",
-            "vmem",
-            "dmp",
-            "pcap",
-            "pcapng",
-            "evtx",
-            "true",
-            "false",
-            "none",
-            "null",
-            "disk",
-            "memory",
-            "image",
-            "dump",
-            "capture",
-            "archive",
-            "file",
-            "directory",
-            "system",
-            "device",
-            "host",
-            "evidence",
-            "scan_evidence",
-            "list_directory",
-            "extract_archive",
-            "list_sources",
-            "get_source_stats",
-            "run_parallel",
-            "classified",
-        }
-
-        seen: set[str] = set()
-        systems = []
-
-        for name in labeled:
-            lower = name.lower()
-            if lower in seen or lower in _NON_SYSTEM_TOKENS:
-                continue
-            if len(lower) < 2:
-                continue
-            seen.add(lower)
-            systems.append(name)
-
-        if not systems:
-            for name in formatted_candidates:
-                lower = name.lower()
-                if lower in seen or lower in _NON_SYSTEM_TOKENS:
-                    continue
-                if len(lower) < 3:
-                    continue
-                has_separator = any(c in lower for c in "-_.")
-                has_digit = any(c.isdigit() for c in lower)
-                if has_separator or has_digit:
-                    seen.add(lower)
-                    systems.append(name)
-
-        if systems:
-            logger.info(
-                "Identified %d systems from catalog text: %s",
-                len(systems),
-                systems,
-            )
-            return systems
-
-        fallback = [Path(self.evidence_path).name]
-        logger.warning(
-            "Could not parse systems from catalog, using fallback: %s",
-            fallback,
-        )
-        return fallback
-
-    @staticmethod
-    def _parse_structured_systems_section(text: str) -> list[str]:
-        """Parse a structured SYSTEMS section from catalog output.
-
-        Args:
-            text: Full catalog assistant output text.
-
-        Returns:
-            List of system names, or empty list if no section found.
-        """
-        pattern = r"#{1,4}\s*SYSTEMS?\s*\n([\s\S]*?)(?=\n#{1,4}\s|\Z)"
-        match = re.search(pattern, text, re.IGNORECASE)
-        if not match:
-            return []
-
-        section = match.group(1)
-        systems: list[str] = []
-        seen: set[str] = set()
-
-        for line in section.strip().splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            cleaned = re.sub(r"^[-*\d.)\s]+", "", line).strip()
-            cleaned = re.sub(r"[`*]", "", cleaned).strip()
-            if ":" in cleaned:
-                cleaned = cleaned.split(":")[0].strip()
-            elif "  " in cleaned:
-                cleaned = cleaned.split("  ")[0].strip()
-
-            if cleaned and cleaned.lower() not in seen and len(cleaned) >= 2:
-                seen.add(cleaned.lower())
-                systems.append(cleaned)
-
-        return systems
+        return systems, catalog_data
 
     @staticmethod
     def _group_systems(
         systems: list[str],
-        catalog_result: PhaseResult,
+        catalog_data: dict[str, Any],
     ) -> list[list[str]]:
         """Group systems into extraction sessions.
 
-        Systems with rich evidence get individual sessions. Systems with
-        simpler evidence are batched together.
+        Systems with disk image evidence get individual sessions. Systems
+        with only memory dumps are batched together when there are many
+        systems. Uses structured evidence type arrays from the catalog
+        JSON rather than scanning free text.
 
         Args:
             systems: Full list of system identifiers.
-            catalog_result: Catalog phase result for evidence type hints.
+            catalog_data: Structured catalog JSON with per-system evidence
+                types in the ``systems`` array.
 
         Returns:
             List of system groups, each group processed in one session.
         """
-        full_text = "\n".join(catalog_result.messages).lower()
+        systems_by_name: dict[str, dict[str, Any]] = {
+            str(s.get("name", "")).lower(): s
+            for s in catalog_data.get("systems", [])
+            if isinstance(s, dict)
+        }
+
         rich_systems: list[str] = []
         simple_systems: list[str] = []
 
-        _DISK_INDICATORS = (
-            "disk image",
-            "disk_image",
-            ".e01",
-            ".vmdk",
-            ".vhd",
-            ".raw disk",
-            ".dd",
-            "filesystem image",
-            "partition",
-        )
-        _MEMORY_INDICATORS = (
-            "memory dump",
-            "memory_dump",
-            ".mem",
-            ".vmem",
-            ".dmp",
-            "ram capture",
-            "memory image",
-            "physical memory",
-        )
-
         for sys_name in systems:
-            sys_lower = sys_name.lower()
-            context = _extract_system_context(full_text, sys_lower)
+            sys_info = systems_by_name.get(sys_name.lower(), {})
+            evidence: object = sys_info.get("evidence", [])
+            if not isinstance(evidence, list):
+                evidence = []
 
-            has_disk = any(ind in context for ind in _DISK_INDICATORS)
-            has_memory = any(ind in context for ind in _MEMORY_INDICATORS)
+            has_disk = "disk_image" in evidence
+            has_memory = "memory_dump" in evidence
 
             if has_disk:
                 rich_systems.append(sys_name)
@@ -1922,88 +2136,3 @@ class Orchestrator:
             phase_result: The phase result to accumulate from.
         """
         result.total_turns += phase_result.turns_used
-
-
-def _count_finding_submissions(result: PhaseResult) -> int:
-    """Count submit_finding tool calls in the phase messages.
-
-    Scans for the characteristic submit_finding confirmation patterns
-    in agent text output.
-
-    Args:
-        result: PhaseResult whose messages are scanned.
-
-    Returns:
-        Number of submit_finding calls detected.
-    """
-    count = 0
-    for msg in result.messages:
-        count += msg.lower().count("submit_finding")
-    return count
-
-
-def _extract_system_context(full_text: str, system_name: str) -> str:
-    """Extract text surrounding a system name for evidence type detection.
-
-    Args:
-        full_text: Lowercased full catalog output text.
-        system_name: Lowercased system identifier to search for.
-
-    Returns:
-        Concatenated context strings around all occurrences.
-    """
-    contexts: list[str] = []
-    start = 0
-    while True:
-        idx = full_text.find(system_name, start)
-        if idx == -1:
-            break
-        ctx_start = max(0, idx - 200)
-        ctx_end = min(len(full_text), idx + len(system_name) + 200)
-        contexts.append(full_text[ctx_start:ctx_end])
-        start = idx + len(system_name)
-
-    return " ".join(contexts) if contexts else full_text
-
-
-def _parse_json_from_text(text: str) -> dict[str, Any]:
-    """Extract and parse a JSON object from free-form text.
-
-    Args:
-        text: Raw text that may contain a JSON object.
-
-    Returns:
-        Parsed dictionary, or empty dict if no valid JSON is found.
-    """
-    stripped = text.strip()
-    try:
-        parsed: object = json.loads(stripped)
-        if isinstance(parsed, dict):
-            return parsed
-    except (json.JSONDecodeError, ValueError):
-        pass
-
-    for marker in ("```json", "```"):
-        if marker in stripped:
-            start = stripped.index(marker) + len(marker)
-            end = stripped.find("```", start)
-            if end > start:
-                try:
-                    parsed = json.loads(stripped[start:end].strip())
-                    if isinstance(parsed, dict):
-                        return parsed
-                except (json.JSONDecodeError, ValueError):
-                    pass
-
-    brace_start = stripped.find("{")
-    brace_end = stripped.rfind("}")
-    if brace_start >= 0 and brace_end > brace_start:
-        try:
-            parsed = json.loads(stripped[brace_start : brace_end + 1])
-            if isinstance(parsed, dict):
-                return parsed
-        except (json.JSONDecodeError, ValueError):
-            pass
-
-    logger.warning("Failed to parse JSON from tool response: %s", text[:200])
-    return {}

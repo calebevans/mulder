@@ -18,10 +18,11 @@ import shutil
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from mulder.extractors import DISK_IMAGE_EXTS
 from mulder.extractors.base import ExtractionResult
+from mulder.patterns import DISK_IMAGE_EXTS
 
 logger = logging.getLogger(__name__)
 _EVTX_EXTS = frozenset({".evtx"})
@@ -792,21 +793,31 @@ class DiskImageExtractor:
             if any(pat in rel.lower() for pat in _TSK_EVTX_INDICATORS)
         ]
 
-        for inode, rel_path in evtx_entries:
-            safe_name = rel_path.replace("/", "_").replace("\\", "_")
-            dest = extract_dir / safe_name
-            if _tsk_icat_file(image_str, inode, sector_offset, dest):
-                channel, text = _parse_evtx_file(dest)
-                if text:
-                    results.append(
-                        ExtractionResult(
-                            source_name=f"evtx.{channel}",
-                            source_path=str(image_path),
-                            extractor="python-evtx (tsk-fallback)",
-                            text_output=text,
-                            line_count=text.count("\n") + 1,
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futures = {
+                pool.submit(
+                    _tsk_icat_file,
+                    image_str,
+                    inode,
+                    sector_offset,
+                    extract_dir / rel_path.replace("/", "_").replace("\\", "_"),
+                ): (inode, rel_path, extract_dir / rel_path.replace("/", "_").replace("\\", "_"))
+                for inode, rel_path in evtx_entries
+            }
+            for future in as_completed(futures):
+                _inode, rel_path, dest = futures[future]
+                if future.result():
+                    channel, text = _parse_evtx_file(dest)
+                    if text:
+                        results.append(
+                            ExtractionResult(
+                                source_name=f"evtx.{channel}",
+                                source_path=str(image_path),
+                                extractor="python-evtx (tsk-fallback)",
+                                text_output=text,
+                                line_count=text.count("\n") + 1,
+                            )
                         )
-                    )
         return results
 
     def _tsk_parse_registry(

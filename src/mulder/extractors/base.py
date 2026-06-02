@@ -71,28 +71,3 @@ class ExtractorRegistry:
     def all_extractors(self) -> list[Extractor]:
         """Return all registered extractors in registration order."""
         return list(self._extractors)
-
-
-def default_registry() -> ExtractorRegistry:
-    """Return a registry with all known extractors.
-
-    Concrete extractors are imported lazily so the module stays importable
-    even when the underlying forensic tools are not installed.
-    """
-    from mulder.extractors.bulk import BulkExtractorExtractor
-    from mulder.extractors.disk import DiskImageExtractor
-    from mulder.extractors.eztools import EZToolsExtractor
-    from mulder.extractors.logs import LogFileExtractor
-    from mulder.extractors.plaso import PlasoExtractor
-    from mulder.extractors.sleuthkit import SleuthKitExtractor
-    from mulder.extractors.volatility import VolatilityExtractor
-
-    registry = ExtractorRegistry()
-    registry.register(VolatilityExtractor())
-    registry.register(PlasoExtractor())
-    registry.register(SleuthKitExtractor())
-    registry.register(BulkExtractorExtractor())
-    registry.register(EZToolsExtractor())
-    registry.register(DiskImageExtractor())
-    registry.register(LogFileExtractor())
-    return registry

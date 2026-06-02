@@ -238,20 +238,16 @@ class ProxyManager:
 
         self._process = subprocess.Popen(
             cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             env=proxy_env,
         )
 
         if not _wait_for_health(self._port):
-            stderr_output = ""
-            if self._process and self._process.stderr:
-                stderr_output = self._process.stderr.read().decode(errors="replace")[:500]
             self.stop()
             raise RuntimeError(
                 f"LiteLLM proxy failed to start within {_HEALTH_CHECK_TIMEOUT}s. "
-                f"Models: {self._models}\n"
-                f"Stderr: {stderr_output}"
+                f"Models: {self._models}"
             )
 
         logger.info("LiteLLM proxy is healthy on port %d", self._port)

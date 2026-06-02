@@ -337,5 +337,96 @@ def investigate(
         raise SystemExit(1)
 
 
+@cli.command("export-iocs")
+@click.argument("case_id")
+@click.option(
+    "--format",
+    "fmt",
+    type=click.Choice(["stix", "csv", "all"]),
+    default="all",
+    show_default=True,
+    help="Output format.",
+)
+@click.option(
+    "--output-dir",
+    default=None,
+    help="Directory for output files. Defaults to the case report directory.",
+)
+@click.option(
+    "--db-dir",
+    default=DEFAULT_DB_DIR,
+    show_default=True,
+    help="Directory containing per-case databases.",
+)
+def export_iocs_cmd(case_id: str, fmt: str, output_dir: str | None, db_dir: str) -> None:
+    """Export IOCs from a completed investigation as STIX 2.1 or CSV."""
+    from mulder.db import CaseDB
+    from mulder.report.ioc_export import export_iocs
+
+    db_dir_path = Path(db_dir).expanduser()
+    db_path = db_dir_path / f"{case_id}.db"
+
+    if not db_path.exists():
+        raise click.ClickException(f"Case database not found: {db_path}")
+
+    out_dir = Path(output_dir) if output_dir else db_dir_path
+
+    with CaseDB(db_path) as case_db:
+        findings = case_db.get_findings()
+        click.echo(f"Exporting IOCs from {len(findings)} findings ...")
+        result = export_iocs(case_id, findings, out_dir, fmt=fmt)
+
+    if result.get("csv_path"):
+        click.echo(f"  CSV:  {result['csv_path']}")
+    if result.get("stix_path"):
+        click.echo(f"  STIX: {result['stix_path']}")
+    click.echo("Done.")
+
+
+@cli.command("export-navigator")
+@click.argument("case_id")
+@click.option(
+    "--output-dir",
+    default=None,
+    help="Directory for the output file. Defaults to the case report directory.",
+)
+@click.option(
+    "--domain",
+    type=click.Choice(["enterprise-attack", "ics-attack"]),
+    default="enterprise-attack",
+    show_default=True,
+    help="ATT&CK domain for the layer.",
+)
+@click.option(
+    "--db-dir",
+    default=DEFAULT_DB_DIR,
+    show_default=True,
+    help="Directory containing per-case databases.",
+)
+def export_navigator_cmd(case_id: str, output_dir: str | None, domain: str, db_dir: str) -> None:
+    """Export a MITRE ATT&CK Navigator layer from investigation findings."""
+    from mulder.db import CaseDB
+    from mulder.report.navigator import export_navigator_layer
+
+    db_dir_path = Path(db_dir).expanduser()
+    db_path = db_dir_path / f"{case_id}.db"
+
+    if not db_path.exists():
+        raise click.ClickException(f"Case database not found: {db_path}")
+
+    out_dir = Path(output_dir) if output_dir else db_dir_path
+
+    with CaseDB(db_path) as case_db:
+        findings = case_db.get_findings()
+        click.echo(f"Building Navigator layer from {len(findings)} findings ...")
+        layer_path = export_navigator_layer(case_id, findings, out_dir, domain=domain)
+
+    if layer_path:
+        click.echo(f"  Layer: {layer_path}")
+    else:
+        click.echo("  No MITRE technique IDs found; no layer generated.")
+    click.echo("Done.")
+
+
 if __name__ == "__main__":
     cli()

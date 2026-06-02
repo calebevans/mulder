@@ -265,7 +265,7 @@ class TestRenderAll:
         )
         audit_path = tmp_path / "audit.jsonl"
         audit_path.write_text("")
-        md_text, html_text = renderer.render_all(meta, [finding], summary, audit_path)
+        md_text, html_text, _pdf = renderer.render_all(meta, [finding], summary, audit_path)
         assert len(md_text) > 0
         assert "dual" in md_text
         assert len(html_text) > 0

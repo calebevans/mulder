@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
 import time
@@ -16,12 +17,14 @@ from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
     _FILE_LIST_CAP,
     _PREVIEW_CHAR_LIMIT,
-    TOOL_TIMEOUT,
+    adaptive_timeout,
     error_response,
     make_tool_call_id,
     require_binary,
+    sources_already_indexed,
     tool_response,
 )
+from mulder.server.tool_access import Role, tool_access
 
 __all__ = [
     "run_binwalk",
@@ -36,6 +39,41 @@ logger = logging.getLogger(__name__)
 _BULK_TIMEOUT = 1800
 _SCALPEL_TIMEOUT = 1800
 _PHOTOREC_TIMEOUT = 3600
+_MAX_FEATURE_FILE_SIZE = 256 * 1024 * 1024  # 256 MiB read cap per feature file
+_MIN_FREE_SPACE_BYTES = 1024 * 1024 * 1024  # 1 GiB absolute minimum
+
+
+def _check_disk_space(image_path: str, multiplier: float = 0.1) -> str | None:
+    """Verify sufficient temp-partition space before running a carving tool.
+
+    Estimates needed space as *multiplier* times the image file size
+    (minimum 1 GiB) and compares against free space on the temp
+    filesystem.
+
+    Args:
+        image_path: Path to the disk image.
+        multiplier: Fraction of image size to require as free space.
+
+    Returns:
+        An error message when space is insufficient, None otherwise.
+    """
+    try:
+        image_size = Path(image_path).stat().st_size
+    except OSError:
+        return None
+    needed = max(int(image_size * multiplier), _MIN_FREE_SPACE_BYTES)
+    try:
+        usage = shutil.disk_usage(tempfile.gettempdir())
+    except OSError:
+        return None
+    if usage.free < needed:
+        free_gib = usage.free / (1024**3)
+        needed_gib = needed / (1024**3)
+        return (
+            f"Insufficient disk space: {free_gib:.1f} GiB free, "
+            f"estimated {needed_gib:.1f} GiB needed"
+        )
+    return None
 
 
 def _bulk_page_size() -> int:
@@ -139,6 +177,31 @@ def _build_bulk_extractor_cmd(
     return cmd
 
 
+def _read_capped_feature_file(feature_file: Path) -> str | None:
+    """Read a single feature file, capped at ``_MAX_FEATURE_FILE_SIZE``.
+
+    Args:
+        feature_file: Path to a bulk_extractor feature file.
+
+    Returns:
+        Stripped file content, or None on read failure or empty content.
+    """
+    try:
+        file_size = feature_file.stat().st_size
+        if file_size > _MAX_FEATURE_FILE_SIZE:
+            logger.warning(
+                "Feature file %s is %d bytes; reading first %d only",
+                feature_file.name,
+                file_size,
+                _MAX_FEATURE_FILE_SIZE,
+            )
+        with open(feature_file, encoding="utf-8", errors="replace") as fh:
+            text = fh.read(_MAX_FEATURE_FILE_SIZE).strip()
+    except OSError:
+        return None
+    return text or None
+
+
 def _stream_and_index_features(
     outdir: str,
     features: list[str] | None,
@@ -146,7 +209,10 @@ def _stream_and_index_features(
 ) -> list[dict[str, object]]:
     """Read, index, and discard each feature file sequentially.
 
-    Bounds peak memory to a single feature file rather than all combined.
+    Bounds peak memory to a single feature file (capped at
+    ``_MAX_FEATURE_FILE_SIZE`` characters) rather than all combined.
+    Safely handles a missing or empty output directory so that partial
+    results can be collected after a timeout.
 
     Args:
         outdir: bulk_extractor output directory.
@@ -157,7 +223,10 @@ def _stream_and_index_features(
         List of per-feature index summary dicts.
     """
     results: list[dict[str, object]] = []
-    for feature_file in sorted(Path(outdir).iterdir()):
+    out_path = Path(outdir)
+    if not out_path.is_dir():
+        return results
+    for feature_file in sorted(out_path.iterdir()):
         if not feature_file.is_file() or feature_file.suffix == ".xml":
             continue
         stem = feature_file.stem.replace("_histogram", "").replace("_find", "find")
@@ -166,11 +235,8 @@ def _stream_and_index_features(
         if features and stem not in features:
             continue
 
-        try:
-            text = feature_file.read_text(encoding="utf-8", errors="replace").strip()
-        except OSError:
-            continue
-        if not text:
+        text = _read_capped_feature_file(feature_file)
+        if text is None:
             continue
 
         source_name = _FEATURE_SOURCE_MAP.get(stem, f"bulk.{stem}")
@@ -182,11 +248,13 @@ def _stream_and_index_features(
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def run_bulk_extractor(
     image_path: str,
     features: list[str] | None = None,
     scanners: list[str] | None = None,
     max_depth: int | None = None,
+    force: bool = False,
 ) -> dict[str, object]:
     """Carve IOCs (URLs, emails, domains, IPs) from a disk image using bulk_extractor.
 
@@ -220,37 +288,74 @@ def run_bulk_extractor(
             first-pass scan: most forensic artifacts are at depth
             0-1.  Re-run with full depth on specific images if you
             suspect nested compressed content.
+        force: Re-run extraction even if sources already exist.
     """
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
-    params = {
+    params: dict[str, object] = {
         "image_path": image_path,
         "features": features,
         "scanners": scanners,
         "max_depth": max_depth,
+        "force": force,
     }
+
+    if not force:
+        existing = sources_already_indexed(["bulk."], evidence_path=image_path)
+        if existing:
+            return tool_response(
+                tc_id,
+                "run_bulk_extractor",
+                params,
+                {
+                    "status": "skipped",
+                    "reason": "Sources already indexed from prior extraction",
+                    "existing_sources": existing,
+                },
+                "bulk",
+                0.0,
+            )
 
     if not require_binary("bulk_extractor"):
         return error_response(
             tc_id, "run_bulk_extractor", params, "bulk_extractor not found on PATH"
         )
 
+    if not Path(image_path).exists():
+        return error_response(
+            tc_id,
+            "run_bulk_extractor",
+            params,
+            f"File not found: {image_path}",
+            error_type="file_not_found",
+        )
+
+    space_err = _check_disk_space(image_path)
+    if space_err:
+        return error_response(
+            tc_id, "run_bulk_extractor", params, space_err, error_type="disk_space"
+        )
+
+    timeout = adaptive_timeout(image_path, base=_BULK_TIMEOUT)
+
     with tempfile.TemporaryDirectory(prefix="mulder_bulk_") as tmpdir:
         cmd = _build_bulk_extractor_cmd(image_path, tmpdir, scanners, max_depth)
+        timed_out = False
 
         try:
             proc = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=_BULK_TIMEOUT, check=False
+                cmd, capture_output=True, text=True, timeout=timeout, check=False
             )
         except subprocess.TimeoutExpired:
-            return error_response(
-                tc_id,
-                "run_bulk_extractor",
-                params,
-                f"bulk_extractor timed out after {_BULK_TIMEOUT}s",
+            timed_out = True
+            proc = None
+            logger.warning(
+                "bulk_extractor timed out after %ds on %s; salvaging partial results",
+                timeout,
+                image_path,
             )
 
-        if proc.returncode != 0:
+        if proc is not None and proc.returncode != 0:
             stderr_hint = (proc.stderr or "")[:_PREVIEW_CHAR_LIMIT].strip()
             logger.error("bulk_extractor exited %d: %r", proc.returncode, stderr_hint)
             return error_response(
@@ -268,21 +373,30 @@ def run_bulk_extractor(
         r.pop("source_id", None)
 
     elapsed = (time.monotonic() - t0) * 1000
+    response_data: dict[str, object] = {
+        "features_indexed": len(results),
+        "total_windows_indexed": total_windows,
+        "per_feature": results,
+    }
+    if timed_out:
+        response_data["partial"] = True
+        response_data["warning"] = (
+            f"bulk_extractor timed out after {timeout}s; "
+            f"indexed {len(results)} partial feature file(s)"
+        )
+
     return tool_response(
         tc_id,
         "run_bulk_extractor",
         params,
-        {
-            "features_indexed": len(results),
-            "total_windows_indexed": total_windows,
-            "per_feature": results,
-        },
+        response_data,
         "bulk",
         elapsed,
     )
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def run_foremost(image_path: str) -> dict[str, object]:
     """Carve files from a disk image using foremost.
 
@@ -294,25 +408,46 @@ def run_foremost(image_path: str) -> dict[str, object]:
     """
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
-    params = {"image_path": image_path}
+    params: dict[str, object] = {"image_path": image_path}
 
     if not require_binary("foremost"):
         return error_response(tc_id, "run_foremost", params, "foremost not found on PATH")
 
-    with tempfile.TemporaryDirectory(prefix="mulder_foremost_") as tmpdir:
+    if not Path(image_path).exists():
+        return error_response(
+            tc_id,
+            "run_foremost",
+            params,
+            f"File not found: {image_path}",
+            error_type="file_not_found",
+        )
+
+    space_err = _check_disk_space(image_path, multiplier=0.5)
+    if space_err:
+        return error_response(tc_id, "run_foremost", params, space_err, error_type="disk_space")
+
+    timeout = adaptive_timeout(image_path, base=_BULK_TIMEOUT)
+
+    with tempfile.TemporaryDirectory(prefix="mulder_foremost_") as parent:
+        outdir = os.path.join(parent, "output")
         try:
             subprocess.run(
-                ["foremost", "-i", image_path, "-o", tmpdir, "-T"],
+                ["foremost", "-i", image_path, "-o", outdir, "-T"],
                 capture_output=True,
                 text=True,
-                timeout=_BULK_TIMEOUT,
+                timeout=timeout,
                 check=False,
             )
         except subprocess.TimeoutExpired:
-            return error_response(tc_id, "run_foremost", params, "foremost timed out")
+            return error_response(
+                tc_id,
+                "run_foremost",
+                params,
+                f"foremost timed out after {timeout}s",
+            )
 
         audit_text = ""
-        for audit_file in Path(tmpdir).rglob("audit.txt"):
+        for audit_file in Path(parent).rglob("audit.txt"):
             with contextlib.suppress(OSError):
                 audit_text += audit_file.read_text(encoding="utf-8", errors="replace")
 
@@ -324,6 +459,7 @@ def run_foremost(image_path: str) -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def run_scalpel(image_path: str) -> dict[str, object]:
     """Carve files from a disk image or partition using Scalpel.
 
@@ -336,7 +472,7 @@ def run_scalpel(image_path: str) -> dict[str, object]:
     """
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
-    params = {"image_path": image_path}
+    params: dict[str, object] = {"image_path": image_path}
 
     if not require_binary("scalpel"):
         return error_response(
@@ -356,14 +492,21 @@ def run_scalpel(image_path: str) -> dict[str, object]:
             error_type="file_not_found",
         )
 
-    with tempfile.TemporaryDirectory(prefix="mulder_scalpel_") as tmpdir:
-        cmd = ["scalpel", "-o", tmpdir, image_path]
+    space_err = _check_disk_space(image_path, multiplier=0.5)
+    if space_err:
+        return error_response(tc_id, "run_scalpel", params, space_err, error_type="disk_space")
+
+    timeout = adaptive_timeout(image_path, base=_SCALPEL_TIMEOUT)
+
+    with tempfile.TemporaryDirectory(prefix="mulder_scalpel_") as parent:
+        outdir = os.path.join(parent, "output")
+        cmd = ["scalpel", "-o", outdir, image_path]
         try:
             proc = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=_SCALPEL_TIMEOUT,
+                timeout=timeout,
                 check=False,
             )
         except subprocess.TimeoutExpired:
@@ -371,11 +514,11 @@ def run_scalpel(image_path: str) -> dict[str, object]:
                 tc_id,
                 "run_scalpel",
                 params,
-                f"scalpel timed out after {_SCALPEL_TIMEOUT}s",
+                f"scalpel timed out after {timeout}s",
                 error_type="timeout",
             )
 
-        audit_path = Path(tmpdir) / "audit.txt"
+        audit_path = Path(outdir) / "audit.txt"
         audit_text = ""
         if audit_path.exists():
             audit_text = audit_path.read_text(errors="replace")
@@ -390,6 +533,7 @@ def run_scalpel(image_path: str) -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def run_binwalk(target_path: str, extract: bool = False) -> dict[str, object]:
     """Scan a file for embedded files, firmware headers, and compressed archives.
 
@@ -402,7 +546,7 @@ def run_binwalk(target_path: str, extract: bool = False) -> dict[str, object]:
     """
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
-    params = {"target_path": target_path, "extract": extract}
+    params: dict[str, object] = {"target_path": target_path, "extract": extract}
 
     if not require_binary("binwalk"):
         return error_response(
@@ -422,6 +566,11 @@ def run_binwalk(target_path: str, extract: bool = False) -> dict[str, object]:
             error_type="file_not_found",
         )
 
+    if extract:
+        space_err = _check_disk_space(target_path, multiplier=0.5)
+        if space_err:
+            return error_response(tc_id, "run_binwalk", params, space_err, error_type="disk_space")
+
     cmd = ["binwalk"]
     if extract:
         cmd.append("-e")
@@ -432,7 +581,7 @@ def run_binwalk(target_path: str, extract: bool = False) -> dict[str, object]:
             cmd,
             capture_output=True,
             text=True,
-            timeout=TOOL_TIMEOUT * 3,
+            timeout=adaptive_timeout(target_path),
             check=False,
         )
     except subprocess.TimeoutExpired:
@@ -450,6 +599,7 @@ def run_binwalk(target_path: str, extract: bool = False) -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def run_photorec(image_path: str) -> dict[str, object]:
     """Recover deleted files from a disk image using PhotoRec.
 
@@ -461,7 +611,7 @@ def run_photorec(image_path: str) -> dict[str, object]:
     """
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
-    params = {"image_path": image_path}
+    params: dict[str, object] = {"image_path": image_path}
 
     if not require_binary("photorec"):
         return error_response(
@@ -482,6 +632,12 @@ def run_photorec(image_path: str) -> dict[str, object]:
             error_type="file_not_found",
         )
 
+    space_err = _check_disk_space(image_path, multiplier=0.5)
+    if space_err:
+        return error_response(tc_id, "run_photorec", params, space_err, error_type="disk_space")
+
+    timeout = adaptive_timeout(image_path, base=_PHOTOREC_TIMEOUT)
+
     with tempfile.TemporaryDirectory(prefix="mulder_photorec_") as tmpdir:
         cmd = [
             "photorec",
@@ -495,7 +651,7 @@ def run_photorec(image_path: str) -> dict[str, object]:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=_PHOTOREC_TIMEOUT,
+                timeout=timeout,
                 check=False,
             )
         except subprocess.TimeoutExpired:
@@ -503,7 +659,7 @@ def run_photorec(image_path: str) -> dict[str, object]:
                 tc_id,
                 "run_photorec",
                 params,
-                f"photorec timed out after {_PHOTOREC_TIMEOUT}s",
+                f"photorec timed out after {timeout}s",
                 error_type="timeout",
             )
 

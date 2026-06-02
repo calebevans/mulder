@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import patch
 
 from mulder.orchestrator.runner import (
     Orchestrator,
-    _count_finding_submissions,
-    _extract_system_context,
-    _parse_json_from_text,
 )
-from mulder.orchestrator.types import PhaseResult
+from mulder.orchestrator.types import PhaseResult, extract_catalog_result, extract_json_from_text
 
 
 def _make_orchestrator(evidence_path: str = "/evidence") -> Orchestrator:
@@ -19,149 +17,161 @@ def _make_orchestrator(evidence_path: str = "/evidence") -> Orchestrator:
         return Orchestrator(evidence_path=evidence_path)
 
 
+def _catalog_json(
+    systems: list[dict[str, object]],
+    case_id: str = "evidence",
+    evidence_root: str = "/evidence",
+) -> str:
+    """Build a valid catalog JSON string for test fixtures."""
+    return json.dumps(
+        {
+            "case_id": case_id,
+            "evidence_root": evidence_root,
+            "systems": systems,
+            "archives_extracted": True,
+            "total_sources": len(systems),
+        }
+    )
+
+
+class TestExtractCatalogResult:
+    """Tests for extract_catalog_result in types.py."""
+
+    def test_valid_json_parsed(self) -> None:
+        """Valid catalog JSON with systems array is extracted."""
+        msg = _catalog_json([{"name": "Rocba", "type": "Windows", "evidence": ["disk_image"]}])
+        result = extract_catalog_result([msg])
+        assert result is not None
+        assert result["case_id"] == "evidence"
+        assert len(result["systems"]) == 1
+        assert result["systems"][0]["name"] == "Rocba"
+
+    def test_searches_reverse_order(self) -> None:
+        """Last valid JSON message wins when multiple are present."""
+        old = _catalog_json([{"name": "OldHost", "type": "Linux", "evidence": []}])
+        new = _catalog_json([{"name": "NewHost", "type": "Windows", "evidence": ["disk_image"]}])
+        result = extract_catalog_result(["some text", old, "more text", new])
+        assert result is not None
+        assert result["systems"][0]["name"] == "NewHost"
+
+    def test_rejects_empty_systems(self) -> None:
+        """JSON with empty systems array returns None."""
+        msg = json.dumps({"case_id": "x", "evidence_root": "/e", "systems": []})
+        assert extract_catalog_result([msg]) is None
+
+    def test_rejects_missing_name(self) -> None:
+        """Systems entries without a name field are rejected."""
+        msg = json.dumps({"systems": [{"type": "Windows", "evidence": []}]})
+        assert extract_catalog_result([msg]) is None
+
+    def test_returns_none_for_no_json(self) -> None:
+        """Plain text with no JSON returns None."""
+        assert extract_catalog_result(["No JSON here."]) is None
+
+    def test_handles_json_with_surrounding_text(self) -> None:
+        """JSON embedded in surrounding text is still extracted."""
+        catalog = _catalog_json([{"name": "host-a", "type": "Linux", "evidence": []}])
+        msg = f"Here is the catalog output:\n{catalog}\nDone."
+        result = extract_catalog_result([msg])
+        assert result is not None
+        assert result["systems"][0]["name"] == "host-a"
+
+
 class TestIdentifySystemsFromCatalog:
-    """Tests for Orchestrator._identify_systems_from_catalog."""
+    """Tests for Orchestrator._identify_systems_from_catalog (JSON-only)."""
 
-    def test_structured_section_preferred(self) -> None:
-        """Uses ## SYSTEMS markdown section when present."""
+    def test_extracts_systems_from_json(self) -> None:
+        """Parses system names from structured catalog JSON."""
+        orch = _make_orchestrator()
+        msg = _catalog_json(
+            [
+                {"name": "base-dc", "type": "Windows", "evidence": ["disk_image"]},
+                {"name": "base-admin", "type": "Windows", "evidence": ["memory_dump"]},
+            ]
+        )
+        catalog = PhaseResult(phase_name="catalog", success=True, messages=[msg], turns_used=1)
+        systems, catalog_data = orch._identify_systems_from_catalog(catalog)
+        assert systems == ["base-dc", "base-admin"]
+        assert catalog_data["case_id"] == "evidence"
+
+    def test_single_system(self) -> None:
+        """Single system in JSON is returned correctly."""
+        orch = _make_orchestrator()
+        msg = _catalog_json([{"name": "Rocba", "type": "Windows", "evidence": ["disk_image"]}])
+        catalog = PhaseResult(phase_name="catalog", success=True, messages=[msg], turns_used=1)
+        systems, _ = orch._identify_systems_from_catalog(catalog)
+        assert systems == ["Rocba"]
+
+    def test_returns_empty_on_no_json(self) -> None:
+        """Returns empty list when catalog has no valid JSON."""
         orch = _make_orchestrator()
         catalog = PhaseResult(
             phase_name="catalog",
             success=True,
-            messages=["Evidence cataloged.\n## SYSTEMS\n- base-dc\n- base-admin\n\n## SUMMARY"],
+            messages=["No JSON output, just markdown text."],
             turns_used=1,
         )
-        systems = orch._identify_systems_from_catalog(catalog)
-        assert "base-dc" in systems
-        assert "base-admin" in systems
+        systems, catalog_data = orch._identify_systems_from_catalog(catalog)
+        assert systems == []
+        assert catalog_data == {}
 
-    def test_labeled_pattern_fallback(self) -> None:
-        """Falls back to 'System: name' regex when no section exists."""
+    def test_returns_empty_on_invalid_systems(self) -> None:
+        """Returns empty list when systems entries lack names."""
         orch = _make_orchestrator()
-        catalog = PhaseResult(
-            phase_name="catalog",
-            success=True,
-            messages=["Found System: web-server-01 with disk evidence."],
-            turns_used=1,
-        )
-        systems = orch._identify_systems_from_catalog(catalog)
-        assert "web-server-01" in systems
+        msg = json.dumps({"systems": [{"type": "Windows"}]})
+        catalog = PhaseResult(phase_name="catalog", success=True, messages=[msg], turns_used=1)
+        systems, catalog_data = orch._identify_systems_from_catalog(catalog)
+        assert systems == []
+        assert catalog_data == {}
 
-    def test_formatted_candidates_deduplicated(self) -> None:
-        """Bold/backtick names are collected and deduplicated."""
+    def test_uses_last_json_message(self) -> None:
+        """When compaction restarts produce multiple JSON messages, uses the last."""
         orch = _make_orchestrator()
+        old_msg = _catalog_json([{"name": "partial", "type": "Unknown", "evidence": []}])
+        new_msg = _catalog_json(
+            [
+                {"name": "Rocba", "type": "Windows", "evidence": ["disk_image", "memory_dump"]},
+            ]
+        )
         catalog = PhaseResult(
             phase_name="catalog",
             success=True,
-            messages=["Found **host-a** and `host-a` evidence. Also **host-b** disk."],
-            turns_used=1,
+            messages=["cataloging...", old_msg, "continuing...", new_msg],
+            turns_used=5,
         )
-        systems = orch._identify_systems_from_catalog(catalog)
-        host_a_count = sum(1 for s in systems if s.lower() == "host-a")
-        assert host_a_count == 1
-
-    def test_filters_non_system_tokens(self) -> None:
-        """Tokens like 'e01', 'memory', 'disk' are excluded."""
-        orch = _make_orchestrator()
-        catalog = PhaseResult(
-            phase_name="catalog",
-            success=True,
-            messages=["Device: actual-host and `e01` and **memory** items."],
-            turns_used=1,
-        )
-        systems = orch._identify_systems_from_catalog(catalog)
-        lowered = [s.lower() for s in systems]
-        assert "e01" not in lowered
-        assert "memory" not in lowered
-        assert "actual-host" in lowered
-
-    def test_single_system_fallback(self) -> None:
-        """Returns evidence path as sole system when no names found."""
-        orch = _make_orchestrator(evidence_path="/cases/incident-42")
-        catalog = PhaseResult(
-            phase_name="catalog",
-            success=True,
-            messages=["No recognizable systems were found."],
-            turns_used=1,
-        )
-        systems = orch._identify_systems_from_catalog(catalog)
-        assert systems == ["incident-42"]
-
-
-class TestParseStructuredSystemsSection:
-    """Tests for Orchestrator._parse_structured_systems_section."""
-
-    def test_h2_heading_parsed(self) -> None:
-        """## SYSTEMS heading with bullet list items."""
-        text = "Intro\n## SYSTEMS\n- base-dc\n- base-admin\n## NEXT"
-        result = Orchestrator._parse_structured_systems_section(text)
-        assert result == ["base-dc", "base-admin"]
-
-    def test_h3_heading_parsed(self) -> None:
-        """### Systems heading variant recognized."""
-        text = "### Systems\n- server-01\n- server-02\n"
-        result = Orchestrator._parse_structured_systems_section(text)
-        assert result == ["server-01", "server-02"]
-
-    def test_numbered_list(self) -> None:
-        """Items prefixed with '1.' are cleaned correctly."""
-        text = "## SYSTEMS\n1. host-alpha\n2. host-beta\n"
-        result = Orchestrator._parse_structured_systems_section(text)
-        assert "host-alpha" in result
-        assert "host-beta" in result
-
-    def test_colon_suffix_stripped(self) -> None:
-        """'base-dc: Windows DC' yields 'base-dc'."""
-        text = "## SYSTEMS\n- base-dc: Windows Domain Controller\n"
-        result = Orchestrator._parse_structured_systems_section(text)
-        assert result == ["base-dc"]
-
-    def test_empty_section_returns_empty(self) -> None:
-        """Heading present but no items yields []."""
-        text = "Some intro text\n## SYSTEMS\n"
-        result = Orchestrator._parse_structured_systems_section(text)
-        assert result == []
-
-    def test_no_section_returns_empty(self) -> None:
-        """Text without SYSTEMS heading yields []."""
-        text = "Just some text about evidence.\nNothing structured here."
-        result = Orchestrator._parse_structured_systems_section(text)
-        assert result == []
+        systems, _ = orch._identify_systems_from_catalog(catalog)
+        assert systems == ["Rocba"]
 
 
 class TestGroupSystems:
-    """Tests for Orchestrator._group_systems."""
+    """Tests for Orchestrator._group_systems (structured catalog data)."""
 
     def test_disk_system_gets_own_group(self) -> None:
-        """System with '.e01' in catalog context is placed alone."""
-        catalog = PhaseResult(
-            phase_name="catalog",
-            success=True,
-            messages=["host-a has disk image host-a.e01, host-b has memory dump host-b.mem"],
-            turns_used=1,
-        )
-        groups = Orchestrator._group_systems(["host-a", "host-b"], catalog)
+        """System with disk_image evidence is placed alone."""
+        catalog_data = {
+            "systems": [
+                {"name": "host-a", "evidence": ["disk_image"]},
+                {"name": "host-b", "evidence": ["memory_dump"]},
+            ],
+        }
+        groups = Orchestrator._group_systems(["host-a", "host-b"], catalog_data)
         host_a_groups = [g for g in groups if "host-a" in g]
         assert len(host_a_groups) == 1
         assert host_a_groups[0] == ["host-a"]
 
     def test_memory_only_batched_when_many_systems(self) -> None:
         """Memory-only systems batched when total systems > 3."""
-        padding = " " * 250
-        catalog = PhaseResult(
-            phase_name="catalog",
-            success=True,
-            messages=[
-                f"host-a has disk image host-a.e01.{padding}"
-                f"host-b has disk image host-b.vmdk.{padding}"
-                f"host-c has memory dump host-c.mem.{padding}"
-                f"host-d has memory dump host-d.mem.{padding}"
-                "host-e has memory dump host-e.dmp."
+        catalog_data = {
+            "systems": [
+                {"name": "host-a", "evidence": ["disk_image"]},
+                {"name": "host-b", "evidence": ["disk_image"]},
+                {"name": "host-c", "evidence": ["memory_dump"]},
+                {"name": "host-d", "evidence": ["memory_dump"]},
+                {"name": "host-e", "evidence": ["memory_dump"]},
             ],
-            turns_used=1,
-        )
+        }
         systems = ["host-a", "host-b", "host-c", "host-d", "host-e"]
-        groups = Orchestrator._group_systems(systems, catalog)
+        groups = Orchestrator._group_systems(systems, catalog_data)
         flat = [s for g in groups for s in g]
         assert sorted(flat) == sorted(systems)
         batched = [g for g in groups if len(g) > 1]
@@ -169,117 +179,57 @@ class TestGroupSystems:
 
     def test_all_rich_returns_individual_groups(self) -> None:
         """When all systems have disk evidence, each gets its own group."""
-        catalog = PhaseResult(
-            phase_name="catalog",
-            success=True,
-            messages=["host-a has disk_image host-a.e01. host-b has disk_image host-b.e01."],
-            turns_used=1,
-        )
-        groups = Orchestrator._group_systems(["host-a", "host-b"], catalog)
+        catalog_data = {
+            "systems": [
+                {"name": "host-a", "evidence": ["disk_image"]},
+                {"name": "host-b", "evidence": ["disk_image"]},
+            ],
+        }
+        groups = Orchestrator._group_systems(["host-a", "host-b"], catalog_data)
         assert groups == [["host-a"], ["host-b"]]
 
     def test_empty_systems_fallback(self) -> None:
         """Edge case: empty list still returns one group."""
-        catalog = PhaseResult(
-            phase_name="catalog",
-            success=True,
-            messages=["No systems found."],
-            turns_used=1,
-        )
-        groups = Orchestrator._group_systems([], catalog)
+        groups = Orchestrator._group_systems([], {"systems": []})
         assert len(groups) == 1
+
+    def test_missing_evidence_field_treated_as_rich(self) -> None:
+        """Systems without an evidence field default to individual groups."""
+        catalog_data = {
+            "systems": [
+                {"name": "host-x"},
+            ],
+        }
+        groups = Orchestrator._group_systems(["host-x"], catalog_data)
+        assert groups == [["host-x"]]
 
 
 class TestParseJsonFromText:
-    """Tests for _parse_json_from_text."""
+    """Tests for extract_json_from_text."""
 
     def test_bare_json(self) -> None:
         """Direct JSON string is parsed."""
-        result = _parse_json_from_text('{"key": "value"}')
+        result = extract_json_from_text('{"key": "value"}')
         assert result == {"key": "value"}
 
     def test_fenced_json(self) -> None:
         """JSON inside triple-backtick code fence is extracted."""
         text = 'Some preamble\n```json\n{"tool": "search"}\n```\nDone.'
-        result = _parse_json_from_text(text)
+        result = extract_json_from_text(text)
         assert result == {"tool": "search"}
 
     def test_embedded_braces(self) -> None:
         """JSON within surrounding prose is found via brace matching."""
         text = 'The result is: {"status": "ok", "count": 3} as expected.'
-        result = _parse_json_from_text(text)
+        result = extract_json_from_text(text)
         assert result == {"status": "ok", "count": 3}
 
     def test_no_json_returns_empty_dict(self) -> None:
         """Plain text with no JSON returns {}."""
-        result = _parse_json_from_text("No JSON content here at all.")
+        result = extract_json_from_text("No JSON content here at all.")
         assert result == {}
 
     def test_invalid_json_returns_empty_dict(self) -> None:
         """Malformed JSON returns {} without raising."""
-        result = _parse_json_from_text('{"broken": }')
+        result = extract_json_from_text('{"broken": }')
         assert result == {}
-
-
-class TestCountFindingSubmissions:
-    """Tests for _count_finding_submissions."""
-
-    def test_counts_multiple_mentions(self) -> None:
-        """Multiple 'submit_finding' in messages are counted."""
-        phase = PhaseResult(
-            phase_name="analysis",
-            success=True,
-            messages=[
-                "Called submit_finding for suspicious process.",
-                "Also called submit_finding for lateral movement.",
-            ],
-            turns_used=2,
-        )
-        assert _count_finding_submissions(phase) == 2
-
-    def test_case_insensitive(self) -> None:
-        """Mixed case 'Submit_Finding' is still counted."""
-        phase = PhaseResult(
-            phase_name="analysis",
-            success=True,
-            messages=["Used Submit_Finding for the IOC."],
-            turns_used=1,
-        )
-        assert _count_finding_submissions(phase) == 1
-
-    def test_zero_when_absent(self) -> None:
-        """Returns 0 when no submit_finding pattern present."""
-        phase = PhaseResult(
-            phase_name="analysis",
-            success=True,
-            messages=["Analysis complete, no findings to report."],
-            turns_used=1,
-        )
-        assert _count_finding_submissions(phase) == 0
-
-
-class TestExtractSystemContext:
-    """Tests for _extract_system_context."""
-
-    def test_extracts_surrounding_200_chars(self) -> None:
-        """Context window around each occurrence is 200 chars each side."""
-        padding = "x" * 300
-        text = f"{padding}target_host{padding}"
-        result = _extract_system_context(text, "target_host")
-        assert "target_host" in result
-        assert len(result) <= 200 + len("target_host") + 200
-
-    def test_multiple_occurrences_concatenated(self) -> None:
-        """All occurrences contribute to context string."""
-        padding = "x" * 300
-        text = f"first target_host here{padding}second target_host there"
-        result = _extract_system_context(text, "target_host")
-        assert "first" in result
-        assert "second" in result
-        assert result.count("target_host") >= 2
-
-    def test_no_match_returns_full_text(self) -> None:
-        """When system name not found, full text is returned."""
-        text = "some text about other systems entirely"
-        result = _extract_system_context(text, "nonexistent")
-        assert result == text

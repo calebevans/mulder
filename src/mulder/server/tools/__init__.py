@@ -3,10 +3,15 @@
 from mulder.server.tools import (  # noqa: F401  # noqa: F401
     artifacts,
     attack,
+    binary,
     bulk,
     case,
+    chainsaw,
     composite,
     core,
+    documents,
+    email,
+    enrichment,
     extract,
     eztools,
     findings,
@@ -19,4 +24,5 @@ from mulder.server.tools import (  # noqa: F401  # noqa: F401
     review,
     tsk,
     yara,
+    zircolite,
 )

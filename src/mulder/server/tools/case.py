@@ -9,7 +9,6 @@ import logging
 import shutil
 import subprocess
 import tarfile
-import threading
 import time
 import zipfile
 from pathlib import Path
@@ -24,6 +23,7 @@ from mulder.server.app import (
     slugify,
 )
 from mulder.server.helpers import error_response, hash_output, make_tool_call_id
+from mulder.server.tool_access import ALL_ROLES, Role, tool_access
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +31,7 @@ _EXTRACT_TIMEOUT = 600
 
 
 @mcp.tool()
+@tool_access(Role.CATALOG)
 def scan_evidence(
     evidence_path: str,
     case_id: str | None = None,
@@ -103,15 +104,20 @@ def scan_evidence(
     return result
 
 
-def _hash_and_register_evidence(manifest: list[dict[str, object]]) -> None:
-    """Hash each evidence file and register it for chain of custody."""
+def _hash_and_register_evidence(manifest: list[dict[str, object]]) -> list[str]:
+    """Hash each evidence file and register it for chain of custody.
+
+    Returns:
+        List of file paths that failed to hash.
+    """
     import hashlib as _hashlib
 
     from mulder.server.app import get_ctx, has_ctx
 
     if not has_ctx():
-        return
+        return []
     ctx = get_ctx()
+    failed_files: list[str] = []
     for item in manifest:
         fp = Path(str(item.get("path", "")))
         if not fp.is_file():
@@ -131,8 +137,10 @@ def _hash_and_register_evidence(manifest: list[dict[str, object]]) -> None:
                 sha256=h.hexdigest(),
                 size_bytes=size,
             )
-        except Exception:
-            logger.debug("Failed to hash %r", fp, exc_info=True)
+        except Exception as exc:
+            logger.warning("Failed to hash evidence file %s: %s", fp, exc)
+            failed_files.append(str(fp))
+    return failed_files
 
 
 def _scan_evidence_inner(ev_path: Path, case_id: str, replace: bool) -> dict[str, object]:
@@ -183,18 +191,19 @@ def _scan_evidence_inner(ev_path: Path, case_id: str, replace: bool) -> dict[str
         result["total_items"] = len(manifest)
         return result
 
-    threading.Thread(
-        target=_hash_and_register_evidence,
-        args=(list(manifest),),
-        daemon=True,
-    ).start()
+    if isinstance(result, dict) and result.get("status") == "error":
+        return result
+
+    failed_files = _hash_and_register_evidence(list(manifest))
 
     archive_count = type_counts.get("compressed_archive", 0)
     message = (
         f"Case '{case_id}' created. Found {len(manifest)} evidence item(s). "
-        "Evidence hashing running in background for chain of custody. "
+        "Evidence hashing complete for chain of custody. "
         "Use Tier 2 extraction tools to start analyzing immediately."
     )
+    if failed_files:
+        message += f" WARNING: {len(failed_files)} file(s) failed to hash."
     if archive_count > 0:
         message += (
             f" NOTE: {archive_count} compressed archive(s) detected. "
@@ -204,7 +213,7 @@ def _scan_evidence_inner(ev_path: Path, case_id: str, replace: bool) -> dict[str
             "analysis tools directly."
         )
 
-    return {
+    response: dict[str, object] = {
         "status": "success",
         "case_id": case_id,
         "evidence_path": str(ev_path),
@@ -213,9 +222,13 @@ def _scan_evidence_inner(ev_path: Path, case_id: str, replace: bool) -> dict[str
         "total_items": len(manifest),
         "message": message,
     }
+    if failed_files:
+        response["failed_files"] = failed_files
+    return response
 
 
 @mcp.tool()
+@tool_access(Role.CATALOG | Role.EXTRACT_PLANNER | Role.REPORT)
 def list_cases() -> dict[str, object]:
     """List all cases in the database directory.
 
@@ -275,6 +288,7 @@ def list_cases() -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(ALL_ROLES)
 def open_case(case_id: str) -> dict[str, object]:
     """Switch the active case to an already-existing case.
 
@@ -333,6 +347,7 @@ def _human_size(nbytes: int) -> str:
 
 
 @mcp.tool()
+@tool_access(Role.CATALOG)
 def verify_evidence_integrity() -> dict[str, object]:
     """Verify the integrity of all indexed source data.
 
@@ -428,6 +443,7 @@ def _extract_7z(archive: Path, dest: Path) -> list[str]:
 
 
 @mcp.tool()
+@tool_access(Role.CATALOG | Role.EXTRACT_EXECUTOR)
 def extract_archive(
     archive_path: str,
     extract_to: str | None = None,

@@ -17,6 +17,7 @@ from pathlib import Path
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import error_response, hash_output, make_tool_call_id
+from mulder.server.tool_access import Role, tool_access
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ def _find_hindsight_cmd() -> list[str] | None:
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR | Role.EXTRACT_ANALYST)
 def run_hindsight(
     profile_path: str,
     browser: str = "chrome",

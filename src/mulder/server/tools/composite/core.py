@@ -7,22 +7,45 @@ that all composite submodules depend on.
 
 from __future__ import annotations
 
+import json
+import logging
 import re
+import threading
 import time
 from datetime import datetime
 from typing import Any
 
 from mulder.models import SourceRow, WindowRow
-from mulder.patterns import SUSPICIOUS_PATHS
 from mulder.server import source_names as _sn
 from mulder.server.app import get_ctx
+from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
     extract_pid,
     hash_output,
     make_tool_call_id,
 )
 
+logger = logging.getLogger(__name__)
+
 __all__: list[str] = []
+
+# ---------------------------------------------------------------------------
+# Composite tool name -> indexed source name mapping
+# ---------------------------------------------------------------------------
+
+_TOOL_SOURCE_MAP: dict[str, str] = {
+    "find_persistence_mechanisms": "composite.persistence",
+    "find_lateral_movement_indicators": "composite.lateral_movement",
+    "find_data_exfiltration_indicators": "composite.exfil",
+    "find_defense_evasion": "composite.defense_evasion",
+    "find_suspicious_processes": "composite.suspicious_processes",
+    "find_execution_evidence": "composite.execution",
+    "correlate_across_sources": "composite.correlation",
+    "reconstruct_execution_chains": "composite.execution_chains",
+    "analyze_execution_timeline": "composite.timeline",
+    "assess_recovery": "composite.recovery",
+    "correlate_pcap_with_host": "composite.pcap_correlation",
+}
 
 # ---------------------------------------------------------------------------
 # Source-name constants (canonical definitions in mulder.server.source_names)
@@ -70,7 +93,6 @@ _EXE_CMD = "cmd.exe"
 # ---------------------------------------------------------------------------
 
 _PORT_RE = re.compile(r":(\d{1,5})(?:\s|$)")
-_IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _PROC_NAME_RE = re.compile(r"^([^\t]+\.exe)", re.MULTILINE | re.IGNORECASE)
 _PPID_RE = re.compile(r"(?:^|\t)(\d{1,6})\t(\d{1,6})(?:\t|$)", re.MULTILINE)
 
@@ -80,14 +102,13 @@ _PPID_RE = re.compile(r"(?:^|\t)(\d{1,6})\t(\d{1,6})(?:\t|$)", re.MULTILINE)
 
 _sources_cache: list[SourceRow] | None = None
 _sources_cache_case_id: str | None = None
+_sources_lock = threading.Lock()
 
 # ---------------------------------------------------------------------------
 # Constants used by multiple submodules
 # ---------------------------------------------------------------------------
 
 _LATERAL_PORTS: set[int] = {445, 3389, 5985, 5986, 135}
-
-_UNUSUAL_DLL_PATHS = SUSPICIOUS_PATHS
 
 _NETWORK_SOURCE_ALTERNATIVES = (
     "volatility.netscan",
@@ -130,10 +151,14 @@ def _get_cached_sources() -> list[SourceRow]:
     """Return cached sources for the current case, refreshing if case changed."""
     global _sources_cache, _sources_cache_case_id
     ctx = get_ctx()
-    if _sources_cache is None or _sources_cache_case_id != ctx.case_id:
-        _sources_cache = ctx.db.get_sources()
+    with _sources_lock:
+        if _sources_cache is not None and _sources_cache_case_id == ctx.case_id:
+            return _sources_cache
+    sources = ctx.db.get_sources()
+    with _sources_lock:
+        _sources_cache = sources
         _sources_cache_case_id = ctx.case_id
-    return _sources_cache
+    return sources
 
 
 def _source_exists(source_prefix: str) -> bool:
@@ -349,6 +374,14 @@ def _parse_event_time(ts: str | None) -> datetime | None:
         return None
 
 
+def _invalidate_sources_cache() -> None:
+    """Clear the cached sources list so newly indexed sources are visible."""
+    global _sources_cache, _sources_cache_case_id
+    with _sources_lock:
+        _sources_cache = None
+        _sources_cache_case_id = None
+
+
 def finalize_composite_result(
     ctx: Any,
     composite_id: str,
@@ -361,9 +394,11 @@ def finalize_composite_result(
     *,
     audit_params: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    """Compute elapsed time, log audit, strip windows, and build the result dict.
+    """Compute elapsed time, log audit, strip windows, persist, and build result.
 
     Centralizes the epilogue boilerplate shared by all composite tools.
+    After building the result, indexes it into the case database so that
+    subsequent phases can query it via ``search(query, source="composite.*")``.
 
     Args:
         ctx: The request context (must expose ``audit.log_tool_call``).
@@ -400,11 +435,26 @@ def finalize_composite_result(
 
     result_count = len(results) if isinstance(results, list) else 1
 
+    # Persist composite results as a searchable source
+    source_name = _TOOL_SOURCE_MAP.get(tool_name)
+    if source_name and result_count > 0:
+        try:
+            raw_output = json.dumps(results, indent=2, default=str)
+            extract_and_index(
+                raw_output=raw_output,
+                source_name=source_name,
+                source_path="composite_analysis",
+                extractor_name="composite",
+            )
+            _invalidate_sources_cache()
+        except Exception:
+            logger.warning("Failed to index composite results for %s", tool_name, exc_info=True)
+
     result: dict[str, object] = {
         "tool_call_id": composite_id,
         "status": "success",
         "results": results,
-        "source": None,
+        "source": source_name,
         "result_count": result_count,
         **coverage,
     }

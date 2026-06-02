@@ -11,9 +11,9 @@ import pytest
 
 from mulder.orchestrator.gates import (
     GateResult,
-    validate_audit,
     validate_cross_system,
     validate_extraction,
+    validate_narrative,
 )
 from mulder.orchestrator.models import ModelConfig
 from mulder.orchestrator.runner import Orchestrator
@@ -298,11 +298,11 @@ class TestSinglePhaseGate:
         assert call_count == 1 + CATALOG.max_retries
 
 
-class TestAuditGateNonVacuous:
-    """Audit gate should fail when no checks are evaluated."""
+class TestNarrativeGateNonVacuous:
+    """Narrative gate should fail when no checks are evaluated."""
 
     def test_empty_gates_fails(self) -> None:
-        result = validate_audit(
+        result = validate_narrative(
             summary={"remaining_work": []},
             readiness={"gates": []},
         )
@@ -311,14 +311,14 @@ class TestAuditGateNonVacuous:
         assert "checks_performed" in check_names
 
     def test_none_readiness_fails(self) -> None:
-        result = validate_audit(
+        result = validate_narrative(
             summary={"remaining_work": []},
             readiness=None,
         )
         assert not result.passed
 
     def test_passing_gates_succeed(self) -> None:
-        result = validate_audit(
+        result = validate_narrative(
             summary={"remaining_work": []},
             readiness={
                 "gates": [
@@ -680,7 +680,7 @@ class TestBuildEvidenceContext:
 
             ctx = orch._build_evidence_context("host-a")
 
-        assert "Extracted memory dumps:" in ctx
+        assert "Extracted memory dumps (ready for Volatility):" in ctx
         assert "host-a-memory.img" in ctx
 
     def test_fallback_when_no_files(self, tmp_path: Path) -> None:

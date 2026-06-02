@@ -14,10 +14,12 @@ from mulder.server.app import get_cfg, get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
     _PREVIEW_CHAR_LIMIT,
+    adaptive_timeout,
     error_response,
     make_tool_call_id,
     tool_response,
 )
+from mulder.server.tool_access import Role, tool_access
 
 __all__ = [
     "run_plaso",
@@ -62,6 +64,7 @@ def _find_plaso_cmd(tool: str) -> list[str] | None:
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def run_plaso(
     evidence_path: str,
     parsers: str | None = None,
@@ -106,13 +109,14 @@ def run_plaso(
             l2t_cmd.extend(["--parsers", parsers])
         l2t_cmd.extend([str(plaso_file), evidence_path])
 
+        plaso_timeout = adaptive_timeout(evidence_path, base=_PLASO_TIMEOUT)
         try:
             proc = subprocess.run(
-                l2t_cmd, capture_output=True, text=True, timeout=_PLASO_TIMEOUT, check=False
+                l2t_cmd, capture_output=True, text=True, timeout=plaso_timeout, check=False
             )
         except subprocess.TimeoutExpired:
             return error_response(
-                tc_id, "run_plaso", params, f"log2timeline timed out after {_PLASO_TIMEOUT}s"
+                tc_id, "run_plaso", params, f"log2timeline timed out after {plaso_timeout}s"
             )
 
         if proc.returncode != 0 and not plaso_file.exists():
@@ -132,7 +136,7 @@ def run_plaso(
 
         try:
             psort_proc = subprocess.run(
-                psort_cmd, capture_output=True, text=True, timeout=_PLASO_TIMEOUT, check=False
+                psort_cmd, capture_output=True, text=True, timeout=plaso_timeout, check=False
             )
         except subprocess.TimeoutExpired:
             return error_response(tc_id, "run_plaso", params, "psort timed out")

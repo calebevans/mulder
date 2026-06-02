@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import cast
@@ -16,17 +17,21 @@ from typing import cast
 from mulder.server.app import get_cfg, get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
-    TOOL_TIMEOUT,
+    adaptive_timeout,
     error_response,
     make_tool_call_id,
     require_binary,
+    sources_already_indexed,
     tool_response,
 )
+from mulder.server.tool_access import Role, tool_access
 from mulder.server.tools.extract.misc import _DOTNET, _find_ez_tool
 from mulder.server.tools.extract.tsk import (
-    _ensure_fls_indexed,
+    _detect_partition_offset,
     _parse_partition_offset,
+    _run_fls_inline,
     _tsk_extract_dirs,
+    _tsk_lock,
 )
 
 __all__ = [
@@ -39,39 +44,55 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 _evtx_extract_dirs: dict[str, str] = {}
+_evtx_lock = threading.Lock()
 
 
 def _extract_evtx_from_image(image_path: str, dest_dir: str) -> list[Path]:
     """Extract .evtx files from a disk image to *dest_dir* using TSK icat.
 
-    Uses the fls listing indexed for the case to locate EVTX inodes, then
-    extracts each with icat. Runs ``fls`` automatically if the listing has
-    not been indexed yet. Works on E01 and raw images without mounting.
-    """
-    _ensure_fls_indexed(image_path)
+    Uses the fls listing already indexed for the case to locate EVTX
+    inodes, then extracts each with icat.  When the DB has no
+    ``tsk.filelist`` source (e.g. ``run_fls`` has not completed yet),
+    runs fls inline so extraction is self-contained.
 
+    Works on E01 and raw images without mounting.
+    """
     ctx = get_ctx()
     sources = ctx.db.get_sources()
     fls_source = next((s for s in sources if s.source_name == "tsk.filelist"), None)
-    if fls_source is None:
+
+    fls_text_chunks: list[str] = []
+    offset = 0
+
+    if fls_source is not None:
+        windows = ctx.db.get_windows_by_source("tsk.filelist")
+        fls_text_chunks = [w.raw_text for w in windows]
+        part_src = next((s for s in sources if s.source_name == "tsk.partitions"), None)
+        if part_src:
+            part_windows = ctx.db.get_windows_by_source("tsk.partitions")
+            mmls_text = "\n".join(w.raw_text for w in part_windows)
+            offset = _parse_partition_offset(mmls_text)
+    else:
+        logger.info(
+            "tsk.filelist not yet indexed; running fls inline for EVTX extraction from %s",
+            image_path,
+        )
+        inline_output = _run_fls_inline(image_path)
+        if inline_output:
+            fls_text_chunks = [inline_output]
+            offset = _detect_partition_offset(image_path)
+
+    if not fls_text_chunks:
         return []
 
-    windows = ctx.db.get_windows_by_source("tsk.filelist")
     evtx_re = re.compile(
         r"^[rd]/[rd*]\s+(\d+(?:-\d+-\d+)?):\s+(.+\.evtx)\s*$", re.IGNORECASE | re.MULTILINE
     )
 
-    part_src = next((s for s in sources if s.source_name == "tsk.partitions"), None)
-    offset = 0
-    if part_src:
-        part_windows = ctx.db.get_windows_by_source("tsk.partitions")
-        mmls_text = "\n".join(w.raw_text for w in part_windows)
-        offset = _parse_partition_offset(mmls_text)
-
     extracted: list[Path] = []
     seen_inodes: set[str] = set()
-    for w in windows:
-        for m in evtx_re.finditer(w.raw_text):
+    for chunk in fls_text_chunks:
+        for m in evtx_re.finditer(chunk):
             inode_str = m.group(1).split("-")[0]
             if inode_str in seen_inodes:
                 continue
@@ -134,12 +155,16 @@ def _find_carved_evtx(dest_dir: str) -> list[Path]:
 
 def _cleanup_temp_dirs() -> None:
     """Remove all extraction temp directories."""
-    for path in _evtx_extract_dirs.values():
+    with _evtx_lock:
+        dirs = list(_evtx_extract_dirs.values())
+        _evtx_extract_dirs.clear()
+    for path in dirs:
         shutil.rmtree(path, ignore_errors=True)
-    _evtx_extract_dirs.clear()
-    for path in _tsk_extract_dirs:
+    with _tsk_lock:
+        tsk_dirs = list(_tsk_extract_dirs)
+        _tsk_extract_dirs.clear()
+    for path in tsk_dirs:
         shutil.rmtree(path, ignore_errors=True)
-    _tsk_extract_dirs.clear()
 
 
 atexit.register(_cleanup_temp_dirs)
@@ -220,7 +245,13 @@ def _parse_evtx_with_eztools(evtx_path: str, evtx_dir: str | None) -> dict[str, 
         else:
             cmd = [_DOTNET, dll, "-f", evtx_path, "--csv", csv_dir]
 
-        subprocess.run(cmd, capture_output=True, text=True, timeout=TOOL_TIMEOUT * 4, check=False)
+        subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=adaptive_timeout(evtx_path),
+            check=False,
+        )
 
         combined = ""
         for csv_file in sorted(Path(csv_dir).glob("*.csv")):
@@ -260,7 +291,8 @@ def _parse_evtx_with_python_fallback(evtx_path: str, evtx_dir: str | None) -> li
 
 
 @mcp.tool()
-def run_evtx_parser(evtx_path: str) -> dict[str, object]:
+@tool_access(Role.EXTRACT_EXECUTOR)
+def run_evtx_parser(evtx_path: str, force: bool = False) -> dict[str, object]:
     """Extract and list Windows Event Log (.evtx) files from a disk image.
 
     When given a disk image (E01/raw), extracts ALL .evtx files to a
@@ -279,10 +311,27 @@ def run_evtx_parser(evtx_path: str) -> dict[str, object]:
 
     Args:
         evtx_path: Path to an EVTX file, directory, or disk image.
+        force: Re-run extraction even if sources already exist.
     """
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
-    params = {"evtx_path": evtx_path}
+    params = {"evtx_path": evtx_path, "force": force}
+
+    if not force:
+        existing = sources_already_indexed(["evtx.", "ez.evtx"], evidence_path=evtx_path)
+        if existing:
+            return tool_response(
+                tc_id,
+                "run_evtx_parser",
+                params,
+                {
+                    "status": "skipped",
+                    "reason": "Sources already indexed from prior extraction",
+                    "existing_sources": existing,
+                },
+                "evtx",
+                0.0,
+            )
 
     target = Path(evtx_path)
     if not target.exists():
@@ -292,11 +341,15 @@ def run_evtx_parser(evtx_path: str) -> dict[str, object]:
 
     if is_image:
         extract_dir = tempfile.mkdtemp(prefix="mulder_evtx_extract_")
-        _evtx_extract_dirs[evtx_path] = extract_dir
+        with _evtx_lock:
+            _evtx_extract_dirs[evtx_path] = extract_dir
         evtx_files = _extract_evtx_from_image(evtx_path, extract_dir)
         if not evtx_files:
             evtx_files = _find_carved_evtx(extract_dir)
         if not evtx_files:
+            shutil.rmtree(extract_dir, ignore_errors=True)
+            with _evtx_lock:
+                _evtx_extract_dirs.pop(evtx_path, None)
             return error_response(
                 tc_id,
                 "run_evtx_parser",
@@ -309,6 +362,11 @@ def run_evtx_parser(evtx_path: str) -> dict[str, object]:
         manifest = _build_evtx_priority_manifest(evtx_files)
         high_count = sum(1 for m in manifest if m["priority"] == "HIGH")
         total_size: int = sum(cast(int, m["size_bytes"]) for m in manifest)
+
+        manifest_text = "\n".join(
+            f"{m['filename']}\t{m['size_human']}\t{m['priority']}" for m in manifest
+        )
+        extract_and_index(manifest_text, "evtx.manifest", evtx_path, "evtx-extract")
 
         result = {
             "extract_dir": extract_dir,
@@ -349,6 +407,7 @@ def run_evtx_parser(evtx_path: str) -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def index_evtx_file(
     filename: str,
     event_ids: list[int] | None = None,
@@ -388,12 +447,13 @@ def index_evtx_file(
     t0 = time.monotonic()
     params = {"filename": filename, "event_ids": event_ids, "image_path": image_path}
 
-    if image_path and image_path in _evtx_extract_dirs:
-        extract_dir = _evtx_extract_dirs[image_path]
-    elif _evtx_extract_dirs:
-        extract_dir = next(reversed(_evtx_extract_dirs.values()))
-    else:
-        extract_dir = ""
+    with _evtx_lock:
+        if image_path and image_path in _evtx_extract_dirs:
+            extract_dir = _evtx_extract_dirs[image_path]
+        elif _evtx_extract_dirs:
+            extract_dir = next(reversed(_evtx_extract_dirs.values()))
+        else:
+            extract_dir = ""
 
     if not extract_dir or not Path(extract_dir).is_dir():
         return error_response(
@@ -425,7 +485,11 @@ def index_evtx_file(
                 cmd.extend(["--inc", ",".join(str(eid) for eid in event_ids)])
             try:
                 subprocess.run(
-                    cmd, capture_output=True, text=True, timeout=TOOL_TIMEOUT * 8, check=False
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=adaptive_timeout(str(evtx_path)),
+                    check=False,
                 )
             except subprocess.TimeoutExpired:
                 return error_response(

@@ -5,7 +5,7 @@
 
 </div>
 
-Mulder is an [MCP](https://modelcontextprotocol.io/) server and agentic orchestrator for digital forensics. It exposes 110+ typed forensic tools (Volatility 3, Sleuthkit, Plaso, Hayabusa, YARA, and more) through the Model Context Protocol with no shell access, and includes a multi-phase agentic pipeline that runs full investigations autonomously with quality gates between phases.
+Mulder is an [MCP](https://modelcontextprotocol.io/) server and agentic orchestrator for digital forensics. It exposes 140+ typed forensic tools (Volatility 3, Sleuthkit, Plaso, Hayabusa, YARA, CAPA, Zeek, Chainsaw, and more) through the Model Context Protocol with no shell access, and includes a multi-phase agentic pipeline that runs full investigations autonomously with quality gates between phases.
 
 <p align="center">
   <img src="docs/photos/cli.gif" alt="Mulder CLI running a forensic investigation" width="800">
@@ -18,13 +18,17 @@ Mulder is an [MCP](https://modelcontextprotocol.io/) server and agentic orchestr
 
 ## Features
 
-- **MCP server** with 110+ typed forensic tools covering memory, disk, timeline, Windows event logs, YARA, network capture, mobile, steganography, and more
-- **Agentic pipeline** that decomposes investigations into six phases (Catalog, Extraction, Cross-System Analysis, Alternative Narrative, Audit, Report) with hard quality gates between each phase
+- **MCP server** with 140+ typed forensic tools covering memory, disk, timeline, Windows event logs, YARA, network capture, binary analysis, document forensics, email forensics, mobile, steganography, and more
+- **Agentic pipeline** that decomposes investigations into five phases (Catalog, Extraction, Cross-System Analysis, Alternative Narrative, Report) with hard quality gates between each phase
 - **Per-case SQLite database** with FTS5 full-text search across all indexed evidence
 - **Append-only audit log** that records every tool invocation; findings must cite real tool call IDs to prevent hallucinated evidence citations
 - **Cross-source correlation** to join evidence from different artifact types within a time range
+- **Threat intelligence enrichment** with automated IOC lookups against public TI sources
+- **Evidence gap detection** that identifies unexamined artifact types and coverage blind spots before reporting
+- **Automatic finding deduplication** to merge per-host duplicates of the same artifact across systems
 - **Rich Live dashboard** showing real-time investigation progress, per-model token usage, findings, and throughput
-- **Report generation** producing both Markdown and styled HTML reports with IOC tables, MITRE ATT&CK coverage, and full audit trails
+- **Report generation** producing Markdown, styled HTML, and PDF reports with IOC tables, MITRE ATT&CK coverage, and full audit trails
+- **IOC export** in STIX 2.1 and CSV formats, plus MITRE ATT&CK Navigator layer generation
 - **Resource throttling** with configurable memory and CPU limits so extractions do not overwhelm the host
 - **Parallel extraction** with a configurable worker pool, background job management, and a `run_parallel` meta-tool for batch dispatch
 - **Auto-compaction** that detects context window exhaustion and restarts phases with a compact prompt, recovering state from the database
@@ -127,9 +131,8 @@ The orchestrator will:
 1. Catalog all evidence files and classify their types
 2. Run per-system extraction (memory analysis, disk forensics, log parsing)
 3. Perform cross-system correlation and MITRE ATT&CK mapping
-4. Challenge the primary narrative with alternative hypotheses
-5. Audit for completeness and tool coverage gaps
-6. Generate a comprehensive investigation report
+4. Challenge the primary narrative with alternative hypotheses and audit for completeness
+5. Generate a comprehensive investigation report
 
 Case databases and reports are written to the mounted `~/mulder-cases` directory on the host.
 
@@ -164,9 +167,8 @@ This reduces cost by routing mechanical tool-calling to a cheaper model while pr
 | 1. Catalog | Enumerate and classify all evidence files, identify distinct systems | Single (Planner model) |
 | 2. Extraction | Run all applicable forensic tools per system, submit findings | Split (per system) |
 | 3. Cross-System | Correlate events across systems, map MITRE ATT&CK, consolidate findings | Split |
-| 4. Alternative Narrative | Challenge primary narrative, search for counter-evidence (advisory, no hard gate) | Split |
-| 5. Audit | Verify completeness, fix timestamps, close coverage gaps | Split |
-| 6. Report | Write investigation narrative and generate the final report | Single (Analyst model) |
+| 4. Alternative Narrative | Challenge primary narrative, search for counter-evidence, audit for completeness and coverage gaps | Split |
+| 5. Report | Write investigation narrative and generate the final report | Single (Analyst model) |
 
 Each phase passes through a quality gate before proceeding. Failed gates trigger retries with increased turn limits and gap-specific remediation instructions. The analyst can request follow-up cycles (capped at a maximum per phase) when it needs additional tool execution.
 
@@ -259,13 +261,30 @@ Starts the MCP server. Normally invoked automatically by the orchestrator or MCP
 
 ### `mulder report <case_id>`
 
-Generates reports offline without starting the MCP server.
+Generates reports (Markdown, HTML, and PDF) offline without starting the MCP server.
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--db-dir` | `~/.mulder/cases` | Directory containing case databases |
 
-Reads `{case_id}.db` and `{case_id}.audit.jsonl` from the database directory and writes `{case_id}.report.md` and `{case_id}.report.html` alongside them.
+Reads `{case_id}.db` and `{case_id}.audit.jsonl` from the database directory and writes `{case_id}.report.md`, `{case_id}.report.html`, and `{case_id}.report.pdf` alongside them.
+
+### `mulder export-iocs <case_id>`
+
+Exports IOCs from a completed case in STIX 2.1 or CSV format.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--db-dir` | `~/.mulder/cases` | Directory containing case databases |
+| `--format` | `stix` | Output format (`stix` or `csv`) |
+
+### `mulder export-navigator <case_id>`
+
+Generates a MITRE ATT&CK Navigator layer JSON from a completed case.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--db-dir` | `~/.mulder/cases` | Directory containing case databases |
 
 ## Supported Forensic Tools
 
@@ -299,17 +318,35 @@ Reads `{case_id}.db` and `{case_id}.audit.jsonl` from the database directory and
 | [dislocker](https://github.com/Aorimn/dislocker) / [libbde](https://github.com/libyal/libbde) | BitLocker volume decryption and metadata extraction |
 | [libfvde](https://github.com/libyal/libfvde) | Apple FileVault encryption metadata extraction |
 | [tcpflow](https://github.com/simsong/tcpflow) / [tcpxtract](https://tcpxtract.sourceforge.net/) | TCP stream reconstruction and file extraction from PCAPs |
+| [CAPA](https://github.com/mandiant/capa) | Capability detection with MITRE ATT&CK mapping |
+| [FLOSS](https://github.com/mandiant/flare-floss) | Obfuscated string extraction from malware samples |
+| [Detect-It-Easy](https://github.com/horsicq/Detect-It-Easy) | Packer, compiler, and protector identification |
+| [oletools](https://github.com/decalage2/oletools) | Microsoft Office malware analysis |
+| [Didier Stevens PDF tools](https://github.com/DidierStevens/DidierStevensSuite) | PDF malware triage and structure analysis |
+| [pst-utils / libpst](https://www.five-ten-sg.com/libpst/) | Outlook PST/OST email forensics |
+| [Zeek](https://zeek.org/) | Network protocol analysis and structured log generation |
+| [Suricata](https://suricata.io/) | IDS signature matching against network captures |
+| [Chainsaw](https://github.com/WithSecureLabs/chainsaw) | Windows EVTX, MFT, and SRUM analysis with Sigma rules |
+| [Zircolite](https://github.com/wagga40/Zircolite) | Sigma detection for Linux Auditd and Sysmon logs |
+| [ALEAPP](https://github.com/abrignoni/ALEAPP) | Android forensic artifact parsing (300+ artifact types) |
+| [iLEAPP](https://github.com/abrignoni/iLEAPP) | iOS forensic artifact parsing (200+ artifact types) |
 
 ## Report Generation
 
-Mulder generates two report formats from the case database and audit log:
+Mulder generates three report formats from the case database and audit log:
 
 - **Markdown** (`{case_id}.report.md`) for plain-text review and version control
 - **HTML** (`{case_id}.report.html`) a self-contained styled page with dark/light theme, sidebar navigation, and interactive layout
+- **PDF** (`{case_id}.report.pdf`) for formal distribution and archival
 
-Both formats include an executive summary, severity overview, evidence integrity hashes, attack timeline, detailed findings with MITRE ATT&CK mappings, IOC tables (network, file, email), audit metrics, and a sources appendix.
+All formats include an executive summary, severity overview, evidence integrity hashes, attack timeline, detailed findings with MITRE ATT&CK mappings, IOC tables (network, file, email), audit metrics, and a sources appendix.
 
-Reports can be generated in two ways:
+Additionally, the report phase produces:
+
+- **IOC export** in STIX 2.1 (`{case_id}.stix.json`) and CSV (`{case_id}.iocs.csv`) formats
+- **MITRE ATT&CK Navigator layer** (`{case_id}.navigator.json`) for visualization in the Navigator web app
+
+Reports and exports can be generated in two ways:
 
 1. **Automatically** by the orchestrator at the end of a successful investigation
 2. **CLI**: run `mulder report <case_id>` offline without starting the server

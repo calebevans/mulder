@@ -42,8 +42,3 @@ CROSS_SYSTEM_ANALYST_PROMPT: str = _load("cross_system_analyst.md")
 NARRATIVE_PLANNER_PROMPT: str = _load("narrative_planner.md")
 NARRATIVE_EXECUTOR_PROMPT: str = _load("narrative_executor.md")
 NARRATIVE_ANALYST_PROMPT: str = _load("narrative_analyst.md")
-
-# Audit phase (split: planner / executor / analyst)
-AUDIT_PLANNER_PROMPT: str = _load("audit_planner.md")
-AUDIT_EXECUTOR_PROMPT: str = _load("audit_executor.md")
-AUDIT_ANALYST_PROMPT: str = _load("audit_analyst.md")

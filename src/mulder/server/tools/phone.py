@@ -18,10 +18,12 @@ import tempfile
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import Any
 
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import error_response, make_tool_call_id, require_binary, tool_response
+from mulder.server.tool_access import Role, tool_access
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +89,7 @@ def _carve_sqlite_databases(
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def carve_sqlite_from_raw(
     image_path: str,
     max_databases: int = 50,
@@ -284,6 +287,7 @@ def _find_databases(search_dir: Path, db_names: list[str]) -> list[Path]:
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def parse_android_artifacts(
     evidence_path: str,
     artifact_types: list[str] | None = None,
@@ -507,6 +511,7 @@ def _resolve_ios_manifest(backup_dir: Path) -> dict[str, Path]:
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def parse_ios_artifacts(
     evidence_path: str,
     artifact_types: list[str] | None = None,
@@ -721,6 +726,7 @@ def _extract_strings_from_file(file_path: Path, min_length: int = 8) -> list[str
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def decrypt_app_data(
     app_data_path: str,
     known_passwords: list[str] | None = None,
@@ -858,3 +864,435 @@ def decrypt_app_data(
         "phone.app_data",
         elapsed,
     )
+
+
+# ---------------------------------------------------------------------------
+# ALEAPP / iLEAPP comprehensive mobile parsers
+# ---------------------------------------------------------------------------
+
+_ALEAPP_TIMEOUT = 1800
+_ILEAPP_TIMEOUT = 1800
+_ALEAPP_SCRIPT = "/opt/aleapp/aleapp.py"
+_ILEAPP_SCRIPT = "/opt/ileapp/ileapp.py"
+
+_LEAPP_INPUT_TYPE_FLAGS: dict[str, str] = {
+    "fs": "fs",
+    "tar": "tar",
+    "zip": "zip",
+    "gz": "gz",
+    "itunes": "itunes",
+}
+
+_ARTIFACT_CATEGORIES: dict[str, str] = {
+    "whatsapp": "communications",
+    "sms": "communications",
+    "mms": "communications",
+    "calls": "communications",
+    "contacts": "communications",
+    "imessage": "communications",
+    "telegram": "communications",
+    "signal": "communications",
+    "chrome": "browsing",
+    "safari": "browsing",
+    "firefox": "browsing",
+    "locations": "location",
+    "wifi": "location",
+    "bluetooth": "connectivity",
+    "accounts": "system",
+    "installed_apps": "system",
+    "permissions": "system",
+    "notifications": "system",
+    "photos": "media",
+    "downloads": "media",
+}
+
+
+def _classify_artifact_category(artifact_type: str) -> str:
+    """Map an artifact type to its forensic category.
+
+    Args:
+        artifact_type: The artifact module/file name.
+
+    Returns:
+        Category string.
+    """
+    for key, category in _ARTIFACT_CATEGORIES.items():
+        if key in artifact_type.lower():
+            return category
+    return "other"
+
+
+def _parse_tsv_file(tsv_path: Path) -> list[dict[str, str]]:
+    """Parse a TSV file into a list of row dicts.
+
+    Args:
+        tsv_path: Path to the TSV file.
+
+    Returns:
+        List of dicts mapping column headers to values.
+    """
+    try:
+        lines = tsv_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+
+    if len(lines) < 2:
+        return []
+
+    headers = lines[0].split("\t")
+    records: list[dict[str, str]] = []
+    for line in lines[1:]:
+        values = line.split("\t")
+        row = dict(zip(headers, values, strict=False))
+        records.append(row)
+
+    return records
+
+
+def _parse_leapp_output(
+    output_dir: Path,
+    platform: str,
+    extraction_path: str,
+    artifact_filter: list[str] | None = None,
+) -> dict[str, Any]:
+    """Parse ALEAPP/iLEAPP output directory into structured results.
+
+    Both tools produce TSV and HTML output in a standard directory
+    structure. This function reads the TSV files and aggregates
+    results by category.
+
+    Args:
+        output_dir: Path to the LEAPP output directory.
+        platform: "android" or "ios".
+        extraction_path: Original extraction path for reference.
+        artifact_filter: Optional list of artifacts to include.
+
+    Returns:
+        Dict with categorized artifacts and statistics.
+    """
+    artifacts: list[dict[str, object]] = []
+    categories: dict[str, int] = {}
+    total_records = 0
+
+    tsv_dir = output_dir / "tsv"
+    if not tsv_dir.exists():
+        for candidate in output_dir.iterdir():
+            if candidate.is_dir() and (candidate / "tsv").exists():
+                tsv_dir = candidate / "tsv"
+                break
+        else:
+            tsv_dir = output_dir
+
+    tsv_files = sorted(tsv_dir.glob("*.tsv")) if tsv_dir.exists() else []
+
+    for tsv_file in tsv_files:
+        artifact_type = tsv_file.stem
+        if artifact_filter and artifact_type not in artifact_filter:
+            continue
+
+        records = _parse_tsv_file(tsv_file)
+        if not records:
+            continue
+
+        category = _classify_artifact_category(artifact_type)
+        record_count = len(records)
+        total_records += record_count
+        categories[category] = categories.get(category, 0) + record_count
+
+        artifacts.append(
+            {
+                "category": category,
+                "artifact_type": artifact_type,
+                "record_count": record_count,
+                "data": records[:100],
+                "source_files": [str(tsv_file)],
+            }
+        )
+
+    return {
+        "platform": platform,
+        "extraction_path": extraction_path,
+        "artifacts": artifacts,
+        "total_artifacts_parsed": len(artifacts),
+        "total_records": total_records,
+        "categories": categories,
+    }
+
+
+@mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
+def run_aleapp(
+    extraction_path: str,
+    input_type: str = "fs",
+    artifact_filter: list[str] | None = None,
+) -> dict[str, object]:
+    """Parse Android forensic artifacts using ALEAPP.
+
+    Processes a full filesystem extraction from an Android device,
+    parsing 300+ artifact types including app databases, location
+    history, messaging apps, browser data, and system logs.
+
+    Args:
+        extraction_path: Path to the Android extraction (directory
+            for filesystem type, or archive file path).
+        input_type: Type of input. "fs" for extracted filesystem
+            directory, "tar"/"zip"/"gz" for compressed archives.
+        artifact_filter: Optional list of artifact module names to
+            process. If None, all available modules are executed.
+            Examples: "whatsapp", "chrome", "sms", "calls",
+            "locations", "wifi", "bluetooth", "accounts".
+    """
+    tc_id = make_tool_call_id()
+    t0 = time.monotonic()
+    params: dict[str, object] = {
+        "extraction_path": extraction_path,
+        "input_type": input_type,
+        "artifact_filter": artifact_filter,
+    }
+
+    if not Path(_ALEAPP_SCRIPT).exists() and not require_binary("aleapp"):
+        return error_response(
+            tc_id,
+            "run_aleapp",
+            params,
+            f"ALEAPP not found: {_ALEAPP_SCRIPT}",
+            error_type="binary_missing",
+            suggestion=(
+                "Install ALEAPP: git clone https://github.com/abrignoni/ALEAPP.git /opt/aleapp"
+            ),
+        )
+
+    if not Path(extraction_path).exists():
+        return error_response(
+            tc_id,
+            "run_aleapp",
+            params,
+            f"Path not found: {extraction_path}",
+            error_type="file_not_found",
+        )
+
+    if input_type not in _LEAPP_INPUT_TYPE_FLAGS:
+        return error_response(
+            tc_id,
+            "run_aleapp",
+            params,
+            f"Invalid input_type: {input_type}. Valid: {list(_LEAPP_INPUT_TYPE_FLAGS.keys())}",
+            error_type="invalid_argument",
+        )
+
+    with tempfile.TemporaryDirectory(prefix="mulder_aleapp_") as tmpdir:
+        output_dir = Path(tmpdir)
+        cmd = [
+            "python3",
+            _ALEAPP_SCRIPT,
+            "-t",
+            _LEAPP_INPUT_TYPE_FLAGS[input_type],
+            "-i",
+            str(extraction_path),
+            "-o",
+            str(output_dir),
+        ]
+
+        try:
+            subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=_ALEAPP_TIMEOUT,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            result = _parse_leapp_output(output_dir, "android", extraction_path, artifact_filter)
+            if result["total_artifacts_parsed"] > 0:
+                result["timed_out"] = True
+                text = f"ALEAPP (partial, timed out): {result['total_artifacts_parsed']} artifacts"
+                summary = extract_and_index(text, "phone.aleapp", extraction_path, "aleapp")
+                summary.update(result)
+                elapsed = (time.monotonic() - t0) * 1000
+                return tool_response(tc_id, "run_aleapp", params, summary, "phone.aleapp", elapsed)
+            return error_response(
+                tc_id,
+                "run_aleapp",
+                params,
+                f"ALEAPP timed out after {_ALEAPP_TIMEOUT}s",
+                (time.monotonic() - t0) * 1000,
+                error_type="timeout",
+            )
+        except OSError as exc:
+            return error_response(
+                tc_id,
+                "run_aleapp",
+                params,
+                f"Failed to execute ALEAPP: {exc}",
+                (time.monotonic() - t0) * 1000,
+                error_type="os_error",
+            )
+
+        result = _parse_leapp_output(output_dir, "android", extraction_path, artifact_filter)
+
+        if result["total_artifacts_parsed"] == 0:
+            elapsed = (time.monotonic() - t0) * 1000
+            return tool_response(
+                tc_id,
+                "run_aleapp",
+                params,
+                {"status": "no_artifacts", "message": "ALEAPP produced no parseable output"},
+                "phone.aleapp",
+                elapsed,
+            )
+
+        text_parts = [
+            f"ALEAPP analysis of {extraction_path}",
+            f"Artifacts parsed: {result['total_artifacts_parsed']}",
+            f"Total records: {result['total_records']}",
+        ]
+        for cat, count in result.get("categories", {}).items():
+            text_parts.append(f"  {cat}: {count} records")
+
+        summary = extract_and_index(
+            "\n".join(text_parts), "phone.aleapp", extraction_path, "aleapp"
+        )
+        summary.update(result)
+
+    elapsed = (time.monotonic() - t0) * 1000
+    return tool_response(tc_id, "run_aleapp", params, summary, "phone.aleapp", elapsed)
+
+
+@mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
+def run_ileapp(
+    extraction_path: str,
+    input_type: str = "fs",
+    artifact_filter: list[str] | None = None,
+) -> dict[str, object]:
+    """Parse iOS forensic artifacts using iLEAPP.
+
+    Processes a full filesystem extraction from an iOS device,
+    parsing 200+ artifact types including app data, location
+    services, Health data, Safari history, and iCloud records.
+
+    Args:
+        extraction_path: Path to the iOS extraction (directory
+            for filesystem type, or archive/backup path).
+        input_type: Type of input. "fs" for extracted filesystem,
+            "tar"/"zip"/"gz" for archives, "itunes" for iTunes
+            backup format.
+        artifact_filter: Optional list of artifact module names to
+            process. If None, all available modules are executed.
+            Examples: "safari", "imessage", "locations", "photos",
+            "health", "wifi", "bluetooth", "accounts", "calls".
+    """
+    tc_id = make_tool_call_id()
+    t0 = time.monotonic()
+    params: dict[str, object] = {
+        "extraction_path": extraction_path,
+        "input_type": input_type,
+        "artifact_filter": artifact_filter,
+    }
+
+    if not Path(_ILEAPP_SCRIPT).exists() and not require_binary("ileapp"):
+        return error_response(
+            tc_id,
+            "run_ileapp",
+            params,
+            f"iLEAPP not found: {_ILEAPP_SCRIPT}",
+            error_type="binary_missing",
+            suggestion=(
+                "Install iLEAPP: git clone https://github.com/abrignoni/iLEAPP.git /opt/ileapp"
+            ),
+        )
+
+    if not Path(extraction_path).exists():
+        return error_response(
+            tc_id,
+            "run_ileapp",
+            params,
+            f"Path not found: {extraction_path}",
+            error_type="file_not_found",
+        )
+
+    if input_type not in _LEAPP_INPUT_TYPE_FLAGS:
+        return error_response(
+            tc_id,
+            "run_ileapp",
+            params,
+            f"Invalid input_type: {input_type}. Valid: {list(_LEAPP_INPUT_TYPE_FLAGS.keys())}",
+            error_type="invalid_argument",
+        )
+
+    with tempfile.TemporaryDirectory(prefix="mulder_ileapp_") as tmpdir:
+        output_dir = Path(tmpdir)
+        cmd = [
+            "python3",
+            _ILEAPP_SCRIPT,
+            "-t",
+            _LEAPP_INPUT_TYPE_FLAGS[input_type],
+            "-i",
+            str(extraction_path),
+            "-o",
+            str(output_dir),
+        ]
+
+        try:
+            subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=_ILEAPP_TIMEOUT,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            result = _parse_leapp_output(output_dir, "ios", extraction_path, artifact_filter)
+            if result["total_artifacts_parsed"] > 0:
+                result["timed_out"] = True
+                text = f"iLEAPP (partial, timed out): {result['total_artifacts_parsed']} artifacts"
+                summary = extract_and_index(text, "phone.ileapp", extraction_path, "ileapp")
+                summary.update(result)
+                elapsed = (time.monotonic() - t0) * 1000
+                return tool_response(tc_id, "run_ileapp", params, summary, "phone.ileapp", elapsed)
+            return error_response(
+                tc_id,
+                "run_ileapp",
+                params,
+                f"iLEAPP timed out after {_ILEAPP_TIMEOUT}s",
+                (time.monotonic() - t0) * 1000,
+                error_type="timeout",
+            )
+        except OSError as exc:
+            return error_response(
+                tc_id,
+                "run_ileapp",
+                params,
+                f"Failed to execute iLEAPP: {exc}",
+                (time.monotonic() - t0) * 1000,
+                error_type="os_error",
+            )
+
+        result = _parse_leapp_output(output_dir, "ios", extraction_path, artifact_filter)
+
+        if result["total_artifacts_parsed"] == 0:
+            elapsed = (time.monotonic() - t0) * 1000
+            return tool_response(
+                tc_id,
+                "run_ileapp",
+                params,
+                {"status": "no_artifacts", "message": "iLEAPP produced no parseable output"},
+                "phone.ileapp",
+                elapsed,
+            )
+
+        text_parts = [
+            f"iLEAPP analysis of {extraction_path}",
+            f"Artifacts parsed: {result['total_artifacts_parsed']}",
+            f"Total records: {result['total_records']}",
+        ]
+        for cat, count in result.get("categories", {}).items():
+            text_parts.append(f"  {cat}: {count} records")
+
+        summary = extract_and_index(
+            "\n".join(text_parts), "phone.ileapp", extraction_path, "ileapp"
+        )
+        summary.update(result)
+
+    elapsed = (time.monotonic() - t0) * 1000
+    return tool_response(tc_id, "run_ileapp", params, summary, "phone.ileapp", elapsed)

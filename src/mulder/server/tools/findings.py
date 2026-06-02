@@ -18,14 +18,15 @@ import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal, cast
+from typing import Any, Literal, cast
 from uuid import uuid4
 
 from mulder.models import AuditSummary, CaseMetadataRow, Finding, SourceRow
-from mulder.patterns import source_is_cited
+from mulder.patterns import SEVERITY_ORDER, source_is_cited
 from mulder.report.renderer import ReportRenderer
 from mulder.server.app import get_ctx, get_job_store, mcp
 from mulder.server.helpers import error_response, hash_output, make_tool_call_id
+from mulder.server.tool_access import ANALYSTS, Role, tool_access
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +67,12 @@ def _evaluate_finalize_gates(
     gates.append({"name": "minimum_findings", "passed": passed, "detail": detail})
 
     # Gate 2: Timestamp coverage on non-negative findings
-    missing_ts = [f for f in non_negative if not f.event_time_start]
+    # Configuration and informational findings may not have meaningful
+    # timestamps (e.g., "BitLocker keys stored insecurely" is a state,
+    # not a timed event). Exempt them to avoid incentivizing fabricated dates.
+    _TS_EXEMPT_SEVERITIES = ("info", "informational")
+    ts_required = [f for f in non_negative if f.severity not in _TS_EXEMPT_SEVERITIES]
+    missing_ts = [f for f in ts_required if not f.event_time_start]
     passed = len(missing_ts) == 0
     if passed:
         detail = "All non-negative findings have event_time_start"
@@ -108,7 +114,12 @@ def _evaluate_finalize_gates(
         )
     gates.append({"name": "audit_tools_called", "passed": passed, "detail": detail})
 
-    # Gate 5: Evidence citation coverage
+    # Gate 5: Evidence citation coverage (advisory, not blocking)
+    # A low citation percentage is a signal to investigate more sources,
+    # NOT an instruction to manufacture findings. Only submit findings
+    # when the evidence genuinely warrants it. This gate passes at 25%
+    # to catch cases where major evidence categories were overlooked,
+    # without pressuring the analyst to cite every source.
     finding_source_names: set[str] = set()
     for f in findings:
         finding_source_names.update(f.sources)
@@ -120,7 +131,7 @@ def _evaluate_finalize_gates(
             1 for s in non_empty_sources if source_is_cited(s.source_name, finding_source_names)
         )
         coverage_pct = round(cited_count / total_non_empty * 100, 1)
-        passed = coverage_pct >= _MIN_EVIDENCE_CITATION_PCT
+        passed = coverage_pct >= 25.0
         if passed:
             detail = (
                 f"{coverage_pct}% of non-empty sources cited in findings "
@@ -129,10 +140,9 @@ def _evaluate_finalize_gates(
         else:
             detail = (
                 f"Only {coverage_pct}% of non-empty sources are cited "
-                f"({cited_count}/{total_non_empty}), need at least "
-                f"{_MIN_EVIDENCE_CITATION_PCT}%. Run audit_evidence_coverage "
-                f"to identify uncited sources, then review and submit findings "
-                f"or document why they are not relevant."
+                f"({cited_count}/{total_non_empty}). Review uncited sources "
+                f"to verify nothing was missed, but do NOT create findings "
+                f"just to increase this percentage."
             )
     else:
         passed = True
@@ -165,6 +175,7 @@ def _sanitize_event_time(ts: str | None) -> tuple[str | None, str | None]:
 
 
 @mcp.tool()
+@tool_access(ANALYSTS)
 def submit_finding(
     title: str,
     description: str,
@@ -291,6 +302,7 @@ def submit_finding(
 
 
 @mcp.tool()
+@tool_access(ANALYSTS | Role.NARRATIVE_EXECUTOR | Role.REPORT)
 def update_finding(
     finding_id: str,
     title: str | None = None,
@@ -402,6 +414,7 @@ def update_finding(
 
 
 @mcp.tool()
+@tool_access(Role.CROSS_ANALYST | Role.NARRATIVE_ANALYST)
 def delete_finding(finding_id: str) -> dict[str, object]:
     """Delete a finding that was submitted in error.
 
@@ -446,6 +459,7 @@ def delete_finding(finding_id: str) -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.REPORT)
 def submit_narrative(narrative: str) -> dict[str, object]:
     """Submit the long-form investigation narrative report.
 
@@ -482,6 +496,9 @@ def submit_narrative(narrative: str) -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(
+    ANALYSTS | Role.CROSS_PLANNER | Role.NARRATIVE_PLANNER | Role.NARRATIVE_EXECUTOR | Role.REPORT
+)
 def get_findings(limit: int = 20, offset: int = 0) -> dict[str, object]:
     """Retrieve findings submitted so far in this case.
 
@@ -525,6 +542,7 @@ def get_findings(limit: int = 20, offset: int = 0) -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.REPORT)
 def finalize_report() -> dict[str, object]:
     """Generate the final investigation report from all submitted findings.
 
@@ -584,17 +602,6 @@ def finalize_report() -> dict[str, object]:
     audit_log_path = report_dir / f"{case_metadata.case_id}.audit.jsonl"
 
     renderer = ReportRenderer()
-    report_text = renderer.render(
-        case_metadata=case_metadata,
-        findings=findings,
-        audit_summary=audit_summary,
-        audit_log_path=audit_log_path,
-        sources_list=sources_list,
-        evidence_integrity=evidence_integrity,
-    )
-
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(report_text, encoding="utf-8")
 
     _MAX_WINDOWS_PER_SOURCE = 50
     source_names = [s.source_name for s in sources_list]
@@ -615,7 +622,7 @@ def finalize_report() -> dict[str, object]:
 
     html_path: Path | None = report_dir / f"{case_metadata.case_id}.report.html"
     try:
-        html_text = renderer.render_html(
+        report_text, html_text, _ = renderer.render_all(
             case_metadata=case_metadata,
             findings=findings,
             audit_summary=audit_summary,
@@ -623,15 +630,30 @@ def finalize_report() -> dict[str, object]:
             sources_list=sources_list,
             evidence_integrity=evidence_integrity,
             source_windows=source_windows,
+            generate_pdf=False,
         )
-        if html_path is not None:
-            html_path.write_text(html_text, encoding="utf-8")
     except Exception as exc:
-        logger.warning("HTML report generation failed, markdown report still saved", exc_info=True)
+        logger.warning(
+            "HTML report generation failed, falling back to markdown only", exc_info=True
+        )
+        report_text = renderer.render(
+            case_metadata=case_metadata,
+            findings=findings,
+            audit_summary=audit_summary,
+            audit_log_path=audit_log_path,
+            sources_list=sources_list,
+            evidence_integrity=evidence_integrity,
+        )
+        html_text = ""
         html_warning: str | None = f"HTML report generation failed: {exc}"
         html_path = None
     else:
         html_warning = None
+
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(report_text, encoding="utf-8")
+    if html_path is not None and html_text:
+        html_path.write_text(html_text, encoding="utf-8")
 
     log_src = report_dir / "mulder.log"
     log_dest = report_dir / f"{case_metadata.case_id}.mulder.log"
@@ -660,6 +682,297 @@ def finalize_report() -> dict[str, object]:
         tool_call_id=tc_id,
         tool_name="finalize_report",
         params={},
+        output_hash=hash_output(result),
+        duration_ms=elapsed,
+    )
+    return result
+
+
+_IOC_PATTERN = re.compile(
+    r"\b(?:"
+    r"(?:\d{1,3}\.){3}\d{1,3}"
+    r"|[a-fA-F0-9]{32,64}"
+    r"|(?:[a-z0-9-]+\.)+[a-z]{2,}"
+    r")\b"
+)
+
+_SEVERITY_RANK = SEVERITY_ORDER
+
+
+def _jaccard(a: set[str], b: set[str]) -> float:
+    """Compute the Jaccard similarity coefficient of two sets.
+
+    Args:
+        a: First set.
+        b: Second set.
+
+    Returns:
+        Jaccard coefficient between 0.0 and 1.0.
+    """
+    if not a and not b:
+        return 0.0
+    intersection = a & b
+    union = a | b
+    return len(intersection) / len(union)
+
+
+def _tokenize(text: str) -> set[str]:
+    """Split text into lowercase word tokens, stripping punctuation.
+
+    Args:
+        text: Input text to tokenize.
+
+    Returns:
+        Set of lowercase word tokens longer than 2 characters.
+    """
+    return {w.lower().strip(".,;:!?()[]") for w in text.split() if len(w) > 2}
+
+
+def _extract_ioc_tokens(description: str) -> set[str]:
+    """Extract IOC-like tokens (IPs, hashes, domains) from text.
+
+    Args:
+        description: Finding description text.
+
+    Returns:
+        Set of IOC strings found in the text.
+    """
+    return set(_IOC_PATTERN.findall(description.lower()))
+
+
+def _time_windows_overlap(a: Finding, b: Finding) -> float:
+    """Compute overlap between two findings' time windows.
+
+    Returns 1.0 if both findings share any part of the same time window,
+    0.0 otherwise. Findings without timestamps return 0.0.
+
+    Args:
+        a: First finding.
+        b: Second finding.
+
+    Returns:
+        1.0 if time windows overlap, 0.0 otherwise.
+    """
+    if not a.event_time_start or not b.event_time_start:
+        return 0.0
+    a_start = a.event_time_start
+    a_end = a.event_time_end or a.event_time_start
+    b_start = b.event_time_start
+    b_end = b.event_time_end or b.event_time_start
+    if a_start <= b_end and b_start <= a_end:
+        return 1.0
+    return 0.0
+
+
+def _compute_similarity(a: Finding, b: Finding) -> float:
+    """Compute a weighted similarity score between two findings.
+
+    Combines six signals to detect findings describing the same event
+    even when title wording differs significantly:
+    - Title word overlap (Jaccard coefficient), weight 0.2
+    - MITRE technique ID overlap (Jaccard), weight 0.15
+    - IOC overlap in descriptions, weight 0.15
+    - Evidence ref overlap (Jaccard), weight 0.25
+    - Source overlap (Jaccard), weight 0.15
+    - Time window overlap (binary), weight 0.1
+
+    Args:
+        a: First finding.
+        b: Second finding.
+
+    Returns:
+        Similarity score between 0.0 and 1.0.
+    """
+    title_sim = _jaccard(_tokenize(a.title), _tokenize(b.title))
+    mitre_sim = _jaccard(set(a.mitre_attack_ids), set(b.mitre_attack_ids))
+    ioc_sim = _jaccard(
+        _extract_ioc_tokens(a.description),
+        _extract_ioc_tokens(b.description),
+    )
+    evidence_sim = _jaccard(set(a.evidence_refs), set(b.evidence_refs))
+    source_sim = _jaccard(set(a.sources), set(b.sources))
+    time_sim = _time_windows_overlap(a, b)
+
+    return (
+        0.20 * title_sim
+        + 0.15 * mitre_sim
+        + 0.15 * ioc_sim
+        + 0.25 * evidence_sim
+        + 0.15 * source_sim
+        + 0.10 * time_sim
+    )
+
+
+def _group_duplicates(
+    findings: list[Finding],
+    threshold: float,
+) -> list[list[Finding]]:
+    """Group findings into clusters of likely duplicates.
+
+    Uses single-linkage clustering: two findings in the same group
+    if either is similar enough to any existing group member.
+
+    Args:
+        findings: All findings for the case.
+        threshold: Minimum similarity to join a group.
+
+    Returns:
+        List of groups, where each group is a list of similar findings.
+        Single-member groups (unique findings) are included.
+    """
+    groups: list[list[Finding]] = []
+    assigned: set[str] = set()
+
+    for finding in findings:
+        if finding.finding_id in assigned:
+            continue
+        group = [finding]
+        assigned.add(finding.finding_id)
+
+        for candidate in findings:
+            if candidate.finding_id in assigned:
+                continue
+            for member in group:
+                if _compute_similarity(member, candidate) >= threshold:
+                    group.append(candidate)
+                    assigned.add(candidate.finding_id)
+                    break
+
+        groups.append(group)
+
+    return groups
+
+
+def _consolidate_group(
+    group: list[Finding],
+) -> tuple[Finding, list[str]]:
+    """Select the representative finding and merge metadata from duplicates.
+
+    Keeps the finding with the longest description. Merges unique
+    evidence_refs, sources, and MITRE IDs from all group members.
+    Elevates severity to the highest in the group.
+
+    Args:
+        group: List of similar findings to consolidate.
+
+    Returns:
+        Tuple of (representative finding to keep, finding_ids to delete).
+    """
+    best = max(group, key=lambda f: len(f.description))
+    to_delete: list[str] = []
+
+    all_sources: set[str] = set()
+    all_refs: set[str] = set()
+    all_mitre: set[str] = set()
+    highest_severity = best.severity
+
+    for f in group:
+        all_sources.update(f.sources)
+        all_refs.update(f.evidence_refs)
+        all_mitre.update(f.mitre_attack_ids)
+        if _SEVERITY_RANK.get(f.severity, 99) < _SEVERITY_RANK.get(highest_severity, 99):
+            highest_severity = f.severity
+        if f.finding_id != best.finding_id:
+            to_delete.append(f.finding_id)
+
+    best.sources = sorted(all_sources)
+    best.evidence_refs = sorted(all_refs)
+    best.mitre_attack_ids = sorted(all_mitre)
+    best.severity = highest_severity
+
+    return best, to_delete
+
+
+@mcp.tool()
+@tool_access(Role.NARRATIVE_EXECUTOR | Role.NARRATIVE_ANALYST | Role.REPORT)
+def deduplicate_findings(
+    case_id: str,
+    similarity_threshold: float = 0.4,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Identify and consolidate duplicate findings across systems.
+
+    Groups findings by evidence overlap, source overlap, time window
+    overlap, MITRE technique overlap, title similarity, and IOC overlap.
+    For each duplicate group, keeps the most detailed finding and merges
+    system-specific metadata from the others.
+
+    Args:
+        case_id: Active case identifier.
+        similarity_threshold: Minimum combined similarity score (0.0 to
+            1.0) to consider two findings as duplicates. Default 0.4.
+        dry_run: If True, return the proposed groups without modifying
+            findings.
+
+    Returns:
+        Dict with ``groups`` (proposed or applied merge groups),
+        ``merged_count`` (findings removed), and ``kept_count``
+        (findings retained).
+    """
+    ctx = get_ctx()
+    tc_id = make_tool_call_id()
+    t0 = time.monotonic()
+
+    findings = ctx.db.get_findings()
+    groups = _group_duplicates(findings, similarity_threshold)
+
+    multi_groups = [g for g in groups if len(g) > 1]
+    merged_count = 0
+    kept_count = len(findings)
+    group_summaries: list[dict[str, Any]] = []
+
+    for group in multi_groups:
+        representative, delete_ids = _consolidate_group(group)
+        affected_systems = sorted({s for f in group for s in f.sources})
+        suffix = f"\n\n**Affected Systems:** {', '.join(affected_systems)}"
+
+        group_summary: dict[str, Any] = {
+            "representative_id": representative.finding_id,
+            "representative_title": representative.title,
+            "merged_ids": delete_ids,
+            "affected_systems": affected_systems,
+            "group_size": len(group),
+        }
+        group_summaries.append(group_summary)
+
+        if not dry_run:
+            if suffix not in representative.description:
+                representative.description += suffix
+            ctx.db.update_finding(
+                representative.finding_id,
+                description=representative.description,
+                severity=representative.severity,
+                sources=representative.sources,
+                evidence_refs=representative.evidence_refs,
+                mitre_attack_ids=representative.mitre_attack_ids,
+            )
+            for fid in delete_ids:
+                ctx.db.delete_finding(fid)
+            merged_count += len(delete_ids)
+
+    if not dry_run:
+        kept_count = len(findings) - merged_count
+
+    result: dict[str, Any] = {
+        "tool_call_id": tc_id,
+        "status": "success",
+        "dry_run": dry_run,
+        "groups": group_summaries,
+        "merged_count": merged_count if not dry_run else 0,
+        "would_merge_count": sum(len(g["merged_ids"]) for g in group_summaries),
+        "kept_count": kept_count,
+        "total_groups": len(multi_groups),
+    }
+
+    elapsed = (time.monotonic() - t0) * 1000
+    ctx.audit.log_tool_call(
+        tool_call_id=tc_id,
+        tool_name="deduplicate_findings",
+        params={
+            "case_id": case_id,
+            "similarity_threshold": similarity_threshold,
+            "dry_run": dry_run,
+        },
         output_hash=hash_output(result),
         duration_ms=elapsed,
     )

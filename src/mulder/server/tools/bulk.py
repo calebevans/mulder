@@ -16,12 +16,14 @@ from mulder.server.helpers import (
     make_tool_call_id,
     windowed_response,
 )
+from mulder.server.tool_access import Role, tool_access
 
 _BULK_SOURCE_PREFIX = "bulk."
 _BULK_FEATURE_CAP = 15
 
 
 @mcp.tool()
+@tool_access(Role.CROSS_EXECUTOR)
 def get_carved_iocs(feature: str | None = None) -> dict[str, object]:
     """Return IOC data carved by bulk_extractor during ingest.
 
