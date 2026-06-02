@@ -14,9 +14,9 @@ import tempfile
 import time
 from pathlib import Path
 
-from mulder.server.app import get_ctx, mcp
+from mulder.server.app import mcp
 from mulder.server.extract_helpers import extract_and_index
-from mulder.server.helpers import error_response, hash_output, make_tool_call_id
+from mulder.server.helpers import error_response, make_tool_call_id, tool_response
 from mulder.server.tool_access import Role, tool_access
 
 logger = logging.getLogger(__name__)
@@ -66,7 +66,6 @@ def run_hindsight(
             (e.g. Default/ under Chrome user data).
         browser: Browser type, one of "chrome" (default), "brave", "edge", "opera".
     """
-    ctx = get_ctx()
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
     params: dict[str, object] = {"profile_path": profile_path, "browser": browser}
@@ -160,16 +159,4 @@ def run_hindsight(
         "index": index_result,
     }
 
-    ctx.audit.log_tool_call(
-        tool_call_id=tc_id,
-        tool_name=tool_name,
-        params=params,
-        output_hash=hash_output(result),
-        duration_ms=elapsed,
-    )
-    return {
-        "tool_call_id": tc_id,
-        "status": "success",
-        "results": result,
-        "source": "hindsight.browser",
-    }
+    return tool_response(tc_id, tool_name, params, result, "hindsight.browser", elapsed)

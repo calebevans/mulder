@@ -17,9 +17,9 @@ import tempfile
 import time
 from pathlib import Path
 
-from mulder.server.app import get_ctx, mcp
+from mulder.server.app import mcp
 from mulder.server.extract_helpers import extract_and_index
-from mulder.server.helpers import error_response, hash_output, make_tool_call_id
+from mulder.server.helpers import error_response, make_tool_call_id, tool_response
 from mulder.server.tool_access import Role, tool_access
 
 logger = logging.getLogger(__name__)
@@ -72,7 +72,6 @@ def run_mvt_android(
         evidence_path: Path to Android backup directory or bugreport.
         iocs: Path to STIX2 IOC file for indicator matching (optional).
     """
-    ctx = get_ctx()
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
     params: dict[str, object] = {"evidence_path": evidence_path, "iocs": iocs}
@@ -151,19 +150,7 @@ def run_mvt_android(
         "index": index_result,
     }
 
-    ctx.audit.log_tool_call(
-        tool_call_id=tc_id,
-        tool_name=tool_name,
-        params=params,
-        output_hash=hash_output(result),
-        duration_ms=elapsed,
-    )
-    return {
-        "tool_call_id": tc_id,
-        "status": "success",
-        "results": result,
-        "source": "mvt.android",
-    }
+    return tool_response(tc_id, tool_name, params, result, "mvt.android", elapsed)
 
 
 @mcp.tool()
@@ -183,7 +170,6 @@ def run_mvt_ios(
         iocs: Path to STIX2 IOC file for indicator matching (optional).
         mode: Analysis mode, either "backup" (default) or "fs" (filesystem dump).
     """
-    ctx = get_ctx()
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
     params: dict[str, object] = {
@@ -265,16 +251,4 @@ def run_mvt_ios(
         "index": index_result,
     }
 
-    ctx.audit.log_tool_call(
-        tool_call_id=tc_id,
-        tool_name=tool_name,
-        params=params,
-        output_hash=hash_output(result),
-        duration_ms=elapsed,
-    )
-    return {
-        "tool_call_id": tc_id,
-        "status": "success",
-        "results": result,
-        "source": "mvt.ios",
-    }
+    return tool_response(tc_id, tool_name, params, result, "mvt.ios", elapsed)

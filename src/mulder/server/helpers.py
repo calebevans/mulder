@@ -278,7 +278,16 @@ def tool_response(
     source: str | None = None,
     elapsed_ms: float = 0,
 ) -> dict[str, object]:
-    """Build an audited success response and log the tool call."""
+    """Build an audited success response and log the tool call.
+
+    When *source* is provided (indicating data has been indexed into the
+    case DB), returns a compact response with only a preview of the output.
+    The agent should use ``search()`` or ``get_raw_output()`` to access
+    the full data.
+
+    When *source* is None, returns the full results (for read/reference
+    tools whose output is not indexed elsewhere).
+    """
     if has_ctx():
         ctx = get_ctx()
         ctx.audit.log_tool_call(
@@ -289,12 +298,47 @@ def tool_response(
             duration_ms=elapsed_ms,
             batch_id=current_batch_id.get(),
         )
-    return {
+
+    if source is None:
+        return {
+            "tool_call_id": tc_id,
+            "status": "success",
+            "results": results,
+            "source": source,
+        }
+
+    line_count: int | None = None
+    windows_indexed: int | None = None
+    if isinstance(results, dict):
+        lc = results.get("line_count")
+        if isinstance(lc, int):
+            line_count = lc
+        wi = results.get("windows_indexed")
+        if isinstance(wi, int):
+            windows_indexed = wi
+
+    preview = ""
+    if isinstance(results, dict | list):
+        preview = json.dumps(results, default=str)[:_PREVIEW_CHAR_LIMIT]
+    elif isinstance(results, str):
+        preview = results[:_PREVIEW_CHAR_LIMIT]
+
+    resp: dict[str, object] = {
         "tool_call_id": tc_id,
         "status": "success",
-        "results": results,
         "source": source,
+        "preview": preview + ("..." if len(preview) >= _PREVIEW_CHAR_LIMIT else ""),
+        "hint": (
+            f"Full output indexed as '{source}'. "
+            f"Use search(query, source='{source}') or "
+            f"get_raw_output('{source}') to access."
+        ),
     }
+    if line_count is not None:
+        resp["line_count"] = line_count
+    if windows_indexed is not None:
+        resp["windows_indexed"] = windows_indexed
+    return resp
 
 
 def error_response(

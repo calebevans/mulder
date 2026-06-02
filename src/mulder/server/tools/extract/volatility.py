@@ -198,20 +198,25 @@ def _run_single_vol_plugin(
         extractor_name="volatility3",
     )
     summary["plugin"] = plugin
+    if short == "malfind":
+        summary["caveat"] = (
+            "RWX memory is expected in AV engines, JIT compilers, and "
+            ".NET CLR. Verify hex dump content before concluding injection."
+        )
     return summary
 
 
 @mcp.tool()
 @tool_access(Role.EXTRACT_EXECUTOR)
 def run_volatility(plugin: str, memory_path: str) -> dict[str, object]:
-    """Run a single Volatility 3 plugin against a memory dump.
+    """Run a single Volatility 3 plugin against a memory dump and index the output.
 
-    Runs the specified plugin (e.g. "windows.pslist.PsList" or just
-    "pslist"), indexes the output into the case database, and returns
-    a summary.  The output becomes searchable via query tools.
+    Call after extracting a memory dump (e.g. via extract_archive) when you
+    need output from one specific plugin. Prefer run_volatility_batch for
+    multiple plugins since it builds the Volatility context only once.
 
-    Common plugins: pslist, pstree, cmdline, netscan, malfind, dlllist,
-    svcscan, handles, psscan, envars, filescan, modules, modscan, vadinfo.
+    Indexes output as ``volatility.<plugin>`` source, searchable via
+    search() and get_raw_output().
 
     Args:
         plugin: Volatility 3 plugin name (e.g. "windows.pslist.PsList"
@@ -556,7 +561,7 @@ def _aggregate_batch_results(
         "run_volatility_batch",
         params,
         payload,
-        "volatility.batch",
+        None,
         elapsed,
     )
 
@@ -613,23 +618,16 @@ def run_volatility_batch(
     memory_path: str,
     force: bool = False,
 ) -> dict[str, object]:
-    """Run multiple Volatility 3 plugins against a memory dump in one call.
+    """Run multiple Volatility 3 plugins in one call with shared context setup.
 
-    Builds the Volatility context ONCE (parsing the memory image, loading
-    symbols, running automagic) and then executes each plugin against the
-    shared context.  This is significantly faster than calling
-    ``run_volatility`` separately for each plugin, since context setup
-    takes 10-20 seconds and is only done once.
+    Call after extracting a memory dump when you need multiple memory
+    analysis plugins. This is the primary memory extraction tool; context
+    setup runs once (~15s) then each plugin executes against it. Falls
+    back to subprocess execution when the Python API fails.
 
-    Each plugin's output is indexed separately.  Failed plugins are
-    reported individually without stopping the batch.
-
-    If the Volatility Python API is unavailable or context construction
-    fails, automatically falls back to subprocess execution so that a
-    library-level issue does not prevent any analysis.
-
-    For netscan, automatically falls back to connscan/sockscan if the
-    plugin is unsupported (e.g. Windows XP memory images).
+    Each plugin indexes as ``volatility.<plugin>`` (e.g.
+    ``volatility.pslist``). Use via start_extraction_batch for background
+    execution, or call directly for foreground runs.
 
     Args:
         plugins: List of plugin names (short or full form), e.g.

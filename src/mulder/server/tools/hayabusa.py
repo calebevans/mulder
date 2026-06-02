@@ -18,13 +18,12 @@ from collections import Counter
 from pathlib import Path
 
 from mulder.patterns import DISK_IMAGE_EXTS
-from mulder.server.app import get_ctx, mcp
+from mulder.server.app import mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
     _PREVIEW_CHAR_LIMIT,
     adaptive_timeout,
     error_response,
-    hash_output,
     make_tool_call_id,
     sources_already_indexed,
     tool_response,
@@ -137,18 +136,17 @@ def run_hayabusa(
     image_path: str = "",
     force: bool = False,
 ) -> dict[str, object]:
-    """Scan EVTX files with Hayabusa against 3,700+ Sigma detection rules.
+    """Detect threats in EVTX files using 3,700+ Sigma rules via Hayabusa.
 
-    Runs the Hayabusa Sigma rule engine against all ``.evtx`` files in a
-    directory.  Returns detection alerts with severity levels and MITRE
-    ATT&CK technique mappings.  Results are indexed into the case DB as
-    ``hayabusa.alerts`` for subsequent searching.
+    Call immediately after run_evtx_parser to get a prioritized list of
+    suspicious events with MITRE ATT&CK technique mappings. Automatically
+    locates the EVTX extraction directory from the prior run_evtx_parser
+    call. If no prior extraction exists and image_path is a disk image,
+    extracts EVTX files inline.
 
-    Run this **immediately after** ``run_evtx_parser`` for each disk
-    image to get a prioritised list of suspicious events before manual
-    EVTX analysis.  Each ``run_evtx_parser`` call stores its extracted
-    EVTX directory keyed by image path, so pass *image_path* to target
-    a specific extraction when multiple images have been processed.
+    Indexes as ``hayabusa.alerts``; returns severity breakdown, top rules,
+    and MITRE technique IDs. Use search(source='hayabusa.alerts') for
+    detailed alert inspection.
 
     Args:
         evtx_dir: Directory containing ``.evtx`` files.  If empty, falls
@@ -162,7 +160,6 @@ def run_hayabusa(
             previously passed to ``run_evtx_parser``.
         force: Re-run extraction even if sources already exist.
     """
-    ctx = get_ctx()
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
     params = {
@@ -285,27 +282,21 @@ def run_hayabusa(
 
     if not csv_text.strip():
         elapsed = (time.monotonic() - t0) * 1000
-        result: dict[str, object] = {
-            "total_alerts": 0,
-            "by_severity": {},
-            "top_rules": [],
-            "mitre_techniques": [],
-            "evtx_dir": resolved_dir,
-            "evtx_file_count": len(evtx_files),
-        }
-        ctx.audit.log_tool_call(
-            tool_call_id=tc_id,
-            tool_name=tool_name,
-            params=params,
-            output_hash=hash_output(result),
-            duration_ms=elapsed,
+        return tool_response(
+            tc_id,
+            tool_name,
+            params,
+            {
+                "total_alerts": 0,
+                "by_severity": {},
+                "top_rules": [],
+                "mitre_techniques": [],
+                "evtx_dir": resolved_dir,
+                "evtx_file_count": len(evtx_files),
+            },
+            "hayabusa.alerts",
+            elapsed,
         )
-        return {
-            "tool_call_id": tc_id,
-            "status": "success",
-            "results": result,
-            "source": "hayabusa.alerts",
-        }
 
     alerts = _parse_hayabusa_csv(csv_text)
 
@@ -338,7 +329,7 @@ def run_hayabusa(
     top_rules = [{"rule": name, "count": count} for name, count in rule_counts.most_common(10)]
 
     elapsed = (time.monotonic() - t0) * 1000
-    result = {
+    result: dict[str, object] = {
         "total_alerts": len(alerts),
         "by_severity": dict(severity_counts),
         "top_rules": top_rules,
@@ -348,19 +339,7 @@ def run_hayabusa(
         "index": index_result,
     }
 
-    ctx.audit.log_tool_call(
-        tool_call_id=tc_id,
-        tool_name=tool_name,
-        params=params,
-        output_hash=hash_output(result),
-        duration_ms=elapsed,
-    )
-    return {
-        "tool_call_id": tc_id,
-        "status": "success",
-        "results": result,
-        "source": "hayabusa.alerts",
-    }
+    return tool_response(tc_id, tool_name, params, result, "hayabusa.alerts", elapsed)
 
 
 def _parse_hayabusa_csv(csv_text: str) -> list[dict[str, str]]:
