@@ -372,10 +372,12 @@ class InvestigationDashboard:
         elapsed: float | None = None,
         error: str | None = None,
     ) -> None:
-        """Update status of a specific task in the progress panel.
+        """Update status of a specific task, creating it if necessary.
 
-        Finds the first matching task that is not already ``done`` and
-        applies the new status.
+        Uses upsert semantics: finds the first matching task that is not
+        already ``done`` and applies the new status. If no matching task
+        exists, a new ``TaskItem`` is created so the panel reactively
+        reflects actual execution without requiring pre-population.
 
         Args:
             system: System identifier.
@@ -389,7 +391,18 @@ class InvestigationDashboard:
                 task.status = status
                 task.elapsed_seconds = elapsed
                 task.error = error
-                break
+                return
+
+        self._tasks.append(
+            TaskItem(
+                tool=tool,
+                system=system,
+                status=status,
+                elapsed_seconds=elapsed,
+                error=error,
+            )
+        )
+        self._tasks_active = True
 
     def clear_tasks(self) -> None:
         """Remove all tasks and hide the progress panel."""

@@ -726,6 +726,10 @@ class Orchestrator:
         combined_result = PhaseResult(phase_name=phase.name)
 
         for attempt in range(1 + phase.max_retries):
+            if attempt > 0:
+                task_label = (prompt_vars or {}).get("system_name", "") or phase.name
+                self.dashboard.clear_system_tasks(task_label)
+
             follow_up_count = 0
             follow_up_context: str = ""
             follow_up_history: list[dict[str, Any]] = []
@@ -740,16 +744,6 @@ class Orchestrator:
                     return combined_result
 
                 combined_result.plans_executed += 1
-
-                if plan.tasks:
-                    task_label = (prompt_vars or {}).get("system_name", phase.name)
-                    tool_names = [
-                        str(t.get("tool", ""))
-                        for t in plan.tasks
-                        if t.get("tool") and str(t.get("tool", "")) not in _TASK_PANEL_SKIP
-                    ]
-                    if tool_names:
-                        self.dashboard.set_tasks(task_label, tool_names)
 
                 # Step 2: Executor
                 self._update_dashboard_sub_step(phase, "Executing", log_prefix)
