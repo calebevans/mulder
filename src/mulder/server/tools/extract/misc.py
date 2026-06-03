@@ -161,9 +161,9 @@ def _run_ez_tool(
 def run_prefetch_parser(image_path: str, force: bool = False) -> dict[str, object]:
     """Parse Windows Prefetch files from a disk image using PECmd (EZ Tools).
 
-    Mounts the disk image, locates Prefetch files, parses them for
-    execution history, and indexes the results.  Falls back to TSK
-    extraction when mounting fails.
+    Extracts Prefetch files via TSK (fls + icat) first since it reads
+    E01 images directly without FUSE, then falls back to mount if TSK
+    extraction is unavailable.
 
     Args:
         image_path: Path to the disk image (E01, dd, img).
@@ -248,7 +248,7 @@ def run_amcache_parser(image_path: str, force: bool = False) -> dict[str, object
     """Parse Amcache from a disk image using AmcacheParser (EZ Tools).
 
     Shows program execution history with SHA1 hashes, file paths, and
-    timestamps.  Falls back to TSK extraction when mounting fails.
+    timestamps.  Extracts via TSK first, falls back to mount.
 
     Args:
         image_path: Path to the disk image.
@@ -330,8 +330,8 @@ def run_amcache_parser(image_path: str, force: bool = False) -> dict[str, object
 def run_shimcache_parser(image_path: str, force: bool = False) -> dict[str, object]:
     """Parse ShimCache (AppCompatCache) from a disk image using AppCompatCacheParser.
 
-    Shows file existence evidence with timestamps.  Falls back to TSK
-    extraction when mounting fails.
+    Shows file existence evidence with timestamps.  Extracts the SYSTEM
+    hive via TSK first, falls back to mount.
 
     Args:
         image_path: Path to the disk image.
@@ -427,8 +427,8 @@ def run_mft_parser(image_path: str, force: bool = False) -> dict[str, object]:
     """Parse the $MFT from a disk image using MFTECmd (EZ Tools).
 
     The Master File Table contains timestamps, sizes, and parent
-    directories for every file on an NTFS volume.  Falls back to TSK
-    icat extraction (inode 0) when mounting fails.
+    directories for every file on an NTFS volume.  Extracts $MFT via
+    TSK icat (inode 0) first, falls back to mount.
 
     Args:
         image_path: Path to the disk image.
@@ -465,6 +465,7 @@ def run_mft_parser(image_path: str, force: bool = False) -> dict[str, object]:
             try:
                 proc = subprocess.run(cmd, capture_output=True, timeout=TOOL_TIMEOUT, check=False)
             except subprocess.TimeoutExpired:
+                logger.warning("icat timed out extracting $MFT from %s; trying mount", image_path)
                 proc = None
 
             if proc is not None and proc.returncode == 0 and proc.stdout:
@@ -478,6 +479,12 @@ def run_mft_parser(image_path: str, force: bool = False) -> dict[str, object]:
                     "run_mft_parser",
                     params,
                     t0,
+                )
+            elif proc is not None:
+                logger.warning(
+                    "icat $MFT extraction failed (rc=%d) for %s; trying mount",
+                    proc.returncode,
+                    image_path,
                 )
 
     try:

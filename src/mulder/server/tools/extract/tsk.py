@@ -219,11 +219,7 @@ def _tsk_extract_files(
         re.IGNORECASE | re.MULTILINE,
     )
 
-    extract_dir = Path(tempfile.mkdtemp(prefix="mulder_tsk_extract_"))
-    with _tsk_lock:
-        _tsk_extract_dirs.append(str(extract_dir))
-    ctx = get_ctx()
-    ctx.db.set_kv("tsk_extract_dir", str(extract_dir))
+    extract_dir: Path | None = None
     extracted: list[tuple[str, Path]] = []
     seen: set[str] = set()
 
@@ -238,6 +234,12 @@ def _tsk_extract_files(
             if inode_str in seen:
                 continue
             seen.add(inode_str)
+
+            if extract_dir is None:
+                extract_dir = Path(tempfile.mkdtemp(prefix="mulder_tsk_extract_"))
+                with _tsk_lock:
+                    _tsk_extract_dirs.append(str(extract_dir))
+                ctx.db.set_kv("tsk_extract_dir", str(extract_dir))
 
             safe_name = rel_path.replace("/", "_").replace("\\", "_")
             out_path = extract_dir / safe_name
