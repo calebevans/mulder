@@ -123,26 +123,26 @@ These hypotheses were explicitly tested and no supporting evidence was found.
 
 ### Network IOCs
 
-| Type | Value | Context |
-|------|-------|---------|
-{% for ioc in network_iocs %}| {{ ioc.type }} | `{{ ioc.value }}` | {{ ioc.context }} |
-{% endfor %}{% if not network_iocs %}| | No network IOCs extracted | |
+| Type | Value | Enrichment | Context |
+|------|-------|------------|---------|
+{% for ioc in network_iocs %}| {{ ioc.type }} | `{{ ioc.value }}` | {{ ioc.enrichment | default('') }} | {{ ioc.context }} |
+{% endfor %}{% if not network_iocs %}| | No network IOCs extracted | | |
 {% endif %}
 
 ### File IOCs
 
-| Type | Value | Context |
-|------|-------|---------|
-{% for ioc in file_iocs %}| {{ ioc.type }} | `{{ ioc.value }}` | {{ ioc.context }} |
-{% endfor %}{% if not file_iocs %}| | No file IOCs extracted | |
+| Type | Value | Enrichment | Context |
+|------|-------|------------|---------|
+{% for ioc in file_iocs %}| {{ ioc.type }} | `{{ ioc.value }}` | {{ ioc.enrichment | default('') }} | {{ ioc.context }} |
+{% endfor %}{% if not file_iocs %}| | No file IOCs extracted | | |
 {% endif %}
 
 {% if email_iocs %}
 ### Email IOCs
 
-| Type | Value | Context |
-|------|-------|---------|
-{% for ioc in email_iocs %}| {{ ioc.type }} | `{{ ioc.value }}` | {{ ioc.context }} |
+| Type | Value | Enrichment | Context |
+|------|-------|------------|---------|
+{% for ioc in email_iocs %}| {{ ioc.type }} | `{{ ioc.value }}` | {{ ioc.enrichment | default('') }} | {{ ioc.context }} |
 {% endfor %}
 {% endif %}
 

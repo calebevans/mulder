@@ -1012,12 +1012,13 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
   <div class="card mb-2">
     <div class="card-header">Network IOCs ({{ network_iocs | length }})</div>
     <table class="data-table" id="networkIocTable">
-      <thead><tr><th>Type</th><th>Value</th><th>Context</th><th>Actions</th></tr></thead>
+      <thead><tr><th>Type</th><th>Value</th><th>Enrichment</th><th>Context</th><th>Actions</th></tr></thead>
       <tbody>
       {% for ioc in network_iocs %}
       <tr>
         <td><span class="badge badge-{{ 'critical' if ioc.type == 'External IP' else 'info' }}">{{ ioc.type }}</span></td>
         <td><code>{{ ioc.value }}</code></td>
+        <td class="text-muted" style="font-size:0.75rem;">{{ ioc.enrichment | default('') }}</td>
         <td class="text-muted" style="font-size:0.78rem;">{{ ioc.context }}</td>
         <td>
           <button class="ioc-copy-btn" onclick="copyText('{{ ioc.value }}')" title="Copy">&#128203;</button>
@@ -1034,12 +1035,13 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
   <div class="card mb-2">
     <div class="card-header">File IOCs ({{ file_iocs | length }})</div>
     <table class="data-table" id="fileIocTable">
-      <thead><tr><th>Type</th><th>Value</th><th>Context</th><th>Actions</th></tr></thead>
+      <thead><tr><th>Type</th><th>Value</th><th>Enrichment</th><th>Context</th><th>Actions</th></tr></thead>
       <tbody>
       {% for ioc in file_iocs %}
       <tr>
         <td><span class="badge badge-{{ 'high' if ioc.type in ['SHA256','SHA1','MD5'] else 'medium' }}">{{ ioc.type }}</span></td>
         <td><code style="font-size:0.68rem;">{{ ioc.value | truncate(60) }}</code></td>
+        <td class="text-muted" style="font-size:0.75rem;">{{ ioc.enrichment | default('') }}</td>
         <td class="text-muted" style="font-size:0.78rem;">{{ ioc.context }}</td>
         <td>
           <button class="ioc-copy-btn" onclick="copyText('{{ ioc.value }}')" title="Copy">&#128203;</button>
@@ -1056,12 +1058,13 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
   <div class="card mb-2">
     <div class="card-header">Email IOCs ({{ email_iocs | length }})</div>
     <table class="data-table" id="emailIocTable">
-      <thead><tr><th>Type</th><th>Value</th><th>Context</th><th>Actions</th></tr></thead>
+      <thead><tr><th>Type</th><th>Value</th><th>Enrichment</th><th>Context</th><th>Actions</th></tr></thead>
       <tbody>
       {% for ioc in email_iocs %}
       <tr>
         <td><span class="badge badge-info">{{ ioc.type }}</span></td>
         <td><code>{{ ioc.value }}</code></td>
+        <td class="text-muted" style="font-size:0.75rem;">{{ ioc.enrichment | default('') }}</td>
         <td class="text-muted" style="font-size:0.78rem;">{{ ioc.context }}</td>
         <td><button class="ioc-copy-btn" onclick="copyText('{{ ioc.value }}')" title="Copy">&#128203;</button></td>
       </tr>

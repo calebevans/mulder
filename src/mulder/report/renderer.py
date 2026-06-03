@@ -66,6 +66,116 @@ _FALSE_POSITIVE_RE = re.compile(r"false\s+positive", re.IGNORECASE)
 _IOC_EXCLUDED_SEVERITIES = frozenset({"low", "info"})
 
 
+def _build_enrichment_map(
+    enrichment_windows: list[dict[str, Any]] | None,
+) -> dict[str, dict[str, Any]]:
+    """Build IOC-keyed lookup from enrichment.iocs DB windows.
+
+    Parses the raw JSON text stored in enrichment windows and extracts
+    per-IOC metadata (country, ASN, abuse score) into a dict keyed by
+    the IOC value for O(1) lookups during report rendering.
+
+    Args:
+        enrichment_windows: List of window dicts from the
+            ``enrichment.iocs`` source, each containing a ``raw_text``
+            field with JSON enrichment data.
+
+    Returns:
+        Dict mapping IOC values to their enrichment metadata. Each value
+        dict may contain ``country``, ``asn``, ``abuse_score``, and
+        ``aggregate_score`` keys. Returns empty dict when no enrichment
+        data is available.
+    """
+    if not enrichment_windows:
+        return {}
+
+    enrichment_map: dict[str, dict[str, Any]] = {}
+    for window in enrichment_windows:
+        raw_text = window.get("raw_text", "")
+        if not raw_text:
+            continue
+        try:
+            data = json.loads(raw_text)
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+        items = data if isinstance(data, list) else [data]
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            ioc_value = item.get("ioc", "")
+            if not ioc_value:
+                continue
+
+            meta: dict[str, Any] = {}
+            if "aggregate_score" in item:
+                meta["aggregate_score"] = item["aggregate_score"]
+
+            for source_result in item.get("sources", []):
+                if not isinstance(source_result, dict) or not source_result.get("found"):
+                    continue
+                if source_result.get("country") and "country" not in meta:
+                    meta["country"] = source_result["country"]
+                if source_result.get("asn") and "asn" not in meta:
+                    meta["asn"] = source_result["asn"]
+                if (
+                    source_result.get("source") == "abuseipdb"
+                    and source_result.get("reputation_score") is not None
+                ):
+                    meta["abuse_score"] = source_result["reputation_score"]
+
+            if meta:
+                enrichment_map[ioc_value] = meta
+
+    return enrichment_map
+
+
+def _format_enrichment(enrichment: dict[str, Any]) -> str:
+    """Format enrichment metadata into a compact display string.
+
+    Args:
+        enrichment: Dict with optional ``country``, ``asn``, and
+            ``abuse_score`` keys.
+
+    Returns:
+        Formatted string like "Germany, AS24961 WIIT AG (abuse: 85%)"
+        or empty string if no enrichment data is present.
+    """
+    parts: list[str] = []
+    if enrichment.get("country"):
+        parts.append(str(enrichment["country"]))
+    if enrichment.get("asn"):
+        parts.append(str(enrichment["asn"]))
+    label = ", ".join(parts)
+    if enrichment.get("abuse_score") is not None:
+        abuse = enrichment["abuse_score"]
+        label += f" (abuse: {abuse}%)" if label else f"abuse: {abuse}%"
+    return label
+
+
+def _apply_enrichment(
+    iocs: list[dict[str, str]],
+    enrichment_map: dict[str, dict[str, Any]],
+) -> list[dict[str, str]]:
+    """Merge enrichment metadata into IOC dicts.
+
+    Adds an ``enrichment`` key with a formatted display string to each
+    IOC dict whose value matches an entry in the enrichment map.
+
+    Args:
+        iocs: List of IOC dicts with ``type``, ``value``, ``context``.
+        enrichment_map: IOC-keyed enrichment lookup from
+            ``_build_enrichment_map``.
+
+    Returns:
+        The same list with ``enrichment`` keys added in-place.
+    """
+    for ioc in iocs:
+        meta = enrichment_map.get(ioc["value"])
+        ioc["enrichment"] = _format_enrichment(meta) if meta else ""
+    return iocs
+
+
 def _filter_ioc_eligible(findings: list[Finding]) -> list[Finding]:
     """Exclude findings that should not contribute IOCs to the appendix.
 
@@ -881,6 +991,7 @@ class ReportRenderer:
         sources_list: Sequence[SourceRow | dict[str, Any]] | None = None,
         evidence_integrity: list[dict[str, object]] | None = None,
         source_windows: dict[str, list[dict[str, Any]]] | None = None,
+        enrichment_windows: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Assemble template variables from case metadata, findings, audit trail, and sources.
 
@@ -893,6 +1004,8 @@ class ReportRenderer:
             sources_list: Evidence source rows for the source table.
             evidence_integrity: Evidence registry entries with file hashes.
             source_windows: Per-source raw text windows for the HTML report.
+            enrichment_windows: Raw windows from the ``enrichment.iocs``
+                DB source containing threat intel metadata for IOCs.
 
         Returns:
             Dict of template variables ready for Jinja2 rendering.
@@ -928,6 +1041,12 @@ class ReportRenderer:
 
         ioc_eligible_findings = _filter_ioc_eligible(positive_findings)
         network_iocs, file_iocs, email_iocs = _extract_iocs(ioc_eligible_findings)
+
+        enrichment_map = _build_enrichment_map(enrichment_windows)
+        if enrichment_map:
+            _apply_enrichment(network_iocs, enrichment_map)
+            _apply_enrichment(file_iocs, enrichment_map)
+            _apply_enrichment(email_iocs, enrichment_map)
 
         if audit_entries is None:
             audit_entries = _parse_audit_log(audit_log_path)
@@ -1227,6 +1346,7 @@ class ReportRenderer:
         audit_entries: list[dict[str, Any]] | None = None,
         sources_list: list[SourceRow] | None = None,
         evidence_integrity: list[dict[str, object]] | None = None,
+        enrichment_windows: list[dict[str, Any]] | None = None,
     ) -> str:
         """Render the markdown report template (``report.md.j2``) to a string.
 
@@ -1241,6 +1361,8 @@ class ReportRenderer:
             audit_entries: Pre-parsed audit entries; parsed from file if None.
             sources_list: Evidence source rows for the source table.
             evidence_integrity: Evidence registry entries with file hashes.
+            enrichment_windows: Raw windows from the ``enrichment.iocs``
+                DB source for threat intel context.
 
         Returns:
             Rendered markdown report string.
@@ -1253,6 +1375,7 @@ class ReportRenderer:
             audit_entries=audit_entries,
             sources_list=sources_list,
             evidence_integrity=evidence_integrity,
+            enrichment_windows=enrichment_windows,
         )
         return self._render_markdown(ctx)
 
@@ -1266,6 +1389,7 @@ class ReportRenderer:
         sources_list: list[SourceRow] | None = None,
         evidence_integrity: list[dict[str, object]] | None = None,
         source_windows: dict[str, list[dict[str, Any]]] | None = None,
+        enrichment_windows: list[dict[str, Any]] | None = None,
     ) -> str:
         """Render the HTML report with markdown descriptions converted to HTML.
 
@@ -1281,6 +1405,8 @@ class ReportRenderer:
             sources_list: Evidence source rows for the source table.
             evidence_integrity: Evidence registry entries with file hashes.
             source_windows: Per-source raw text windows for the HTML report.
+            enrichment_windows: Raw windows from the ``enrichment.iocs``
+                DB source for threat intel context.
 
         Returns:
             Rendered HTML report string.
@@ -1294,6 +1420,7 @@ class ReportRenderer:
             sources_list=sources_list,
             evidence_integrity=evidence_integrity,
             source_windows=source_windows,
+            enrichment_windows=enrichment_windows,
         )
         return self._render_html(ctx)
 
@@ -1308,6 +1435,7 @@ class ReportRenderer:
         evidence_integrity: list[dict[str, object]] | None = None,
         source_windows: dict[str, list[dict[str, Any]]] | None = None,
         generate_pdf: bool = True,
+        enrichment_windows: list[dict[str, Any]] | None = None,
     ) -> tuple[str, str, bytes | None]:
         """Render markdown, HTML, and optionally PDF reports.
 
@@ -1326,6 +1454,8 @@ class ReportRenderer:
             evidence_integrity: Evidence registry entries with file hashes.
             source_windows: Per-source raw text windows for the HTML report.
             generate_pdf: Attempt PDF generation if weasyprint is available.
+            enrichment_windows: Raw windows from the ``enrichment.iocs``
+                DB source for threat intel context.
 
         Returns:
             Tuple of (markdown_text, html_text, pdf_bytes_or_none).
@@ -1339,6 +1469,7 @@ class ReportRenderer:
             sources_list=sources_list,
             evidence_integrity=evidence_integrity,
             source_windows=source_windows,
+            enrichment_windows=enrichment_windows,
         )
         md_text = self._render_markdown(ctx)
         html_text = self._render_html(dict(ctx))

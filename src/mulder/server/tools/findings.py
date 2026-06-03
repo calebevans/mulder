@@ -617,6 +617,9 @@ def finalize_report() -> dict[str, object]:
             for w in windows
         ]
 
+    enrichment_rows = ctx.db.get_windows_by_source("enrichment.iocs")
+    enrichment_windows: list[dict[str, Any]] = [{"raw_text": w.raw_text} for w in enrichment_rows]
+
     html_path: Path | None = report_dir / f"{case_metadata.case_id}.report.html"
     try:
         report_text, html_text, _ = renderer.render_all(
@@ -628,6 +631,7 @@ def finalize_report() -> dict[str, object]:
             evidence_integrity=evidence_integrity,
             source_windows=source_windows,
             generate_pdf=False,
+            enrichment_windows=enrichment_windows,
         )
     except Exception as exc:
         logger.warning(
@@ -640,6 +644,7 @@ def finalize_report() -> dict[str, object]:
             audit_log_path=audit_log_path,
             sources_list=sources_list,
             evidence_integrity=evidence_integrity,
+            enrichment_windows=enrichment_windows,
         )
         html_text = ""
         html_warning: str | None = f"HTML report generation failed: {exc}"
