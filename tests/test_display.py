@@ -97,6 +97,56 @@ class TestMultipleSystems:
         assert dash._tasks[1].elapsed_seconds == 1.0
 
 
+class TestCompleteOneRunningTask:
+    """complete_one_running_task targets exactly one running task per call."""
+
+    def test_completes_only_one_system(self) -> None:
+        """When two systems share the same tool, only one is marked done."""
+        dash = _make_dashboard()
+        dash.set_tasks("sys-a", ["run_fls"])
+        dash.set_tasks("sys-b", ["run_fls"])
+        dash.update_task("sys-a", "run_fls", "running")
+        dash.update_task("sys-b", "run_fls", "running")
+
+        dash.complete_one_running_task("run_fls", "done")
+
+        statuses = [t.status for t in dash._tasks]
+        assert statuses.count("done") == 1
+        assert statuses.count("running") == 1
+
+    def test_second_completion_marks_second_system(self) -> None:
+        """A second completion event marks the remaining running task."""
+        dash = _make_dashboard()
+        dash.set_tasks("sys-a", ["run_fls"])
+        dash.set_tasks("sys-b", ["run_fls"])
+        dash.update_task("sys-a", "run_fls", "running")
+        dash.update_task("sys-b", "run_fls", "running")
+
+        dash.complete_one_running_task("run_fls", "done")
+        dash.complete_one_running_task("run_fls", "done")
+
+        assert all(t.status == "done" for t in dash._tasks)
+
+    def test_noop_when_none_running(self) -> None:
+        """No-op when no task with that tool is in running state."""
+        dash = _make_dashboard()
+        dash.set_tasks("sys-a", ["run_fls"])
+
+        dash.complete_one_running_task("run_fls", "done")
+        assert dash._tasks[0].status == "pending"
+
+    def test_failed_status_with_error(self) -> None:
+        """Failed status propagates the error message."""
+        dash = _make_dashboard()
+        dash.set_tasks("sys-a", ["run_fls"])
+        dash.update_task("sys-a", "run_fls", "running")
+
+        dash.complete_one_running_task("run_fls", "failed", error="timeout")
+
+        assert dash._tasks[0].status == "failed"
+        assert dash._tasks[0].error == "timeout"
+
+
 class TestLogPersistence:
     """Log methods emit to the Python logger for file persistence."""
 

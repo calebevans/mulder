@@ -387,7 +387,9 @@ class InvestigationDashboard:
             error: Error message (set when status is ``failed``).
         """
         for task in self._tasks:
-            if task.system == system and task.tool == tool and task.status != "done":
+            if task.system == system and task.tool == tool:
+                if task.status == "done" or task.status == "failed":
+                    return
                 task.status = status
                 task.elapsed_seconds = elapsed
                 task.error = error
@@ -403,6 +405,34 @@ class InvestigationDashboard:
             )
         )
         self._tasks_active = True
+
+    def complete_one_running_task(
+        self,
+        tool: str,
+        status: Literal["done", "failed"],
+        elapsed: float | None = None,
+        error: str | None = None,
+    ) -> None:
+        """Mark exactly one running task with the given tool as complete.
+
+        Used by the log tailer to handle ``[JOB_COMPLETE]`` events which
+        do not carry a system identifier. Finds the first task in
+        ``running`` state that matches *tool* and applies the terminal
+        status, so parallel systems with the same tool are updated one
+        at a time as individual completions arrive.
+
+        Args:
+            tool: Tool name to match.
+            status: Terminal status to apply (``done`` or ``failed``).
+            elapsed: Elapsed seconds, if known.
+            error: Error message when *status* is ``failed``.
+        """
+        for task in self._tasks:
+            if task.tool == tool and task.status == "running":
+                task.status = status
+                task.elapsed_seconds = elapsed
+                task.error = error
+                return
 
     def clear_tasks(self) -> None:
         """Remove all tasks and hide the progress panel."""
@@ -592,7 +622,7 @@ class InvestigationDashboard:
             label = "system" if hidden_done == 1 else "systems"
             content.append(f"\n  ({hidden_done} {label} completed)", style="dim green")
 
-        return Panel(content, title="🔍 Evidence Analysis", border_style="dim")
+        return Panel(content, title="Tasks", border_style="dim")
 
     def _append_system_block(
         self,

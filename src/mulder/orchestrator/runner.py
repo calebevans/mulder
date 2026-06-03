@@ -286,6 +286,12 @@ class Orchestrator:
         Expected format after the marker:
             ``[JOB_COMPLETE] tool_name|status|error_or_empty``
 
+        The marker does not carry a system identifier, so we delegate to
+        ``complete_one_running_task`` which updates exactly one task in
+        ``running`` state per event. This prevents a completion for one
+        system from incorrectly marking the same tool as done under a
+        different system running in parallel.
+
         Args:
             line: Full log line containing the JOB_COMPLETE marker.
         """
@@ -304,11 +310,10 @@ class Orchestrator:
         error = parts[2] if len(parts) > 2 and parts[2] else None
 
         _SUCCESS_STATUSES = ("completed", "ok", "success")
-        for system in list(self._active_systems):
-            if status in _SUCCESS_STATUSES:
-                self.dashboard.update_task(system, tool_name, "done")
-            elif status == "failed":
-                self.dashboard.update_task(system, tool_name, "failed", error=error)
+        if status in _SUCCESS_STATUSES:
+            self.dashboard.complete_one_running_task(tool_name, "done")
+        elif status == "failed":
+            self.dashboard.complete_one_running_task(tool_name, "failed", error=error)
 
     # ------------------------------------------------------------------
     # Pipeline
@@ -418,7 +423,7 @@ class Orchestrator:
         evidence_path = Path(self.evidence_path)
         extracted_dir = Path.home() / ".mulder" / "cases" / "extracted"
 
-        _MEMORY_EXTENSIONS = frozenset((".raw", ".vmem", ".mem", ".img", ".dmp", ".lime"))
+        _MEMORY_EXTENSIONS = frozenset((".raw", ".vmem", ".mem", ".img", ".dmp", ".lime", ".001"))
         _ARCHIVE_EXTENSIONS = frozenset(
             (".7z", ".zip", ".gz", ".tar", ".xz", ".bz2", ".rar", ".zst")
         )
@@ -438,6 +443,25 @@ class Orchestrator:
 
         memory_dumps: list[str] = []
         nested_archives: list[str] = []
+
+        # Scan evidence root for memory dumps (they may not be in extracted/)
+        if evidence_path.is_dir():
+            for f in evidence_path.rglob("*"):
+                if not f.is_file():
+                    continue
+                try:
+                    rel = str(f.relative_to(evidence_path)).lower()
+                except ValueError:
+                    rel = str(f).lower()
+                if sys_lower not in rel:
+                    continue
+                ext = f.suffix.lower()
+                if ext in _MEMORY_EXTENSIONS:
+                    memory_dumps.append(str(f))
+                elif ext in _ARCHIVE_EXTENSIONS:
+                    nested_archives.append(str(f))
+
+        # Also scan extracted directory
         if extracted_dir.is_dir():
             for subdir in extracted_dir.iterdir():
                 if subdir.is_dir() and sys_lower in subdir.name.lower():
@@ -448,7 +472,8 @@ class Orchestrator:
                         if ext in _ARCHIVE_EXTENSIONS:
                             nested_archives.append(str(f))
                         elif ext in _MEMORY_EXTENSIONS or f.stat().st_size > 100 * 1024 * 1024:
-                            memory_dumps.append(str(f))
+                            if str(f) not in memory_dumps:
+                                memory_dumps.append(str(f))
 
         lines: list[str] = [f"System: {system_name}"]
         if disk_images:
