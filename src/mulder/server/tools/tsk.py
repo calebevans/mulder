@@ -15,6 +15,7 @@ import subprocess
 import threading
 import time
 
+from mulder.models import WindowRow
 from mulder.server import source_names as _sn
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
@@ -48,6 +49,25 @@ _LINUX_INDICATORS = ("linux", "0x83", "ext", "0x8e")
 
 _cached_image_info: dict[str, tuple[str, int, str | None]] = {}
 _image_info_lock = threading.Lock()
+
+
+def _get_all_filelist_windows() -> list[WindowRow]:
+    """Return windows from all indexed ``tsk.filelist*`` sources.
+
+    Collects windows from the primary ``tsk.filelist`` and any secondary
+    partition sources (``tsk.filelist.p1``, ``tsk.filelist.p2``, etc.).
+    """
+    ctx = get_ctx()
+    sources = ctx.db.get_sources()
+    fls_sources = sorted(
+        [s for s in sources if s.source_name.startswith(_SRC_FILELIST)],
+        key=lambda s: s.source_name,
+    )
+    all_windows: list[WindowRow] = []
+    for src in fls_sources:
+        all_windows.extend(ctx.db.get_windows_by_source(src.source_name))
+    return all_windows
+
 
 _FSSTAT_TYPE_RE = re.compile(r"File System Type:\s*(.+)", re.IGNORECASE)
 
@@ -189,9 +209,9 @@ def list_files(
 ) -> dict[str, object]:
     """List files from the disk image filesystem (TSK fls).
 
-    Returns a summary of matching files with counts. Use search() to
-    find specific files by name or path, and get_raw_output() to
-    paginate through the full listing.
+    Returns a summary of matching files with counts across all indexed
+    partitions. Use search() to find specific files by name or path,
+    and get_raw_output() to paginate through the full listing.
 
     Args:
         path_filter: Optional substring filter on file paths.
@@ -201,7 +221,7 @@ def list_files(
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
-    windows = ctx.db.get_windows_by_source(_SRC_FILELIST)
+    windows = _get_all_filelist_windows()
 
     if include_deleted:
         windows = [w for w in windows if "* " in w.raw_text]
@@ -252,14 +272,14 @@ def get_deleted_files() -> dict[str, object]:
     """Return a summary of deleted files detected in the disk image.
 
     TSK marks deleted entries with a ``*`` prefix. Returns counts and
-    top directories containing deleted files. Use search() to find
-    specific deleted files by name.
+    top directories containing deleted files across all indexed
+    partitions. Use search() to find specific deleted files by name.
     """
     ctx = get_ctx()
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
-    windows = ctx.db.get_windows_by_source(_SRC_FILELIST)
+    windows = _get_all_filelist_windows()
     deleted = [w for w in windows if "* " in w.raw_text]
 
     total_entries = sum(w.raw_text.count("\n") + 1 for w in deleted)

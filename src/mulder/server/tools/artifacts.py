@@ -80,7 +80,11 @@ def _icat_extract(image_path: str, offset: int, inode: str, dest: Path) -> bool:
 
 
 def _resolve_image_and_offset() -> tuple[str, int]:
-    """Get disk image path and partition offset from indexed TSK data."""
+    """Get disk image path and primary partition offset from indexed TSK data.
+
+    Returns:
+        Tuple of ``(image_path, primary_partition_offset)``.
+    """
     ctx = get_ctx()
     sources = ctx.db.get_sources()
 
@@ -107,20 +111,45 @@ def _resolve_image_and_offset() -> tuple[str, int]:
     return image_path, offset
 
 
-def _find_inodes_by_pattern(pattern: str) -> list[tuple[str, str]]:
-    """Search fls listing for files matching a name pattern.
+_KV_SOURCE_OFFSET_PREFIX = "tsk_source_offset:"
 
-    Returns list of (inode_str, relative_path) tuples.
+
+def _find_inodes_by_pattern(pattern: str) -> list[tuple[str, str, int]]:
+    """Search all fls listings for files matching a name pattern.
+
+    Searches the primary ``tsk.filelist`` and any secondary partition
+    sources (``tsk.filelist.p1``, etc.), returning the correct partition
+    offset for each match so callers can extract via ``icat`` with the
+    right offset.
+
+    Args:
+        pattern: Regex pattern with at least two capture groups:
+            group(1) = inode string, group(2) = relative path.
+
+    Returns:
+        List of ``(inode_str, relative_path, partition_offset)`` tuples.
     """
     ctx = get_ctx()
-    windows = ctx.db.get_windows_by_source("tsk.filelist")
+    sources = ctx.db.get_sources()
+    fls_sources = sorted(
+        [s for s in sources if s.source_name.startswith("tsk.filelist")],
+        key=lambda s: s.source_name,
+    )
+
+    _, primary_offset = _resolve_image_and_offset()
     pat = re.compile(pattern, re.IGNORECASE | re.MULTILINE)
-    results: list[tuple[str, str]] = []
-    for w in windows:
-        for m in pat.finditer(w.raw_text):
-            inode_str = m.group(1).split("-")[0]
-            rel_path = m.group(2).strip()
-            results.append((inode_str, rel_path))
+    results: list[tuple[str, str, int]] = []
+
+    for src in fls_sources:
+        stored = ctx.db.get_kv(f"{_KV_SOURCE_OFFSET_PREFIX}{src.source_name}:{src.source_path}")
+        offset = int(stored) if stored is not None else primary_offset
+
+        windows = ctx.db.get_windows_by_source(src.source_name)
+        for w in windows:
+            for m in pat.finditer(w.raw_text):
+                inode_str = m.group(1).split("-")[0]
+                rel_path = m.group(2).strip()
+                results.append((inode_str, rel_path, offset))
     return results
 
 
@@ -140,7 +169,7 @@ def parse_browser_history() -> dict[str, object]:
     if not shutil.which("icat"):
         return {"tool_call_id": tc_id, "status": "error", "error_message": "icat not found"}
 
-    image_path, offset = _resolve_image_and_offset()
+    image_path, _ = _resolve_image_and_offset()
     if not image_path:
         return {"tool_call_id": tc_id, "status": "error", "error_message": "No disk image indexed"}
 
@@ -159,9 +188,9 @@ def parse_browser_history() -> dict[str, object]:
     with tempfile.TemporaryDirectory(prefix="mulder_browser_") as tmpdir:
         for pattern, browser in browser_patterns:
             matches = _find_inodes_by_pattern(pattern)
-            for inode_str, rel_path in matches:
+            for inode_str, rel_path, match_offset in matches:
                 db_path = Path(tmpdir) / f"{browser}_{inode_str}.sqlite"
-                if not _icat_extract(image_path, offset, inode_str, db_path):
+                if not _icat_extract(image_path, match_offset, inode_str, db_path):
                     continue
 
                 try:
@@ -249,7 +278,7 @@ def parse_plist(plist_filter: str | None = None) -> dict[str, object]:
     if not shutil.which("icat"):
         return {"tool_call_id": tc_id, "status": "error", "error_message": "icat not found"}
 
-    image_path, offset = _resolve_image_and_offset()
+    image_path, _ = _resolve_image_and_offset()
     if not image_path:
         return {"tool_call_id": tc_id, "status": "error", "error_message": "No disk image indexed"}
 
@@ -267,9 +296,9 @@ def parse_plist(plist_filter: str | None = None) -> dict[str, object]:
     all_results: list[str] = []
 
     with tempfile.TemporaryDirectory(prefix="mulder_plist_") as tmpdir:
-        for inode_str, rel_path in matches[:50]:
+        for inode_str, rel_path, match_offset in matches[:50]:
             plist_path = Path(tmpdir) / f"plist_{inode_str}.plist"
-            if not _icat_extract(image_path, offset, inode_str, plist_path):
+            if not _icat_extract(image_path, match_offset, inode_str, plist_path):
                 continue
 
             try:

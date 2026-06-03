@@ -27,8 +27,7 @@ from mulder.server.helpers import (
 from mulder.server.tool_access import Role, tool_access
 from mulder.server.tools.extract.misc import _DOTNET, _find_ez_tool
 from mulder.server.tools.extract.tsk import (
-    _resolve_partition_offset,
-    _run_fls_inline,
+    _collect_fls_chunks,
     _tsk_extract_dirs,
     _tsk_lock,
 )
@@ -49,62 +48,52 @@ _evtx_lock = threading.Lock()
 def _extract_evtx_from_image(image_path: str, dest_dir: str) -> list[Path]:
     """Extract .evtx files from a disk image to *dest_dir* using TSK icat.
 
-    Uses the fls listing already indexed for the case to locate EVTX
-    inodes, then extracts each with icat.  When the DB has no
-    ``tsk.filelist`` source (e.g. ``run_fls`` has not completed yet),
-    runs fls inline so extraction is self-contained.
+    Searches all indexed ``tsk.filelist*`` sources (primary and secondary
+    partitions) to locate EVTX inodes, then extracts each with ``icat``
+    using the correct partition offset.  Falls back to running fls inline
+    on the primary partition when no indexed sources exist.
 
     Works on E01 and raw images without mounting.
+
+    Args:
+        image_path: Path to the disk image.
+        dest_dir: Directory to write extracted .evtx files to.
+
+    Returns:
+        List of paths to extracted .evtx files.
     """
-    ctx = get_ctx()
-    sources = ctx.db.get_sources()
-    fls_source = next((s for s in sources if s.source_name == "tsk.filelist"), None)
-
-    fls_text_chunks: list[str] = []
-
-    if fls_source is not None:
-        windows = ctx.db.get_windows_by_source("tsk.filelist")
-        fls_text_chunks = [w.raw_text for w in windows]
-    else:
-        logger.info(
-            "tsk.filelist not yet indexed; running fls inline for EVTX extraction from %s",
-            image_path,
-        )
-        inline_output = _run_fls_inline(image_path)
-        if inline_output:
-            fls_text_chunks = [inline_output]
-
-    if not fls_text_chunks:
+    chunk_groups = _collect_fls_chunks(image_path)
+    if not chunk_groups:
         return []
-
-    offset = _resolve_partition_offset(image_path)
 
     evtx_re = re.compile(
         r"^[rd]/[rd*]\s+(\d+(?:-\d+-\d+)?):\s+(.+\.evtx)\s*$", re.IGNORECASE | re.MULTILINE
     )
 
     extracted: list[Path] = []
-    seen_inodes: set[str] = set()
-    for chunk in fls_text_chunks:
-        for m in evtx_re.finditer(chunk):
-            inode_str = m.group(1).split("-")[0]
-            if inode_str in seen_inodes:
-                continue
-            seen_inodes.add(inode_str)
-            rel_path = m.group(2).strip()
-            safe_name = rel_path.replace("/", "_").replace("\\", "_")
-            out_path = Path(dest_dir) / safe_name
-            cmd = ["icat"]
-            if offset > 0:
-                cmd.extend(["-o", str(offset)])
-            cmd.extend([image_path, inode_str])
-            try:
-                proc = subprocess.run(cmd, capture_output=True, timeout=30, check=False)
-                if proc.returncode == 0 and proc.stdout:
-                    out_path.write_bytes(proc.stdout)
-                    extracted.append(out_path)
-            except (subprocess.TimeoutExpired, OSError):
-                continue
+    seen: set[str] = set()
+    for chunks, offset in chunk_groups:
+        for chunk in chunks:
+            for m in evtx_re.finditer(chunk):
+                inode_str = m.group(1).split("-")[0]
+                dedup_key = f"{offset}:{inode_str}"
+                if dedup_key in seen:
+                    continue
+                seen.add(dedup_key)
+                rel_path = m.group(2).strip()
+                safe_name = rel_path.replace("/", "_").replace("\\", "_")
+                out_path = Path(dest_dir) / safe_name
+                cmd = ["icat"]
+                if offset > 0:
+                    cmd.extend(["-o", str(offset)])
+                cmd.extend([image_path, inode_str])
+                try:
+                    proc = subprocess.run(cmd, capture_output=True, timeout=30, check=False)
+                    if proc.returncode == 0 and proc.stdout:
+                        out_path.write_bytes(proc.stdout)
+                        extracted.append(out_path)
+                except (subprocess.TimeoutExpired, OSError):
+                    continue
     return extracted
 
 
