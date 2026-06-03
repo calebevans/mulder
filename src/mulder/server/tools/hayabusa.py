@@ -18,7 +18,7 @@ from collections import Counter
 from pathlib import Path
 
 from mulder.patterns import DISK_IMAGE_EXTS
-from mulder.server.app import mcp
+from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
     _PREVIEW_CHAR_LIMIT,
@@ -51,9 +51,14 @@ def _resolve_evtx_dir(evtx_dir: str | None, image_path: str | None = None) -> st
 
     Resolution order:
     1. Explicit *evtx_dir* if it exists and contains EVTX files.
-    2. Prior extraction from ``run_evtx_parser`` keyed by *image_path*.
-    3. Any prior extraction directory (newest first) that still has files.
-    4. Inline EVTX extraction from *image_path* using the same TSK +
+    2. Prior extraction from ``run_evtx_parser`` keyed by *image_path*
+       (in-memory cache).
+    3. Any prior extraction directory (newest first) that still has files
+       (in-memory cache).
+    4. DB ``kv_store`` fallback (``evtx_extract_dir:{image_path}`` then
+       ``evtx_extract_dir``), for cross-process persistence when the
+       server restarts between orchestrator phases.
+    5. Inline EVTX extraction from *image_path* using the same TSK +
        carved-EVTX strategy as ``run_evtx_parser``.
 
     Args:
@@ -76,6 +81,18 @@ def _resolve_evtx_dir(evtx_dir: str | None, image_path: str | None = None) -> st
     for d in reversed(list(_evtx_extract_dirs.values())):
         if Path(d).is_dir() and _dir_has_evtx(d):
             return d
+
+    try:
+        ctx = get_ctx()
+        if image_path:
+            db_dir = ctx.db.get_kv(f"evtx_extract_dir:{image_path}")
+            if db_dir and Path(db_dir).is_dir() and _dir_has_evtx(db_dir):
+                return db_dir
+        db_dir = ctx.db.get_kv("evtx_extract_dir") or ""
+        if db_dir and Path(db_dir).is_dir() and _dir_has_evtx(db_dir):
+            return db_dir
+    except Exception:
+        logger.debug("Failed to read evtx_extract_dir from DB kv_store", exc_info=True)
 
     if (
         image_path

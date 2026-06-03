@@ -10,7 +10,8 @@ import time
 from pathlib import Path
 from typing import Any, Literal
 
-from mulder.server.app import mcp
+from mulder.patterns import DISK_IMAGE_EXTS
+from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
     adaptive_timeout,
@@ -31,6 +32,53 @@ logger = logging.getLogger(__name__)
 _CHAINSAW_TIMEOUT = 600
 _CHAINSAW_BINARY = "/usr/local/bin/chainsaw"
 _DEFAULT_SIGMA_RULES = "/opt/sigma-rules/rules/windows/"
+
+
+def _resolve_evtx_evidence(evidence_path: str) -> str:
+    """Resolve a disk image path to its EVTX extraction directory.
+
+    If *evidence_path* is already a directory, returns it unchanged.
+    If it is a disk image, looks up the extraction directory from the
+    in-memory cache (``_evtx_extract_dirs``) and the DB ``kv_store``,
+    mirroring the cross-process fallback used in ``run_hayabusa`` and
+    ``index_evtx_file``.
+
+    Args:
+        evidence_path: Path to an EVTX directory or disk image.
+
+    Returns:
+        Resolved directory path, or the original *evidence_path* if
+        no extraction directory is found.
+    """
+    ep = Path(evidence_path)
+    if ep.is_dir():
+        return evidence_path
+    if ep.suffix.lower() not in DISK_IMAGE_EXTS:
+        return evidence_path
+
+    from mulder.server.tools.extract.evtx import _evtx_extract_dirs
+
+    if evidence_path in _evtx_extract_dirs:
+        d = _evtx_extract_dirs[evidence_path]
+        if Path(d).is_dir():
+            return d
+
+    for d in reversed(list(_evtx_extract_dirs.values())):
+        if Path(d).is_dir():
+            return d
+
+    try:
+        ctx = get_ctx()
+        db_dir = ctx.db.get_kv(f"evtx_extract_dir:{evidence_path}")
+        if db_dir and Path(db_dir).is_dir():
+            return db_dir
+        db_dir = ctx.db.get_kv("evtx_extract_dir") or ""
+        if db_dir and Path(db_dir).is_dir():
+            return db_dir
+    except Exception:
+        logger.debug("Failed to read evtx_extract_dir from DB kv_store", exc_info=True)
+
+    return evidence_path
 
 
 def _run_chainsaw_hunt(
@@ -406,6 +454,9 @@ def run_chainsaw(
             error_type="binary_missing",
             suggestion="Install Chainsaw from https://github.com/WithSecureLabs/chainsaw",
         )
+
+    if mode in ("hunt", "search", "timeline"):
+        evidence_path = _resolve_evtx_evidence(evidence_path)
 
     if not Path(evidence_path).exists():
         return error_response(
