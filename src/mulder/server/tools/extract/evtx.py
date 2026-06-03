@@ -27,8 +27,7 @@ from mulder.server.helpers import (
 from mulder.server.tool_access import Role, tool_access
 from mulder.server.tools.extract.misc import _DOTNET, _find_ez_tool
 from mulder.server.tools.extract.tsk import (
-    _detect_partition_offset,
-    _parse_partition_offset,
+    _resolve_partition_offset,
     _run_fls_inline,
     _tsk_extract_dirs,
     _tsk_lock,
@@ -62,16 +61,10 @@ def _extract_evtx_from_image(image_path: str, dest_dir: str) -> list[Path]:
     fls_source = next((s for s in sources if s.source_name == "tsk.filelist"), None)
 
     fls_text_chunks: list[str] = []
-    offset = 0
 
     if fls_source is not None:
         windows = ctx.db.get_windows_by_source("tsk.filelist")
         fls_text_chunks = [w.raw_text for w in windows]
-        part_src = next((s for s in sources if s.source_name == "tsk.partitions"), None)
-        if part_src:
-            part_windows = ctx.db.get_windows_by_source("tsk.partitions")
-            mmls_text = "\n".join(w.raw_text for w in part_windows)
-            offset = _parse_partition_offset(mmls_text)
     else:
         logger.info(
             "tsk.filelist not yet indexed; running fls inline for EVTX extraction from %s",
@@ -80,10 +73,11 @@ def _extract_evtx_from_image(image_path: str, dest_dir: str) -> list[Path]:
         inline_output = _run_fls_inline(image_path)
         if inline_output:
             fls_text_chunks = [inline_output]
-            offset = _detect_partition_offset(image_path)
 
     if not fls_text_chunks:
         return []
+
+    offset = _resolve_partition_offset(image_path)
 
     evtx_re = re.compile(
         r"^[rd]/[rd*]\s+(\d+(?:-\d+-\d+)?):\s+(.+\.evtx)\s*$", re.IGNORECASE | re.MULTILINE

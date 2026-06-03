@@ -29,6 +29,7 @@ __all__ = [
     "_cleanup_tsk_extract_dir",
     "_detect_partition_offset",
     "_parse_partition_offset",
+    "_resolve_partition_offset",
     "_run_fls_inline",
     "_tsk_extract_dirs",
     "_tsk_extract_files",
@@ -85,6 +86,41 @@ def _parse_partition_offset(mmls_text: str) -> int:
     return 0
 
 
+_KV_OFFSET_PREFIX = "tsk_partition_offset:"
+"""DB kv_store key prefix for persisted partition offsets."""
+
+
+def _resolve_partition_offset(image_path: str) -> int:
+    """Resolve the partition offset for *image_path* using all available sources.
+
+    Checks, in order:
+      1. The DB ``kv_store`` (set by a prior successful ``run_fls``).
+      2. The indexed ``tsk.partitions`` source (mmls output).
+      3. Live ``_detect_partition_offset`` (runs mmls on the fly).
+
+    This ensures that when ``run_fls`` was called with an explicit offset
+    (e.g. on multi-segment E01 images where mmls may not work),
+    downstream icat extractions reuse the same working offset.
+    """
+    ctx = get_ctx()
+
+    stored = ctx.db.get_kv(f"{_KV_OFFSET_PREFIX}{image_path}")
+    if stored is not None:
+        with contextlib.suppress(ValueError):
+            return int(stored)
+
+    sources = ctx.db.get_sources()
+    part_src = next((s for s in sources if s.source_name == "tsk.partitions"), None)
+    if part_src:
+        part_windows = ctx.db.get_windows_by_source("tsk.partitions")
+        mmls_text = "\n".join(w.raw_text for w in part_windows)
+        parsed = _parse_partition_offset(mmls_text)
+        if parsed > 0:
+            return parsed
+
+    return _detect_partition_offset(image_path)
+
+
 _tsk_extract_dirs: list[str] = []
 _tsk_lock = threading.Lock()
 
@@ -108,10 +144,12 @@ def _run_fls_inline(image_path: str) -> str:
 
     Used when the pre-indexed ``tsk.filelist`` is not yet available
     (e.g. when extraction tools run concurrently with ``run_fls``).
+    Persists the detected partition offset to the kv_store so that
+    subsequent icat calls can reuse it.
     """
     if not require_binary("fls"):
         return ""
-    offset = _detect_partition_offset(image_path)
+    offset = _resolve_partition_offset(image_path)
     cmd = ["fls", "-r", "-p"]
     if offset > 0:
         cmd.extend(["-o", str(offset)])
@@ -119,6 +157,8 @@ def _run_fls_inline(image_path: str) -> str:
     try:
         proc = subprocess.run(cmd, capture_output=True, timeout=TOOL_TIMEOUT, check=False)
         if proc.returncode == 0:
+            ctx = get_ctx()
+            ctx.db.set_kv(f"{_KV_OFFSET_PREFIX}{image_path}", str(offset))
             return proc.stdout.decode("utf-8", errors="replace")
     except (subprocess.TimeoutExpired, OSError):
         pass
@@ -145,16 +185,10 @@ def _tsk_extract_files(
     fls_source = next((s for s in sources if s.source_name == "tsk.filelist"), None)
 
     fls_text_chunks: list[str] = []
-    offset = 0
 
     if fls_source is not None:
         windows = ctx.db.get_windows_by_source("tsk.filelist")
         fls_text_chunks = [w.raw_text for w in windows]
-        part_src = next((s for s in sources if s.source_name == "tsk.partitions"), None)
-        if part_src:
-            part_windows = ctx.db.get_windows_by_source("tsk.partitions")
-            mmls_text = "\n".join(w.raw_text for w in part_windows)
-            offset = _parse_partition_offset(mmls_text)
     else:
         logger.info(
             "tsk.filelist not yet indexed; running fls inline for TSK extraction from %s",
@@ -163,10 +197,11 @@ def _tsk_extract_files(
         inline_output = _run_fls_inline(image_path)
         if inline_output:
             fls_text_chunks = [inline_output]
-            offset = _detect_partition_offset(image_path)
 
     if not fls_text_chunks:
         return []
+
+    offset = _resolve_partition_offset(image_path)
 
     inode_re = re.compile(
         r"^[rd]/[rd*]\s+(\d+(?:-\d+-\d+)?):\s+(.+)\s*$",
@@ -373,6 +408,9 @@ def run_fls(
             f"run_fls with that offset. stderr: {stderr_hint}",
             error_type="extraction_failed",
         )
+
+    ctx = get_ctx()
+    ctx.db.set_kv(f"{_KV_OFFSET_PREFIX}{image_path}", str(partition_offset))
 
     summary = extract_and_index(stdout_text.strip(), "tsk.filelist", image_path, "sleuthkit")
     elapsed = (time.monotonic() - t0) * 1000

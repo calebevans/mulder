@@ -28,7 +28,11 @@ from mulder.server.helpers import (
     tool_response,
 )
 from mulder.server.tool_access import Role, tool_access
-from mulder.server.tools.extract.tsk import _cleanup_tsk_extract_dir, _tsk_extract_files
+from mulder.server.tools.extract.tsk import (
+    _cleanup_tsk_extract_dir,
+    _resolve_partition_offset,
+    _tsk_extract_files,
+)
 
 __all__ = [
     "_DOTNET",
@@ -478,8 +482,6 @@ def run_mft_parser(image_path: str, force: bool = False) -> dict[str, object]:
     except RuntimeError:
         pass
 
-    from mulder.server.tools.extract.tsk import _detect_partition_offset
-
     if not require_binary("icat"):
         return error_response(
             tc_id,
@@ -489,7 +491,7 @@ def run_mft_parser(image_path: str, force: bool = False) -> dict[str, object]:
             (time.monotonic() - t0) * 1000,
         )
 
-    offset = _detect_partition_offset(image_path)
+    offset = _resolve_partition_offset(image_path)
     with tempfile.TemporaryDirectory(prefix="mulder_mft_") as tmpdir:
         mft_dest = Path(tmpdir) / "$MFT"
         cmd = ["icat"]
