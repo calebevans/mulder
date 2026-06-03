@@ -356,6 +356,10 @@ Reports and exports can be generated in two ways:
 1. **Automatically** by the orchestrator at the end of a successful investigation
 2. **CLI**: run `mulder report <case_id>` offline without starting the server
 
+## Contributing
+
+- [Adding a New MCP Tool](docs/adding-tools.md) — step-by-step guide covering tool creation, role assignment, DB indexing, skip logic, and testing
+
 ## Architecture
 
 See [docs/architecture.md](docs/architecture.md) for a detailed technical overview of the server internals, orchestration pipeline, database schema, and security model.
