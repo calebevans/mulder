@@ -30,9 +30,12 @@ class TestSetTasksAndRender:
         assert "extract_archive" in rendered
         assert "run_volatility_batch" in rendered
 
-    def test_no_tasks_returns_none(self) -> None:
+    def test_no_tasks_returns_empty_panel(self) -> None:
+        """An empty task panel is always returned to keep layout stable."""
         dash = _make_dashboard()
-        assert dash._build_task_panel(body_height=40) is None
+        panel = dash._build_task_panel(body_height=40)
+        assert panel is not None
+        assert panel.renderable.plain == ""
 
 
 class TestTaskUpdateStatus:
@@ -56,7 +59,7 @@ class TestTaskUpdateStatus:
 
 
 class TestTaskClear:
-    """Clearing removes the panel entirely."""
+    """Clearing resets the task list and returns an empty panel."""
 
     def test_clear_removes_tasks(self) -> None:
         dash = _make_dashboard()
@@ -66,7 +69,9 @@ class TestTaskClear:
         dash.clear_tasks()
         assert dash._tasks == []
         assert dash._tasks_active is False
-        assert dash._build_task_panel(body_height=40) is None
+        panel = dash._build_task_panel(body_height=40)
+        assert panel is not None
+        assert panel.renderable.plain == ""
 
 
 class TestMultipleSystems:

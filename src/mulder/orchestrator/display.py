@@ -66,6 +66,8 @@ _SYSTEM_PREFIX_RE: re.Pattern[str] = re.compile(r"\[([^\]]+)\]\s*")
 
 _SPINNER_FRAMES: str = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
+_HEADER_SIZE: int = 8
+
 
 @dataclass
 class TaskItem:
@@ -185,7 +187,7 @@ class InvestigationDashboard:
         self._live = Live(
             self._build_layout(),
             console=self._console,
-            refresh_per_second=4,
+            refresh_per_second=2,
             redirect_stdout=True,
             redirect_stderr=True,
             vertical_overflow="crop",
@@ -535,7 +537,7 @@ class InvestigationDashboard:
         to ``ClaudeAgentOptions``.
         """
 
-    def _build_task_panel(self, body_height: int) -> Panel | None:
+    def _build_task_panel(self, body_height: int) -> Panel:
         """Build the extraction task progress panel with equal per-system allocation.
 
         Each active system receives an equal share of available lines.
@@ -543,14 +545,22 @@ class InvestigationDashboard:
         systems that need more. Within each system, running/pending
         tasks appear first, followed by the most recently completed.
 
+        Always returns a Panel (empty when no tasks) so the layout
+        structure stays identical across every refresh cycle.
+
         Args:
             body_height: Total height available for the panel (lines).
 
         Returns:
-            Rich Panel when tasks are active, None otherwise.
+            Rich Panel, possibly with empty content.
         """
         if not self._tasks_active or not self._tasks:
-            return None
+            return Panel(
+                Text(""),
+                title="Tasks",
+                border_style="dim",
+                height=body_height,
+            )
 
         spinner_idx = int(time.monotonic() * 8) % len(_SPINNER_FRAMES)
         spinner = _SPINNER_FRAMES[spinner_idx]
@@ -698,37 +708,26 @@ class InvestigationDashboard:
             content.append(f"    ... +{hidden_count} more\n", style="dim")
 
     def _build_layout(self) -> Layout:
-        """Build the dashboard layout with optional side-by-side task panel.
+        """Build the dashboard layout with a fixed two-column body.
 
-        Computes a single body_height from the terminal size and passes
-        it to both panel builders so their heights stay consistent.
-        When tasks are active the body splits horizontally: the log
-        panel takes 2/3 width on the left and the task panel takes 1/3
-        on the right. Without tasks the log takes the full width.
+        The structure is always: header row + body row (log | tasks).
+        Both columns are present on every refresh so the layout
+        dimensions never change, eliminating visual jumps.
         """
         terminal_height = shutil.get_terminal_size().lines
-        header_size = 8
-        body_height = max(6, terminal_height - header_size)
+        body_height = max(6, terminal_height - _HEADER_SIZE)
+
+        body = Layout(name="body")
+        body.split_row(
+            Layout(self._build_log_panel(body_height), name="logs", ratio=2),
+            Layout(self._build_task_panel(body_height), name="tasks", ratio=1),
+        )
 
         layout = Layout()
-        task_panel = self._build_task_panel(body_height)
-
-        if task_panel:
-            body = Layout(name="body")
-            body.split_row(
-                Layout(self._build_log_panel(body_height), name="logs", ratio=2),
-                Layout(task_panel, name="tasks", ratio=1),
-            )
-            layout.split_column(
-                Layout(self._build_stats_panel(), name="header", size=header_size),
-                body,
-            )
-        else:
-            layout.split_column(
-                Layout(self._build_stats_panel(), name="header", size=header_size),
-                Layout(self._build_log_panel(body_height), name="logs"),
-            )
-
+        layout.split_column(
+            Layout(self._build_stats_panel(), name="header", size=_HEADER_SIZE),
+            body,
+        )
         return layout
 
     def _total_tokens_from_models(self) -> int:
@@ -810,7 +809,7 @@ class InvestigationDashboard:
             "",
         )
 
-        return Panel(table, title="Mulder", border_style="blue")
+        return Panel(table, title="Mulder", border_style="blue", height=_HEADER_SIZE)
 
     def _build_log_panel(self, body_height: int) -> Panel:
         """Build the scrolling log panel with a fixed viewport height.
