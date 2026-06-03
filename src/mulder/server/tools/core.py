@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import logging
 import re
 import time
 from pathlib import Path
@@ -34,6 +35,8 @@ from mulder.server.helpers import (
     windowed_response,
 )
 from mulder.server.tool_access import PLANNERS, Role, tool_access
+
+logger = logging.getLogger(__name__)
 
 _SRC_PSLIST = _sn.SRC_PSLIST
 _SRC_PSTREE = _sn.SRC_PSTREE
@@ -440,6 +443,20 @@ def correlate_across_sources(
         "windows_by_source": slimmed_by_source,
     }
 
+    # Index results so later phases can search them
+    from mulder.server.extract_helpers import extract_and_index
+
+    source_name = "composite.correlation"
+    try:
+        extract_and_index(
+            raw_output=json.dumps(results, default=str),
+            source_name=source_name,
+            source_path="correlate_across_sources",
+            extractor_name="composite",
+        )
+    except Exception:
+        logger.debug("Failed to index correlation results", exc_info=True)
+
     elapsed = (time.monotonic() - t0) * 1000
     ctx.audit.log_tool_call(
         tool_call_id=tc_id,
@@ -452,7 +469,7 @@ def correlate_across_sources(
         "tool_call_id": tc_id,
         "status": "success",
         "results": results,
-        "source": None,
+        "source": source_name,
         "result_count": correlation.total_windows,
         "sources_with_data": sources_with_data,
         "sources_without_data": sources_without_data,

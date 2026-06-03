@@ -121,10 +121,10 @@ docker run -it --privileged \
 
 #### Starting an Investigation
 
-Use the `mulder investigate` command to run a full autonomous investigation:
+Use the `mulder investigate` command to run a full autonomous investigation. The `case_id` is a required positional argument that names the case database:
 
 ```bash
-mulder investigate /evidence/case-2025-001
+mulder investigate /evidence Rocba
 ```
 
 The orchestrator will:
@@ -174,9 +174,14 @@ Each phase passes through a quality gate before proceeding. Failed gates trigger
 
 ## CLI Reference
 
-### `mulder investigate <evidence_path>`
+### `mulder investigate <evidence_path> <case_id>`
 
 Runs a full multi-phase forensic investigation using the agentic pipeline.
+
+| Argument | Description |
+|----------|-------------|
+| `evidence_path` | Filesystem path to the evidence directory |
+| `case_id` | Unique identifier for this investigation (used as the database filename) |
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -194,7 +199,7 @@ Runs a full multi-phase forensic investigation using the agentic pipeline.
 **Cost-optimized (recommended):**
 
 ```bash
-mulder investigate /evidence/case-2025-001 \
+mulder investigate /evidence Rocba \
   --planner-model claude-sonnet-4-6 \
   --executor-model claude-haiku-4-5 \
   --analyst-model claude-sonnet-4-6
@@ -203,13 +208,13 @@ mulder investigate /evidence/case-2025-001 \
 **Single model (simple):**
 
 ```bash
-mulder investigate /evidence/case-2025-001 --model claude-sonnet-4-6
+mulder investigate /evidence Rocba --model claude-sonnet-4-6
 ```
 
 **Config file:**
 
 ```bash
-mulder investigate /evidence/case-2025-001 --config investigation.yaml
+mulder investigate /evidence Rocba --config investigation.yaml
 ```
 
 All roles inherit from `--model` when not explicitly set, so a single `--model` flag is sufficient for providers that use a unified model identifier.
@@ -218,17 +223,17 @@ All roles inherit from `--model` when not explicitly set, so a single `--model` 
 
 ```bash
 # Use a Bedrock-hosted Llama model for all roles
-mulder investigate /evidence/case-2025-001 \
+mulder investigate /evidence Rocba \
   --model bedrock/meta.llama3-1-70b-instruct-v1:0
 
 # Mix providers: Llama for execution, Claude for planning and analysis
-mulder investigate /evidence/case-2025-001 \
+mulder investigate /evidence Rocba \
   --executor-model bedrock/meta.llama3-1-70b-instruct-v1:0 \
   --planner-model claude-sonnet-4-6 \
   --analyst-model claude-sonnet-4-6
 
 # Use a local Ollama model
-mulder investigate /evidence/case-2025-001 \
+mulder investigate /evidence Rocba \
   --model ollama/llama3.1:70b
 ```
 
@@ -237,7 +242,7 @@ When any model ID uses a provider prefix (`bedrock/`, `openai/`, `vertex_ai/`, `
 For advanced routing, pass a custom LiteLLM config:
 
 ```bash
-mulder investigate /evidence/case-2025-001 \
+mulder investigate /evidence Rocba \
   --proxy-config ./litellm_config.yaml \
   --model my-custom-deployment
 ```
