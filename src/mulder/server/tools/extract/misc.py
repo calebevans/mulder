@@ -189,6 +189,23 @@ def run_prefetch_parser(image_path: str, force: bool = False) -> dict[str, objec
                 0.0,
             )
 
+    extracted = _tsk_extract_files(image_path, ["Prefetch/", ".pf"])
+    if extracted:
+        extract_dir = str(extracted[0][1].parent)
+        try:
+            return _run_ez_tool(
+                "PECmd.dll",
+                ["-d", extract_dir],
+                "ez.prefetch",
+                image_path,
+                tc_id,
+                "run_prefetch_parser",
+                params,
+                t0,
+            )
+        finally:
+            _cleanup_tsk_extract_dir(extract_dir)
+
     try:
         with mount_disk_image(image_path) as mount_point:
             prefetch_dir = None
@@ -216,29 +233,13 @@ def run_prefetch_parser(image_path: str, force: bool = False) -> dict[str, objec
     except RuntimeError:
         pass
 
-    extracted = _tsk_extract_files(image_path, ["Prefetch/", ".pf"])
-    if not extracted:
-        return error_response(
-            tc_id,
-            "run_prefetch_parser",
-            params,
-            "Mount failed and no Prefetch files found via TSK extraction",
-            (time.monotonic() - t0) * 1000,
-        )
-    extract_dir = str(extracted[0][1].parent)
-    try:
-        return _run_ez_tool(
-            "PECmd.dll",
-            ["-d", extract_dir],
-            "ez.prefetch",
-            image_path,
-            tc_id,
-            "run_prefetch_parser",
-            params,
-            t0,
-        )
-    finally:
-        _cleanup_tsk_extract_dir(extract_dir)
+    return error_response(
+        tc_id,
+        "run_prefetch_parser",
+        params,
+        "No Prefetch files found via TSK extraction or mount",
+        (time.monotonic() - t0) * 1000,
+    )
 
 
 @mcp.tool()
@@ -273,6 +274,23 @@ def run_amcache_parser(image_path: str, force: bool = False) -> dict[str, object
                 0.0,
             )
 
+    extracted = _tsk_extract_files(image_path, ["Amcache.hve"])
+    if extracted:
+        extract_dir = str(extracted[0][1].parent)
+        try:
+            return _run_ez_tool(
+                "AmcacheParser.dll",
+                ["-f", str(extracted[0][1])],
+                "ez.amcache",
+                image_path,
+                tc_id,
+                "run_amcache_parser",
+                params,
+                t0,
+            )
+        finally:
+            _cleanup_tsk_extract_dir(extract_dir)
+
     try:
         with mount_disk_image(image_path) as mount_point:
             amcache_path = None
@@ -298,29 +316,13 @@ def run_amcache_parser(image_path: str, force: bool = False) -> dict[str, object
     except RuntimeError:
         pass
 
-    extracted = _tsk_extract_files(image_path, ["Amcache.hve"])
-    if not extracted:
-        return error_response(
-            tc_id,
-            "run_amcache_parser",
-            params,
-            "Mount failed and Amcache.hve not found via TSK extraction",
-            (time.monotonic() - t0) * 1000,
-        )
-    extract_dir = str(extracted[0][1].parent)
-    try:
-        return _run_ez_tool(
-            "AmcacheParser.dll",
-            ["-f", str(extracted[0][1])],
-            "ez.amcache",
-            image_path,
-            tc_id,
-            "run_amcache_parser",
-            params,
-            t0,
-        )
-    finally:
-        _cleanup_tsk_extract_dir(extract_dir)
+    return error_response(
+        tc_id,
+        "run_amcache_parser",
+        params,
+        "Amcache.hve not found via TSK extraction or mount",
+        (time.monotonic() - t0) * 1000,
+    )
 
 
 @mcp.tool()
@@ -357,6 +359,32 @@ def run_shimcache_parser(image_path: str, force: bool = False) -> dict[str, obje
                 0.0,
             )
 
+    extracted = _tsk_extract_files(image_path, ["config/SYSTEM"])
+    if extracted:
+        system_files = [
+            (r, p)
+            for r, p in extracted
+            if p.name.upper() == "SYSTEM" or "config_system" in p.name.lower()
+        ]
+        if system_files:
+            extract_dir = str(system_files[0][1].parent)
+            try:
+                return _run_ez_tool(
+                    "AppCompatCacheParser.dll",
+                    ["-f", str(system_files[0][1])],
+                    "ez.shimcache",
+                    image_path,
+                    tc_id,
+                    "run_shimcache_parser",
+                    params,
+                    t0,
+                )
+            finally:
+                _cleanup_tsk_extract_dir(extract_dir)
+        else:
+            extract_dir = str(extracted[0][1].parent)
+            _cleanup_tsk_extract_dir(extract_dir)
+
     try:
         with mount_disk_image(image_path) as mount_point:
             system_hive = None
@@ -384,42 +412,13 @@ def run_shimcache_parser(image_path: str, force: bool = False) -> dict[str, obje
     except RuntimeError:
         pass
 
-    extracted = _tsk_extract_files(image_path, ["config/SYSTEM"])
-    if not extracted:
-        return error_response(
-            tc_id,
-            "run_shimcache_parser",
-            params,
-            "Mount failed and SYSTEM hive not found via TSK extraction",
-            (time.monotonic() - t0) * 1000,
-        )
-    extract_dir = str(extracted[0][1].parent)
-    try:
-        system_files = [
-            (r, p)
-            for r, p in extracted
-            if p.name.upper() == "SYSTEM" or "config_system" in p.name.lower()
-        ]
-        if not system_files:
-            return error_response(
-                tc_id,
-                "run_shimcache_parser",
-                params,
-                "Mount failed and SYSTEM hive not found via TSK extraction",
-                (time.monotonic() - t0) * 1000,
-            )
-        return _run_ez_tool(
-            "AppCompatCacheParser.dll",
-            ["-f", str(system_files[0][1])],
-            "ez.shimcache",
-            image_path,
-            tc_id,
-            "run_shimcache_parser",
-            params,
-            t0,
-        )
-    finally:
-        _cleanup_tsk_extract_dir(extract_dir)
+    return error_response(
+        tc_id,
+        "run_shimcache_parser",
+        params,
+        "SYSTEM hive not found via TSK extraction or mount",
+        (time.monotonic() - t0) * 1000,
+    )
 
 
 @mcp.tool()
@@ -455,6 +454,32 @@ def run_mft_parser(image_path: str, force: bool = False) -> dict[str, object]:
                 0.0,
             )
 
+    if require_binary("icat"):
+        offset = _resolve_partition_offset(image_path)
+        with tempfile.TemporaryDirectory(prefix="mulder_mft_") as tmpdir:
+            mft_dest = Path(tmpdir) / "$MFT"
+            cmd = ["icat"]
+            if offset > 0:
+                cmd.extend(["-o", str(offset)])
+            cmd.extend([image_path, "0"])
+            try:
+                proc = subprocess.run(cmd, capture_output=True, timeout=TOOL_TIMEOUT, check=False)
+            except subprocess.TimeoutExpired:
+                proc = None
+
+            if proc is not None and proc.returncode == 0 and proc.stdout:
+                mft_dest.write_bytes(proc.stdout)
+                return _run_ez_tool(
+                    "MFTECmd.dll",
+                    ["-f", str(mft_dest)],
+                    "ez.mft",
+                    image_path,
+                    tc_id,
+                    "run_mft_parser",
+                    params,
+                    t0,
+                )
+
     try:
         with mount_disk_image(image_path) as mount_point:
             mft_path = None
@@ -482,53 +507,13 @@ def run_mft_parser(image_path: str, force: bool = False) -> dict[str, object]:
     except RuntimeError:
         pass
 
-    if not require_binary("icat"):
-        return error_response(
-            tc_id,
-            "run_mft_parser",
-            params,
-            "Mount failed and icat not available for TSK fallback",
-            (time.monotonic() - t0) * 1000,
-        )
-
-    offset = _resolve_partition_offset(image_path)
-    with tempfile.TemporaryDirectory(prefix="mulder_mft_") as tmpdir:
-        mft_dest = Path(tmpdir) / "$MFT"
-        cmd = ["icat"]
-        if offset > 0:
-            cmd.extend(["-o", str(offset)])
-        cmd.extend([image_path, "0"])
-        try:
-            proc = subprocess.run(cmd, capture_output=True, timeout=TOOL_TIMEOUT, check=False)
-        except subprocess.TimeoutExpired:
-            return error_response(
-                tc_id,
-                "run_mft_parser",
-                params,
-                "icat timed out extracting $MFT",
-                (time.monotonic() - t0) * 1000,
-            )
-
-        if proc.returncode != 0 or not proc.stdout:
-            return error_response(
-                tc_id,
-                "run_mft_parser",
-                params,
-                "Mount failed and $MFT extraction via icat failed",
-                (time.monotonic() - t0) * 1000,
-            )
-
-        mft_dest.write_bytes(proc.stdout)
-        return _run_ez_tool(
-            "MFTECmd.dll",
-            ["-f", str(mft_dest)],
-            "ez.mft",
-            image_path,
-            tc_id,
-            "run_mft_parser",
-            params,
-            t0,
-        )
+    return error_response(
+        tc_id,
+        "run_mft_parser",
+        params,
+        "$MFT not found via TSK icat or mount",
+        (time.monotonic() - t0) * 1000,
+    )
 
 
 # ---------------------------------------------------------------------------
