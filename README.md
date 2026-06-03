@@ -23,7 +23,7 @@ Mulder is an [MCP](https://modelcontextprotocol.io/) server and agentic orchestr
 - **Evidence gap detection** that identifies unexamined artifact types and coverage blind spots before reporting
 - **Automatic finding deduplication** to merge per-host duplicates of the same artifact across systems
 - **Rich Live dashboard** showing real-time investigation progress, per-model token usage, findings, and throughput
-- **Report generation** producing Markdown, styled HTML, and PDF reports with IOC tables, MITRE ATT&CK coverage, and full audit trails
+- **Report generation** producing Markdown and styled HTML reports with IOC tables, MITRE ATT&CK coverage, and full audit trails
 - **IOC export** in STIX 2.1 and CSV formats, plus MITRE ATT&CK Navigator layer generation
 - **Resource throttling** with configurable memory and CPU limits so extractions do not overwhelm the host
 - **Parallel extraction** with a configurable worker pool, background job management, and a `run_parallel` meta-tool for batch dispatch
@@ -182,9 +182,9 @@ Runs a full multi-phase forensic investigation using the agentic pipeline.
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--model` | None | Fallback model for all roles |
-| `--planner-model` | `claude-sonnet-4-6` | Model for planner agents (decides what tools to run) |
-| `--executor-model` | `claude-haiku-4-5` | Model for executor agents (calls tools, manages waits) |
-| `--analyst-model` | `claude-sonnet-4-6` | Model for analyst agents (interprets results, submits findings) |
+| `--planner-model` | None | Model for planner agents (decides what tools to run); resolved by the model resolution system |
+| `--executor-model` | None | Model for executor agents (calls tools, manages waits); resolved by the model resolution system |
+| `--analyst-model` | None | Model for analyst agents (interprets results, submits findings); resolved by the model resolution system |
 | `--config` | None | YAML config file for models and settings |
 | `--effort` | `max` | Effort level for agent sessions (`max`, `xhigh`, `high`) |
 | `--workers` | `3` | Max concurrent extraction agent sessions (not tool threads) |
@@ -262,22 +262,23 @@ Starts the MCP server. Normally invoked automatically by the orchestrator or MCP
 
 ### `mulder report <case_id>`
 
-Generates reports (Markdown, HTML, and PDF) offline without starting the MCP server.
+Generates reports (Markdown and HTML) offline without starting the MCP server.
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--db-dir` | `~/.mulder/cases` | Directory containing case databases |
 
-Reads `{case_id}.db` and `{case_id}.audit.jsonl` from the database directory and writes `{case_id}.report.md`, `{case_id}.report.html`, and `{case_id}.report.pdf` alongside them.
+Reads `{case_id}.db` and `{case_id}.audit.jsonl` from the database directory and writes `{case_id}.report.md` and `{case_id}.report.html` alongside them.
 
 ### `mulder export-iocs <case_id>`
 
-Exports IOCs from a completed case in STIX 2.1 or CSV format.
+Exports IOCs from a completed case in STIX 2.1, CSV, or both formats.
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--db-dir` | `~/.mulder/cases` | Directory containing case databases |
-| `--format` | `stix` | Output format (`stix` or `csv`) |
+| `--format` | `all` | Output format (`stix`, `csv`, or `all`) |
+| `--output-dir` | None | Directory for exported files (defaults to `--db-dir`) |
 
 ### `mulder export-navigator <case_id>`
 
@@ -286,6 +287,8 @@ Generates a MITRE ATT&CK Navigator layer JSON from a completed case.
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--db-dir` | `~/.mulder/cases` | Directory containing case databases |
+| `--output-dir` | None | Directory for the exported layer file (defaults to `--db-dir`) |
+| `--domain` | `enterprise-attack` | ATT&CK domain (`enterprise-attack` or `ics-attack`) |
 
 ## Supported Forensic Tools
 
@@ -334,11 +337,10 @@ Generates a MITRE ATT&CK Navigator layer JSON from a completed case.
 
 ## Report Generation
 
-Mulder generates three report formats from the case database and audit log:
+Mulder generates two report formats from the case database and audit log:
 
 - **Markdown** (`{case_id}.report.md`) for plain-text review and version control
 - **HTML** (`{case_id}.report.html`) a self-contained styled page with dark/light theme, sidebar navigation, and interactive layout
-- **PDF** (`{case_id}.report.pdf`) for formal distribution and archival
 
 All formats include an executive summary, severity overview, evidence integrity hashes, attack timeline, detailed findings with MITRE ATT&CK mappings, IOC tables (network, file, email), audit metrics, and a sources appendix.
 

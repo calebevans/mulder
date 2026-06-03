@@ -399,7 +399,7 @@ Analyze Windows artifacts using Chainsaw with Sigma rules.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | evidence_path | str | yes | Path to EVTX directory or SRUM database |
-| mode | str | no | "hunt", "search", "srum", or "timeline" (default "hunt") |
+| mode | Literal['hunt', 'search', 'srum', 'timeline'] | no | Analysis mode (default "hunt") |
 | sigma_rules_path | str | no | Path to Sigma rules directory |
 | search_term | str \| None | no | Required when mode="search" |
 | time_range_start | str \| None | no | ISO 8601 start time filter |
@@ -508,9 +508,9 @@ Apply Sigma detection rules to Linux logs using Zircolite.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | events_path | str | yes | Path to the log file or directory |
-| log_format | str | no | "auditd", "sysmon_linux", "json", or "evtx" (default "auditd") |
+| log_format | Literal['auditd', 'sysmon_linux', 'json', 'evtx'] | no | Log format (default "auditd") |
 | ruleset_path | str \| None | no | Path to custom ruleset directory |
-| sigma_level_filter | str \| None | no | Minimum Sigma level (default "medium") |
+| sigma_level_filter | Literal['informational', 'low', 'medium', 'high', 'critical'] \| None | no | Minimum Sigma level (default "medium") |
 | force | bool | no | Re-run extraction even if sources already exist |
 
 **Returns:** `total_detections`, `level_counts{}`, `mitre_coverage{}`, `timeline[]`
@@ -941,7 +941,7 @@ List all evidence sources currently indexed in the active case.
 
 **Returns:** `results[]` (source_name, source_path, extractor, line_count, hash)
 
-**Roles:** `CATALOG` `EXTRACT_PLANNER` `CROSS_PLANNER` `EXTRACT_ANALYST` `CROSS_ANALYST` `NARRATIVE_EXECUTOR` `REPORT`
+**Roles:** `CATALOG` `EXTRACT_PLANNER` `CROSS_PLANNER` `NARRATIVE_PLANNER` `EXTRACT_ANALYST` `CROSS_ANALYST` `NARRATIVE_EXECUTOR` `REPORT`
 
 ### get_source_stats
 
@@ -1748,7 +1748,7 @@ Submit long-running extraction tools for background execution.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| tasks | list[dict] | yes | List of {tool, args} dicts |
+| tasks | list[dict[str, Any]] | yes | List of {tool, args} dicts |
 
 **Returns:** `batch_id`, `tasks_submitted[]`, `tasks_skipped[]`
 
@@ -1812,7 +1812,7 @@ Run multiple tool calls in parallel and return all results.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| tasks | list[dict] | yes | List of {tool, args} dicts |
+| tasks | list[dict[str, Any]] | yes | List of {tool, args} dicts |
 
 **Returns:** `batch_id`, `parallel_results[]` (tool, result), `total_tasks`
 

@@ -14,7 +14,7 @@ flowchart TB
         DB["SQLite + FTS5\n(per-case database)"]
         AuditLog["Audit Log\n(append-only JSONL)"]
         Extractors["Extractors\n(forensic binaries)"]
-        Reports["Report Renderer\n(HTML + Markdown + PDF)"]
+        Reports["Report Renderer\n(HTML + Markdown)"]
     end
 
     subgraph binaries [Forensic Toolchain]
@@ -121,11 +121,11 @@ flowchart LR
 
 ### Resource Throttling
 
-Every tool call passes through an async resource gate before execution:
+Synchronous tool calls pass through an async resource gate before execution (via `_wrap_sync_tool`). Async tools such as `run_parallel` and `enrich_iocs` bypass this wrapper and manage their own concurrency.
 
 ```mermaid
 flowchart LR
-    request["MCP Request"] --> asyncWrapper["Async Wrapper"]
+    request["MCP Request"] --> asyncWrapper["Async Wrapper\n(_wrap_sync_tool)"]
     asyncWrapper --> resourceCheck{"Memory/CPU\nunder limit?"}
     resourceCheck -->|"No"| wait["anyio.sleep\n(5s intervals)"]
     wait --> resourceCheck
@@ -204,13 +204,13 @@ Each phase is defined by a `PhaseConfig` dataclass specifying:
 - **Follow-up limit**: Maximum planner/executor cycles the analyst can request before being capped
 - **Workers**: Configurable via `--workers` for concurrent extraction sessions
 - **Auto-compaction**: When context is exhausted mid-phase, the orchestrator restarts with a compact prompt that recovers state from the database
-- **Retry policy**: Maximum retries with 1.5x turn limit multiplier on each retry
+- **Retry policy**: Maximum retries with 1.5x turn limit multiplier on each retry (applied in single-mode phases only; split-mode phases retry without the budget multiplier)
 
 ### Deferred Retry System
 
 When a quality gate fails after a phase completes, the orchestrator retries with escalating budgets:
 
-1. **Budget multiplier**: Each retry gets 1.5x the previous attempt's turn limit
+1. **Budget multiplier**: In single-mode phases, each retry gets 1.5x the previous attempt's turn limit (`_RETRY_BUDGET_MULTIPLIER`). Split-mode phases retry without this multiplier.
 2. **Gap-specific remediation**: The gate reports specific gaps (e.g., "no sources indexed", "no MITRE mappings"), which are prepended to the retry prompt so the agent focuses on what's missing
 3. **Follow-up cycles**: Within a single attempt, the analyst can request additional planner/executor iterations (capped at `max_follow_ups`) when it identifies gaps that need more tool execution
 4. **Auto-compaction on exhaustion**: If context is exhausted mid-phase, the orchestrator restarts with a compact prompt that preserves state via the database rather than failing immediately
@@ -385,7 +385,7 @@ erDiagram
 
 ### Write Safety
 
-SQLite does not support concurrent writers. Mulder serializes all writes through a `WriteQueue`: a dedicated daemon thread that drains a queue of write callables. Worker threads submit operations and block until completion. This eliminates `SQLITE_BUSY` errors entirely.
+SQLite does not support concurrent writers. Mulder serializes all writes through a `_WriteQueue`: a dedicated daemon thread that drains a queue of write callables. Worker threads submit operations and block until completion. This eliminates `SQLITE_BUSY` errors entirely.
 
 Read operations bypass the queue since WAL mode allows concurrent readers.
 
@@ -488,9 +488,9 @@ The `submit_finding` tool performs server-side evidence-ref validation: every `t
 
 Before the alternative narrative phase, the orchestrator builds a dedup index from all findings, grouping them by shared IOCs (IPs, file paths, process names) extracted via regex to identify per-host duplicates of the same artifact. This consistency analysis is prepended to the narrative phase prompt so the agent acts on code-discovered clusters rather than re-deriving them from raw text.
 
-### Cross-Phase Enrichment Steps
+### Enrichment Tools
 
-Several automated enrichment steps run at phase boundaries:
+Several enrichment tools are available for agents to call during relevant phases. These are exposed through tool access control and referenced in phase prompts, but do not run automatically at phase boundaries:
 
 - **TI enrichment** (cross-system phase): The `enrich_iocs` tool queries public threat intelligence sources for context on extracted indicators (IPs, domains, file hashes), annotating findings with reputation data and known campaign associations.
 - **Evidence gap detection** (narrative phase): The `get_evidence_gaps` tool identifies artifact types that were present but not examined, coverage blind spots, and systems with incomplete extraction. Gap reports are surfaced to the narrative planner and extraction analyst for remediation.
@@ -559,7 +559,7 @@ The `Correlator` class performs time-bounded joins across evidence sources. Give
 
 ## Report Generation
 
-The `ReportRenderer` uses Jinja2 templates to produce Markdown, HTML, and PDF reports:
+The `ReportRenderer` uses Jinja2 templates to produce Markdown and HTML reports:
 
 1. Aggregate findings sorted by severity
 2. Extract IOCs from descriptions using regex patterns
@@ -567,17 +567,13 @@ The `ReportRenderer` uses Jinja2 templates to produce Markdown, HTML, and PDF re
 4. Convert finding descriptions from markdown to HTML
 5. Generate executive summary from severity distribution
 6. Render template with all case data, narrative, findings, audit metrics, and source listings
-7. Export IOCs in STIX 2.1 and CSV formats
-8. Generate MITRE ATT&CK Navigator layer JSON
 
 ### Output Formats
 
 - **Markdown** (`{case_id}.report.md`): Plain-text report for version control and review
 - **HTML** (`{case_id}.report.html`): Self-contained styled page with dark/light theme toggle, sidebar navigation, per-model token usage breakdown, and collapsible source window samples
-- **PDF** (`{case_id}.report.pdf`): Formal report for distribution and archival
-- **STIX 2.1** (`{case_id}.stix.json`): Machine-readable IOC bundle for threat intelligence platforms
-- **CSV** (`{case_id}.iocs.csv`): Flat IOC export for import into SIEMs and blocklists
-- **ATT&CK Navigator** (`{case_id}.navigator.json`): Layer file for MITRE ATT&CK Navigator visualization
+
+IOC export (STIX 2.1, CSV) and ATT&CK Navigator layer generation are separate CLI commands (`mulder export-iocs`, `mulder export-navigator`), not part of the `ReportRenderer` flow.
 
 ## Investigation Quality
 
@@ -596,7 +592,7 @@ The pipeline incorporates several quality mechanisms that improve finding accura
 - **N+1 query elimination**: `verify_evidence_integrity` uses a single streaming query ordered by `source_id` instead of per-source window fetches
 - **Parallel icat extraction**: File extraction from disk images runs concurrently via the worker pool
 - **Audit log in-memory accumulators**: `AuditLog.summary()` computes statistics from in-memory counters updated during indexing, avoiding full file re-reads
-- **`render_all()` single-pass rendering**: Report generation builds the template context once and renders all formats (Markdown, HTML, PDF) from it
+- **`render_all()` single-pass rendering**: Report generation builds the template context once and renders all formats (Markdown, HTML) from it
 - **Reactive task panel**: The CLI dashboard shows tasks only when actively executing, not pre-populated from plans, reducing visual noise and rendering cost
 - **Evidence-path aware skipping**: Tools that have already indexed a source at the same path skip re-extraction
 

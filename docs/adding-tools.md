@@ -6,7 +6,7 @@ This guide walks through adding a new tool to the Mulder MCP server, from functi
 
 ### Where to Put It
 
-Tool modules live under `src/mulder/server/tools/`. Choose a location based on the tool's purpose:
+Tool modules live under `src/mulder/server/tools/` (with the exception of `run_parallel`, which is defined in `src/mulder/server/app.py`). Choose a location based on the tool's purpose:
 
 | Location | Purpose |
 |----------|---------|
@@ -149,9 +149,11 @@ summary = extract_and_index(
 
 The `source_name` is how agents reference this data later (e.g. `search(query, source="mytool.output")`). Use a dotted prefix convention: `toolname.artifact_type`.
 
-### `tool_response()`
+### `tool_response()` vs `@audited_tool()`
 
-Use [`tool_response()`](../src/mulder/server/helpers.py) to build the return value for every tool. It handles audit logging and response formatting:
+Use **one** of these two patterns for audit logging, not both:
+
+- **`tool_response()`** for tools that manually manage `tool_call_id`, timing, and audit logging. Call `make_tool_call_id()` yourself, measure elapsed time, and pass everything to `tool_response()`:
 
 ```python
 from mulder.server.helpers import tool_response
@@ -165,6 +167,8 @@ return tool_response(
     elapsed,
 )
 ```
+
+- **`@audited_tool("tool_name")`** for tools that return a plain dict. The decorator handles `tool_call_id` generation, timing, and audit logging automatically. Do not call `make_tool_call_id()` or `tool_response()` inside the function.
 
 **Truncation behavior:** When `source` is provided, `tool_response` returns only a preview of the output (first 500 chars). The full data lives in the database, accessible via `search()` or `get_raw_output()`. When `source` is `None`, the full results are returned in the response (appropriate for reference tools whose output is not indexed).
 
@@ -242,8 +246,8 @@ from mulder.server.helpers import sources_already_indexed, tool_response
 
 if not force:
     existing = sources_already_indexed(
-        ["mytool."],              # source name prefixes this tool produces
-        evidence_path=image_path, # scope check to this evidence file
+        ["mytool."],               # source name prefixes this tool produces
+        evidence_path=target_path, # scope check to this evidence file
     )
     if existing:
         return tool_response(
@@ -288,13 +292,13 @@ def run_my_tool(target_path: str, force: bool = False) -> dict[str, object]:
 
 ### Verify the Tool Works
 
-Start the MCP server and confirm the tool appears in the tool listing:
+Confirm the tool registers correctly by running the test suite, which validates tool registration and role access:
 
 ```bash
-mulder serve --transport stdio
+pytest tests/ -k tool
 ```
 
-For extraction tools, run a small test case:
+For extraction tools, run a small test case. This requires a valid `.mcp.json` configuration in the working directory (or the container default) so the orchestrator can connect to the MCP server:
 
 ```bash
 mulder investigate /path/to/test/evidence test-case
