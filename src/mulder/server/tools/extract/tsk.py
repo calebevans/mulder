@@ -215,6 +215,42 @@ def _tsk_extract_files(
     return extracted
 
 
+def _classify_mmls_failure(returncode: int, stderr: str) -> tuple[str, str, str]:
+    """Classify an mmls failure into an error type, message, and suggestion.
+
+    Returns:
+        A (error_type, error_message, suggestion) tuple.
+    """
+    stderr_lower = stderr.strip().lower()
+
+    ewf_indicators = ("ewf", "libewf", "e01", "expert witness")
+    if any(kw in stderr_lower for kw in ewf_indicators):
+        return (
+            "ewf_unsupported",
+            f"mmls cannot read this E01 image (exit {returncode}): {stderr[:300]}",
+            "The SleuthKit binary may lack libewf support. "
+            "Try mounting the E01 with ewfmount first, then pass the "
+            "raw device path to run_fls with partition_offset=0.",
+        )
+
+    if not stderr_lower:
+        return (
+            "no_partition_table",
+            f"mmls found no partition table (exit {returncode}). "
+            "This image is likely a partition dump or single-filesystem "
+            "image rather than a full disk.",
+            "Skip mmls and call run_fls with partition_offset=0 to "
+            "list files directly from the filesystem.",
+        )
+
+    return (
+        "mmls_failed",
+        f"mmls exited {returncode}: {stderr[:300]}",
+        "If the image is a partition dump rather than a full disk, "
+        "call run_fls with partition_offset=0 directly.",
+    )
+
+
 @mcp.tool()
 @tool_access(Role.EXTRACT_EXECUTOR)
 def run_mmls(image_path: str) -> dict[str, object]:
@@ -246,11 +282,16 @@ def run_mmls(image_path: str) -> dict[str, object]:
         return error_response(tc_id, "run_mmls", params, "mmls timed out", error_type="timeout")
 
     if proc.returncode != 0:
+        stderr_text = (proc.stderr or "").strip()
+        error_type, error_msg, suggestion = _classify_mmls_failure(proc.returncode, stderr_text)
+        logger.info("mmls failed on %s: %s", image_path, error_type)
         return error_response(
             tc_id,
             "run_mmls",
             params,
-            f"mmls exited {proc.returncode}: {(proc.stderr or '')[:300]}",
+            error_msg,
+            error_type=error_type,
+            suggestion=suggestion,
         )
 
     summary = extract_and_index(proc.stdout.strip(), "tsk.partitions", image_path, "sleuthkit")
