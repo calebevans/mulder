@@ -22,7 +22,7 @@ class TestSetTasksAndRender:
     def test_set_tasks_produces_panel(self) -> None:
         dash = _make_dashboard()
         dash.set_tasks("base-dc", ["extract_archive", "run_volatility_batch"])
-        panel = dash._build_task_panel()
+        panel = dash._build_task_panel(body_height=40)
         assert panel is not None
         rendered = (
             panel.renderable.plain if hasattr(panel.renderable, "plain") else str(panel.renderable)
@@ -32,7 +32,7 @@ class TestSetTasksAndRender:
 
     def test_no_tasks_returns_none(self) -> None:
         dash = _make_dashboard()
-        assert dash._build_task_panel() is None
+        assert dash._build_task_panel(body_height=40) is None
 
 
 class TestTaskUpdateStatus:
@@ -66,7 +66,7 @@ class TestTaskClear:
         dash.clear_tasks()
         assert dash._tasks == []
         assert dash._tasks_active is False
-        assert dash._build_task_panel() is None
+        assert dash._build_task_panel(body_height=40) is None
 
 
 class TestMultipleSystems:
@@ -82,7 +82,7 @@ class TestMultipleSystems:
         assert dash._tasks[1].system == "base-dc"
         assert dash._tasks[2].system == "base-admin"
 
-        panel = dash._build_task_panel()
+        panel = dash._build_task_panel(body_height=40)
         assert panel is not None
 
     def test_update_correct_system_in_multi(self) -> None:

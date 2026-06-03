@@ -535,27 +535,28 @@ class InvestigationDashboard:
         to ``ClaudeAgentOptions``.
         """
 
-    def _build_task_panel(self) -> Panel | None:
-        """Build the extraction task progress panel.
+    def _build_task_panel(self, body_height: int) -> Panel | None:
+        """Build the extraction task progress panel with equal per-system allocation.
 
-        Prioritizes active (running/pending) systems when the terminal
-        is too short to show everything. Fully completed systems are
-        collapsed into a summary line at the bottom.
+        Each active system receives an equal share of available lines.
+        Systems with fewer tasks than their budget yield surplus to
+        systems that need more. Within each system, running/pending
+        tasks appear first, followed by the most recently completed.
 
-        Returns a Rich Panel with per-system task rows when tasks are
-        active, or None when no tasks are registered.
+        Args:
+            body_height: Total height available for the panel (lines).
+
+        Returns:
+            Rich Panel when tasks are active, None otherwise.
         """
         if not self._tasks_active or not self._tasks:
             return None
 
-        # Derive spinner frame from wall clock so it always animates
-        # even when the panel isn't being rebuilt frequently
         spinner_idx = int(time.monotonic() * 8) % len(_SPINNER_FRAMES)
         spinner = _SPINNER_FRAMES[spinner_idx]
 
-        terminal_height = shutil.get_terminal_size().lines
-        # Panel border + title take ~3 lines; header takes ~8
-        available_lines = max(6, terminal_height - 11)
+        panel_border = 2
+        available_lines = max(6, body_height - panel_border)
 
         systems_ordered: list[str] = []
         system_tasks: dict[str, list[TaskItem]] = {}
@@ -576,53 +577,67 @@ class InvestigationDashboard:
             if all(t.status in ("done", "failed") for t in system_tasks[s])
         ]
 
-        num_active = max(len(active_systems), 1)
-        per_system_budget = max(4, (available_lines - num_active) // num_active)
+        display_systems = active_systems if active_systems else done_systems
+        min_tasks_per_system = 3
+        overhead_per_system = 2
+        num_display = max(len(display_systems), 1)
 
-        def _system_line_count(system: str) -> int:
-            """Header line + visible tasks + overflow line + separator."""
-            task_count = min(len(system_tasks[system]), per_system_budget)
-            overflow = 1 if len(system_tasks[system]) > per_system_budget else 0
-            return 1 + task_count + overflow + 1
+        per_system_total = available_lines // num_display
+        per_system_budget = max(min_tasks_per_system, per_system_total - overhead_per_system)
+
+        system_budgets: dict[str, int] = {}
+        surplus = 0
+        needy: list[str] = []
+
+        for s in display_systems:
+            need = len(system_tasks[s])
+            if need <= per_system_budget:
+                system_budgets[s] = need
+                surplus += per_system_budget - need
+            else:
+                system_budgets[s] = per_system_budget
+                needy.append(s)
+
+        if needy and surplus > 0:
+            extra_per = surplus // len(needy)
+            remainder = surplus % len(needy)
+            for i, s in enumerate(needy):
+                system_budgets[s] += extra_per + (1 if i < remainder else 0)
 
         content = Text()
         lines_used = 0
 
-        for system in active_systems:
-            needed = _system_line_count(system)
-            if lines_used + needed > available_lines and lines_used > 0:
-                break
-            self._append_system_block(
-                content,
-                system,
-                system_tasks[system],
-                spinner,
-                per_system_budget,
-            )
-            lines_used += needed
+        for system in display_systems:
+            budget = system_budgets.get(system, min_tasks_per_system)
+            task_list = system_tasks[system]
+            overflow = 1 if len(task_list) > budget else 0
+            block_lines = overhead_per_system + min(len(task_list), budget) + overflow
 
-        remaining_space = available_lines - lines_used
-        shown_done = 0
-        for system in done_systems:
-            needed = _system_line_count(system)
-            if remaining_space < needed + 1:
-                break
-            self._append_system_block(
-                content,
-                system,
-                system_tasks[system],
-                spinner,
-                per_system_budget,
-            )
-            remaining_space -= needed
-            shown_done += 1
+            self._append_system_block(content, system, task_list, spinner, budget)
+            lines_used += block_lines
 
-        hidden_done = len(done_systems) - shown_done
-        if hidden_done > 0:
-            label = "system" if hidden_done == 1 else "systems"
-            content.append(f"\n  ({hidden_done} {label} completed)", style="dim green")
+        if active_systems:
+            remaining = available_lines - lines_used
+            shown_done = 0
+            for system in done_systems:
+                task_list = system_tasks[system]
+                visible = min(len(task_list), min_tasks_per_system)
+                overflow = 1 if len(task_list) > min_tasks_per_system else 0
+                needed = overhead_per_system + visible + overflow
+                if remaining < needed + 1:
+                    break
+                self._append_system_block(
+                    content, system, task_list, spinner, min_tasks_per_system
+                )
+                remaining -= needed
+                shown_done += 1
 
-        return Panel(content, title="Tasks", border_style="dim")
+            hidden_done = len(done_systems) - shown_done
+            if hidden_done > 0:
+                label = "system" if hidden_done == 1 else "systems"
+                content.append(f"\n  ({hidden_done} {label} completed)", style="dim green")
+
+        return Panel(content, title="Tasks", border_style="dim", height=body_height)
 
     def _append_system_block(
         self,
@@ -647,12 +662,12 @@ class InvestigationDashboard:
         system_color = self._get_system_color(system)
         content.append(f"  {system}\n", style=f"bold {system_color}")
 
-        # Prioritize showing running/pending tasks over completed ones
         active_tasks = [t for t in tasks if t.status in ("running", "pending")]
         done_tasks = [t for t in tasks if t.status in ("done", "failed")]
+        done_tasks.reverse()
         prioritized = active_tasks + done_tasks
         visible_tasks = prioritized[:max_tasks]
-        hidden_count = len(prioritized) - max_tasks
+        hidden_count = max(0, len(prioritized) - max_tasks)
 
         for task in visible_tasks:
             if task.status == "pending":
@@ -685,18 +700,23 @@ class InvestigationDashboard:
     def _build_layout(self) -> Layout:
         """Build the dashboard layout with optional side-by-side task panel.
 
+        Computes a single body_height from the terminal size and passes
+        it to both panel builders so their heights stay consistent.
         When tasks are active the body splits horizontally: the log
         panel takes 2/3 width on the left and the task panel takes 1/3
         on the right. Without tasks the log takes the full width.
         """
+        terminal_height = shutil.get_terminal_size().lines
         header_size = 8
+        body_height = max(6, terminal_height - header_size)
+
         layout = Layout()
-        task_panel = self._build_task_panel()
+        task_panel = self._build_task_panel(body_height)
 
         if task_panel:
             body = Layout(name="body")
             body.split_row(
-                Layout(self._build_log_panel(), name="logs", ratio=2),
+                Layout(self._build_log_panel(body_height), name="logs", ratio=2),
                 Layout(task_panel, name="tasks", ratio=1),
             )
             layout.split_column(
@@ -706,7 +726,7 @@ class InvestigationDashboard:
         else:
             layout.split_column(
                 Layout(self._build_stats_panel(), name="header", size=header_size),
-                Layout(self._build_log_panel(), name="logs"),
+                Layout(self._build_log_panel(body_height), name="logs"),
             )
 
         return layout
@@ -792,21 +812,37 @@ class InvestigationDashboard:
 
         return Panel(table, title="Mulder", border_style="blue")
 
-    def _build_log_panel(self) -> Panel:
-        """Build the scrolling log panel from the deque."""
-        terminal_height = shutil.get_terminal_size().lines
-        available = max(5, terminal_height - 8)
+    def _build_log_panel(self, body_height: int) -> Panel:
+        """Build the scrolling log panel with a fixed viewport height.
 
-        skip = max(0, len(self._log_lines) - available)
+        Content always fills the panel so the layout dimensions remain
+        stable between refreshes, preventing visual jumps.
+
+        Args:
+            body_height: Total height available for the panel (lines).
+
+        Returns:
+            Rich Panel with the most recent log lines.
+        """
+        panel_border = 2
+        content_lines = max(3, body_height - panel_border)
+
+        skip = max(0, len(self._log_lines) - content_lines)
         recent = list(islice(self._log_lines, skip, None))
 
         content = Text()
-        for i, line in enumerate(recent):
+        for i in range(content_lines):
             if i > 0:
                 content.append("\n")
-            content.append_text(line)
+            if i < len(recent):
+                content.append_text(recent[i])
 
-        return Panel(content, title="Investigation Log", border_style="dim")
+        return Panel(
+            content,
+            title="Investigation Log",
+            border_style="dim",
+            height=body_height,
+        )
 
     def _refresh(self) -> None:
         """Refresh the live display with updated content."""
