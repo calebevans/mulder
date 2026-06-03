@@ -163,6 +163,7 @@ class TestFollowUpCapping:
             exec_results: ExecutionResults,
             prompt_vars: object = None,
             log_prefix: str = "",
+            task_system: str = "",
         ) -> AnalystResult:
             nonlocal call_count
             call_count += 1
@@ -476,6 +477,7 @@ class TestGateAfterAnalyst:
             exec_results: ExecutionResults,
             prompt_vars: object = None,
             log_prefix: str = "",
+            task_system: str = "",
         ) -> AnalystResult:
             return AnalystResult(
                 findings_submitted=1,

@@ -76,8 +76,17 @@ def scan_evidence(
             error_type="file_not_found",
         )
 
-    if case_id is None:
-        case_id = os.environ.get("MULDER_CASE_ID") or slugify(ev_path.name)
+    enforced_id = os.environ.get("MULDER_CASE_ID", "")
+    if enforced_id:
+        if case_id is not None and case_id != enforced_id:
+            logger.warning(
+                "Overriding requested case_id '%s' with MULDER_CASE_ID='%s'",
+                case_id,
+                enforced_id,
+            )
+        case_id = enforced_id
+    elif case_id is None:
+        case_id = slugify(ev_path.name)
 
     try:
         result = _scan_evidence_inner(ev_path, case_id, replace)

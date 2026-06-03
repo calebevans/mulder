@@ -5,6 +5,7 @@ from __future__ import annotations
 import functools
 import inspect
 import logging
+import os
 import re
 import threading
 import time
@@ -497,7 +498,30 @@ def create_case(
     a second server instance (e.g. spawned between pipeline phases)
     from silently wiping extraction data. The ``replace`` flag only
     takes effect when the existing database is empty.
+
+    When ``MULDER_CASE_ID`` is set in the environment, only that case
+    ID is allowed. Attempts to create a different case are rejected
+    and the enforced case is loaded instead.
     """
+    enforced_id = os.environ.get("MULDER_CASE_ID", "")
+    if enforced_id and case_id != enforced_id:
+        logger.warning(
+            "Refusing to create case '%s': MULDER_CASE_ID enforces '%s'. "
+            "Loading the enforced case instead.",
+            case_id,
+            enforced_id,
+        )
+        ctx = load_case(enforced_id)
+        return {
+            "status": "case_exists",
+            "case_id": enforced_id,
+            "source_count": ctx.db.get_source_count(),
+            "message": (
+                f"MULDER_CASE_ID enforces case '{enforced_id}'. "
+                f"Refused to create '{case_id}'. Using enforced case."
+            ),
+        }
+
     _close_current_ctx()
 
     cfg = get_cfg()

@@ -427,11 +427,13 @@ class Orchestrator:
         disk_images: list[str] = []
         if evidence_path.is_dir():
             for f in evidence_path.rglob("*"):
-                if (
-                    f.is_file()
-                    and sys_lower in f.name.lower()
-                    and f.suffix.lower() in DISK_IMAGE_EXTS
-                ):
+                if not f.is_file() or f.suffix.lower() not in DISK_IMAGE_EXTS:
+                    continue
+                try:
+                    rel = str(f.relative_to(evidence_path)).lower()
+                except ValueError:
+                    rel = str(f).lower()
+                if sys_lower in rel:
                     disk_images.append(str(f))
 
         memory_dumps: list[str] = []
@@ -758,7 +760,12 @@ class Orchestrator:
                 # Step 3: Analyst
                 self._update_dashboard_sub_step(phase, "Analyzing", log_prefix)
                 analyst_out = await self._run_analyst(
-                    phase, plan, exec_results, prompt_vars, log_prefix
+                    phase,
+                    plan,
+                    exec_results,
+                    prompt_vars,
+                    log_prefix,
+                    task_system=task_sys,
                 )
 
                 combined_result.turns_used += (
@@ -1122,6 +1129,7 @@ class Orchestrator:
         exec_results: ExecutionResults,
         prompt_vars: dict[str, str] | None = None,
         log_prefix: str = "",
+        task_system: str = "",
     ) -> AnalystResult:
         """Run the analyst with execution results.
 
@@ -1134,6 +1142,7 @@ class Orchestrator:
             exec_results: Results from the executor.
             prompt_vars: Additional template variables (e.g. system_name).
             log_prefix: Prefix for dashboard log lines.
+            task_system: Task panel system name for tool tracking.
 
         Returns:
             AnalystResult with findings count and optional follow-up request.
@@ -1173,6 +1182,7 @@ class Orchestrator:
             max_turns=phase.analyst_max_turns,
             max_budget=phase.analyst_max_budget_usd,
             log_prefix=log_prefix,
+            task_system=task_system,
         )
 
         # Handle context exhaustion with compaction restarts
@@ -1684,14 +1694,16 @@ class Orchestrator:
     ) -> list[str]:
         """Restrict executor tools to those referenced in the plan.
 
-        Extracts tool names from the planner's task list and combines
-        them with essential control tools. Falls back to the full phase
-        allowlist when the plan contains no recognizable tool references.
+        Extracts tool names from the planner's task list and intersects
+        them with the role-based allowlist. This prevents a planner from
+        granting the executor access to tools outside its declared role
+        (e.g. scan_evidence is catalog-only and must not leak into the
+        extraction executor). Falls back to the full phase allowlist
+        when the plan contains no recognizable tool references.
 
         Args:
             plan: Structured plan from the planner.
-            fallback_allowed: Full phase-level tool allowlist used when
-                no plan tools are found.
+            fallback_allowed: Full phase-level tool allowlist (role-based).
 
         Returns:
             Sorted list of MCP tool names for the executor session.
@@ -1700,7 +1712,9 @@ class Orchestrator:
         if not plan_tools:
             return fallback_allowed
 
-        dynamic = plan_tools | Orchestrator._EXECUTOR_CONTROL_TOOLS
+        allowed_set = frozenset(fallback_allowed)
+        safe_plan_tools = plan_tools & allowed_set
+        dynamic = safe_plan_tools | Orchestrator._EXECUTOR_CONTROL_TOOLS
         return sorted(dynamic)
 
     # ------------------------------------------------------------------
