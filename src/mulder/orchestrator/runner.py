@@ -388,12 +388,17 @@ class Orchestrator:
         result.phases.append(alt_result)
         self._accumulate(result, alt_result)
 
+        # Persist SDK-reported token usage before the report phase so that
+        # finalize_report can inject real counts into the rendered report.
+        self._write_model_usage()
+
         # Phase 5: Report (single-mode)
         report_result = await self._run_single_phase(REPORT)
         result.phases.append(report_result)
         self._accumulate(result, report_result)
 
         result.success = all(p.success for p in result.phases)
+        # Re-write with final totals (includes report phase overhead).
         self._write_model_usage()
         return result
 
