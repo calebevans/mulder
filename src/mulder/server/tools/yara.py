@@ -283,7 +283,7 @@ def _build_rules_args(
     return ([idx], cleanup) if idx else ([], False)
 
 
-_MEMORY_DUMP_EXTS = frozenset({".raw", ".mem", ".vmem", ".dmp", ".lime"})
+_MEMORY_DUMP_EXTS = frozenset({".raw", ".mem", ".vmem", ".dmp", ".lime", ".001"})
 
 
 def _find_memory_image() -> str:
@@ -307,6 +307,21 @@ def _find_memory_image() -> str:
             return s.source_path
 
     cfg = get_cfg()
+
+    # Search the evidence root (memory dumps may be alongside disk images)
+    meta = ctx.db.get_case_metadata()
+    evidence_root = Path(meta.evidence_root) if meta.evidence_root else None
+    if evidence_root and evidence_root.is_dir():
+        for mem_file in evidence_root.rglob("*"):
+            if (
+                mem_file.is_file()
+                and mem_file.suffix.lower() in _MEMORY_DUMP_EXTS
+                and ("memory" in mem_file.name.lower() or "mem" in mem_file.parent.name.lower())
+            ):
+                logger.info("Found memory dump in evidence root: %s", mem_file)
+                return str(mem_file)
+
+    # Fallback: search extracted directory
     extracted_dir = cfg.db_dir / "extracted"
     if extracted_dir.is_dir():
         for mem_file in extracted_dir.rglob("*"):
@@ -319,8 +334,7 @@ def _find_memory_image() -> str:
 
     raise RuntimeError(
         "No memory sources found in this case. Run run_volatility_batch first, "
-        "or ensure a memory dump (.raw/.mem/.vmem/.dmp) exists in the "
-        "extracted evidence directory."
+        "or ensure a memory dump exists in the evidence directory."
     )
 
 

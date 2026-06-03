@@ -471,9 +471,10 @@ class Orchestrator:
                         ext = f.suffix.lower()
                         if ext in _ARCHIVE_EXTENSIONS:
                             nested_archives.append(str(f))
-                        elif ext in _MEMORY_EXTENSIONS or f.stat().st_size > 100 * 1024 * 1024:
-                            if str(f) not in memory_dumps:
-                                memory_dumps.append(str(f))
+                        elif (
+                            ext in _MEMORY_EXTENSIONS or f.stat().st_size > 100 * 1024 * 1024
+                        ) and str(f) not in memory_dumps:
+                            memory_dumps.append(str(f))
 
         lines: list[str] = [f"System: {system_name}"]
         if disk_images:

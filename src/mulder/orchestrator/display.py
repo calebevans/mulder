@@ -8,13 +8,14 @@ rendering, preventing corruption from the SDK subprocess.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
 import time
 from collections import deque
 from dataclasses import dataclass
 from itertools import islice
-from typing import TYPE_CHECKING, Any, Literal
+from typing import IO, TYPE_CHECKING, Any, Literal
 
 import psutil
 
@@ -119,11 +120,20 @@ class InvestigationDashboard:
 
     def __init__(self) -> None:
         """Initialize the dashboard."""
-        self._console = Console(stderr=True)
+        # Duplicate the real stderr fd so the Console can reach the
+        # terminal even after we redirect fd 2 to /dev/null.
+        self._terminal_fd: int = os.dup(2)
+        self._terminal_file: IO[str] = os.fdopen(self._terminal_fd, "w", closefd=False)
+        self._console = Console(file=self._terminal_file)
+
         # Seed psutil so the first real call returns accurate data
         psutil.cpu_percent(interval=None)
         self._live: Live | None = None
         self._start_time = time.monotonic()
+
+        self._saved_stdout_fd: int = -1
+        self._saved_stderr_fd: int = -1
+        self._devnull_fd: int = -1
 
         self._phase_label = ""
         self._phase_num = 0
@@ -183,11 +193,23 @@ class InvestigationDashboard:
         self._log_lines.append(styled)
 
     def start(self) -> None:
-        """Enter the Live display context."""
+        """Enter the Live display context.
+
+        Redirects file descriptors 1 (stdout) and 2 (stderr) to /dev/null
+        so that stray writes from subprocesses or native code cannot reach
+        the terminal and flicker below the panel border. The Rich Console
+        renders through a saved duplicate of the original stderr fd.
+        """
+        self._saved_stdout_fd = os.dup(1)
+        self._saved_stderr_fd = os.dup(2)
+        self._devnull_fd = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(self._devnull_fd, 1)
+        os.dup2(self._devnull_fd, 2)
+
         self._live = Live(
             self._build_layout(),
             console=self._console,
-            refresh_per_second=2,
+            refresh_per_second=4,
             redirect_stdout=True,
             redirect_stderr=True,
             vertical_overflow="crop",
@@ -200,6 +222,18 @@ class InvestigationDashboard:
         if self._live is not None:
             self._live.stop()
             self._live = None
+
+        if self._saved_stdout_fd >= 0:
+            os.dup2(self._saved_stdout_fd, 1)
+            os.close(self._saved_stdout_fd)
+            self._saved_stdout_fd = -1
+        if self._saved_stderr_fd >= 0:
+            os.dup2(self._saved_stderr_fd, 2)
+            os.close(self._saved_stderr_fd)
+            self._saved_stderr_fd = -1
+        if self._devnull_fd >= 0:
+            os.close(self._devnull_fd)
+            self._devnull_fd = -1
 
     def set_phase(
         self,
@@ -241,8 +275,6 @@ class InvestigationDashboard:
         detail = Text(f"  {model}", style="dim")
         self._log_lines.append(detail)
         self._log_lines.append(separator)
-
-        self._refresh()
 
     def set_extraction_counts(self, total: int, done: int, active: int) -> None:
         """Update extraction progress counters for the phase header.
@@ -842,13 +874,6 @@ class InvestigationDashboard:
             border_style="dim",
             height=body_height,
         )
-
-    def _refresh(self) -> None:
-        """Refresh the live display with updated content."""
-        if self._live is None:
-            return
-        layout = self._build_layout()
-        self._live.update(layout)
 
     def _format_findings_summary(self) -> str:
         """Format findings total with per-severity dot breakdown.
