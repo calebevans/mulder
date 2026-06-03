@@ -8,10 +8,6 @@
 Mulder is an [MCP](https://modelcontextprotocol.io/) server and agentic orchestrator for digital forensics. It exposes 140+ typed forensic tools (Volatility 3, Sleuthkit, Plaso, Hayabusa, YARA, CAPA, Zeek, Chainsaw, and more) through the Model Context Protocol with no shell access, and includes a multi-phase agentic pipeline that runs full investigations autonomously with quality gates between phases.
 
 <p align="center">
-  <img src="docs/photos/cli.gif" alt="Mulder CLI running a forensic investigation" width="800">
-</p>
-
-<p align="center">
   <b>Example report:</b>&nbsp;
   <a href="examples/srl-2018/SRL-2018.report.html">SRL-2018 APT Investigation</a> — <a href="https://www.sans.org/cyber-security-courses/advanced-incident-response-threat-hunting-training">SANS FOR508</a> enterprise intrusion capstone (395 sources, 99 findings, 80 MITRE ATT&CK techniques, 3.9 hours)
 </p>
@@ -356,10 +352,11 @@ Reports and exports can be generated in two ways:
 1. **Automatically** by the orchestrator at the end of a successful investigation
 2. **CLI**: run `mulder report <case_id>` offline without starting the server
 
-## Contributing
+## Documentation
 
-- [Adding a New MCP Tool](docs/adding-tools.md) — step-by-step guide covering tool creation, role assignment, DB indexing, skip logic, and testing
+See [docs/](docs/README.md) for the full documentation index, including:
 
-## Architecture
-
-See [docs/architecture.md](docs/architecture.md) for a detailed technical overview of the server internals, orchestration pipeline, database schema, and security model.
+- [Architecture](docs/architecture.md) — system design, components, data flow
+- [Adding Tools](docs/adding-tools.md) — step-by-step contributor guide
+- [Tool Manifest](docs/tool-manifest.md) — API reference for all 144 MCP tools
+- [Glossary](docs/glossary.md) — project terminology and definitions
