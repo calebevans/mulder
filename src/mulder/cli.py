@@ -191,6 +191,7 @@ def report(case_id: str, db_dir: str) -> None:
 
 @cli.command()
 @click.argument("evidence_path")
+@click.argument("case_id")
 @click.option(
     "--model",
     default=None,
@@ -251,6 +252,7 @@ def report(case_id: str, db_dir: str) -> None:
 )
 def investigate(
     evidence_path: str,
+    case_id: str,
     model: str | None,
     planner_model: str | None,
     executor_model: str | None,
@@ -268,9 +270,11 @@ def investigate(
     models per role via CLI flags or a YAML config file.
 
     EVIDENCE_PATH is the filesystem path to the evidence directory.
+    CASE_ID is the unique identifier for this investigation (used as the
+    database filename and referenced by all phases).
 
     \b
-      mulder investigate /evidence \\
+      mulder investigate /evidence Rocba \\
         --planner-model claude-sonnet-4-6 \\
         --executor-model claude-haiku-4-5 \\
         --analyst-model claude-sonnet-4-6
@@ -327,6 +331,7 @@ def investigate(
         env={},
         parallel_extractions=workers,
         proxy_config=proxy_config,
+        case_id=case_id,
     )
 
     result = asyncio.run(orchestrator.run())

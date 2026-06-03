@@ -5,8 +5,6 @@ from __future__ import annotations
 import subprocess
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from mulder.server.tools.extract.tsk import _classify_mmls_failure, _parse_partition_offset
 
 
@@ -36,15 +34,11 @@ class TestClassifyMmlsFailure:
         assert error_type == "ewf_unsupported"
 
     def test_expert_witness_keyword_in_stderr(self) -> None:
-        error_type, _, _ = _classify_mmls_failure(
-            1, "Expert Witness format not supported"
-        )
+        error_type, _, _ = _classify_mmls_failure(1, "Expert Witness format not supported")
         assert error_type == "ewf_unsupported"
 
     def test_generic_stderr_returns_mmls_failed(self) -> None:
-        error_type, msg, suggestion = _classify_mmls_failure(
-            1, "Error reading sector 0"
-        )
+        error_type, msg, suggestion = _classify_mmls_failure(1, "Error reading sector 0")
         assert error_type == "mmls_failed"
         assert "Error reading sector 0" in msg
         assert "partition_offset=0" in suggestion
@@ -82,8 +76,7 @@ class TestParsePartitionOffset:
 
     def test_no_ntfs_returns_zero(self) -> None:
         mmls_output = (
-            "DOS Partition Table\n"
-            "001:000   0000002048   0000206847   0000204800   Linux (0x83)\n"
+            "DOS Partition Table\n001:000   0000002048   0000206847   0000204800   Linux (0x83)\n"
         )
         offset = _parse_partition_offset(mmls_output)
         assert offset == 0
@@ -105,9 +98,7 @@ class TestRunMmls:
 
     @patch("mulder.server.tools.extract.tsk.require_binary", return_value="/usr/bin/mmls")
     @patch("mulder.server.tools.extract.tsk.subprocess.run")
-    def test_no_partition_table_error(
-        self, mock_run: MagicMock, mock_req: MagicMock
-    ) -> None:
+    def test_no_partition_table_error(self, mock_run: MagicMock, mock_req: MagicMock) -> None:
         from mulder.server.tools.extract.tsk import run_mmls
 
         mock_run.return_value = subprocess.CompletedProcess(
@@ -140,9 +131,7 @@ class TestRunMmls:
 
     @patch("mulder.server.tools.extract.tsk.require_binary", return_value="/usr/bin/mmls")
     @patch("mulder.server.tools.extract.tsk.subprocess.run")
-    def test_generic_mmls_error(
-        self, mock_run: MagicMock, mock_req: MagicMock
-    ) -> None:
+    def test_generic_mmls_error(self, mock_run: MagicMock, mock_req: MagicMock) -> None:
         from mulder.server.tools.extract.tsk import run_mmls
 
         mock_run.return_value = subprocess.CompletedProcess(
@@ -157,7 +146,10 @@ class TestRunMmls:
         assert "suggestion" in result
 
     @patch("mulder.server.tools.extract.tsk.require_binary", return_value="/usr/bin/mmls")
-    @patch("mulder.server.tools.extract.tsk.subprocess.run", side_effect=subprocess.TimeoutExpired("mmls", 60))
+    @patch(
+        "mulder.server.tools.extract.tsk.subprocess.run",
+        side_effect=subprocess.TimeoutExpired("mmls", 60),
+    )
     def test_timeout(self, mock_run: MagicMock, mock_req: MagicMock) -> None:
         from mulder.server.tools.extract.tsk import run_mmls
 

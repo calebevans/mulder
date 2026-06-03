@@ -746,7 +746,10 @@ class InvestigationDashboard:
         Both columns are present on every refresh so the layout
         dimensions never change, eliminating visual jumps.
         """
-        terminal_height = shutil.get_terminal_size().lines
+        try:
+            terminal_height = os.get_terminal_size(self._terminal_fd).lines
+        except (OSError, ValueError):
+            terminal_height = shutil.get_terminal_size().lines
         body_height = max(6, terminal_height - _HEADER_SIZE)
 
         body = Layout(name="body")
