@@ -70,7 +70,17 @@ For Vertex AI, Amazon Bedrock, non-Anthropic models via LiteLLM, and full CLI op
 
 Mulder integrates 35+ open-source forensic tools exposed as 145+ typed MCP operations:
 
-**Memory:** Volatility 3 (14 plugins) | **Disk:** Sleuthkit, Plaso, foremost, PhotoRec, Scalpel | **Windows artifacts:** EZ Tools (Prefetch, Amcache, ShimCache, MFT, USN Journal, Jump Lists, Shellbags, SRUM), RegRipper, Hayabusa (3,700+ Sigma rules), Chainsaw | **Event logs:** python-evtx, Zircolite | **Network:** tshark, Zeek, Suricata, tcpflow, tcpxtract | **Malware:** YARA, CAPA, FLOSS, Detect-It-Easy, ClamAV, radare2 | **Documents:** oletools, PDF tools, pst-utils | **Mobile:** ALEAPP, iLEAPP, MVT | **Other:** bulk_extractor, binwalk, ExifTool, ssdeep, hashdeep, steghide, Hindsight
+| Category | Tools |
+|----------|-------|
+| Memory | Volatility 3 (14 plugins) |
+| Disk | Sleuthkit, Plaso, foremost, PhotoRec, Scalpel |
+| Windows artifacts | EZ Tools (Prefetch, Amcache, ShimCache, MFT, USN Journal, Jump Lists, Shellbags, SRUM), RegRipper, Hayabusa (3,700+ Sigma rules), Chainsaw |
+| Event logs | python-evtx, Zircolite |
+| Network | tshark, Zeek, Suricata, tcpflow, tcpxtract |
+| Malware | YARA, CAPA, FLOSS, Detect-It-Easy, ClamAV, radare2 |
+| Documents | oletools, PDF tools, pst-utils |
+| Mobile | ALEAPP, iLEAPP, MVT |
+| Other | bulk_extractor, binwalk, ExifTool, ssdeep, hashdeep, steghide, Hindsight |
 
 Full API reference: [Tool Manifest](docs/tool-manifest.md)
 
