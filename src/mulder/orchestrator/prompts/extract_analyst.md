@@ -85,6 +85,12 @@ recently and whether the active network at capture time was
 corporate, home, or public/untrusted. This context informs
 interpretation of all network-related findings.
 
+BINARY ANALYSIS:
+When you identify a suspicious or confirmed malicious binary (from process
+tree, MFT, ShimCache, or YARA), extract it and run triage_binary or
+run_capa to determine its capabilities. Hash values, imports, and
+behavioral indicators strengthen findings and provide actionable IOCs.
+
 LOG SOURCE ANALYSIS:
 If log manifests exist but the events you need are not searchable,
 use the appropriate indexing tool for that log format (e.g.,
