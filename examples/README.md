@@ -36,7 +36,7 @@ against forensic evidence datasets.
 
 - **Scenario:** APT compromise of the C137.LOCAL domain with NTLM brute-force initial access from Kali Linux, Meterpreter deployment, and lateral movement between domain controller and workstation
 - **Key findings:** Successful brute-force against DC01 Administrator; coreupdater.exe (Meterpreter) deployed to both systems with C2 to 203.78.103.109:443; process injection in Print Spooler service; DCSync credential theft detected in network traffic
-- **Accuracy:** Has a detailed [accuracy report](szechuan/README.md) comparing findings against published ground truth (65% full match, 85% detection rate, 0% false positives)
+- **Accuracy:** Has a detailed [accuracy report](szechuan/ACCURACY-REPORT.md) comparing findings against published ground truth (57% full match, 79% detection rate, 0% false positives)
 - **Validation:** Used as the validation case for hackathon submission against [DFIR Madness Case 001](https://dfirmadness.com/the-stolen-szechuan-sauce/)
 - **Files:** `szechuan.report.md`, `szechuan.report.html`, `szechuan.audit.jsonl`, `orchestrator.log`, `mulder.log`, `README.md`
 
