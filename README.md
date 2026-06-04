@@ -5,7 +5,7 @@
 
 </div>
 
-Mulder is an [MCP](https://modelcontextprotocol.io/) server and agentic orchestrator for digital forensics. It exposes 140+ typed forensic tools (Volatility 3, Sleuthkit, Plaso, Hayabusa, YARA, CAPA, Zeek, Chainsaw, and more) through the Model Context Protocol with no shell access, and includes a multi-phase agentic pipeline that runs full investigations autonomously with quality gates between phases.
+Mulder is an [MCP](https://modelcontextprotocol.io/) server and agentic orchestrator for digital forensics. It exposes 145+ typed forensic tools (Volatility 3, Sleuthkit, Plaso, Hayabusa, YARA, CAPA, Zeek, Chainsaw, and more) through the Model Context Protocol with no shell access, and includes a multi-phase agentic pipeline that runs full investigations autonomously with quality gates between phases.
 
 <p align="center">
   <b>Example report:</b>&nbsp;
@@ -14,8 +14,11 @@ Mulder is an [MCP](https://modelcontextprotocol.io/) server and agentic orchestr
 
 ## Features
 
-- **MCP server** with 140+ typed forensic tools covering memory, disk, timeline, Windows event logs, YARA, network capture, binary analysis, document forensics, email forensics, mobile, steganography, and more
+- **MCP server** with 145+ typed forensic tools covering memory, disk, timeline, Windows event logs, YARA, network capture, binary analysis, document forensics, email forensics, mobile, steganography, and more
 - **Agentic pipeline** that decomposes investigations into five phases (Catalog, Extraction, Cross-System Analysis, Alternative Narrative, Report) with hard quality gates between each phase
+- **Multi-partition disk analysis** that automatically identifies and processes all NTFS partitions above 100 MB, selecting the largest as the primary
+- **TSK-first extraction** using icat as the primary method for all disk artifact access, with FUSE mounting as fallback only
+- **E01 multi-segment support** reading E01 evidence files directly via TSK without requiring FUSE mounting
 - **Per-case SQLite database** with FTS5 full-text search across all indexed evidence
 - **Append-only audit log** that records every tool invocation; findings must cite real tool call IDs to prevent hallucinated evidence citations
 - **Cross-source correlation** to join evidence from different artifact types within a time range
@@ -27,6 +30,7 @@ Mulder is an [MCP](https://modelcontextprotocol.io/) server and agentic orchestr
 - **IOC export** in STIX 2.1 and CSV formats, plus MITRE ATT&CK Navigator layer generation
 - **Resource throttling** with configurable memory and CPU limits so extractions do not overwhelm the host
 - **Parallel extraction** with a configurable worker pool, background job management, and a `run_parallel` meta-tool for batch dispatch
+- **Dynamic executor allowlists** that expose only plan-relevant tools to each executor session rather than the full tool surface
 - **Auto-compaction** that detects context window exhaustion and restarts phases with a compact prompt, recovering state from the database
 - **Per-model token tracking** with role-based model assignment (planner, executor, analyst) and per-role usage breakdowns
 
@@ -360,5 +364,5 @@ See [docs/](docs/README.md) for the full documentation index, including:
 
 - [Architecture](docs/architecture.md) — system design, components, data flow
 - [Adding Tools](docs/adding-tools.md) — step-by-step contributor guide
-- [Tool Manifest](docs/tool-manifest.md) — API reference for all 144 MCP tools
+- [Tool Manifest](docs/tool-manifest.md) — API reference for all 146 MCP tools
 - [Glossary](docs/glossary.md) — project terminology and definitions

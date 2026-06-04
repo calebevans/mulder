@@ -1,6 +1,6 @@
 # Mulder MCP Tool Manifest
 
-Every tool is exposed as `mcp__mulder__{name}`. All tools return a dict containing at minimum `tool_call_id` and `status`. Extraction tools additionally return `source_name`, `windows_indexed`, and `line_count`.
+Every tool is exposed as `mcp__mulder__{name}`. All tools return a dict containing at minimum `tool_call_id` and `status`. Extraction tools additionally return `source_name`, `windows_indexed`, and `line_count`. Write tools (those with a `source_name`) return only metadata plus a 500-character content preview; full output is accessible via `search()` or `get_raw_output()`.
 
 **Role Key:** `CATALOG` `EXTRACT_PLANNER` `EXTRACT_EXECUTOR` `EXTRACT_ANALYST` `CROSS_PLANNER` `CROSS_EXECUTOR` `CROSS_ANALYST` `NARRATIVE_PLANNER` `NARRATIVE_EXECUTOR` `NARRATIVE_ANALYST` `REPORT`
 
@@ -116,15 +116,15 @@ List partitions in a disk image using TSK mmls.
 
 ### run_fls
 
-List all files and directories (including deleted) from a disk image.
+List all files and directories (including deleted) from a disk image. Automatically analyzes all NTFS partitions above 100 MB when multiple partitions are present, indexing each as a separate source. The largest NTFS partition is selected as primary when `partition_offset` is omitted.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | image_path | str | yes | Path to the disk image |
-| partition_offset | int \| None | no | Sector offset; auto-detected if omitted |
+| partition_offset | int \| None | no | Sector offset; auto-detected (largest NTFS) if omitted |
 | force | bool | no | Re-run extraction even if sources already exist |
 
-**Returns:** `source_name` (tsk.filelist), `windows_indexed`, `line_count`
+**Returns:** `source_name` (tsk.filelist), `windows_indexed`, `line_count`, `partitions_analyzed`
 
 **Roles:** `EXTRACT_EXECUTOR`
 
@@ -367,6 +367,8 @@ Extract .evtx files from a disk image and return a prioritized manifest.
 
 Parse and index a specific EVTX file from a prior run_evtx_parser extraction.
 
+When indexing a Security log, automatically indexes System.evtx and PowerShell operational logs from the same extraction directory (if present and not already indexed) for persistence and execution coverage.
+
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | filename | str | yes | Name of the .evtx file to parse |
@@ -374,6 +376,8 @@ Parse and index a specific EVTX file from a prior run_evtx_parser extraction.
 | image_path | str | no | Disk image path for multi-image sessions |
 
 **Returns:** `source_name` (evtx.\<channel\>), `windows_indexed`, `line_count`
+
+**Auto-companion behavior:** Indexing `Security.evtx` triggers automatic indexing of `System.evtx` and `Microsoft-Windows-PowerShell%4Operational.evtx` from the same directory.
 
 **Roles:** `EXTRACT_EXECUTOR`
 
@@ -1153,6 +1157,18 @@ Detect potential data exfiltration by correlating network, URL, and file access 
 
 **Roles:** `CROSS_EXECUTOR`
 
+### find_file_staging
+
+Detect signs of data staging and exfiltration preparation in filesystem data.
+
+Searches indexed filesystem sources (tsk.filelist, ez.mft) for recently created archive files, archives in suspicious locations (temp dirs, Downloads, Recycle Bin), large files indicating bulk data collection, and archives that were created then deleted (exfiltrated then cleaned up). Complements `find_data_exfiltration_indicators` by focusing on host filesystem artifacts rather than network traffic.
+
+*No parameters.*
+
+**Returns:** `results[]` (type, source, event_time, evidence_text), `missing_sources[]`
+
+**Roles:** `CROSS_EXECUTOR` `EXTRACT_ANALYST` `NARRATIVE_EXECUTOR`
+
 ### find_defense_evasion
 
 Detect defense evasion techniques across memory, filesystem, and event logs.
@@ -1443,6 +1459,18 @@ Return USN Journal entries within a time range, parsed by MFTECmd (EZ Tools).
 | t_end | str | yes | ISO 8601 end time |
 
 **Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR`
+
+### detect_timestomping
+
+Analyze MFT data for files with manipulated timestamps (timestomping).
+
+Reads the indexed `ez.mft` source (MFTECmd output) and compares $STANDARD_INFORMATION timestamps against $FILE_NAME timestamps for each file entry. Flags files where $SI Created is significantly earlier than $FN Created (SI was backdated), or $SI Created is later than $SI Modified (impossible without manipulation). Filters out known false positives from Windows Update, servicing, and installer paths.
+
+*No parameters.*
+
+**Returns:** `results[]` (file_path, si_created, fn_created, delta_hours, reason), `total_suspicious`, `false_positive_filtered`
+
+**Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR` `NARRATIVE_EXECUTOR`
 
 ---
 

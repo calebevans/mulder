@@ -1,6 +1,6 @@
 # Architecture
 
-Mulder is a forensic investigation platform consisting of two core components: an MCP server that exposes 140+ typed forensic tools with no shell access, and an agentic orchestrator that runs multi-phase investigations with quality gates.
+Mulder is a forensic investigation platform consisting of two core components: an MCP server that exposes 145+ typed forensic tools with no shell access, and an agentic orchestrator that runs multi-phase investigations with quality gates.
 
 ## System Overview
 
@@ -10,7 +10,7 @@ flowchart TB
         CLI["mulder CLI"]
         Orchestrator["Orchestrator\n(multi-phase pipeline)"]
         AgentSDK["Agent SDK\n(Session Runtime)"]
-        MCPServer["MCP Server\n(FastMCP, 140+ tools)"]
+        MCPServer["MCP Server\n(FastMCP, 145+ tools)"]
         DB["SQLite + FTS5\n(per-case database)"]
         AuditLog["Audit Log\n(append-only JSONL)"]
         Extractors["Extractors\n(forensic binaries)"]
@@ -198,7 +198,7 @@ The Alternative Narrative phase (Phase 4) combines counter-analysis with audit r
 Each phase is defined by a `PhaseConfig` dataclass specifying:
 
 - **Pipeline mode**: Either `split` (planner/executor/analyst) or `single` (one agent session)
-- **Dynamic tool allowlists**: Built at import time from `@tool_access` declarations on each tool (see [Tool Access Control](#tool-access-control) below). Executors see only plan-relevant tools rather than the full 140+ surface.
+- **Dynamic tool allowlists**: Built at import time from `@tool_access` declarations on each tool (see [Tool Access Control](#tool-access-control) below). Executors see only plan-relevant tools rather than the full 145+ surface.
 - **Model assignment**: Each role resolves its model via `ModelConfig.resolve(phase, role)` with support for per-phase overrides via config file
 - **Turn limit**: Maximum tool-use round trips per role session
 - **Follow-up limit**: Maximum planner/executor cycles the analyst can request before being capped
@@ -274,7 +274,7 @@ The `@audited_tool` decorator (`src/mulder/server/helpers.py`) wraps MCP tool fu
 
 ### Tool Response Truncation
 
-Write tools (extractors, composite analyses) return only metadata plus a 500-character content preview in their MCP response. Full output is persisted to the database and accessible via `search` (FTS5) or `get_raw_output`. This keeps agent context windows focused on reasoning rather than raw forensic output.
+Write tools (extractors, composite analyses) return only metadata plus a 500-character content preview in their MCP response. The `tool_response()` helper enforces this truncation whenever a `source` argument is provided, returning only `source_name`, `windows_indexed`, `line_count`, and a `content_preview` (first 500 chars). Full output is persisted to the database and accessible via `search` (FTS5) or `get_raw_output`. This keeps agent context windows focused on reasoning rather than raw forensic output.
 
 ### Composite Tool Indexing
 
@@ -381,7 +381,7 @@ erDiagram
 - **evidence_registry**: SHA-256 chain-of-custody records for original evidence files
 - **bookmarks**: Agent-flagged windows of interest for later review
 - **progress**: Per-system records of tools executed and questions addressed
-- **kv_store**: General-purpose key-value persistence (e.g., EVTX extraction paths that must survive server restarts)
+- **kv_store**: General-purpose key-value persistence for cross-tool state sharing. Stores TSK partition offsets (`tsk_partition_offset:<image>`), EVTX extraction directory paths, and other data that must survive server restarts and context compaction
 
 ### Write Safety
 
@@ -437,6 +437,31 @@ The `EvidenceClassifier` scans evidence directories and categorizes files by typ
 | Archive | `.zip`, `.7z`, `.tar`, `.gz` | Internal extraction |
 
 Each extractor normalizes output into `WindowRow` objects (source_id, line_start, line_end, event_time, raw_text) for uniform database storage and FTS indexing.
+
+## Disk Image Extraction Strategy
+
+### TSK-First Extraction
+
+All disk tools use TSK `icat` as the primary extraction method for retrieving files from disk images. FUSE mounting (`ewfmount`, `guestmount`) is only attempted as a fallback when `icat` fails. This approach is more reliable across image formats and eliminates the need for `--privileged` containers in many cases.
+
+The extraction flow:
+
+1. **Primary**: `icat -o <offset> <image> <inode>` extracts the file directly from the image
+2. **Fallback**: If `icat` fails (e.g., corrupted filesystem entries), attempt FUSE mount and filesystem-level access
+
+### E01 Multi-Segment Support
+
+TSK reads E01 (EnCase) evidence files directly without requiring FUSE mounting. Multi-segment E01 files (`.E01`, `.E02`, etc.) are handled natively by passing the first segment path to TSK commands. This eliminates the `ewfmount` dependency for most disk analysis operations.
+
+### Multi-Partition Support
+
+When `run_fls` is invoked on a disk image, it automatically detects and analyzes all NTFS partitions above 100 MB (approximately 204,800 sectors). The `_parse_all_partitions` function filters the `mmls` output and returns data partitions sorted by size descending.
+
+For single-partition tools that need a sector offset, `_parse_partition_offset` selects the largest NTFS partition rather than the first one encountered. This prevents analysis from targeting a small recovery or system-reserved partition when a large data partition exists.
+
+### Partition Offset Persistence
+
+Resolved partition offsets are stored in the database `kv_store` table under the key prefix `tsk_partition_offset:<image_path>`. This allows tools invoked later in the pipeline (e.g., `extract_file_by_inode`, `index_evtx_file`) to retrieve the correct offset without re-running `mmls`. The kv_store pattern is also used for EVTX extraction directory paths that must survive server restarts and context compaction.
 
 ## Docker Deployment Architecture
 
@@ -583,18 +608,9 @@ The pipeline incorporates several quality mechanisms that improve finding accura
 - **Behavioral context synthesis**: Extraction prompts gather user behavior context (location, network environment, usage patterns) to distinguish adversary artifacts from benign user activity.
 - **Anti-evasion awareness**: Counter-analysis prompts explicitly instruct the agent to consider anti-forensic techniques (timestomping, log clearing, process injection) when evaluating findings.
 - **Cross-platform prompts**: Extraction and analysis prompts are generalized across operating systems rather than assuming Windows-first.
-- **Security.evtx auto-indexing**: Group 3 post-extraction automatically indexes Windows Security event logs for authentication and privilege escalation analysis.
+- **Auto companion EVTX indexing**: When `index_evtx_file` is called on a Security log, it automatically indexes System.evtx and PowerShell operational logs from the same extraction directory (if present and not already indexed), ensuring persistence and execution coverage without requiring explicit agent calls.
 - **IOC enrichment display**: Reports include enrichment annotations from threat intelligence lookups alongside IOC tables.
 - **Skip redundant extraction**: Tools check whether their output sources already exist in the database before running, preventing duplicate work during retries or follow-up cycles.
-
-## Performance
-
-- **N+1 query elimination**: `verify_evidence_integrity` uses a single streaming query ordered by `source_id` instead of per-source window fetches
-- **Parallel icat extraction**: File extraction from disk images runs concurrently via the worker pool
-- **Audit log in-memory accumulators**: `AuditLog.summary()` computes statistics from in-memory counters updated during indexing, avoiding full file re-reads
-- **`render_all()` single-pass rendering**: Report generation builds the template context once and renders all formats (Markdown, HTML) from it
-- **Reactive task panel**: The CLI dashboard shows tasks only when actively executing, not pre-populated from plans, reducing visual noise and rendering cost
-- **Evidence-path aware skipping**: Tools that have already indexed a source at the same path skip re-extraction
 
 ## Limitations and Known Considerations
 
