@@ -1591,6 +1591,19 @@ Extract hidden data from a steganographic JPEG image.
 
 **Roles:** `EXTRACT_EXECUTOR`
 
+### parse_autoruns
+
+Parse Sysinternals Autoruns CSV output to identify persistence mechanisms. Indexes all autostart entries (services, registry, scheduled tasks, drivers) for searching.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| csv_path | str | no | Path to the Autoruns CSV file (auto-discovers from evidence if empty) |
+| force | bool | no | Re-run even if already indexed (default False) |
+
+**Returns:** `sources` (autoruns.\*), `result_count`, `files_parsed`
+
+**Roles:** `EXTRACT_EXECUTOR` `EXTRACT_ANALYST` `CROSS_EXECUTOR`
+
 ---
 
 ## 17. Findings Management

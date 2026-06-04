@@ -1243,3 +1243,245 @@ def detect_timestomping() -> dict[str, object]:
         "result_count": len(suspicious),
         "total_mft_windows_analyzed": len(windows),
     }
+
+
+# ---------------------------------------------------------------------------
+# Sysinternals Autoruns CSV parsing
+# ---------------------------------------------------------------------------
+
+_AUTORUNS_GLOB_PATTERNS: tuple[str, ...] = (
+    "*autorunsc*.csv",
+    "*autoruns*.csv",
+)
+
+_AUTORUNS_KEY_COLUMNS: tuple[str, ...] = (
+    "Entry Location",
+    "Entry",
+    "Enabled",
+    "Category",
+    "Image Path",
+    "Launch String",
+    "Signer",
+    "Company",
+    "Description",
+    "MD5",
+    "SHA-256",
+    "Time",
+    "Profile",
+)
+
+
+def _discover_autoruns_csvs(evidence_path: str) -> list[Path]:
+    """Find Autoruns CSV files in the evidence or extracted directories.
+
+    Searches both the evidence root and the case db_dir for files matching
+    common Autoruns export naming patterns.
+    """
+    import fnmatch as _fnmatch
+
+    candidates: list[Path] = []
+    search_roots: list[Path] = []
+
+    ctx = get_ctx()
+    meta = ctx.db.get_case_metadata()
+    if meta and meta.evidence_root:
+        search_roots.append(Path(meta.evidence_root))
+    cfg = get_cfg()
+    search_roots.append(Path(cfg.db_dir))
+
+    if evidence_path:
+        ep = Path(evidence_path)
+        if ep.is_file():
+            return [ep] if ep.exists() else []
+        if ep.is_dir():
+            search_roots.insert(0, ep)
+
+    seen: set[Path] = set()
+    for root in search_roots:
+        if not root.exists():
+            continue
+        for item in root.rglob("*.csv"):
+            name_lower = item.name.lower()
+            if any(_fnmatch.fnmatch(name_lower, pat) for pat in _AUTORUNS_GLOB_PATTERNS):
+                resolved = item.resolve()
+                if resolved not in seen:
+                    seen.add(resolved)
+                    candidates.append(item)
+
+    return sorted(candidates)
+
+
+def _parse_autoruns_csv_content(csv_path: Path) -> tuple[list[str], str]:
+    """Parse an Autoruns CSV and return formatted lines and hostname hint.
+
+    Handles both comma-separated and tab-separated variants, and is
+    robust to missing columns. Returns (lines, hostname).
+    """
+    try:
+        raw = csv_path.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        raw = csv_path.read_text(encoding="utf-8", errors="replace")
+
+    if not raw.strip():
+        return [], ""
+
+    # Detect delimiter: if header has tabs, treat as TSV
+    first_line = raw.split("\n", 1)[0]
+    delimiter = "\t" if "\t" in first_line and "," not in first_line else ","
+
+    reader = csv.DictReader(io.StringIO(raw), delimiter=delimiter)
+    if not reader.fieldnames:
+        return [], ""
+
+    fieldnames = [f.strip() for f in reader.fieldnames]
+    reader.fieldnames = fieldnames
+
+    hostname = ""
+    if "Profile" in fieldnames:
+        pass  # extract from first row below
+
+    lines: list[str] = []
+    for row in reader:
+        entry_location = row.get("Entry Location", "").strip()
+        entry_name = row.get("Entry", "").strip()
+        category = row.get("Category", "").strip()
+        image_path = row.get("Image Path", "").strip()
+        enabled = row.get("Enabled", "").strip()
+        signer = row.get("Signer", "").strip()
+        launch_string = row.get("Launch String", "").strip()
+        company = row.get("Company", "").strip()
+        description = row.get("Description", "").strip()
+        timestamp = row.get("Time", "").strip()
+        profile = row.get("Profile", "").strip()
+        md5 = row.get("MD5", "").strip()
+        sha256 = row.get("SHA-256", row.get("SHA256", "")).strip()
+
+        if not hostname and profile:
+            hostname = profile.replace("\\", "_").replace(" ", "_").lower()
+
+        parts = [
+            f"Category={category}" if category else "",
+            f"Location={entry_location}" if entry_location else "",
+            f"Entry={entry_name}" if entry_name else "",
+            f"ImagePath={image_path}" if image_path else "",
+            f"LaunchString={launch_string}" if launch_string else "",
+            f"Enabled={enabled}" if enabled else "",
+            f"Signer={signer}" if signer else "",
+            f"Company={company}" if company else "",
+            f"Description={description}" if description else "",
+            f"Time={timestamp}" if timestamp else "",
+            f"MD5={md5}" if md5 else "",
+            f"SHA256={sha256}" if sha256 else "",
+        ]
+        line = "\t".join(p for p in parts if p)
+        if line:
+            lines.append(line)
+
+    return lines, hostname
+
+
+@mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR | Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR)
+def parse_autoruns(csv_path: str = "", force: bool = False) -> dict[str, object]:
+    """Parse Sysinternals Autoruns CSV output to identify persistence mechanisms.
+
+    Call when autoruns CSV files are present in the evidence. Indexes all
+    autostart entries (services, registry, scheduled tasks, drivers) for
+    searching. Output indexed as 'autoruns.*'.
+
+    Args:
+        csv_path: Path to the Autoruns CSV file (or auto-discover from
+            evidence/extracted directories if empty).
+        force: Re-run even if already indexed.
+    """
+    from mulder.server.helpers import sources_already_indexed
+
+    ctx = get_ctx()
+    tc_id = make_tool_call_id()
+    t0 = time.monotonic()
+    params: dict[str, object] = {"csv_path": csv_path, "force": force}
+
+    if not force:
+        existing = sources_already_indexed(["autoruns."])
+        if existing:
+            elapsed = (time.monotonic() - t0) * 1000
+            ctx.audit.log_tool_call(
+                tool_call_id=tc_id,
+                tool_name="parse_autoruns",
+                params=params,
+                output_hash=hash_output({"skipped": existing}),
+                duration_ms=elapsed,
+            )
+            return {
+                "tool_call_id": tc_id,
+                "status": "already_indexed",
+                "existing_sources": existing,
+                "hint": "Use force=True to re-index.",
+            }
+
+    csv_files = (
+        [Path(csv_path)]
+        if csv_path and Path(csv_path).is_file()
+        else _discover_autoruns_csvs(csv_path)
+    )
+
+    if not csv_files:
+        elapsed = (time.monotonic() - t0) * 1000
+        ctx.audit.log_tool_call(
+            tool_call_id=tc_id,
+            tool_name="parse_autoruns",
+            params=params,
+            output_hash=hash_output({"error": "no_csv"}),
+            duration_ms=elapsed,
+        )
+        return {
+            "tool_call_id": tc_id,
+            "status": "error",
+            "error_message": (
+                "No Autoruns CSV files found. "
+                "Provide csv_path or place files in evidence directory."
+            ),
+        }
+
+    total_entries = 0
+    indexed_sources: list[str] = []
+
+    for csv_file in csv_files:
+        lines, hostname = _parse_autoruns_csv_content(csv_file)
+        if not lines:
+            continue
+
+        source_name = f"autoruns.{hostname}" if hostname else "autoruns"
+        combined = "\n".join(lines)
+        extract_and_index(combined, source_name, str(csv_file), "autoruns_parser")
+        total_entries += len(lines)
+        indexed_sources.append(source_name)
+
+    if not indexed_sources:
+        summary: dict[str, object] = {
+            "status": "no_results",
+            "message": "Autoruns CSV files found but contained no parseable entries.",
+        }
+    else:
+        summary = {
+            "status": "success",
+            "sources_indexed": indexed_sources,
+            "total_entries": total_entries,
+            "files_parsed": len(csv_files),
+        }
+
+    elapsed = (time.monotonic() - t0) * 1000
+    ctx.audit.log_tool_call(
+        tool_call_id=tc_id,
+        tool_name="parse_autoruns",
+        params=params,
+        output_hash=hash_output(summary),
+        duration_ms=elapsed,
+    )
+    return {
+        "tool_call_id": tc_id,
+        "status": "success" if indexed_sources else "no_results",
+        "results": summary,
+        "sources": indexed_sources,
+        "result_count": total_entries,
+    }
