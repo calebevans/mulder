@@ -11,14 +11,14 @@ Mulder takes a directory of forensic evidence (disk images, memory dumps, PCAPs,
 
 ## Results
 
-Four autonomous investigations against real forensic datasets, unmodified from tool output:
+Four autonomous investigations against real forensic datasets, unmodified from tool output. Each case has an interactive HTML report on [GitHub Pages](https://calebevans.github.io/mulder/examples/srl-2018/SRL-2018.report.html) (sidebar navigation, dark/light theme, audit trail). See the [examples index](examples/README.md) for all report links.
 
-| Case | Systems | Evidence | Sources | Tool Calls | Findings | Runtime | Tokens |
-|------|---------|----------|---------|------------|----------|---------|--------|
-| [Rocba](examples/rocba/) | 1 | ~8 GB | 85 | 396 | 15 (2 high) | 72 min | 104K |
-| [SRL-2015](examples/srl-2015/) | 4 | ~30 GB | 154 | 614 | 28 (21 high) | 108 min | 216K |
-| [SRL-2018](examples/srl-2018/) | 9 | ~120 GB | 365 | 1,060 | 50 (4 crit, 9 high) | 234 min | 301K |
-| [Szechuan](examples/szechuan/) | 2 | ~13 GB | 115 | 412 | 18 (3 crit, 6 high) | 55 min | 134K |
+| Case | Systems | Evidence | Sources | Tool Calls | Findings | Runtime | Tokens | Report |
+|------|---------|----------|---------|------------|----------|---------|--------|--------|
+| [Rocba](examples/rocba/) | 1 | ~8 GB | 85 | 396 | 15 (2 high) | 72 min | 104K | [HTML](https://calebevans.github.io/mulder/examples/rocba/Rocba.report.html) |
+| [SRL-2015](examples/srl-2015/) | 4 | ~30 GB | 154 | 614 | 28 (21 high) | 108 min | 216K | [HTML](https://calebevans.github.io/mulder/examples/srl-2015/SRL-2015.report.html) |
+| [SRL-2018](examples/srl-2018/) | 9 | ~120 GB | 365 | 1,060 | 50 (4 crit, 9 high) | 234 min | 301K | [HTML](https://calebevans.github.io/mulder/examples/srl-2018/SRL-2018.report.html) |
+| [Szechuan](examples/szechuan/) | 2 | ~13 GB | 115 | 412 | 18 (3 crit, 6 high) | 55 min | 134K | [HTML](https://calebevans.github.io/mulder/examples/szechuan/szechuan.report.html) |
 
 The Szechuan case has a [detailed accuracy report](examples/szechuan/ACCURACY-REPORT.md) validated against [published ground truth](https://dfirmadness.com/the-stolen-szechuan-sauce/): 57% full match, 79% detection rate, 0% false positive rate. The Alternative Narrative phase caught and corrected two would-be false positives (a DCSync misclassification and an over-matching YARA rule) before they reached the final report.
 
@@ -88,7 +88,7 @@ Full API reference: [Tool Manifest](docs/tool-manifest.md)
 
 Each investigation produces:
 
-- **Markdown and HTML reports** - executive summary, attack timeline, findings with MITRE ATT&CK mappings, IOC tables, and audit trail
+- **Markdown and HTML reports** - executive summary, attack timeline, findings with MITRE ATT&CK mappings, IOC tables, and audit trail ([example HTML reports](https://calebevans.github.io/mulder/examples/srl-2018/SRL-2018.report.html))
 - **Per-case SQLite database** - FTS5 full-text search across all indexed evidence
 - **Append-only audit log** - JSONL recording every tool invocation with BLAKE2b output hashes
 - **Optional exports** - STIX 2.1 IOC bundle, CSV IOC list, and MITRE ATT&CK Navigator layer via `mulder export-iocs` and `mulder export-navigator`
