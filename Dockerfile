@@ -425,8 +425,10 @@ RUN if [ -f /opt/die/die.deb ]; then \
 RUN if [ -x /opt/floss/floss ]; then ln -sf /opt/floss/floss /usr/local/bin/floss; fi
 
 # Suricata: PPA on amd64, link source build on arm64
+# python3 now points to 3.12 (deadsnakes), but apt_pkg is compiled for
+# the system 3.10, so invoke add-apt-repository via python3.10 explicitly.
 RUN if [ "$TARGETARCH" = "amd64" ]; then \
-        add-apt-repository -y ppa:oisf/suricata-stable \
+        /usr/bin/python3.10 /usr/bin/add-apt-repository -y ppa:oisf/suricata-stable \
         && apt-get update \
         && apt-get install -y --no-install-recommends suricata \
         && apt-get clean && rm -rf /var/lib/apt/lists/*; \
