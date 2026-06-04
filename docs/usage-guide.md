@@ -47,7 +47,7 @@ Try-it-out instructions for running Mulder, the forensic investigation platform.
 The pre-built container image includes all forensic tools, dependencies, and the Mulder server:
 
 ```bash
-docker pull ghcr.io/calebevans/mulder:1.1
+docker pull ghcr.io/calebevans/mulder:1.2
 ```
 
 ## Running a Container
@@ -88,7 +88,7 @@ docker run -it --privileged \
   -v /path/to/evidence:/evidence:ro \
   -v ~/mulder-cases:/home/mulder/.mulder/cases \
   -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
-  ghcr.io/calebevans/mulder:1.1
+  ghcr.io/calebevans/mulder:1.2
 ```
 
 ### Using Google Cloud Vertex AI
@@ -104,7 +104,7 @@ docker run -it --privileged \
   -e ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project-id \
   -e GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcloud-creds.json \
   -v ~/.config/gcloud/application_default_credentials.json:/tmp/gcloud-creds.json:ro \
-  ghcr.io/calebevans/mulder:1.1
+  ghcr.io/calebevans/mulder:1.2
 ```
 
 | Variable | Description |
@@ -128,7 +128,7 @@ docker run -it --privileged \
   -e AWS_REGION=us-east-1 \
   -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
   -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
-  ghcr.io/calebevans/mulder:1.1
+  ghcr.io/calebevans/mulder:1.2
 ```
 
 | Variable | Description |
