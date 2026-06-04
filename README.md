@@ -8,8 +8,8 @@
 Mulder is an [MCP](https://modelcontextprotocol.io/) server and agentic orchestrator for digital forensics. It exposes 145+ typed forensic tools (Volatility 3, Sleuthkit, Plaso, Hayabusa, YARA, CAPA, Zeek, Chainsaw, and more) through the Model Context Protocol with no shell access, and includes a multi-phase agentic pipeline that runs full investigations autonomously with quality gates between phases.
 
 <p align="center">
-  <b>Example report:</b>&nbsp;
-  <a href="examples/srl-2018/SRL-2018.report.html">SRL-2018 APT Investigation</a> — <a href="https://www.sans.org/cyber-security-courses/advanced-incident-response-threat-hunting-training">SANS FOR508</a> enterprise intrusion capstone (395 sources, 99 findings, 80 MITRE ATT&CK techniques, 3.9 hours)
+  <b>Example reports:</b>&nbsp;
+  <a href="examples/README.md">4 investigations</a> across 16 systems — from single-workstation RDP defense to multi-system APT compromise
 </p>
 
 ## Features
@@ -34,24 +34,16 @@ Mulder is an [MCP](https://modelcontextprotocol.io/) server and agentic orchestr
 - **Auto-compaction** that detects context window exhaustion and restarts phases with a compact prompt, recovering state from the database
 - **Per-model token tracking** with role-based model assignment (planner, executor, analyst) and per-role usage breakdowns
 
-### Example Output
+### Example Investigations
 
-From an automated investigation of the [SANS FOR508 enterprise intrusion capstone](https://www.sans.org/cyber-security-courses/advanced-incident-response-threat-hunting-training) (18 Windows systems, memory + disk + event logs):
+| Case | Systems | Sources | Findings | Runtime | Tokens | Report |
+|------|---------|---------|----------|---------|--------|--------|
+| [Rocba](examples/rocba/) | 1 | 85 | 15 (2 high) | 72 min | 104K | RDP brute-force campaign, no breach |
+| [SRL-2015](examples/srl-2015/) | 4 | 154 | 28 (21 high) | 108 min | 216K | Insider threat, Zeus trojan, classified data theft |
+| [SRL-2018](examples/srl-2018/) | 9 | 365 | 50 (4 crit, 9 high) | 234 min | 301K | Enterprise APT, WMI attack chains, IP theft |
+| [Szechuan](examples/szechuan/) | 2 | 115 | 18 (3 crit, 6 high) | 55 min | 134K | RDP brute-force, Meterpreter, lateral movement |
 
-```
-Scope: 395 evidence sources (101 memory, 178 disk, 116 other) | 2250 tool calls | 3.9 hours
-Results: 99 findings (13 critical, 41 high) | 80 MITRE ATT&CK techniques | 56 confirmed, 43 inference
-Timeline: 2018-04-25 to 2018-09-07
-
-Key Threats:
-  - RAT C2 URL (psykooo.ddns.net/rat.php) carved from Domain Controller
-  - 8+ nation-state malware families in memory (Codoso, HTran, PlugX, Industroyer)
-  - C2 infrastructure: gicia.info, masgio.info, 174.122.240.164
-  - PowerShell encoded command spawned via WMI
-  - Anti-forensics: timestomping, log clearing, DLL unlinking
-```
-
-See [examples/srl-2018/](examples/srl-2018/) for the full HTML and Markdown reports.
+The Szechuan case includes a detailed [accuracy report](examples/szechuan/README.md) validated against published ground truth. See [examples/](examples/README.md) for full details and logs.
 
 ## Getting Started
 
