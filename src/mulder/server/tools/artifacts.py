@@ -1,12 +1,15 @@
 """MCP tools for artifact extraction and analysis.
 
-Browser history, plist parsing, generic SQLite queries, and
-steganography detection.  All tools use TSK icat to extract files from
-disk images without mounting, then parse the extracted content.
+Browser history, plist parsing, generic SQLite queries,
+steganography detection, and timestomping analysis.  All tools use
+TSK icat to extract files from disk images without mounting, then
+parse the extracted content.
 """
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import logging
 import plistlib
@@ -16,7 +19,9 @@ import sqlite3
 import subprocess
 import tempfile
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from mulder.server.app import get_cfg, get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
@@ -974,4 +979,267 @@ def extract_steganography(
         "source": "steg.extracted",
         "password_used": password_used,
         "extracted_size": len(extracted_content) if extracted_content else 0,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Timestomping detection
+# ---------------------------------------------------------------------------
+
+_TIMESTOMP_THRESHOLD = timedelta(seconds=10)
+
+_TIMESTOMP_FALSE_POSITIVE_PATHS: tuple[str, ...] = (
+    "\\windows\\winsxs\\",
+    "\\windows\\installer\\",
+    "\\windows\\servicing\\",
+    "\\windows\\softwaredistribution\\",
+    "\\$recycle.bin\\",
+    "\\system volume information\\",
+    "\\windows\\assembly\\",
+)
+
+_SI_CREATED_COLUMNS = ("Created0x10_0", "Created0x10")
+_FN_CREATED_COLUMNS = ("Created0x30_0", "Created0x30")
+_SI_MODIFIED_COLUMNS = ("LastModified0x10_0", "Modified0x10_0", "Modified0x10", "LastModified0x10")
+_FILENAME_COLUMN_CANDIDATES = ("FileName", "Filename", "filename", "File Name")
+_PARENT_PATH_COLUMNS = ("ParentPath", "Parent Path", "parentpath")
+
+
+def _find_column(headers: list[str], candidates: tuple[str, ...]) -> str | None:
+    """Find the first matching column name from a list of candidates."""
+    for c in candidates:
+        if c in headers:
+            return c
+    return None
+
+
+def _parse_mft_timestamp(value: str) -> datetime | None:
+    """Parse a timestamp string from MFTECmd CSV output."""
+    if not value or not value.strip():
+        return None
+    value = value.strip()
+    for fmt in (
+        "%Y-%m-%d %H:%M:%S.%f",
+        "%Y-%m-%d %H:%M:%S",
+        "%m/%d/%Y %H:%M:%S",
+        "%m/%d/%Y %H:%M",
+    ):
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+    try:
+        return datetime.fromisoformat(value)
+    except (ValueError, TypeError):
+        return None
+
+
+def _is_false_positive_path(filepath: str) -> bool:
+    """Return True if the file path is a known source of benign timestamp anomalies."""
+    lower = filepath.lower()
+    return any(fp in lower for fp in _TIMESTOMP_FALSE_POSITIVE_PATHS)
+
+
+def _analyze_mft_windows_for_timestomping(
+    windows: list[Any],
+) -> list[dict[str, Any]]:
+    """Analyze raw MFT window text for timestamp anomalies.
+
+    Handles both CSV-formatted MFT data and tab-delimited output
+    by parsing each window's content.
+    """
+    suspicious: list[dict[str, Any]] = []
+
+    for w in windows:
+        text = w.raw_text
+        if not text.strip():
+            continue
+
+        lines = text.strip().splitlines()
+        if len(lines) < 2:
+            continue
+
+        reader = csv.reader(io.StringIO(text))
+        try:
+            headers = next(reader)
+        except StopIteration:
+            continue
+
+        headers = [h.strip() for h in headers]
+
+        si_created_col = _find_column(headers, _SI_CREATED_COLUMNS)
+        fn_created_col = _find_column(headers, _FN_CREATED_COLUMNS)
+        si_modified_col = _find_column(headers, _SI_MODIFIED_COLUMNS)
+        filename_col = _find_column(headers, _FILENAME_COLUMN_CANDIDATES)
+        parent_col = _find_column(headers, _PARENT_PATH_COLUMNS)
+
+        if not si_created_col or not fn_created_col:
+            continue
+
+        for row in reader:
+            if len(row) <= max(
+                headers.index(si_created_col),
+                headers.index(fn_created_col),
+            ):
+                continue
+
+            try:
+                si_created_val = row[headers.index(si_created_col)]
+                fn_created_val = row[headers.index(fn_created_col)]
+            except (IndexError, ValueError):
+                continue
+
+            si_created = _parse_mft_timestamp(si_created_val)
+            fn_created = _parse_mft_timestamp(fn_created_val)
+
+            if si_created is None or fn_created is None:
+                continue
+
+            fname = ""
+            if filename_col and headers.index(filename_col) < len(row):
+                fname = row[headers.index(filename_col)].strip()
+            parent = ""
+            if parent_col and headers.index(parent_col) < len(row):
+                parent = row[headers.index(parent_col)].strip()
+
+            full_path = f"{parent}\\{fname}" if parent else fname
+            if _is_false_positive_path(full_path):
+                continue
+
+            reasons: list[str] = []
+
+            # SI Created significantly earlier than FN Created = backdated
+            if fn_created - si_created > _TIMESTOMP_THRESHOLD:
+                reasons.append(
+                    f"SI Created ({si_created_val}) is earlier than "
+                    f"FN Created ({fn_created_val}) by "
+                    f"{fn_created - si_created}"
+                )
+
+            # SI Created > SI Modified is impossible without manipulation
+            if si_modified_col:
+                try:
+                    si_modified_val = row[headers.index(si_modified_col)]
+                    si_modified = _parse_mft_timestamp(si_modified_val)
+                    if si_modified and si_created > si_modified:
+                        reasons.append(
+                            f"SI Created ({si_created_val}) is after "
+                            f"SI Modified ({si_modified_val})"
+                        )
+                except (IndexError, ValueError):
+                    pass
+
+            if reasons:
+                suspicious.append(
+                    {
+                        "file": full_path,
+                        "si_created": si_created_val,
+                        "fn_created": fn_created_val,
+                        "reasons": reasons,
+                    }
+                )
+
+    return suspicious
+
+
+@mcp.tool()
+@tool_access(Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR | Role.NARRATIVE_EXECUTOR)
+def detect_timestomping() -> dict[str, object]:
+    """Analyze MFT data for files with manipulated timestamps (timestomping).
+
+    Reads the indexed ``ez.mft`` source (MFTECmd output) and compares
+    $STANDARD_INFORMATION timestamps against $FILE_NAME timestamps for
+    each file entry.  Flags files where:
+
+    - $SI Created is significantly earlier than $FN Created (SI was
+      backdated to blend in with legitimate files)
+    - $SI Created is later than $SI Modified (impossible without
+      timestamp manipulation)
+
+    Filters out known false positives from Windows Update, servicing,
+    and installer paths.  Read-only.
+    """
+    ctx = get_ctx()
+    tc_id = make_tool_call_id()
+    t0 = time.monotonic()
+
+    sources = ctx.db.get_sources()
+    mft_source = next(
+        (s for s in sources if s.source_name == "ez.mft" or s.source_name.startswith("ez.mft.")),
+        None,
+    )
+
+    if mft_source is None:
+        elapsed = (time.monotonic() - t0) * 1000
+        ctx.audit.log_tool_call(
+            tool_call_id=tc_id,
+            tool_name="detect_timestomping",
+            params={},
+            output_hash=hash_output({"error": "no_mft"}),
+            duration_ms=elapsed,
+        )
+        return {
+            "tool_call_id": tc_id,
+            "status": "error",
+            "error_message": (
+                "No MFT data indexed. Run MFTECmd first: run_ez_tool('MFTECmd', '<image_path>')"
+            ),
+            "suggestion": "run_ez_tool('MFTECmd', '<image_path>')",
+        }
+
+    windows = ctx.db.get_windows_by_source_prefix("ez.mft")
+    if not windows:
+        elapsed = (time.monotonic() - t0) * 1000
+        ctx.audit.log_tool_call(
+            tool_call_id=tc_id,
+            tool_name="detect_timestomping",
+            params={},
+            output_hash=hash_output({"error": "empty_mft"}),
+            duration_ms=elapsed,
+        )
+        return {
+            "tool_call_id": tc_id,
+            "status": "error",
+            "error_message": "MFT source is indexed but contains no data windows.",
+        }
+
+    suspicious = _analyze_mft_windows_for_timestomping(windows)
+
+    if suspicious:
+        output_lines: list[str] = []
+        for entry in suspicious:
+            reasons_str = "; ".join(entry["reasons"])
+            output_lines.append(
+                f"{entry['file']}\tSI_Created={entry['si_created']}\t"
+                f"FN_Created={entry['fn_created']}\t{reasons_str}"
+            )
+        combined = "\n".join(output_lines)
+        summary = extract_and_index(
+            combined, "forensic.timestomping", "mft_analysis", "timestomp_detector"
+        )
+    else:
+        summary = {
+            "status": "no_results",
+            "message": (
+                f"No timestomping indicators found in {len(windows)} MFT windows. "
+                "This does not guarantee absence of timestomping if SI/FN columns "
+                "are not present in the MFTECmd output format."
+            ),
+        }
+
+    elapsed = (time.monotonic() - t0) * 1000
+    ctx.audit.log_tool_call(
+        tool_call_id=tc_id,
+        tool_name="detect_timestomping",
+        params={},
+        output_hash=hash_output(summary),
+        duration_ms=elapsed,
+    )
+    return {
+        "tool_call_id": tc_id,
+        "status": "success",
+        "results": summary,
+        "source": "forensic.timestomping",
+        "result_count": len(suspicious),
+        "total_mft_windows_analyzed": len(windows),
     }

@@ -37,6 +37,7 @@ _TOOL_SOURCE_MAP: dict[str, str] = {
     "find_persistence_mechanisms": "composite.persistence",
     "find_lateral_movement_indicators": "composite.lateral_movement",
     "find_data_exfiltration_indicators": "composite.exfil",
+    "find_file_staging": "composite.file_staging",
     "find_defense_evasion": "composite.defense_evasion",
     "find_suspicious_processes": "composite.suspicious_processes",
     "find_execution_evidence": "composite.execution",

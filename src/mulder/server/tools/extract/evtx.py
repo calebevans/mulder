@@ -387,6 +387,85 @@ def run_evtx_parser(evtx_path: str, force: bool = False) -> dict[str, object]:
     return tool_response(tc_id, "run_evtx_parser", params, results, "evtx", elapsed)
 
 
+_COMPANION_LOG_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("system", "evtx.system"),
+    ("powershell%4operational", "evtx.powershell-operational"),
+    ("microsoft-windows-powershell%4operational", "evtx.powershell-operational"),
+)
+
+
+def _is_security_log(filename: str) -> bool:
+    """Return True if *filename* refers to a Security event log."""
+    return "security" in filename.lower().replace(" ", "").replace("-", "")
+
+
+def _auto_index_companion_logs(extract_dir: str, image_path: str) -> list[dict[str, object]]:
+    """Index System.evtx and PowerShell logs alongside a Security log.
+
+    Checks for companion logs in the same extraction directory. Skips
+    any that are already indexed. Returns summaries of newly indexed logs.
+    """
+    ctx = get_ctx()
+    existing_sources = {s.source_name for s in ctx.db.get_sources()}
+    indexed: list[dict[str, object]] = []
+
+    extract_path = Path(extract_dir)
+    available_files = {f.name.lower(): f for f in extract_path.glob("*.evtx")}
+
+    for pattern, source_name in _COMPANION_LOG_PATTERNS:
+        if source_name in existing_sources:
+            continue
+
+        candidate = next(
+            (path for name, path in available_files.items() if pattern in name),
+            None,
+        )
+        if candidate is None:
+            continue
+
+        dll = _find_ez_tool("EvtxECmd.dll")
+        if dll and require_binary(_DOTNET):
+            with tempfile.TemporaryDirectory(prefix="mulder_evtx_csv_") as csv_dir:
+                cmd = [_DOTNET, dll, "-f", str(candidate), "--csv", csv_dir]
+                try:
+                    subprocess.run(
+                        cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=adaptive_timeout(str(candidate)),
+                        check=False,
+                    )
+                except subprocess.TimeoutExpired:
+                    logger.warning("Auto-index timed out for %s", candidate.name)
+                    continue
+
+                combined = ""
+                for csv_file in sorted(Path(csv_dir).glob("*.csv")):
+                    with contextlib.suppress(OSError):
+                        combined += csv_file.read_text(encoding="utf-8", errors="replace")
+
+                if combined:
+                    sname = "evtx." + candidate.stem.lower().replace(" ", "-").replace("%", "")
+                    summary = extract_and_index(combined, sname, str(candidate), "eztools")
+                    indexed.append({"source": sname, "file": candidate.name, "summary": summary})
+                    existing_sources.add(sname)
+                    continue
+
+        try:
+            from mulder.extractors.disk import _parse_evtx_file
+        except ImportError:
+            continue
+
+        channel, text = _parse_evtx_file(candidate)
+        if text:
+            sname = f"evtx.{channel}"
+            summary = extract_and_index(text, sname, str(candidate), "python-evtx")
+            indexed.append({"source": sname, "file": candidate.name, "summary": summary})
+            existing_sources.add(sname)
+
+    return indexed
+
+
 @mcp.tool()
 @tool_access(Role.EXTRACT_EXECUTOR)
 def index_evtx_file(
@@ -403,6 +482,10 @@ def index_evtx_file(
     Indexes as ``evtx.<channel>`` (e.g. ``evtx.security``). Searchable
     via search() and get_raw_output(). Recommended order: Security,
     System, PowerShell, Sysmon, then WinRM/TaskScheduler/RDP.
+
+    When indexing a Security log, automatically indexes System.evtx and
+    PowerShell operational logs from the same directory (if present and
+    not already indexed) for persistence and execution coverage.
 
     Args:
         filename: Name of the .evtx file to parse (from the manifest).
@@ -482,10 +565,18 @@ def index_evtx_file(
             if combined:
                 source_name = "evtx." + evtx_path.stem.lower().replace(" ", "-").replace("%", "")
                 summary = extract_and_index(combined, source_name, str(evtx_path), "eztools")
+
+                auto_indexed: list[dict[str, object]] = []
+                if _is_security_log(filename):
+                    auto_indexed = _auto_index_companion_logs(extract_dir, image_path)
+
                 elapsed = (time.monotonic() - t0) * 1000
-                return tool_response(
+                response = tool_response(
                     tc_id, "index_evtx_file", params, summary, source_name, elapsed
                 )
+                if auto_indexed:
+                    response["auto_indexed_companions"] = auto_indexed
+                return response
 
     try:
         from mulder.extractors.disk import _parse_evtx_file
@@ -496,8 +587,18 @@ def index_evtx_file(
     channel, text = _parse_evtx_file(evtx_path, event_ids=id_filter)
     if text:
         summary = extract_and_index(text, f"evtx.{channel}", str(evtx_path), "python-evtx")
+
+        auto_indexed = []
+        if _is_security_log(filename):
+            auto_indexed = _auto_index_companion_logs(extract_dir, image_path)
+
         elapsed = (time.monotonic() - t0) * 1000
-        return tool_response(tc_id, "index_evtx_file", params, summary, f"evtx.{channel}", elapsed)
+        response = tool_response(
+            tc_id, "index_evtx_file", params, summary, f"evtx.{channel}", elapsed
+        )
+        if auto_indexed:
+            response["auto_indexed_companions"] = auto_indexed
+        return response
 
     elapsed = (time.monotonic() - t0) * 1000
     return error_response(tc_id, "index_evtx_file", params, f"No events parsed from {filename}")
