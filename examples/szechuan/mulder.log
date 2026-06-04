@@ -1,0 +1,840 @@
+2026-06-04 02:29:35,727 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-06-04 02:29:35,746 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListToolsRequest
+2026-06-04 02:29:35,748 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListPromptsRequest
+2026-06-04 02:29:35,749 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListResourcesRequest
+2026-06-04 02:29:41,648 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:29:41,656 [AnyIO worker thread] INFO mulder.server.app: Creating empty case database for 'szechuan' ...
+2026-06-04 02:29:41,704 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'szechuan'
+2026-06-04 02:30:10,055 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:30:10,070 [AnyIO worker thread] INFO mulder.server.jobs: Submitted batch bg_c5631f00 with 11 jobs: ['extract_archive', 'extract_archive', 'extract_archive', 'extract_archive', 'extract_archive', 'extract_archive', 'extract_archive', 'extract_archive', 'extract_archive', 'extract_archive', 'extract_archive']
+2026-06-04 02:30:10,101 [mulder-job_2] INFO mulder.server.jobs: Job job_f094dfa2 (extract_archive) completed
+2026-06-04 02:30:10,102 [mulder-job_2] INFO mulder.server.jobs: [JOB_COMPLETE] extract_archive|completed|
+2026-06-04 02:30:10,113 [mulder-job_7] INFO mulder.server.jobs: Job job_37e72234 (extract_archive) completed
+2026-06-04 02:30:10,114 [mulder-job_7] INFO mulder.server.jobs: [JOB_COMPLETE] extract_archive|completed|
+2026-06-04 02:30:13,578 [mulder-job_1] INFO mulder.server.jobs: Job job_9b80ca2b (extract_archive) completed
+2026-06-04 02:30:13,580 [mulder-job_1] INFO mulder.server.jobs: [JOB_COMPLETE] extract_archive|completed|
+2026-06-04 02:30:14,578 [mulder-job_6] INFO mulder.server.jobs: Job job_a16ae4db (extract_archive) completed
+2026-06-04 02:30:14,579 [mulder-job_6] INFO mulder.server.jobs: [JOB_COMPLETE] extract_archive|completed|
+2026-06-04 02:30:14,984 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:30:18,532 [mulder-job_1] INFO mulder.server.jobs: Job job_f9cfbacd (extract_archive) completed
+2026-06-04 02:30:18,535 [mulder-job_1] INFO mulder.server.jobs: [JOB_COMPLETE] extract_archive|completed|
+2026-06-04 02:30:33,619 [mulder-job_4] INFO mulder.server.jobs: Job job_bb1d7916 (extract_archive) completed
+2026-06-04 02:30:33,624 [mulder-job_4] INFO mulder.server.jobs: [JOB_COMPLETE] extract_archive|completed|
+2026-06-04 02:30:36,376 [mulder-job_7] INFO mulder.server.jobs: Job job_cfd3d5c3 (extract_archive) completed
+2026-06-04 02:30:36,377 [mulder-job_7] INFO mulder.server.jobs: [JOB_COMPLETE] extract_archive|completed|
+2026-06-04 02:30:55,657 [mulder-job_3] INFO mulder.server.jobs: Job job_230b9e14 (extract_archive) completed
+2026-06-04 02:30:55,667 [mulder-job_3] INFO mulder.server.jobs: [JOB_COMPLETE] extract_archive|completed|
+2026-06-04 02:31:02,800 [mulder-job_2] INFO mulder.server.jobs: Job job_5b165600 (extract_archive) completed
+2026-06-04 02:31:02,801 [mulder-job_2] INFO mulder.server.jobs: [JOB_COMPLETE] extract_archive|completed|
+2026-06-04 02:31:20,354 [mulder-job_0] INFO mulder.server.jobs: Job job_94494335 (extract_archive) completed
+2026-06-04 02:31:20,355 [mulder-job_0] INFO mulder.server.jobs: [JOB_COMPLETE] extract_archive|completed|
+2026-06-04 02:31:30,073 [mulder-job_5] INFO mulder.server.jobs: Job job_804bd298 (extract_archive) completed
+2026-06-04 02:31:30,075 [mulder-job_5] INFO mulder.server.jobs: [JOB_COMPLETE] extract_archive|completed|
+2026-06-04 02:31:35,658 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:31:40,726 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:31:41,119 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:31:47,232 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:31:53,293 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:31:53,324 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:31:59,194 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:32:03,237 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:32:09,249 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:32:13,054 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:32:19,779 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:32:19,802 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'szechuan'
+2026-06-04 02:32:31,356 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:32:31,372 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:32:51,731 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-06-04 02:32:51,731 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-06-04 02:32:51,751 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListToolsRequest
+2026-06-04 02:32:51,751 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListToolsRequest
+2026-06-04 02:32:51,753 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListPromptsRequest
+2026-06-04 02:32:51,753 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListPromptsRequest
+2026-06-04 02:32:51,754 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListResourcesRequest
+2026-06-04 02:32:51,755 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListResourcesRequest
+2026-06-04 02:33:15,736 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:33:19,509 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:33:20,563 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:33:23,658 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:33:23,661 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'szechuan' ...
+2026-06-04 02:33:23,670 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'szechuan'
+2026-06-04 02:33:24,482 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:33:28,579 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:33:28,582 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'szechuan' ...
+2026-06-04 02:33:28,591 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'szechuan'
+2026-06-04 02:33:45,671 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-06-04 02:33:45,687 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListToolsRequest
+2026-06-04 02:33:45,690 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListPromptsRequest
+2026-06-04 02:33:45,691 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListResourcesRequest
+2026-06-04 02:33:53,092 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:33:57,856 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:34:01,704 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:34:01,705 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'szechuan' ...
+2026-06-04 02:34:01,710 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'szechuan'
+2026-06-04 02:34:06,902 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:34:10,600 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-06-04 02:34:10,617 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListToolsRequest
+2026-06-04 02:34:10,619 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListPromptsRequest
+2026-06-04 02:34:10,620 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListResourcesRequest
+2026-06-04 02:34:15,490 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:34:15,499 [AnyIO worker thread] INFO mulder.server.jobs: Submitted batch bg_bf1ee0ff with 3 jobs: ['run_volatility_batch', 'yara_scan_memory', 'run_strings']
+2026-06-04 02:34:15,501 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_strings waiting (cpu=100%>=90.0%, waited 0s)
+2026-06-04 02:34:15,527 [mulder-job_1] INFO mulder.server.tools.yara: No Volatility sources indexed yet; found memory dump via filesystem scan: /home/mulder/.mulder/cases/extracted/DC01-memory/citadeldc01.mem
+2026-06-04 02:34:15,531 [mulder-job_1] INFO mulder.server.tools.yara: Updated YARA rules: signature-base
+2026-06-04 02:34:15,941 [mulder-job_0] INFO mulder.server.tools.extract.volatility: Volatility batch: context built for '/home/mulder/.mulder/cases/extracted/DESKTOP-SDN1RPT-memory/DESKTOP-SDN1RPT.mem', running 14 plugins (timeout=600s)
+2026-06-04 02:34:15,942 [ThreadPoolExecutor-0_0] INFO volatility3.framework.automagic: Running automagic: SymbolCacheMagic
+2026-06-04 02:34:15,959 [ThreadPoolExecutor-0_0] INFO volatility3.framework.automagic: Running automagic: ConstructionMagic
+2026-06-04 02:34:15,973 [ThreadPoolExecutor-0_0] INFO volatility3.framework.automagic: Running automagic: LayerStacker
+2026-06-04 02:34:16,035 [ThreadPoolExecutor-0_0] INFO volatility3.framework.automagic.linux: No Linux banners found - if this is a linux plugin, please check your symbol files location
+2026-06-04 02:34:16,036 [ThreadPoolExecutor-0_0] INFO volatility3.framework.automagic.linux: No Linux banners found - if this is a linux plugin, please check your symbol files location
+2026-06-04 02:34:16,036 [ThreadPoolExecutor-0_0] INFO volatility3.framework.automagic.mac: No Mac banners found - if this is a mac plugin, please check your symbol files location
+2026-06-04 02:34:16,079 [ThreadPoolExecutor-0_0] INFO volatility3.framework.automagic: Running automagic: WinSwapLayers
+2026-06-04 02:34:16,081 [ThreadPoolExecutor-0_0] INFO volatility3.framework.automagic: Running automagic: KernelPDBScanner
+2026-06-04 02:34:16,136 [ThreadPoolExecutor-0_0] INFO volatility3.framework.symbols.windows.pdbconv: Download PDB file...
+2026-06-04 02:34:17,995 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:34:18,045 [mulder-job_1] INFO mulder.server.tools.yara: YARA rule validation: 731/744 files valid (individual)
+2026-06-04 02:34:20,208 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:34:25,433 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:34:30,095 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:34:30,096 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'szechuan' ...
+2026-06-04 02:34:30,101 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'szechuan'
+2026-06-04 02:34:34,891 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:34:35,215 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:34:35,617 [ThreadPoolExecutor-0_0] INFO volatility3.framework.automagic: Running automagic: SymbolFinder
+2026-06-04 02:34:35,618 [ThreadPoolExecutor-0_0] INFO volatility3.framework.automagic: Running automagic: LinuxSymbolFinder
+2026-06-04 02:34:35,619 [ThreadPoolExecutor-0_0] INFO volatility3.framework.automagic: Running automagic: MacSymbolFinder
+2026-06-04 02:34:35,620 [ThreadPoolExecutor-0_0] INFO volatility3.framework.automagic: Running automagic: KernelModule
+2026-06-04 02:34:38,309 [mulder-job_0] INFO mulder.server.tools.extract.volatility: Volatility batch: pslist -> indexed
+2026-06-04 02:34:38,310 [ThreadPoolExecutor-1_0] INFO volatility3.framework.automagic: Running automagic: SymbolCacheMagic
+2026-06-04 02:34:38,331 [ThreadPoolExecutor-1_0] INFO volatility3.framework.automagic: Running automagic: ConstructionMagic
+2026-06-04 02:34:38,334 [ThreadPoolExecutor-1_0] INFO volatility3.framework.automagic: Running automagic: LayerStacker
+2026-06-04 02:34:38,336 [ThreadPoolExecutor-1_0] INFO volatility3.framework.automagic: Running automagic: WinSwapLayers
+2026-06-04 02:34:38,336 [ThreadPoolExecutor-1_0] INFO volatility3.framework.automagic: Running automagic: KernelPDBScanner
+2026-06-04 02:34:38,360 [ThreadPoolExecutor-1_0] INFO volatility3.framework.symbols.windows.pdbconv: Download PDB file...
+2026-06-04 02:34:39,816 [mulder-job_2] INFO mulder.server.jobs: Job job_7473e478 (run_strings) completed
+2026-06-04 02:34:39,973 [mulder-job_2] INFO mulder.server.jobs: [JOB_COMPLETE] run_strings|completed|
+2026-06-04 02:34:45,080 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:34:45,094 [AnyIO worker thread] INFO mulder.server.jobs: Submitted batch bg_1b5a747f with 5 jobs: ['run_volatility_batch', 'run_mmls', 'run_fls', 'run_bulk_extractor', 'yara_scan_memory']
+2026-06-04 02:34:45,104 [mulder-job_4] INFO mulder.server.tools.yara: Updated YARA rules: signature-base
+2026-06-04 02:34:45,364 [mulder-job_2] INFO mulder.server.tools.extract.tsk: run_fls: offset 0 failed, retrying with mmls-detected offset 718848
+2026-06-04 02:34:45,369 [mulder-job_1] INFO mulder.server.jobs: Job job_0030154b (run_mmls) completed
+2026-06-04 02:34:45,370 [mulder-job_1] INFO mulder.server.jobs: [JOB_COMPLETE] run_mmls|completed|
+2026-06-04 02:34:45,531 [mulder-job_0] INFO mulder.server.tools.extract.volatility: Volatility batch: context built for '/home/mulder/.mulder/cases/extracted/DC01-memory/citadeldc01.mem', running 12 plugins (timeout=600s)
+2026-06-04 02:34:45,533 [ThreadPoolExecutor-0_0] INFO volatility3.framework.automagic: Running automagic: SymbolCacheMagic
+2026-06-04 02:34:45,552 [ThreadPoolExecutor-0_0] INFO volatility3.framework.automagic: Running automagic: ConstructionMagic
+2026-06-04 02:34:45,567 [ThreadPoolExecutor-0_0] INFO volatility3.framework.automagic: Running automagic: LayerStacker
+2026-06-04 02:34:45,653 [ThreadPoolExecutor-0_0] INFO volatility3.framework.automagic.linux: No Linux banners found - if this is a linux plugin, please check your symbol files location
+2026-06-04 02:34:45,654 [ThreadPoolExecutor-0_0] INFO volatility3.framework.automagic.linux: No Linux banners found - if this is a linux plugin, please check your symbol files location
+2026-06-04 02:34:45,655 [ThreadPoolExecutor-0_0] INFO volatility3.framework.automagic.mac: No Mac banners found - if this is a mac plugin, please check your symbol files location
+2026-06-04 02:34:45,692 [ThreadPoolExecutor-0_0] INFO volatility3.framework.automagic: Running automagic: WinSwapLayers
+2026-06-04 02:34:45,693 [ThreadPoolExecutor-0_0] INFO volatility3.framework.automagic: Running automagic: KernelPDBScanner
+2026-06-04 02:34:45,726 [ThreadPoolExecutor-0_0] INFO volatility3.framework.symbols.windows.pdbconv: Download PDB file...
+2026-06-04 02:34:50,063 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:34:50,721 [mulder-job_4] INFO mulder.server.tools.yara: YARA rule validation: 731/744 files valid (individual)
+2026-06-04 02:35:02,437 [ThreadPoolExecutor-1_0] INFO volatility3.framework.automagic: Running automagic: SymbolFinder
+2026-06-04 02:35:02,442 [ThreadPoolExecutor-1_0] INFO volatility3.framework.automagic: Running automagic: LinuxSymbolFinder
+2026-06-04 02:35:02,447 [ThreadPoolExecutor-1_0] INFO volatility3.framework.automagic: Running automagic: MacSymbolFinder
+2026-06-04 02:35:02,452 [ThreadPoolExecutor-1_0] INFO volatility3.framework.automagic: Running automagic: KernelModule
+2026-06-04 02:35:04,276 [mulder-job_0] INFO mulder.server.tools.extract.volatility: Volatility batch: pstree -> indexed
+2026-06-04 02:35:04,284 [ThreadPoolExecutor-2_0] INFO volatility3.framework.automagic: Running automagic: SymbolCacheMagic
+2026-06-04 02:35:04,317 [ThreadPoolExecutor-2_0] INFO volatility3.framework.automagic: Running automagic: ConstructionMagic
+2026-06-04 02:35:04,321 [ThreadPoolExecutor-2_0] INFO volatility3.framework.automagic: Running automagic: LayerStacker
+2026-06-04 02:35:04,326 [ThreadPoolExecutor-2_0] INFO volatility3.framework.automagic: Running automagic: WinSwapLayers
+2026-06-04 02:35:04,329 [ThreadPoolExecutor-2_0] INFO volatility3.framework.automagic: Running automagic: KernelPDBScanner
+2026-06-04 02:35:04,357 [ThreadPoolExecutor-2_0] INFO volatility3.framework.symbols.windows.pdbconv: Download PDB file...
+2026-06-04 02:35:04,428 [ThreadPoolExecutor-0_0] INFO volatility3.framework.automagic: Running automagic: SymbolFinder
+2026-06-04 02:35:04,432 [ThreadPoolExecutor-0_0] INFO volatility3.framework.automagic: Running automagic: LinuxSymbolFinder
+2026-06-04 02:35:04,433 [ThreadPoolExecutor-0_0] INFO volatility3.framework.automagic: Running automagic: MacSymbolFinder
+2026-06-04 02:35:04,435 [ThreadPoolExecutor-0_0] INFO volatility3.framework.automagic: Running automagic: KernelModule
+2026-06-04 02:35:05,160 [mulder-job_0] INFO mulder.server.tools.extract.volatility: Volatility batch: pslist -> indexed
+2026-06-04 02:35:05,177 [ThreadPoolExecutor-1_0] INFO volatility3.framework.automagic: Running automagic: SymbolCacheMagic
+2026-06-04 02:35:05,252 [ThreadPoolExecutor-1_0] INFO volatility3.framework.automagic: Running automagic: ConstructionMagic
+2026-06-04 02:35:05,339 [ThreadPoolExecutor-1_0] INFO volatility3.framework.automagic: Running automagic: LayerStacker
+2026-06-04 02:35:05,358 [ThreadPoolExecutor-1_0] INFO volatility3.framework.automagic: Running automagic: WinSwapLayers
+2026-06-04 02:35:05,366 [ThreadPoolExecutor-1_0] INFO volatility3.framework.automagic: Running automagic: KernelPDBScanner
+2026-06-04 02:35:05,556 [ThreadPoolExecutor-1_0] INFO volatility3.framework.symbols.windows.pdbconv: Download PDB file...
+2026-06-04 02:35:16,324 [mulder-job_1] INFO mulder.server.jobs: Job job_276156c9 (yara_scan_memory) completed
+2026-06-04 02:35:16,325 [mulder-job_1] INFO mulder.server.jobs: [JOB_COMPLETE] yara_scan_memory|completed|
+2026-06-04 02:35:17,232 [mulder-job_2] INFO mulder.server.tools.extract.tsk: Indexed secondary partition tsk.filelist.p1: offset=2048, desc=ntfs / exfat (0x07)
+2026-06-04 02:35:17,238 [mulder-job_2] INFO mulder.server.jobs: Job job_d5667e80 (run_fls) completed
+2026-06-04 02:35:17,238 [mulder-job_2] INFO mulder.server.jobs: [JOB_COMPLETE] run_fls|completed|
+2026-06-04 02:35:20,307 [ThreadPoolExecutor-1_0] INFO volatility3.framework.automagic: Running automagic: SymbolFinder
+2026-06-04 02:35:20,312 [ThreadPoolExecutor-1_0] INFO volatility3.framework.automagic: Running automagic: LinuxSymbolFinder
+2026-06-04 02:35:20,312 [ThreadPoolExecutor-1_0] INFO volatility3.framework.automagic: Running automagic: MacSymbolFinder
+2026-06-04 02:35:20,315 [ThreadPoolExecutor-1_0] INFO volatility3.framework.automagic: Running automagic: KernelModule
+2026-06-04 02:35:20,550 [mulder-job_0] INFO mulder.server.tools.extract.volatility: Volatility batch: pstree -> indexed
+2026-06-04 02:35:20,553 [ThreadPoolExecutor-2_0] INFO volatility3.framework.automagic: Running automagic: SymbolCacheMagic
+2026-06-04 02:35:20,586 [ThreadPoolExecutor-2_0] INFO volatility3.framework.automagic: Running automagic: ConstructionMagic
+2026-06-04 02:35:20,593 [ThreadPoolExecutor-2_0] INFO volatility3.framework.automagic: Running automagic: LayerStacker
+2026-06-04 02:35:20,595 [ThreadPoolExecutor-2_0] INFO volatility3.framework.automagic: Running automagic: WinSwapLayers
+2026-06-04 02:35:20,597 [ThreadPoolExecutor-2_0] INFO volatility3.framework.automagic: Running automagic: KernelPDBScanner
+2026-06-04 02:35:20,642 [ThreadPoolExecutor-2_0] INFO volatility3.framework.symbols.windows.pdbconv: Download PDB file...
+2026-06-04 02:35:31,186 [ThreadPoolExecutor-2_0] INFO volatility3.framework.automagic: Running automagic: SymbolFinder
+2026-06-04 02:35:31,192 [ThreadPoolExecutor-2_0] INFO volatility3.framework.automagic: Running automagic: LinuxSymbolFinder
+2026-06-04 02:35:31,193 [ThreadPoolExecutor-2_0] INFO volatility3.framework.automagic: Running automagic: MacSymbolFinder
+2026-06-04 02:35:31,193 [ThreadPoolExecutor-2_0] INFO volatility3.framework.automagic: Running automagic: KernelModule
+2026-06-04 02:35:31,816 [mulder-job_0] INFO mulder.server.tools.extract.volatility: Volatility batch: cmdline -> indexed
+2026-06-04 02:35:31,819 [ThreadPoolExecutor-3_0] INFO volatility3.framework.automagic: Running automagic: SymbolCacheMagic
+2026-06-04 02:35:31,862 [ThreadPoolExecutor-3_0] INFO volatility3.framework.automagic: Running automagic: ConstructionMagic
+2026-06-04 02:35:31,878 [ThreadPoolExecutor-3_0] INFO volatility3.framework.automagic: Running automagic: LayerStacker
+2026-06-04 02:35:31,883 [ThreadPoolExecutor-3_0] INFO volatility3.framework.automagic: Running automagic: WinSwapLayers
+2026-06-04 02:35:31,884 [ThreadPoolExecutor-3_0] INFO volatility3.framework.automagic: Running automagic: KernelPDBScanner
+2026-06-04 02:35:31,930 [ThreadPoolExecutor-3_0] INFO volatility3.framework.symbols.windows.pdbconv: Download PDB file...
+2026-06-04 02:35:34,882 [ThreadPoolExecutor-2_0] INFO volatility3.framework.automagic: Running automagic: SymbolFinder
+2026-06-04 02:35:34,883 [ThreadPoolExecutor-2_0] INFO volatility3.framework.automagic: Running automagic: LinuxSymbolFinder
+2026-06-04 02:35:34,884 [ThreadPoolExecutor-2_0] INFO volatility3.framework.automagic: Running automagic: MacSymbolFinder
+2026-06-04 02:35:34,885 [ThreadPoolExecutor-2_0] INFO volatility3.framework.automagic: Running automagic: KernelModule
+2026-06-04 02:35:35,365 [mulder-job_0] INFO mulder.server.tools.extract.volatility: Volatility batch: cmdline -> indexed
+2026-06-04 02:35:35,369 [ThreadPoolExecutor-3_0] INFO volatility3.framework.automagic: Running automagic: SymbolCacheMagic
+2026-06-04 02:35:35,397 [ThreadPoolExecutor-3_0] INFO volatility3.framework.automagic: Running automagic: ConstructionMagic
+2026-06-04 02:35:35,409 [ThreadPoolExecutor-3_0] INFO volatility3.framework.automagic: Running automagic: LayerStacker
+2026-06-04 02:35:35,413 [ThreadPoolExecutor-3_0] INFO volatility3.framework.automagic: Running automagic: WinSwapLayers
+2026-06-04 02:35:35,413 [ThreadPoolExecutor-3_0] INFO volatility3.framework.automagic: Running automagic: KernelPDBScanner
+2026-06-04 02:35:35,458 [ThreadPoolExecutor-3_0] INFO volatility3.framework.symbols.windows.pdbconv: Download PDB file...
+2026-06-04 02:35:53,559 [ThreadPoolExecutor-3_0] INFO volatility3.framework.automagic: Running automagic: SymbolFinder
+2026-06-04 02:35:53,563 [ThreadPoolExecutor-3_0] INFO volatility3.framework.automagic: Running automagic: LinuxSymbolFinder
+2026-06-04 02:35:53,564 [ThreadPoolExecutor-3_0] INFO volatility3.framework.automagic: Running automagic: MacSymbolFinder
+2026-06-04 02:35:53,564 [ThreadPoolExecutor-3_0] INFO volatility3.framework.automagic: Running automagic: KernelModule
+2026-06-04 02:36:03,730 [ThreadPoolExecutor-3_0] INFO volatility3.framework.automagic: Running automagic: SymbolFinder
+2026-06-04 02:36:03,732 [ThreadPoolExecutor-3_0] INFO volatility3.framework.automagic: Running automagic: LinuxSymbolFinder
+2026-06-04 02:36:03,733 [ThreadPoolExecutor-3_0] INFO volatility3.framework.automagic: Running automagic: MacSymbolFinder
+2026-06-04 02:36:03,734 [ThreadPoolExecutor-3_0] INFO volatility3.framework.automagic: Running automagic: KernelModule
+2026-06-04 02:36:05,036 [mulder-job_4] INFO mulder.server.jobs: Job job_0f386541 (yara_scan_memory) completed
+2026-06-04 02:36:05,038 [mulder-job_4] INFO mulder.server.jobs: [JOB_COMPLETE] yara_scan_memory|completed|
+2026-06-04 02:36:37,420 [mulder-job_0] INFO mulder.server.tools.extract.volatility: Volatility batch: netscan -> indexed
+2026-06-04 02:36:37,422 [ThreadPoolExecutor-4_0] INFO volatility3.framework.automagic: Running automagic: SymbolCacheMagic
+2026-06-04 02:36:37,469 [ThreadPoolExecutor-4_0] INFO volatility3.framework.automagic: Running automagic: ConstructionMagic
+2026-06-04 02:36:37,477 [ThreadPoolExecutor-4_0] INFO volatility3.framework.automagic: Running automagic: LayerStacker
+2026-06-04 02:36:37,482 [ThreadPoolExecutor-4_0] INFO volatility3.framework.automagic: Running automagic: WinSwapLayers
+2026-06-04 02:36:37,482 [ThreadPoolExecutor-4_0] INFO volatility3.framework.automagic: Running automagic: KernelPDBScanner
+2026-06-04 02:36:37,591 [ThreadPoolExecutor-4_0] INFO volatility3.framework.symbols.windows.pdbconv: Download PDB file...
+2026-06-04 02:36:57,374 [ThreadPoolExecutor-4_0] INFO volatility3.framework.automagic: Running automagic: SymbolFinder
+2026-06-04 02:36:57,377 [ThreadPoolExecutor-4_0] INFO volatility3.framework.automagic: Running automagic: LinuxSymbolFinder
+2026-06-04 02:36:57,381 [ThreadPoolExecutor-4_0] INFO volatility3.framework.automagic: Running automagic: MacSymbolFinder
+2026-06-04 02:36:57,386 [ThreadPoolExecutor-4_0] INFO volatility3.framework.automagic: Running automagic: KernelModule
+2026-06-04 02:37:09,792 [mulder-job_0] INFO mulder.server.tools.extract.volatility: Volatility batch: malfind -> indexed
+2026-06-04 02:37:09,796 [ThreadPoolExecutor-5_0] INFO volatility3.framework.automagic: Running automagic: SymbolCacheMagic
+2026-06-04 02:37:09,815 [ThreadPoolExecutor-5_0] INFO volatility3.framework.automagic: Running automagic: ConstructionMagic
+2026-06-04 02:37:09,820 [ThreadPoolExecutor-5_0] INFO volatility3.framework.automagic: Running automagic: LayerStacker
+2026-06-04 02:37:09,821 [ThreadPoolExecutor-5_0] INFO volatility3.framework.automagic: Running automagic: WinSwapLayers
+2026-06-04 02:37:09,822 [ThreadPoolExecutor-5_0] INFO volatility3.framework.automagic: Running automagic: KernelPDBScanner
+2026-06-04 02:37:09,862 [ThreadPoolExecutor-5_0] INFO volatility3.framework.symbols.windows.pdbconv: Download PDB file...
+2026-06-04 02:37:14,042 [mulder-job_0] INFO mulder.server.tools.extract.volatility: Volatility batch: netscan -> indexed
+2026-06-04 02:37:14,055 [ThreadPoolExecutor-4_0] INFO volatility3.framework.automagic: Running automagic: SymbolCacheMagic
+2026-06-04 02:37:14,122 [ThreadPoolExecutor-4_0] INFO volatility3.framework.automagic: Running automagic: ConstructionMagic
+2026-06-04 02:37:14,133 [ThreadPoolExecutor-4_0] INFO volatility3.framework.automagic: Running automagic: LayerStacker
+2026-06-04 02:37:14,135 [ThreadPoolExecutor-4_0] INFO volatility3.framework.automagic: Running automagic: WinSwapLayers
+2026-06-04 02:37:14,137 [ThreadPoolExecutor-4_0] INFO volatility3.framework.automagic: Running automagic: KernelPDBScanner
+2026-06-04 02:37:14,170 [ThreadPoolExecutor-4_0] INFO volatility3.framework.symbols.windows.pdbconv: Download PDB file...
+2026-06-04 02:37:24,244 [ThreadPoolExecutor-5_0] INFO volatility3.framework.automagic: Running automagic: SymbolFinder
+2026-06-04 02:37:24,247 [ThreadPoolExecutor-5_0] INFO volatility3.framework.automagic: Running automagic: LinuxSymbolFinder
+2026-06-04 02:37:24,248 [ThreadPoolExecutor-5_0] INFO volatility3.framework.automagic: Running automagic: MacSymbolFinder
+2026-06-04 02:37:24,248 [ThreadPoolExecutor-5_0] INFO volatility3.framework.automagic: Running automagic: KernelModule
+2026-06-04 02:37:32,153 [mulder-job_0] INFO mulder.server.tools.extract.volatility: Volatility batch: psscan -> indexed
+2026-06-04 02:37:32,155 [ThreadPoolExecutor-6_0] INFO volatility3.framework.automagic: Running automagic: SymbolCacheMagic
+2026-06-04 02:37:32,173 [ThreadPoolExecutor-6_0] INFO volatility3.framework.automagic: Running automagic: ConstructionMagic
+2026-06-04 02:37:32,181 [ThreadPoolExecutor-6_0] INFO volatility3.framework.automagic: Running automagic: LayerStacker
+2026-06-04 02:37:32,182 [ThreadPoolExecutor-6_0] INFO volatility3.framework.automagic: Running automagic: WinSwapLayers
+2026-06-04 02:37:32,183 [ThreadPoolExecutor-6_0] INFO volatility3.framework.automagic: Running automagic: KernelPDBScanner
+2026-06-04 02:37:32,208 [ThreadPoolExecutor-6_0] INFO volatility3.framework.symbols.windows.pdbconv: Download PDB file...
+2026-06-04 02:37:37,892 [ThreadPoolExecutor-4_0] INFO volatility3.framework.automagic: Running automagic: SymbolFinder
+2026-06-04 02:37:37,895 [ThreadPoolExecutor-4_0] INFO volatility3.framework.automagic: Running automagic: LinuxSymbolFinder
+2026-06-04 02:37:37,896 [ThreadPoolExecutor-4_0] INFO volatility3.framework.automagic: Running automagic: MacSymbolFinder
+2026-06-04 02:37:37,897 [ThreadPoolExecutor-4_0] INFO volatility3.framework.automagic: Running automagic: KernelModule
+2026-06-04 02:37:45,650 [ThreadPoolExecutor-6_0] INFO volatility3.framework.automagic: Running automagic: SymbolFinder
+2026-06-04 02:37:45,651 [ThreadPoolExecutor-6_0] INFO volatility3.framework.automagic: Running automagic: LinuxSymbolFinder
+2026-06-04 02:37:45,652 [ThreadPoolExecutor-6_0] INFO volatility3.framework.automagic: Running automagic: MacSymbolFinder
+2026-06-04 02:37:45,652 [ThreadPoolExecutor-6_0] INFO volatility3.framework.automagic: Running automagic: KernelModule
+2026-06-04 02:37:47,969 [mulder-job_0] INFO mulder.server.tools.extract.volatility: Volatility batch: dlllist -> indexed
+2026-06-04 02:37:47,970 [ThreadPoolExecutor-7_0] INFO volatility3.framework.automagic: Running automagic: SymbolCacheMagic
+2026-06-04 02:37:47,987 [ThreadPoolExecutor-7_0] INFO volatility3.framework.automagic: Running automagic: ConstructionMagic
+2026-06-04 02:37:47,991 [ThreadPoolExecutor-7_0] INFO volatility3.framework.automagic: Running automagic: LayerStacker
+2026-06-04 02:37:47,992 [ThreadPoolExecutor-7_0] INFO volatility3.framework.automagic: Running automagic: WinSwapLayers
+2026-06-04 02:37:47,993 [ThreadPoolExecutor-7_0] INFO volatility3.framework.automagic: Running automagic: KernelPDBScanner
+2026-06-04 02:37:48,022 [ThreadPoolExecutor-7_0] INFO volatility3.framework.symbols.windows.pdbconv: Download PDB file...
+2026-06-04 02:38:01,214 [ThreadPoolExecutor-7_0] INFO volatility3.framework.automagic: Running automagic: SymbolFinder
+2026-06-04 02:38:01,217 [ThreadPoolExecutor-7_0] INFO volatility3.framework.automagic: Running automagic: LinuxSymbolFinder
+2026-06-04 02:38:01,217 [ThreadPoolExecutor-7_0] INFO volatility3.framework.automagic: Running automagic: MacSymbolFinder
+2026-06-04 02:38:01,218 [ThreadPoolExecutor-7_0] INFO volatility3.framework.automagic: Running automagic: KernelModule
+2026-06-04 02:38:10,991 [mulder-job_0] INFO mulder.server.tools.extract.volatility: Volatility batch: svcscan -> indexed
+2026-06-04 02:38:10,993 [ThreadPoolExecutor-8_0] INFO volatility3.framework.automagic: Running automagic: SymbolCacheMagic
+2026-06-04 02:38:11,012 [ThreadPoolExecutor-8_0] INFO volatility3.framework.automagic: Running automagic: ConstructionMagic
+2026-06-04 02:38:11,017 [ThreadPoolExecutor-8_0] INFO volatility3.framework.automagic: Running automagic: LayerStacker
+2026-06-04 02:38:11,019 [ThreadPoolExecutor-8_0] INFO volatility3.framework.automagic: Running automagic: WinSwapLayers
+2026-06-04 02:38:11,019 [ThreadPoolExecutor-8_0] INFO volatility3.framework.automagic: Running automagic: KernelPDBScanner
+2026-06-04 02:38:11,055 [ThreadPoolExecutor-8_0] INFO volatility3.framework.symbols.windows.pdbconv: Download PDB file...
+2026-06-04 02:38:14,439 [ThreadPoolExecutor-8_0] INFO volatility3.framework.automagic: Running automagic: SymbolFinder
+2026-06-04 02:38:14,440 [ThreadPoolExecutor-8_0] INFO volatility3.framework.automagic: Running automagic: LinuxSymbolFinder
+2026-06-04 02:38:14,441 [ThreadPoolExecutor-8_0] INFO volatility3.framework.automagic: Running automagic: MacSymbolFinder
+2026-06-04 02:38:14,442 [ThreadPoolExecutor-8_0] INFO volatility3.framework.automagic: Running automagic: KernelModule
+2026-06-04 02:38:14,443 [ThreadPoolExecutor-8_0] WARNING volatility3.framework.plugins: Automagic exception occurred: sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 281472896332032 and this is thread id 281472472903936.
+2026-06-04 02:38:14,444 [ThreadPoolExecutor-8_0] WARNING volatility3.framework.plugins: Automagic exception occurred: AttributeError: Unable to find _PrimitiveObject__new_value for type <class 'volatility3.framework.objects.String'>
+2026-06-04 02:38:14,445 [mulder-job_0] INFO mulder.server.tools.extract.volatility: Volatility batch: envars -> error
+2026-06-04 02:38:14,445 [ThreadPoolExecutor-9_0] INFO volatility3.framework.automagic: Running automagic: SymbolCacheMagic
+2026-06-04 02:38:14,462 [ThreadPoolExecutor-9_0] INFO volatility3.framework.automagic: Running automagic: ConstructionMagic
+2026-06-04 02:38:14,465 [ThreadPoolExecutor-9_0] INFO volatility3.framework.automagic: Running automagic: LayerStacker
+2026-06-04 02:38:14,466 [ThreadPoolExecutor-9_0] INFO volatility3.framework.automagic: Running automagic: WinSwapLayers
+2026-06-04 02:38:14,467 [ThreadPoolExecutor-9_0] INFO volatility3.framework.automagic: Running automagic: KernelPDBScanner
+2026-06-04 02:38:14,496 [ThreadPoolExecutor-9_0] INFO volatility3.framework.symbols.windows.pdbconv: Download PDB file...
+2026-06-04 02:38:16,968 [ThreadPoolExecutor-9_0] INFO volatility3.framework.automagic: Running automagic: SymbolFinder
+2026-06-04 02:38:16,968 [ThreadPoolExecutor-9_0] INFO volatility3.framework.automagic: Running automagic: LinuxSymbolFinder
+2026-06-04 02:38:16,969 [ThreadPoolExecutor-9_0] INFO volatility3.framework.automagic: Running automagic: MacSymbolFinder
+2026-06-04 02:38:16,970 [ThreadPoolExecutor-9_0] INFO volatility3.framework.automagic: Running automagic: KernelModule
+2026-06-04 02:38:16,971 [ThreadPoolExecutor-9_0] WARNING volatility3.framework.plugins: Automagic exception occurred: sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 281472896332032 and this is thread id 281472472903936.
+2026-06-04 02:38:16,971 [ThreadPoolExecutor-9_0] WARNING volatility3.framework.plugins: Automagic exception occurred: AttributeError: Unable to find _PrimitiveObject__new_value for type <class 'volatility3.framework.objects.String'>
+2026-06-04 02:38:16,972 [mulder-job_0] INFO mulder.server.tools.extract.volatility: Volatility batch: filescan -> error
+2026-06-04 02:38:16,973 [ThreadPoolExecutor-10_0] INFO volatility3.framework.automagic: Running automagic: SymbolCacheMagic
+2026-06-04 02:38:16,989 [ThreadPoolExecutor-10_0] INFO volatility3.framework.automagic: Running automagic: ConstructionMagic
+2026-06-04 02:38:16,994 [ThreadPoolExecutor-10_0] INFO volatility3.framework.automagic: Running automagic: LayerStacker
+2026-06-04 02:38:16,995 [ThreadPoolExecutor-10_0] INFO volatility3.framework.automagic: Running automagic: WinSwapLayers
+2026-06-04 02:38:16,995 [ThreadPoolExecutor-10_0] INFO volatility3.framework.automagic: Running automagic: KernelPDBScanner
+2026-06-04 02:38:17,021 [ThreadPoolExecutor-10_0] INFO volatility3.framework.symbols.windows.pdbconv: Download PDB file...
+2026-06-04 02:38:18,985 [ThreadPoolExecutor-10_0] INFO volatility3.framework.automagic: Running automagic: SymbolFinder
+2026-06-04 02:38:18,985 [ThreadPoolExecutor-10_0] INFO volatility3.framework.automagic: Running automagic: LinuxSymbolFinder
+2026-06-04 02:38:18,986 [ThreadPoolExecutor-10_0] INFO volatility3.framework.automagic: Running automagic: MacSymbolFinder
+2026-06-04 02:38:18,987 [ThreadPoolExecutor-10_0] INFO volatility3.framework.automagic: Running automagic: KernelModule
+2026-06-04 02:38:18,988 [ThreadPoolExecutor-10_0] WARNING volatility3.framework.plugins: Automagic exception occurred: sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 281472896332032 and this is thread id 281472472903936.
+2026-06-04 02:38:18,989 [ThreadPoolExecutor-10_0] WARNING volatility3.framework.plugins: Automagic exception occurred: AttributeError: Unable to find _PrimitiveObject__new_value for type <class 'volatility3.framework.objects.String'>
+2026-06-04 02:38:18,989 [mulder-job_0] INFO mulder.server.tools.extract.volatility: Volatility batch: handles -> error
+2026-06-04 02:38:18,993 [mulder-job_0] INFO mulder.server.jobs: Job job_ced8926a (run_volatility_batch) completed
+2026-06-04 02:38:18,994 [mulder-job_0] INFO mulder.server.jobs: [JOB_COMPLETE] run_volatility_batch|completed|
+2026-06-04 02:38:21,721 [mulder-job_0] INFO mulder.server.tools.extract.volatility: Volatility batch: malfind -> indexed
+2026-06-04 02:38:21,726 [ThreadPoolExecutor-5_0] INFO volatility3.framework.automagic: Running automagic: SymbolCacheMagic
+2026-06-04 02:38:21,750 [ThreadPoolExecutor-5_0] INFO volatility3.framework.automagic: Running automagic: ConstructionMagic
+2026-06-04 02:38:21,755 [ThreadPoolExecutor-5_0] INFO volatility3.framework.automagic: Running automagic: LayerStacker
+2026-06-04 02:38:21,757 [ThreadPoolExecutor-5_0] INFO volatility3.framework.automagic: Running automagic: WinSwapLayers
+2026-06-04 02:38:21,757 [ThreadPoolExecutor-5_0] INFO volatility3.framework.automagic: Running automagic: KernelPDBScanner
+2026-06-04 02:38:21,796 [ThreadPoolExecutor-5_0] INFO volatility3.framework.symbols.windows.pdbconv: Download PDB file...
+2026-06-04 02:38:28,828 [mulder-job_3] INFO mulder.server.jobs: Job job_d112c662 (run_bulk_extractor) completed
+2026-06-04 02:38:28,829 [mulder-job_3] INFO mulder.server.jobs: [JOB_COMPLETE] run_bulk_extractor|completed|
+2026-06-04 02:38:28,831 [MainThread] INFO mcp.server.lowlevel.server: Warning: FutureWarning: This API (volatility3.plugins.windows.malware.malfind.Malfind.run) will be removed in the first release after 2026-06-07. This plugin has been renamed, please call volatility3.plugins.windows.malware.malfind.Malfind rather than volatility3.plugins.windows.malfind.Malfind.
+2026-06-04 02:38:28,831 [MainThread] INFO mcp.server.lowlevel.server: Warning: FutureWarning: This plugin (volatility3.plugins.windows.malfind.Malfind) has been renamed and will be removed in the first release after 2026-06-07. Please ensure all method calls to this plugin are replaced with calls to volatility3.plugins.windows.malware.malfind.Malfind
+2026-06-04 02:38:33,362 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:38:43,105 [ThreadPoolExecutor-5_0] INFO volatility3.framework.automagic: Running automagic: SymbolFinder
+2026-06-04 02:38:43,108 [ThreadPoolExecutor-5_0] INFO volatility3.framework.automagic: Running automagic: LinuxSymbolFinder
+2026-06-04 02:38:43,108 [ThreadPoolExecutor-5_0] INFO volatility3.framework.automagic: Running automagic: MacSymbolFinder
+2026-06-04 02:38:43,109 [ThreadPoolExecutor-5_0] INFO volatility3.framework.automagic: Running automagic: KernelModule
+2026-06-04 02:38:46,688 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:38:46,729 [AnyIO worker thread] INFO mulder.server.jobs: Submitted batch bg_1cb31569 with 11 jobs: ['run_evtx_parser', 'run_hayabusa', 'run_chainsaw', 'run_registry_parser', 'run_prefetch_parser', 'run_amcache_parser', 'run_shimcache_parser', 'run_mft_parser', 'yara_scan_files', 'parse_autoruns', 'run_strings']
+2026-06-04 02:38:46,774 [mulder-job_5] INFO mulder.server.tools.hayabusa: Hayabusa: no prior EVTX extraction found; extracting inline from /home/mulder/.mulder/cases/extracted/DC01-E01/E01-DC01/20200918_0347_CDrive.E01
+2026-06-04 02:38:46,859 [mulder-job_2] INFO mulder.server.jobs: Job job_68ab6572 (run_chainsaw) completed
+2026-06-04 02:38:46,861 [mulder-job_2] INFO mulder.server.jobs: [JOB_COMPLETE] run_chainsaw|completed|
+2026-06-04 02:38:47,969 [mulder-job_4] WARNING mulder.extractors.disk: ewfmount failed on /home/mulder/.mulder/cases/extracted/DC01-E01/E01-DC01/20200918_0347_CDrive.E01: Command '['ewfmount', '/home/mulder/.mulder/cases/extracted/DC01-E01/E01-DC01/20200918_0347_CDrive.E01', '/tmp/mulder_mount_iy9ux4iu/_ewf']' returned non-zero exit status 1. No sub system to mount EWF format.
+
+2026-06-04 02:38:48,369 [mulder-job_4] WARNING mulder.extractors.disk: guestmount failed on E01 /home/mulder/.mulder/cases/extracted/DC01-E01/E01-DC01/20200918_0347_CDrive.E01: Command '['guestmount', '-a', '/home/mulder/.mulder/cases/extracted/DC01-E01/E01-DC01/20200918_0347_CDrive.E01', '-i', '--ro', '/tmp/mulder_mount_iy9ux4iu']' returned non-zero exit status 1.
+2026-06-04 02:38:48,371 [mulder-job_4] ERROR mulder.extractors.disk: Could not mount E01 /home/mulder/.mulder/cases/extracted/DC01-E01/E01-DC01/20200918_0347_CDrive.E01 (tried ewfmount+mount and guestmount)
+2026-06-04 02:38:48,372 [mulder-job_4] WARNING mulder.server.jobs: Job job_e6624435 (run_prefetch_parser) returned error: No Prefetch files found via TSK extraction or mount
+2026-06-04 02:38:48,373 [mulder-job_4] INFO mulder.server.jobs: [JOB_COMPLETE] run_prefetch_parser|failed|No Prefetch files found via TSK extraction or mount
+2026-06-04 02:38:48,398 [mulder-job_4] INFO mulder.server.jobs: Job job_c86652cb (parse_autoruns) completed
+2026-06-04 02:38:48,399 [mulder-job_4] INFO mulder.server.jobs: [JOB_COMPLETE] parse_autoruns|completed|
+2026-06-04 02:38:48,653 [mulder-job_7] INFO mulder.server.jobs: Job job_9af01299 (run_amcache_parser) completed
+2026-06-04 02:38:48,655 [mulder-job_7] INFO mulder.server.jobs: [JOB_COMPLETE] run_amcache_parser|completed|
+2026-06-04 02:38:52,433 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:38:57,104 [mulder-job_5] INFO mulder.server.tools.hayabusa: Hayabusa: extracted 105 EVTX files from /home/mulder/.mulder/cases/extracted/DC01-E01/E01-DC01/20200918_0347_CDrive.E01
+2026-06-04 02:38:57,120 [mulder-job_5] INFO mulder.server.jobs: Job job_832400e8 (run_hayabusa) completed
+2026-06-04 02:38:57,121 [mulder-job_5] INFO mulder.server.jobs: [JOB_COMPLETE] run_hayabusa|completed|
+2026-06-04 02:39:11,065 [mulder-job_0] INFO mulder.server.tools.extract.volatility: Volatility batch: psscan -> indexed
+2026-06-04 02:39:11,069 [ThreadPoolExecutor-6_0] INFO volatility3.framework.automagic: Running automagic: SymbolCacheMagic
+2026-06-04 02:39:11,091 [ThreadPoolExecutor-6_0] INFO volatility3.framework.automagic: Running automagic: ConstructionMagic
+2026-06-04 02:39:11,098 [ThreadPoolExecutor-6_0] INFO volatility3.framework.automagic: Running automagic: LayerStacker
+2026-06-04 02:39:11,099 [ThreadPoolExecutor-6_0] INFO volatility3.framework.automagic: Running automagic: WinSwapLayers
+2026-06-04 02:39:11,100 [ThreadPoolExecutor-6_0] INFO volatility3.framework.automagic: Running automagic: KernelPDBScanner
+2026-06-04 02:39:11,119 [ThreadPoolExecutor-6_0] INFO volatility3.framework.symbols.windows.pdbconv: Download PDB file...
+2026-06-04 02:39:12,336 [mulder-job_0] INFO mulder.server.jobs: Job job_f0d6b130 (run_shimcache_parser) completed
+2026-06-04 02:39:12,337 [mulder-job_0] INFO mulder.server.jobs: [JOB_COMPLETE] run_shimcache_parser|completed|
+2026-06-04 02:39:12,753 [mulder-job_4] INFO mulder.server.jobs: Job job_5ea9b169 (run_strings) completed
+2026-06-04 02:39:12,754 [mulder-job_4] INFO mulder.server.jobs: [JOB_COMPLETE] run_strings|completed|
+2026-06-04 02:39:12,764 [mulder-job_1] INFO mulder.server.jobs: Job job_5f22a485 (run_evtx_parser) completed
+2026-06-04 02:39:12,765 [mulder-job_1] INFO mulder.server.jobs: [JOB_COMPLETE] run_evtx_parser|completed|
+2026-06-04 02:39:15,257 [mulder-job_2] INFO mulder.server.jobs: Job job_48ac82e6 (yara_scan_files) completed
+2026-06-04 02:39:15,259 [mulder-job_2] INFO mulder.server.jobs: [JOB_COMPLETE] yara_scan_files|completed|
+2026-06-04 02:39:16,551 [mulder-job_3] INFO mulder.server.jobs: Job job_da70d146 (run_mft_parser) completed
+2026-06-04 02:39:16,552 [mulder-job_3] INFO mulder.server.jobs: [JOB_COMPLETE] run_mft_parser|completed|
+2026-06-04 02:39:26,713 [mulder-job_6] INFO mulder.server.jobs: Job job_73d40a2a (run_registry_parser) completed
+2026-06-04 02:39:26,714 [mulder-job_6] INFO mulder.server.jobs: [JOB_COMPLETE] run_registry_parser|completed|
+2026-06-04 02:39:31,409 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:39:33,699 [ThreadPoolExecutor-6_0] INFO volatility3.framework.automagic: Running automagic: SymbolFinder
+2026-06-04 02:39:33,702 [ThreadPoolExecutor-6_0] INFO volatility3.framework.automagic: Running automagic: LinuxSymbolFinder
+2026-06-04 02:39:33,702 [ThreadPoolExecutor-6_0] INFO volatility3.framework.automagic: Running automagic: MacSymbolFinder
+2026-06-04 02:39:33,703 [ThreadPoolExecutor-6_0] INFO volatility3.framework.automagic: Running automagic: KernelModule
+2026-06-04 02:39:35,867 [mulder-job_0] INFO mulder.server.tools.extract.volatility: Volatility batch: dlllist -> indexed
+2026-06-04 02:39:35,867 [ThreadPoolExecutor-7_0] INFO volatility3.framework.automagic: Running automagic: SymbolCacheMagic
+2026-06-04 02:39:35,884 [ThreadPoolExecutor-7_0] INFO volatility3.framework.automagic: Running automagic: ConstructionMagic
+2026-06-04 02:39:35,888 [ThreadPoolExecutor-7_0] INFO volatility3.framework.automagic: Running automagic: LayerStacker
+2026-06-04 02:39:35,890 [ThreadPoolExecutor-7_0] INFO volatility3.framework.automagic: Running automagic: WinSwapLayers
+2026-06-04 02:39:35,890 [ThreadPoolExecutor-7_0] INFO volatility3.framework.automagic: Running automagic: KernelPDBScanner
+2026-06-04 02:39:35,910 [ThreadPoolExecutor-7_0] INFO volatility3.framework.symbols.windows.pdbconv: Download PDB file...
+2026-06-04 02:39:54,512 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-06-04 02:39:54,531 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListToolsRequest
+2026-06-04 02:39:54,534 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListPromptsRequest
+2026-06-04 02:39:54,535 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListResourcesRequest
+2026-06-04 02:39:57,559 [ThreadPoolExecutor-7_0] INFO volatility3.framework.automagic: Running automagic: SymbolFinder
+2026-06-04 02:39:57,560 [ThreadPoolExecutor-7_0] INFO volatility3.framework.automagic: Running automagic: LinuxSymbolFinder
+2026-06-04 02:39:57,560 [ThreadPoolExecutor-7_0] INFO volatility3.framework.automagic: Running automagic: MacSymbolFinder
+2026-06-04 02:39:57,561 [ThreadPoolExecutor-7_0] INFO volatility3.framework.automagic: Running automagic: KernelModule
+2026-06-04 02:39:59,552 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:39:59,553 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'szechuan' ...
+2026-06-04 02:39:59,573 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'szechuan'
+2026-06-04 02:40:03,730 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:40:11,115 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-06-04 02:40:11,133 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListToolsRequest
+2026-06-04 02:40:11,136 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListPromptsRequest
+2026-06-04 02:40:11,137 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListResourcesRequest
+2026-06-04 02:40:19,444 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:40:23,433 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:40:27,351 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:40:27,352 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'szechuan' ...
+2026-06-04 02:40:27,359 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'szechuan'
+2026-06-04 02:40:31,565 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:40:31,747 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:40:31,758 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:40:42,771 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:40:43,525 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:40:43,758 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:40:44,117 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:40:45,059 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:40:45,289 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:40:53,708 [mulder-job_0] INFO mulder.server.tools.extract.volatility: Volatility batch: svcscan -> indexed
+2026-06-04 02:40:53,711 [ThreadPoolExecutor-8_0] INFO volatility3.framework.automagic: Running automagic: SymbolCacheMagic
+2026-06-04 02:40:53,727 [ThreadPoolExecutor-8_0] INFO volatility3.framework.automagic: Running automagic: ConstructionMagic
+2026-06-04 02:40:53,732 [ThreadPoolExecutor-8_0] INFO volatility3.framework.automagic: Running automagic: LayerStacker
+2026-06-04 02:40:53,733 [ThreadPoolExecutor-8_0] INFO volatility3.framework.automagic: Running automagic: WinSwapLayers
+2026-06-04 02:40:53,733 [ThreadPoolExecutor-8_0] INFO volatility3.framework.automagic: Running automagic: KernelPDBScanner
+2026-06-04 02:40:53,760 [ThreadPoolExecutor-8_0] INFO volatility3.framework.symbols.windows.pdbconv: Download PDB file...
+2026-06-04 02:40:58,950 [ThreadPoolExecutor-8_0] INFO volatility3.framework.automagic: Running automagic: SymbolFinder
+2026-06-04 02:40:58,951 [ThreadPoolExecutor-8_0] INFO volatility3.framework.automagic: Running automagic: LinuxSymbolFinder
+2026-06-04 02:40:58,952 [ThreadPoolExecutor-8_0] INFO volatility3.framework.automagic: Running automagic: MacSymbolFinder
+2026-06-04 02:40:58,953 [ThreadPoolExecutor-8_0] INFO volatility3.framework.automagic: Running automagic: KernelModule
+2026-06-04 02:40:58,954 [ThreadPoolExecutor-8_0] WARNING volatility3.framework.plugins: Automagic exception occurred: sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 281473127133440 and this is thread id 281473139998976.
+2026-06-04 02:40:58,955 [ThreadPoolExecutor-8_0] WARNING volatility3.framework.plugins: Automagic exception occurred: AttributeError: Unable to find _PrimitiveObject__new_value for type <class 'volatility3.framework.objects.String'>
+2026-06-04 02:40:58,955 [mulder-job_0] INFO mulder.server.tools.extract.volatility: Volatility batch: envars -> error
+2026-06-04 02:40:58,956 [ThreadPoolExecutor-9_0] INFO volatility3.framework.automagic: Running automagic: SymbolCacheMagic
+2026-06-04 02:40:58,973 [ThreadPoolExecutor-9_0] INFO volatility3.framework.automagic: Running automagic: ConstructionMagic
+2026-06-04 02:40:58,976 [ThreadPoolExecutor-9_0] INFO volatility3.framework.automagic: Running automagic: LayerStacker
+2026-06-04 02:40:58,977 [ThreadPoolExecutor-9_0] INFO volatility3.framework.automagic: Running automagic: WinSwapLayers
+2026-06-04 02:40:58,977 [ThreadPoolExecutor-9_0] INFO volatility3.framework.automagic: Running automagic: KernelPDBScanner
+2026-06-04 02:40:58,991 [ThreadPoolExecutor-9_0] INFO volatility3.framework.symbols.windows.pdbconv: Download PDB file...
+2026-06-04 02:41:02,719 [ThreadPoolExecutor-9_0] INFO volatility3.framework.automagic: Running automagic: SymbolFinder
+2026-06-04 02:41:02,723 [ThreadPoolExecutor-9_0] INFO volatility3.framework.automagic: Running automagic: LinuxSymbolFinder
+2026-06-04 02:41:02,723 [ThreadPoolExecutor-9_0] INFO volatility3.framework.automagic: Running automagic: MacSymbolFinder
+2026-06-04 02:41:02,724 [ThreadPoolExecutor-9_0] INFO volatility3.framework.automagic: Running automagic: KernelModule
+2026-06-04 02:41:02,725 [ThreadPoolExecutor-9_0] WARNING volatility3.framework.plugins: Automagic exception occurred: sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 281473127133440 and this is thread id 281473139998976.
+2026-06-04 02:41:02,726 [ThreadPoolExecutor-9_0] WARNING volatility3.framework.plugins: Automagic exception occurred: AttributeError: Unable to find _PrimitiveObject__new_value for type <class 'volatility3.framework.objects.String'>
+2026-06-04 02:41:02,727 [mulder-job_0] INFO mulder.server.tools.extract.volatility: Volatility batch: filescan -> error
+2026-06-04 02:41:02,727 [ThreadPoolExecutor-10_0] INFO volatility3.framework.automagic: Running automagic: SymbolCacheMagic
+2026-06-04 02:41:02,743 [ThreadPoolExecutor-10_0] INFO volatility3.framework.automagic: Running automagic: ConstructionMagic
+2026-06-04 02:41:02,747 [ThreadPoolExecutor-10_0] INFO volatility3.framework.automagic: Running automagic: LayerStacker
+2026-06-04 02:41:02,749 [ThreadPoolExecutor-10_0] INFO volatility3.framework.automagic: Running automagic: WinSwapLayers
+2026-06-04 02:41:02,749 [ThreadPoolExecutor-10_0] INFO volatility3.framework.automagic: Running automagic: KernelPDBScanner
+2026-06-04 02:41:02,763 [ThreadPoolExecutor-10_0] INFO volatility3.framework.symbols.windows.pdbconv: Download PDB file...
+2026-06-04 02:41:06,457 [ThreadPoolExecutor-10_0] INFO volatility3.framework.automagic: Running automagic: SymbolFinder
+2026-06-04 02:41:06,458 [ThreadPoolExecutor-10_0] INFO volatility3.framework.automagic: Running automagic: LinuxSymbolFinder
+2026-06-04 02:41:06,459 [ThreadPoolExecutor-10_0] INFO volatility3.framework.automagic: Running automagic: MacSymbolFinder
+2026-06-04 02:41:06,459 [ThreadPoolExecutor-10_0] INFO volatility3.framework.automagic: Running automagic: KernelModule
+2026-06-04 02:41:06,460 [ThreadPoolExecutor-10_0] WARNING volatility3.framework.plugins: Automagic exception occurred: sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 281473127133440 and this is thread id 281473139998976.
+2026-06-04 02:41:06,461 [ThreadPoolExecutor-10_0] WARNING volatility3.framework.plugins: Automagic exception occurred: AttributeError: Unable to find _PrimitiveObject__new_value for type <class 'volatility3.framework.objects.String'>
+2026-06-04 02:41:06,461 [mulder-job_0] INFO mulder.server.tools.extract.volatility: Volatility batch: modscan -> error
+2026-06-04 02:41:06,462 [ThreadPoolExecutor-11_0] INFO volatility3.framework.automagic: Running automagic: SymbolCacheMagic
+2026-06-04 02:41:06,478 [ThreadPoolExecutor-11_0] INFO volatility3.framework.automagic: Running automagic: ConstructionMagic
+2026-06-04 02:41:06,482 [ThreadPoolExecutor-11_0] INFO volatility3.framework.automagic: Running automagic: LayerStacker
+2026-06-04 02:41:06,483 [ThreadPoolExecutor-11_0] INFO volatility3.framework.automagic: Running automagic: WinSwapLayers
+2026-06-04 02:41:06,484 [ThreadPoolExecutor-11_0] INFO volatility3.framework.automagic: Running automagic: KernelPDBScanner
+2026-06-04 02:41:06,496 [ThreadPoolExecutor-11_0] INFO volatility3.framework.symbols.windows.pdbconv: Download PDB file...
+2026-06-04 02:41:10,187 [ThreadPoolExecutor-11_0] INFO volatility3.framework.automagic: Running automagic: SymbolFinder
+2026-06-04 02:41:10,188 [ThreadPoolExecutor-11_0] INFO volatility3.framework.automagic: Running automagic: LinuxSymbolFinder
+2026-06-04 02:41:10,189 [ThreadPoolExecutor-11_0] INFO volatility3.framework.automagic: Running automagic: MacSymbolFinder
+2026-06-04 02:41:10,189 [ThreadPoolExecutor-11_0] INFO volatility3.framework.automagic: Running automagic: KernelModule
+2026-06-04 02:41:10,190 [ThreadPoolExecutor-11_0] WARNING volatility3.framework.plugins: Automagic exception occurred: sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 281473127133440 and this is thread id 281473139998976.
+2026-06-04 02:41:10,191 [ThreadPoolExecutor-11_0] WARNING volatility3.framework.plugins: Automagic exception occurred: AttributeError: Unable to find _PrimitiveObject__new_value for type <class 'volatility3.framework.objects.String'>
+2026-06-04 02:41:10,191 [mulder-job_0] INFO mulder.server.tools.extract.volatility: Volatility batch: modules -> error
+2026-06-04 02:41:10,192 [ThreadPoolExecutor-12_0] INFO volatility3.framework.automagic: Running automagic: SymbolCacheMagic
+2026-06-04 02:41:10,207 [ThreadPoolExecutor-12_0] INFO volatility3.framework.automagic: Running automagic: ConstructionMagic
+2026-06-04 02:41:10,212 [ThreadPoolExecutor-12_0] INFO volatility3.framework.automagic: Running automagic: LayerStacker
+2026-06-04 02:41:10,213 [ThreadPoolExecutor-12_0] INFO volatility3.framework.automagic: Running automagic: WinSwapLayers
+2026-06-04 02:41:10,213 [ThreadPoolExecutor-12_0] INFO volatility3.framework.automagic: Running automagic: KernelPDBScanner
+2026-06-04 02:41:10,226 [ThreadPoolExecutor-12_0] INFO volatility3.framework.symbols.windows.pdbconv: Download PDB file...
+2026-06-04 02:41:14,578 [ThreadPoolExecutor-12_0] INFO volatility3.framework.automagic: Running automagic: SymbolFinder
+2026-06-04 02:41:14,579 [ThreadPoolExecutor-12_0] INFO volatility3.framework.automagic: Running automagic: LinuxSymbolFinder
+2026-06-04 02:41:14,580 [ThreadPoolExecutor-12_0] INFO volatility3.framework.automagic: Running automagic: MacSymbolFinder
+2026-06-04 02:41:14,581 [ThreadPoolExecutor-12_0] INFO volatility3.framework.automagic: Running automagic: KernelModule
+2026-06-04 02:41:14,582 [ThreadPoolExecutor-12_0] WARNING volatility3.framework.plugins: Automagic exception occurred: sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 281473127133440 and this is thread id 281473139998976.
+2026-06-04 02:41:14,583 [ThreadPoolExecutor-12_0] WARNING volatility3.framework.plugins: Automagic exception occurred: AttributeError: Unable to find _PrimitiveObject__new_value for type <class 'volatility3.framework.objects.String'>
+2026-06-04 02:41:14,584 [mulder-job_0] INFO mulder.server.tools.extract.volatility: Volatility batch: handles -> error
+2026-06-04 02:41:14,587 [mulder-job_0] INFO mulder.server.jobs: Job job_c9f20d41 (run_volatility_batch) completed
+2026-06-04 02:41:14,587 [mulder-job_0] INFO mulder.server.jobs: [JOB_COMPLETE] run_volatility_batch|completed|
+2026-06-04 02:41:14,589 [MainThread] INFO mcp.server.lowlevel.server: Warning: FutureWarning: This API (volatility3.plugins.windows.malware.malfind.Malfind.run) will be removed in the first release after 2026-06-07. This plugin has been renamed, please call volatility3.plugins.windows.malware.malfind.Malfind rather than volatility3.plugins.windows.malfind.Malfind.
+2026-06-04 02:41:14,590 [MainThread] INFO mcp.server.lowlevel.server: Warning: FutureWarning: This plugin (volatility3.plugins.windows.malfind.Malfind) has been renamed and will be removed in the first release after 2026-06-07. Please ensure all method calls to this plugin are replaced with calls to volatility3.plugins.windows.malware.malfind.Malfind
+2026-06-04 02:41:17,234 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:41:17,613 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:41:18,222 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:41:19,061 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:41:19,333 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:41:21,747 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:41:24,761 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:41:28,310 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:41:28,316 [AnyIO worker thread] INFO mulder.server.jobs: Submitted batch bg_43d72982 with 4 jobs: ['parse_autoruns', 'yara_scan_files', 'run_exiftool', 'run_clamav']
+2026-06-04 02:41:28,318 [mulder-job_3] INFO mulder.server.app: Resource throttle: yara_scan_files waiting (cpu=100%>=90.0%, waited 0s)
+2026-06-04 02:41:28,350 [mulder-job_2] INFO mulder.server.jobs: Job job_577ec905 (parse_autoruns) completed
+2026-06-04 02:41:28,351 [mulder-job_2] INFO mulder.server.jobs: [JOB_COMPLETE] parse_autoruns|completed|
+2026-06-04 02:41:28,389 [mulder-job_1] INFO mulder.server.jobs: Job job_135ec6e7 (run_exiftool) completed
+2026-06-04 02:41:28,389 [mulder-job_1] INFO mulder.server.jobs: [JOB_COMPLETE] run_exiftool|completed|
+2026-06-04 02:41:32,906 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:41:37,569 [mulder-job_3] INFO mulder.server.jobs: Job job_7a77d49b (yara_scan_files) completed
+2026-06-04 02:41:37,570 [mulder-job_3] INFO mulder.server.jobs: [JOB_COMPLETE] yara_scan_files|completed|
+2026-06-04 02:41:41,279 [mulder-job_0] INFO mulder.server.jobs: Job job_2aa21f98 (run_clamav) completed
+2026-06-04 02:41:41,281 [mulder-job_0] INFO mulder.server.jobs: [JOB_COMPLETE] run_clamav|completed|
+2026-06-04 02:41:46,374 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:41:46,588 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:41:46,856 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:41:47,374 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:41:48,191 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:41:48,683 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:41:58,371 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-06-04 02:41:58,388 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListToolsRequest
+2026-06-04 02:41:58,391 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListPromptsRequest
+2026-06-04 02:41:58,392 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListResourcesRequest
+2026-06-04 02:42:00,457 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:42:01,394 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:42:01,921 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:42:03,595 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:42:04,013 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:42:04,015 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:42:07,735 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:42:13,178 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:42:13,181 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'szechuan' ...
+2026-06-04 02:42:13,193 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'szechuan'
+2026-06-04 02:42:18,170 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:42:18,637 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:42:18,653 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:42:27,231 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:42:27,750 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:42:28,729 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:42:31,494 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:42:31,759 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:42:43,610 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:42:47,031 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:42:47,495 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:42:48,225 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:42:48,472 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:42:48,707 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:43:00,612 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:43:15,784 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:43:15,808 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:43:15,837 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:43:15,853 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:43:18,953 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:43:31,407 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:43:43,904 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:43:43,936 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:43:43,957 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:43:43,975 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:43:46,752 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:44:02,909 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:44:07,976 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:44:08,536 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:44:08,977 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:44:09,431 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:44:09,945 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:44:10,631 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:44:11,015 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:44:12,309 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:44:29,704 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:44:30,428 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:44:40,894 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:44:45,474 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:44:50,562 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:44:51,456 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:44:51,843 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:44:59,817 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:45:08,067 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:45:08,936 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:45:09,038 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:45:15,214 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:45:16,152 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:45:16,477 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:45:28,301 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:45:39,845 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:45:41,964 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:45:54,540 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:45:58,612 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:46:05,871 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:46:08,347 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:46:24,632 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:46:29,554 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:46:39,040 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:46:55,716 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:46:56,608 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-06-04 02:46:56,626 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListToolsRequest
+2026-06-04 02:46:56,629 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListPromptsRequest
+2026-06-04 02:46:56,630 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListResourcesRequest
+2026-06-04 02:47:03,850 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:47:21,402 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:47:26,063 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:47:26,204 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:47:30,263 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:47:30,265 [AnyIO worker thread] WARNING mulder.server.tools.case: Overriding requested case_id 'case001-pcap' with MULDER_CASE_ID='szechuan'
+2026-06-04 02:47:30,303 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'szechuan'
+2026-06-04 02:47:38,851 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:47:38,853 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'szechuan' ...
+2026-06-04 02:47:38,865 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'szechuan'
+2026-06-04 02:48:32,410 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-06-04 02:48:32,428 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListToolsRequest
+2026-06-04 02:48:32,430 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListPromptsRequest
+2026-06-04 02:48:32,431 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListResourcesRequest
+2026-06-04 02:48:39,438 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:48:47,613 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:48:55,752 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:48:55,756 [AnyIO worker thread] WARNING mulder.server.tools.case: Overriding requested case_id 'case001-pcap' with MULDER_CASE_ID='szechuan'
+2026-06-04 02:48:55,772 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'szechuan'
+2026-06-04 02:49:05,214 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:49:05,230 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_pcap_analysis waiting (cpu=100%>=90.0%, waited 0s)
+2026-06-04 02:49:05,234 [AnyIO worker thread] INFO mulder.server.jobs: Submitted batch bg_d8fd79bd with 6 jobs: ['run_pcap_analysis', 'run_zeek_analysis', 'run_suricata', 'run_tcpflow', 'run_tcpxtract', 'run_bulk_extractor']
+2026-06-04 02:49:05,350 [mulder-job_2] INFO mulder.server.jobs: Job job_7979641d (run_suricata) completed
+2026-06-04 02:49:05,354 [mulder-job_2] INFO mulder.server.jobs: [JOB_COMPLETE] run_suricata|completed|
+2026-06-04 02:49:09,850 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:49:11,137 [mulder-job_1] INFO mulder.server.jobs: Job job_a45100b7 (run_zeek_analysis) completed
+2026-06-04 02:49:11,138 [mulder-job_1] INFO mulder.server.jobs: [JOB_COMPLETE] run_zeek_analysis|completed|
+2026-06-04 02:49:17,619 [mulder-job_4] INFO mulder.server.jobs: Job job_2ff203ab (run_tcpxtract) completed
+2026-06-04 02:49:17,620 [mulder-job_4] INFO mulder.server.jobs: [JOB_COMPLETE] run_tcpxtract|completed|
+2026-06-04 02:49:19,323 [mulder-job_3] INFO mulder.server.jobs: Job job_47fe59f3 (run_tcpflow) completed
+2026-06-04 02:49:19,324 [mulder-job_3] INFO mulder.server.jobs: [JOB_COMPLETE] run_tcpflow|completed|
+2026-06-04 02:49:26,190 [mulder-job_0] INFO mulder.server.jobs: Job job_ab7adae3 (run_pcap_analysis) completed
+2026-06-04 02:49:26,203 [mulder-job_0] INFO mulder.server.jobs: [JOB_COMPLETE] run_pcap_analysis|completed|
+2026-06-04 02:51:30,500 [mulder-job_5] INFO mulder.server.jobs: Job job_5ea7f777 (run_bulk_extractor) completed
+2026-06-04 02:51:30,501 [mulder-job_5] INFO mulder.server.jobs: [JOB_COMPLETE] run_bulk_extractor|completed|
+2026-06-04 02:51:35,370 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:51:46,747 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-06-04 02:51:46,766 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListToolsRequest
+2026-06-04 02:51:46,769 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListPromptsRequest
+2026-06-04 02:51:46,770 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListResourcesRequest
+2026-06-04 02:51:51,984 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:51:51,986 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'szechuan' ...
+2026-06-04 02:51:52,014 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'szechuan'
+2026-06-04 02:51:52,115 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:51:58,165 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-06-04 02:51:58,183 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListToolsRequest
+2026-06-04 02:51:58,185 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListPromptsRequest
+2026-06-04 02:51:58,186 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListResourcesRequest
+2026-06-04 02:52:04,360 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:52:04,367 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:52:10,109 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:52:17,564 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:52:17,567 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'szechuan' ...
+2026-06-04 02:52:17,575 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'szechuan'
+2026-06-04 02:52:22,151 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:52:22,189 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:52:33,190 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:52:35,404 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:52:36,819 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:52:38,280 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:52:39,635 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:52:41,740 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:53:02,745 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:53:04,161 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:53:05,800 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:53:07,712 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:53:11,599 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:53:36,853 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:53:38,367 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:53:39,977 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:53:41,573 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:53:45,563 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:54:15,188 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:54:15,640 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:54:17,153 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:54:54,696 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:54:55,272 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:54:55,571 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:55:07,935 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:55:08,507 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:55:08,947 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:55:09,697 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:55:47,243 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:56:01,478 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:56:23,371 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:56:44,459 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:57:03,735 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:57:22,254 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:57:54,162 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:58:16,902 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:58:33,985 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:59:15,734 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-06-04 02:59:15,756 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListToolsRequest
+2026-06-04 02:59:15,759 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListPromptsRequest
+2026-06-04 02:59:15,760 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListResourcesRequest
+2026-06-04 02:59:23,565 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:59:27,690 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:59:27,694 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'szechuan' ...
+2026-06-04 02:59:27,708 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'szechuan'
+2026-06-04 02:59:32,339 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:59:32,362 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:59:32,644 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:59:35,068 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:59:41,516 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:59:42,581 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 02:59:42,674 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:00:53,919 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-06-04 03:00:53,937 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListToolsRequest
+2026-06-04 03:00:53,940 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListPromptsRequest
+2026-06-04 03:00:53,941 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListResourcesRequest
+2026-06-04 03:01:02,757 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:01:06,943 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:01:06,947 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'szechuan' ...
+2026-06-04 03:01:06,958 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'szechuan'
+2026-06-04 03:01:18,773 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:01:53,180 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-06-04 03:01:53,198 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListToolsRequest
+2026-06-04 03:01:53,200 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListPromptsRequest
+2026-06-04 03:01:53,201 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListResourcesRequest
+2026-06-04 03:01:58,373 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:02:02,178 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:02:05,935 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:02:05,938 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'szechuan' ...
+2026-06-04 03:02:05,950 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'szechuan'
+2026-06-04 03:02:09,709 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:02:17,558 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:02:18,027 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:02:22,391 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:02:23,901 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:02:31,937 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:02:33,445 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:02:34,992 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:02:38,875 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:02:40,891 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:02:44,643 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:02:55,086 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:02:56,918 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:02:58,424 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:02:59,969 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:03:18,363 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:03:19,249 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:03:19,641 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:03:20,290 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:03:48,540 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:03:48,928 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:03:49,876 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:03:50,204 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:04:19,598 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:04:20,015 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:04:20,953 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:04:21,726 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:04:29,209 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:04:30,666 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:04:31,902 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:04:58,069 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:04:59,037 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:04:59,177 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:04:59,402 [AnyIO worker thread] INFO mulder.server.tools.attack: Loaded 97 ICS ATT&CK techniques from /opt/attack/ics-attack.json
+2026-06-04 03:04:59,403 [AnyIO worker thread] INFO mulder.server.tools.attack: Loaded 794 total ATT&CK techniques
+2026-06-04 03:05:38,764 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:05:52,740 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:05:52,769 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:06:51,474 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:06:51,975 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:06:59,295 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:07:28,007 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:07:28,034 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:08:59,531 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:09:04,743 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:09:11,785 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:09:23,131 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:09:29,115 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:09:48,712 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:10:09,655 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-06-04 03:10:09,673 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListToolsRequest
+2026-06-04 03:10:09,675 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListPromptsRequest
+2026-06-04 03:10:09,676 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListResourcesRequest
+2026-06-04 03:10:16,461 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:10:20,408 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:10:20,411 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'szechuan' ...
+2026-06-04 03:10:20,428 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'szechuan'
+2026-06-04 03:10:26,479 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:10:26,503 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:10:26,526 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:10:34,884 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:10:37,402 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:12:43,288 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-06-04 03:12:43,309 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListToolsRequest
+2026-06-04 03:12:43,311 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListPromptsRequest
+2026-06-04 03:12:43,312 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListResourcesRequest
+2026-06-04 03:12:50,659 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:12:50,662 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'szechuan' ...
+2026-06-04 03:12:50,691 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'szechuan'
+2026-06-04 03:12:57,011 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:12:57,494 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:12:58,846 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:12:59,736 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:13:00,771 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:13:01,128 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:13:02,099 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:13:02,456 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:13:03,423 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:13:03,843 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:13:04,683 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:13:05,178 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:13:06,074 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:13:06,963 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:13:07,415 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:13:08,294 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:13:09,178 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:13:09,623 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:13:10,519 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:13:10,927 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:13:11,389 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:13:12,298 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:13:13,238 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:13:13,667 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:13:14,132 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:13:20,918 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:13:20,942 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:13:20,972 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:13:49,240 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-06-04 03:13:49,258 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListToolsRequest
+2026-06-04 03:13:49,260 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListPromptsRequest
+2026-06-04 03:13:49,261 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListResourcesRequest
+2026-06-04 03:13:54,993 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:13:58,855 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:14:02,844 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:14:02,847 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'szechuan' ...
+2026-06-04 03:14:02,860 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'szechuan'
+2026-06-04 03:14:06,920 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:14:34,674 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:14:35,481 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:14:36,410 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:14:36,723 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:14:47,063 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:14:47,477 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:14:47,984 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:14:48,672 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:15:54,822 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:15:55,192 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:15:55,329 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:16:48,708 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:16:59,894 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:17:23,034 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:17:40,487 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:18:02,039 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:18:18,108 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:18:25,621 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:18:25,648 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:18:32,791 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:18:42,271 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:18:42,292 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:19:40,359 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:20:10,450 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:20:40,704 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-06-04 03:20:40,721 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListToolsRequest
+2026-06-04 03:20:40,724 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListPromptsRequest
+2026-06-04 03:20:40,725 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type ListResourcesRequest
+2026-06-04 03:20:48,398 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:20:53,281 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:20:53,284 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'szechuan' ...
+2026-06-04 03:20:53,298 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'szechuan'
+2026-06-04 03:20:58,904 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:20:58,913 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:20:59,398 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:20:59,682 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:20:59,691 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:24:25,630 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:24:33,512 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
+2026-06-04 03:24:37,572 [MainThread] INFO mcp.server.lowlevel.server: Processing request of type CallToolRequest
