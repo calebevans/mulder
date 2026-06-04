@@ -91,6 +91,26 @@ use the appropriate indexing tool for that log format (e.g.,
 index_evtx_file for Windows EVTX logs). Use filtering parameters
 to target specific event types relevant to your investigation
 questions. Without indexing, extracted log files are not queryable.
+Index ALL relevant log sources for the investigation, not just the
+primary security log. System-level logs often contain service and
+driver installation events critical to persistence analysis.
+
+AUTHENTICATION PATTERN ANALYSIS:
+When examining authentication logs, look beyond individual events.
+Analyze patterns: clusters of failed authentication attempts
+followed by a success from the same source may indicate credential
+attacks. Compare source addresses against known internal hosts to
+identify external or unexpected authentication sources. Successful
+logon events are only "normal traffic" after you have ruled out
+preceding failure patterns and verified the source is expected.
+
+DATA STAGING DETECTION:
+When assessing exfiltration, search filesystem metadata (MFT,
+file listings) for recently created archive or compressed files in
+temporary directories, user profile paths, and staging locations.
+The absence of archiving tools in execution artifacts does not rule
+out data staging; check the filesystem for the output files
+themselves.
 
 SOURCE ACCURACY:
 Every claim must be directly supported by the cited source. String

@@ -51,6 +51,28 @@ BEHAVIORAL CONTEXT CROSS-CORRELATION:
 - Do NOT dismiss IOCs solely because user activity is present. Document
   the overlap, weight both interpretations, and let the evidence decide.
 
+CROSS-SYSTEM AUTHENTICATION ANALYSIS:
+Correlate authentication events across systems to identify attack
+patterns invisible on a single host. Compare failed and successful
+authentication attempts across all systems to detect credential
+attacks, password spraying, or lateral movement. A logon that
+appears routine on the target may reveal an attack pattern when
+correlated with failures from the same source across other systems.
+
+PERSISTENCE COVERAGE VERIFICATION:
+When persistence searches return no results, verify that all
+relevant log sources were indexed. Cross-check service, driver,
+and scheduled task events from system-level logs against registry
+and memory artifacts. Absence of evidence in one source is not
+conclusive without confirming that source was actually searched.
+
+FILESYSTEM STAGING CORRELATION:
+Cross-correlate filesystem metadata across systems for evidence of
+data collection and staging. Search for recently created archives
+or compressed files, especially in temporary or user-writable
+directories, and correlate their creation timestamps with known
+attack activity windows and network exfiltration indicators.
+
 FINDING CONSOLIDATION (MANDATORY):
 - Review all existing findings with get_findings.
 - When the same artifact appears across multiple systems, consolidate
