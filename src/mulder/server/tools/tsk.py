@@ -12,8 +12,10 @@ import logging
 import re
 import shutil
 import subprocess
+import threading
 import time
 
+from mulder.models import WindowRow
 from mulder.server import source_names as _sn
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
@@ -23,6 +25,7 @@ from mulder.server.helpers import (
     make_tool_call_id,
     windowed_response,
 )
+from mulder.server.tool_access import Role, tool_access
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +48,26 @@ _NTFS_INDICATORS = ("ntfs", "exfat", "0x07", "win95 fat", "0x0b", "0x0c")
 _LINUX_INDICATORS = ("linux", "0x83", "ext", "0x8e")
 
 _cached_image_info: dict[str, tuple[str, int, str | None]] = {}
+_image_info_lock = threading.Lock()
+
+
+def _get_all_filelist_windows() -> list[WindowRow]:
+    """Return windows from all indexed ``tsk.filelist*`` sources.
+
+    Collects windows from the primary ``tsk.filelist`` and any secondary
+    partition sources (``tsk.filelist.p1``, ``tsk.filelist.p2``, etc.).
+    """
+    ctx = get_ctx()
+    sources = ctx.db.get_sources()
+    fls_sources = sorted(
+        [s for s in sources if s.source_name.startswith(_SRC_FILELIST)],
+        key=lambda s: s.source_name,
+    )
+    all_windows: list[WindowRow] = []
+    for src in fls_sources:
+        all_windows.extend(ctx.db.get_windows_by_source(src.source_name))
+    return all_windows
+
 
 _FSSTAT_TYPE_RE = re.compile(r"File System Type:\s*(.+)", re.IGNORECASE)
 
@@ -135,8 +158,9 @@ def _resolve_image_and_offset() -> tuple[str, int, str | None]:
     """
     ctx = get_ctx()
     cache_key = ctx.case_id
-    if cache_key in _cached_image_info:
-        return _cached_image_info[cache_key]
+    with _image_info_lock:
+        if cache_key in _cached_image_info:
+            return _cached_image_info[cache_key]
 
     sources = ctx.db.get_sources()
     tsk_source = next((s for s in sources if s.source_name == _SRC_PARTITIONS), None)
@@ -145,7 +169,8 @@ def _resolve_image_and_offset() -> tuple[str, int, str | None]:
         image_path = _find_tsk_source_path()
         fs_type = _detect_filesystem_type(image_path, 0)
         result = (image_path, 0, fs_type)
-        _cached_image_info[cache_key] = result
+        with _image_info_lock:
+            _cached_image_info[cache_key] = result
         return result
 
     windows = ctx.db.get_windows_by_source(_SRC_PARTITIONS)
@@ -154,11 +179,13 @@ def _resolve_image_and_offset() -> tuple[str, int, str | None]:
     fs_type = _detect_filesystem_type(tsk_source.source_path, offset)
 
     result = (tsk_source.source_path, offset, fs_type)
-    _cached_image_info[cache_key] = result
+    with _image_info_lock:
+        _cached_image_info[cache_key] = result
     return result
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR)
 def list_partitions() -> dict[str, object]:
     """Return the partition table extracted from the disk image (TSK mmls).
 
@@ -175,15 +202,16 @@ def list_partitions() -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR)
 def list_files(
     path_filter: str | None = None,
     include_deleted: bool = False,
 ) -> dict[str, object]:
     """List files from the disk image filesystem (TSK fls).
 
-    Returns a summary of matching files with counts. Use search() to
-    find specific files by name or path, and get_raw_output() to
-    paginate through the full listing.
+    Returns a summary of matching files with counts across all indexed
+    partitions. Use search() to find specific files by name or path,
+    and get_raw_output() to paginate through the full listing.
 
     Args:
         path_filter: Optional substring filter on file paths.
@@ -193,7 +221,7 @@ def list_files(
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
-    windows = ctx.db.get_windows_by_source(_SRC_FILELIST)
+    windows = _get_all_filelist_windows()
 
     if include_deleted:
         windows = [w for w in windows if "* " in w.raw_text]
@@ -239,18 +267,19 @@ def list_files(
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR | Role.CROSS_ANALYST)
 def get_deleted_files() -> dict[str, object]:
     """Return a summary of deleted files detected in the disk image.
 
     TSK marks deleted entries with a ``*`` prefix. Returns counts and
-    top directories containing deleted files. Use search() to find
-    specific deleted files by name.
+    top directories containing deleted files across all indexed
+    partitions. Use search() to find specific deleted files by name.
     """
     ctx = get_ctx()
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
-    windows = ctx.db.get_windows_by_source(_SRC_FILELIST)
+    windows = _get_all_filelist_windows()
     deleted = [w for w in windows if "* " in w.raw_text]
 
     total_entries = sum(w.raw_text.count("\n") + 1 for w in deleted)
@@ -292,6 +321,7 @@ def get_deleted_files() -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR | Role.CROSS_ANALYST)
 def get_fs_timeline(t_start: str, t_end: str) -> dict[str, object]:
     """Return the filesystem timeline (mactime) within a time range.
 
@@ -331,6 +361,7 @@ def _build_tsk_cmd(
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def extract_file_by_inode(inode: int, filesystem_type: str | None = None) -> dict[str, object]:
     """Extract a file from the disk image by inode number using TSK icat.
 
@@ -460,6 +491,7 @@ def extract_file_by_inode(inode: int, filesystem_type: str | None = None) -> dic
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR)
 def get_file_metadata(inode: int, filesystem_type: str | None = None) -> dict[str, object]:
     """Return file metadata (MAC times, size, blocks) for an inode using TSK istat.
 

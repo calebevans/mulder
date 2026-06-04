@@ -15,12 +15,50 @@ RULES:
 5. If a tool fails, retry it once with the same arguments.
 6. After all tasks complete, output structured results.
 
+PARALLEL EXECUTION AND BATCH ORDERING:
+Tools are split into foundation and dependent groups. Foundation
+tools MUST complete before dependent tools can start.
+
+Foundation (Group 1, no dependencies): tools that produce indexes
+and raw outputs with no prerequisites. Typically memory analysis,
+filesystem indexing (fls/mmls), and IOC carving (bulk_extractor).
+
+Dependent (Group 2, needs Group 1 outputs): tools that consume
+the filesystem index or other foundation outputs. Log parsers,
+artifact parsers, configuration analysis, and signature scanning
+belong here. The specific tools depend on the OS and evidence type
+specified in the plan.
+
+MANDATORY WAIT RULE:
+- EVERY batch must be confirmed done via wait or wait_all BEFORE
+  you call get_completed_results or submit any new dependent batch.
+- NEVER call get_completed_results on a batch that has not been
+  waited on. Results will be empty or incomplete for running batches.
+- Collect ALL batch IDs from every start_extraction_batch call.
+  Pass ALL of them to a single wait_all call. Do not proceed until
+  wait_all returns with all_done=true.
+- If you submit additional batches after the first wait_all, you
+  MUST call wait or wait_all again for those new batches before
+  calling get_completed_results on them.
+
+Example flow (two-phase batch ordering):
+  1. start_extraction_batch (foundation tools from the plan) -> batch_1
+  2. start_extraction_batch (more foundation tools) -> batch_2
+  3. wait_all([batch_1, batch_2])  <-- blocks until ALL foundation done
+  4. get_completed_results for batch_1, batch_2
+  5. start_extraction_batch (dependent tools from the plan) -> batch_3
+  6. wait(batch_id=batch_3)  <-- blocks until batch_3 done
+  7. get_completed_results(batch_id=batch_3)
+
 BULK_EXTRACTOR USAGE:
 When the plan includes run_bulk_extractor, pass specific scanners
 rather than running all of them:
 - Network IOCs: scanners=["email", "net", "httplogs"]
-- Windows artifacts: scanners=["winpe", "winlnk", "winprefetch", "evtx"]
-- Filesystem metadata: scanners=["ntfsmft", "ntfsusn", "ntfsindx"]
+- Windows artifacts (when evidence is from a Windows system):
+  scanners=["winpe", "winlnk", "winprefetch", "evtx"]
+- NTFS metadata (when filesystem is NTFS):
+  scanners=["ntfsmft", "ntfsusn", "ntfsindx"]
+Choose scanners that match the evidence OS and filesystem.
 Use max_depth=2 for a fast first pass unless the plan says otherwise.
 
 OUTPUT (MANDATORY):

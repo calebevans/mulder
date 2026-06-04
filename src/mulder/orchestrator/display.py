@@ -8,13 +8,14 @@ rendering, preventing corruption from the SDK subprocess.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
 import time
 from collections import deque
 from dataclasses import dataclass
 from itertools import islice
-from typing import TYPE_CHECKING, Any, Literal
+from typing import IO, TYPE_CHECKING, Any, Literal
 
 import psutil
 
@@ -26,6 +27,8 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
+
+from mulder.patterns import format_token_count
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +67,8 @@ _SYSTEM_PREFIX_RE: re.Pattern[str] = re.compile(r"\[([^\]]+)\]\s*")
 
 _SPINNER_FRAMES: str = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
+_HEADER_SIZE: int = 8
+
 
 @dataclass
 class TaskItem:
@@ -82,22 +87,6 @@ class TaskItem:
     status: Literal["pending", "running", "done", "failed"] = "pending"
     elapsed_seconds: float | None = None
     error: str | None = None
-
-
-def _format_tokens(count: int) -> str:
-    """Format token count with K/M suffix.
-
-    Args:
-        count: Raw token count.
-
-    Returns:
-        Human-readable string with appropriate suffix.
-    """
-    if count >= 1_000_000:
-        return f"{count / 1_000_000:.1f}M"
-    if count >= 1_000:
-        return f"{count / 1_000:.1f}K"
-    return str(count)
 
 
 def _format_elapsed(start: float) -> str:
@@ -131,11 +120,20 @@ class InvestigationDashboard:
 
     def __init__(self) -> None:
         """Initialize the dashboard."""
-        self._console = Console(stderr=True)
+        # Duplicate the real stderr fd so the Console can reach the
+        # terminal even after we redirect fd 2 to /dev/null.
+        self._terminal_fd: int = os.dup(2)
+        self._terminal_file: IO[str] = os.fdopen(self._terminal_fd, "w", closefd=False)
+        self._console = Console(file=self._terminal_file)
+
         # Seed psutil so the first real call returns accurate data
         psutil.cpu_percent(interval=None)
         self._live: Live | None = None
         self._start_time = time.monotonic()
+
+        self._saved_stdout_fd: int = -1
+        self._saved_stderr_fd: int = -1
+        self._devnull_fd: int = -1
 
         self._phase_label = ""
         self._phase_num = 0
@@ -195,7 +193,19 @@ class InvestigationDashboard:
         self._log_lines.append(styled)
 
     def start(self) -> None:
-        """Enter the Live display context."""
+        """Enter the Live display context.
+
+        Redirects file descriptors 1 (stdout) and 2 (stderr) to /dev/null
+        so that stray writes from subprocesses or native code cannot reach
+        the terminal and flicker below the panel border. The Rich Console
+        renders through a saved duplicate of the original stderr fd.
+        """
+        self._saved_stdout_fd = os.dup(1)
+        self._saved_stderr_fd = os.dup(2)
+        self._devnull_fd = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(self._devnull_fd, 1)
+        os.dup2(self._devnull_fd, 2)
+
         self._live = Live(
             self._build_layout(),
             console=self._console,
@@ -212,6 +222,18 @@ class InvestigationDashboard:
         if self._live is not None:
             self._live.stop()
             self._live = None
+
+        if self._saved_stdout_fd >= 0:
+            os.dup2(self._saved_stdout_fd, 1)
+            os.close(self._saved_stdout_fd)
+            self._saved_stdout_fd = -1
+        if self._saved_stderr_fd >= 0:
+            os.dup2(self._saved_stderr_fd, 2)
+            os.close(self._saved_stderr_fd)
+            self._saved_stderr_fd = -1
+        if self._devnull_fd >= 0:
+            os.close(self._devnull_fd)
+            self._devnull_fd = -1
 
     def set_phase(
         self,
@@ -250,11 +272,9 @@ class InvestigationDashboard:
         self._log_lines.append(separator)
         phase_line = Text(f"  [{phase_num}/{total_phases}] {label}", style="bold")
         self._log_lines.append(phase_line)
-        detail = Text(f"  {model} | Max turns: {max_turns}", style="dim")
+        detail = Text(f"  {model}", style="dim")
         self._log_lines.append(detail)
         self._log_lines.append(separator)
-
-        self._refresh()
 
     def set_extraction_counts(self, total: int, done: int, active: int) -> None:
         """Update extraction progress counters for the phase header.
@@ -332,7 +352,9 @@ class InvestigationDashboard:
             turns: Number of turns consumed.
             tokens: Total tokens used in the phase.
         """
-        msg = f"  Done: {tool_count} tool calls, {turns} turns, {_format_tokens(tokens)} tokens"
+        msg = (
+            f"  Done: {tool_count} tool calls, {turns} turns, {format_token_count(tokens)} tokens"
+        )
         logger.info("[dashboard] %s", msg.strip())
         line = Text(msg, style="bold dim")
         self._log_lines.append(line)
@@ -384,10 +406,12 @@ class InvestigationDashboard:
         elapsed: float | None = None,
         error: str | None = None,
     ) -> None:
-        """Update status of a specific task in the progress panel.
+        """Update status of a specific task, creating it if necessary.
 
-        Finds the first matching task that is not already ``done`` and
-        applies the new status.
+        Uses upsert semantics: finds the first matching task that is not
+        already ``done`` and applies the new status. If no matching task
+        exists, a new ``TaskItem`` is created so the panel reactively
+        reflects actual execution without requiring pre-population.
 
         Args:
             system: System identifier.
@@ -397,11 +421,52 @@ class InvestigationDashboard:
             error: Error message (set when status is ``failed``).
         """
         for task in self._tasks:
-            if task.system == system and task.tool == tool and task.status != "done":
+            if task.system == system and task.tool == tool:
+                if task.status == "done" or task.status == "failed":
+                    return
                 task.status = status
                 task.elapsed_seconds = elapsed
                 task.error = error
-                break
+                return
+
+        self._tasks.append(
+            TaskItem(
+                tool=tool,
+                system=system,
+                status=status,
+                elapsed_seconds=elapsed,
+                error=error,
+            )
+        )
+        self._tasks_active = True
+
+    def complete_one_running_task(
+        self,
+        tool: str,
+        status: Literal["done", "failed"],
+        elapsed: float | None = None,
+        error: str | None = None,
+    ) -> None:
+        """Mark exactly one running task with the given tool as complete.
+
+        Used by the log tailer to handle ``[JOB_COMPLETE]`` events which
+        do not carry a system identifier. Finds the first task in
+        ``running`` state that matches *tool* and applies the terminal
+        status, so parallel systems with the same tool are updated one
+        at a time as individual completions arrive.
+
+        Args:
+            tool: Tool name to match.
+            status: Terminal status to apply (``done`` or ``failed``).
+            elapsed: Elapsed seconds, if known.
+            error: Error message when *status* is ``failed``.
+        """
+        for task in self._tasks:
+            if task.tool == tool and task.status == "running":
+                task.status = status
+                task.elapsed_seconds = elapsed
+                task.error = error
+                return
 
     def clear_tasks(self) -> None:
         """Remove all tasks and hide the progress panel."""
@@ -504,27 +569,36 @@ class InvestigationDashboard:
         to ``ClaudeAgentOptions``.
         """
 
-    def _build_task_panel(self) -> Panel | None:
-        """Build the extraction task progress panel.
+    def _build_task_panel(self, body_height: int) -> Panel:
+        """Build the extraction task progress panel with equal per-system allocation.
 
-        Prioritizes active (running/pending) systems when the terminal
-        is too short to show everything. Fully completed systems are
-        collapsed into a summary line at the bottom.
+        Each active system receives an equal share of available lines.
+        Systems with fewer tasks than their budget yield surplus to
+        systems that need more. Within each system, running/pending
+        tasks appear first, followed by the most recently completed.
 
-        Returns a Rich Panel with per-system task rows when tasks are
-        active, or None when no tasks are registered.
+        Always returns a Panel (empty when no tasks) so the layout
+        structure stays identical across every refresh cycle.
+
+        Args:
+            body_height: Total height available for the panel (lines).
+
+        Returns:
+            Rich Panel, possibly with empty content.
         """
         if not self._tasks_active or not self._tasks:
-            return None
+            return Panel(
+                Text(""),
+                title="Tasks",
+                border_style="dim",
+                height=body_height,
+            )
 
-        # Derive spinner frame from wall clock so it always animates
-        # even when the panel isn't being rebuilt frequently
         spinner_idx = int(time.monotonic() * 8) % len(_SPINNER_FRAMES)
         spinner = _SPINNER_FRAMES[spinner_idx]
 
-        terminal_height = shutil.get_terminal_size().lines
-        # Panel border + title take ~3 lines; header takes ~8
-        available_lines = max(6, terminal_height - 11)
+        panel_border = 2
+        available_lines = max(6, body_height - panel_border)
 
         systems_ordered: list[str] = []
         system_tasks: dict[str, list[TaskItem]] = {}
@@ -545,38 +619,67 @@ class InvestigationDashboard:
             if all(t.status in ("done", "failed") for t in system_tasks[s])
         ]
 
-        def _system_line_count(system: str) -> int:
-            """Header line + visible tasks (max 8) + overflow line + separator."""
-            task_count = min(len(system_tasks[system]), 8)
-            overflow = 1 if len(system_tasks[system]) > 8 else 0
-            return 1 + task_count + overflow + 1
+        display_systems = active_systems if active_systems else done_systems
+        min_tasks_per_system = 3
+        overhead_per_system = 2
+        num_display = max(len(display_systems), 1)
+
+        per_system_total = available_lines // num_display
+        per_system_budget = max(min_tasks_per_system, per_system_total - overhead_per_system)
+
+        system_budgets: dict[str, int] = {}
+        surplus = 0
+        needy: list[str] = []
+
+        for s in display_systems:
+            need = len(system_tasks[s])
+            if need <= per_system_budget:
+                system_budgets[s] = need
+                surplus += per_system_budget - need
+            else:
+                system_budgets[s] = per_system_budget
+                needy.append(s)
+
+        if needy and surplus > 0:
+            extra_per = surplus // len(needy)
+            remainder = surplus % len(needy)
+            for i, s in enumerate(needy):
+                system_budgets[s] += extra_per + (1 if i < remainder else 0)
 
         content = Text()
         lines_used = 0
 
-        for system in active_systems:
-            needed = _system_line_count(system)
-            if lines_used + needed > available_lines and lines_used > 0:
-                break
-            self._append_system_block(content, system, system_tasks[system], spinner)
-            lines_used += needed
+        for system in display_systems:
+            budget = system_budgets.get(system, min_tasks_per_system)
+            task_list = system_tasks[system]
+            overflow = 1 if len(task_list) > budget else 0
+            block_lines = overhead_per_system + min(len(task_list), budget) + overflow
 
-        remaining_space = available_lines - lines_used
-        shown_done = 0
-        for system in done_systems:
-            needed = _system_line_count(system)
-            if remaining_space < needed + 1:
-                break
-            self._append_system_block(content, system, system_tasks[system], spinner)
-            remaining_space -= needed
-            shown_done += 1
+            self._append_system_block(content, system, task_list, spinner, budget)
+            lines_used += block_lines
 
-        hidden_done = len(done_systems) - shown_done
-        if hidden_done > 0:
-            label = "system" if hidden_done == 1 else "systems"
-            content.append(f"\n  ({hidden_done} {label} completed)", style="dim green")
+        if active_systems:
+            remaining = available_lines - lines_used
+            shown_done = 0
+            for system in done_systems:
+                task_list = system_tasks[system]
+                visible = min(len(task_list), min_tasks_per_system)
+                overflow = 1 if len(task_list) > min_tasks_per_system else 0
+                needed = overhead_per_system + visible + overflow
+                if remaining < needed + 1:
+                    break
+                self._append_system_block(
+                    content, system, task_list, spinner, min_tasks_per_system
+                )
+                remaining -= needed
+                shown_done += 1
 
-        return Panel(content, title="🔍 Evidence Analysis", border_style="dim")
+            hidden_done = len(done_systems) - shown_done
+            if hidden_done > 0:
+                label = "system" if hidden_done == 1 else "systems"
+                content.append(f"\n  ({hidden_done} {label} completed)", style="dim green")
+
+        return Panel(content, title="Tasks", border_style="dim", height=body_height)
 
     def _append_system_block(
         self,
@@ -584,6 +687,7 @@ class InvestigationDashboard:
         system: str,
         tasks: list[TaskItem],
         spinner: str,
+        max_tasks: int = 8,
     ) -> None:
         """Append a system header and its task rows to the panel content.
 
@@ -592,20 +696,20 @@ class InvestigationDashboard:
             system: System identifier.
             tasks: Task items belonging to this system.
             spinner: Current spinner character for running tasks.
+            max_tasks: Maximum task rows to display for this system.
         """
-        _MAX_TASKS_SHOWN = 8
 
         if content.plain:
             content.append("\n")
         system_color = self._get_system_color(system)
         content.append(f"  {system}\n", style=f"bold {system_color}")
 
-        # Prioritize showing running/pending tasks over completed ones
         active_tasks = [t for t in tasks if t.status in ("running", "pending")]
         done_tasks = [t for t in tasks if t.status in ("done", "failed")]
+        done_tasks.reverse()
         prioritized = active_tasks + done_tasks
-        visible_tasks = prioritized[:_MAX_TASKS_SHOWN]
-        hidden_count = len(prioritized) - _MAX_TASKS_SHOWN
+        visible_tasks = prioritized[:max_tasks]
+        hidden_count = max(0, len(prioritized) - max_tasks)
 
         for task in visible_tasks:
             if task.status == "pending":
@@ -636,32 +740,29 @@ class InvestigationDashboard:
             content.append(f"    ... +{hidden_count} more\n", style="dim")
 
     def _build_layout(self) -> Layout:
-        """Build the dashboard layout with optional side-by-side task panel.
+        """Build the dashboard layout with a fixed two-column body.
 
-        When tasks are active the body splits horizontally: the log
-        panel takes 2/3 width on the left and the task panel takes 1/3
-        on the right. Without tasks the log takes the full width.
+        The structure is always: header row + body row (log | tasks).
+        Both columns are present on every refresh so the layout
+        dimensions never change, eliminating visual jumps.
         """
-        header_size = 8
+        try:
+            terminal_height = os.get_terminal_size(self._terminal_fd).lines
+        except (OSError, ValueError):
+            terminal_height = shutil.get_terminal_size().lines
+        body_height = max(6, terminal_height - _HEADER_SIZE)
+
+        body = Layout(name="body")
+        body.split_row(
+            Layout(self._build_log_panel(body_height), name="logs", ratio=2),
+            Layout(self._build_task_panel(body_height), name="tasks", ratio=1),
+        )
+
         layout = Layout()
-        task_panel = self._build_task_panel()
-
-        if task_panel:
-            body = Layout(name="body")
-            body.split_row(
-                Layout(self._build_log_panel(), name="logs", ratio=2),
-                Layout(task_panel, name="tasks", ratio=1),
-            )
-            layout.split_column(
-                Layout(self._build_stats_panel(), name="header", size=header_size),
-                body,
-            )
-        else:
-            layout.split_column(
-                Layout(self._build_stats_panel(), name="header", size=header_size),
-                Layout(self._build_log_panel(), name="logs"),
-            )
-
+        layout.split_column(
+            Layout(self._build_stats_panel(), name="header", size=_HEADER_SIZE),
+            body,
+        )
         return layout
 
     def _total_tokens_from_models(self) -> int:
@@ -721,7 +822,7 @@ class InvestigationDashboard:
 
         model_str = self._phase_model or "pending"
         table.add_row(
-            f"[dim]{model_str} | max turns: {self._phase_max_turns}[/]",
+            f"[dim]{model_str}[/]",
             "",
             "",
             "",
@@ -730,8 +831,8 @@ class InvestigationDashboard:
         table.add_row(
             f"[green]Tools: {self._tool_count}[/]",
             f"[yellow]Findings: {self._total_findings}[/]",
-            f"Tokens: {_format_tokens(total_tok)}",
-            f"{_format_tokens(tpm)}/min",
+            f"Tokens: {format_token_count(total_tok)}",
+            f"{format_token_count(tpm)}/min",
         )
 
         cpu, mem_used_gb, mem_total_gb = self._get_system_stats()
@@ -743,30 +844,39 @@ class InvestigationDashboard:
             "",
         )
 
-        return Panel(table, title="Mulder", border_style="blue")
+        return Panel(table, title="Mulder", border_style="blue", height=_HEADER_SIZE)
 
-    def _build_log_panel(self) -> Panel:
-        """Build the scrolling log panel from the deque."""
-        terminal_height = shutil.get_terminal_size().lines
-        available = max(5, terminal_height - 8)
+    def _build_log_panel(self, body_height: int) -> Panel:
+        """Build the scrolling log panel with a fixed viewport height.
 
-        skip = max(0, len(self._log_lines) - available)
+        Content always fills the panel so the layout dimensions remain
+        stable between refreshes, preventing visual jumps.
+
+        Args:
+            body_height: Total height available for the panel (lines).
+
+        Returns:
+            Rich Panel with the most recent log lines.
+        """
+        panel_border = 2
+        content_lines = max(3, body_height - panel_border)
+
+        skip = max(0, len(self._log_lines) - content_lines)
         recent = list(islice(self._log_lines, skip, None))
 
         content = Text()
-        for i, line in enumerate(recent):
+        for i in range(content_lines):
             if i > 0:
                 content.append("\n")
-            content.append_text(line)
+            if i < len(recent):
+                content.append_text(recent[i])
 
-        return Panel(content, title="Investigation Log", border_style="dim")
-
-    def _refresh(self) -> None:
-        """Refresh the live display with updated content."""
-        if self._live is None:
-            return
-        layout = self._build_layout()
-        self._live.update(layout)
+        return Panel(
+            content,
+            title="Investigation Log",
+            border_style="dim",
+            height=body_height,
+        )
 
     def _format_findings_summary(self) -> str:
         """Format findings total with per-severity dot breakdown.
@@ -826,11 +936,11 @@ class InvestigationDashboard:
         summary.add_row("Turns", str(result.total_turns))
         summary.add_row(
             "Tokens",
-            f"{_format_tokens(total_tok)} "
-            f"(in: {_format_tokens(total_in)}, "
-            f"out: {_format_tokens(total_out)})",
+            f"{format_token_count(total_tok)} "
+            f"(in: {format_token_count(total_in)}, "
+            f"out: {format_token_count(total_out)})",
         )
-        summary.add_row("Throughput", f"{_format_tokens(tpm)}/min")
+        summary.add_row("Throughput", f"{format_token_count(tpm)}/min")
         summary.add_row("Findings", self._format_findings_summary())
         summary.add_row("Elapsed", elapsed_str)
 
@@ -843,9 +953,9 @@ class InvestigationDashboard:
                 continue
             short_name = model_name.replace("claude-", "").replace("-2025", "")
             detail = (
-                f"{_format_tokens(m_in)} in / "
-                f"{_format_tokens(m_out)} out = "
-                f"{_format_tokens(m_total)}"
+                f"{format_token_count(m_in)} in / "
+                f"{format_token_count(m_out)} out = "
+                f"{format_token_count(m_total)}"
             )
             summary.add_row(f"  {short_name}", detail)
 

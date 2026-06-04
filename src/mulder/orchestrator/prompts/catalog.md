@@ -26,24 +26,36 @@ re-extracting. The extract_archive tool handles output location
 automatically; you do not need to specify extract_to.
 
 OUTPUT REQUIREMENTS:
-- Report every evidence file discovered, its type, and its path.
-- Classify each item into its evidence type: memory dump, disk image,
-  network capture (PCAP/PCAPNG), event logs (EVTX), phone dump (Android/iOS),
-  compressed archive, log directory, database files, documents, executables,
-  images/media files (potential steganography targets), or other.
-- Identify distinct systems or devices represented in the evidence.
-  A "system" is any distinct computer, device, phone, server, VM, or
+- Discover every evidence file, classify its type, and identify the
+  distinct systems or devices it belongs to.
+- A "system" is any distinct computer, device, phone, server, VM, or
   network segment that produced evidence. Determine system names from
   directory structure, filenames, or organizational grouping.
-- End your output with a structured SYSTEMS section in exactly this format:
+- Evidence types: memory dump, disk image, network capture (PCAP/PCAPNG),
+  event logs, phone dump (Android/iOS), compressed archive, log
+  directory, database files, documents, executables, images/media files
+  (potential steganography targets), or other.
 
-  ## SYSTEMS
-  - system-name-1: evidence types (e.g., disk image, memory dump)
-  - system-name-2: evidence types
-  - ...
+FINAL OUTPUT (MANDATORY):
+Your FINAL message MUST be ONLY valid JSON. No text before or after it.
+No markdown fences. No commentary. Just raw JSON matching this schema:
 
-  Use whatever naming makes sense for the evidence (hostnames, IPs,
-  device models, directory names, etc.). List every distinct system.
+{"case_id": "<case_id from scan_evidence>", "evidence_root": "/evidence", "systems": [{"name": "SystemName", "type": "Windows", "evidence": ["disk_image", "memory_dump"], "description": "Short description of evidence for this system"}], "archives_extracted": true, "total_sources": 3}
+
+Rules for the JSON output:
+- "systems" is REQUIRED and must contain ONLY actual system/host names.
+  Do NOT include tool names, evidence types, or descriptions as system
+  names.
+- "name" must be a short identifier (hostname, IP, device model, or
+  directory name). NOT a sentence or description.
+- "evidence" is an array of evidence type strings for that system.
+- "type" is the OS or platform (Windows, Linux, macOS, Android, iOS,
+  Network, Unknown).
+- "archives_extracted" indicates whether all compressed archives were
+  successfully extracted.
+- "total_sources" is the total number of distinct evidence files found.
+- Your FINAL message must be parseable by json.loads(). Any other format
+  will cause a gate failure and force a retry.
 
 CONSTRAINTS:
 - Do NOT run extraction tools (volatility, fls, plaso, etc.).

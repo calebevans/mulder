@@ -13,7 +13,7 @@ class TestPromptLoading:
         exported = [
             name for name in dir(prompts) if name.endswith("_PROMPT") and not name.startswith("_")
         ]
-        assert len(exported) >= 14
+        assert len(exported) >= 11
         for name in exported:
             val = getattr(prompts, name)
             assert isinstance(val, str), f"{name} is not a string"
@@ -37,7 +37,6 @@ class TestPromptConstraints:
             ("EXTRACT_PLANNER_PROMPT", prompts.EXTRACT_PLANNER_PROMPT),
             ("CROSS_SYSTEM_PLANNER_PROMPT", prompts.CROSS_SYSTEM_PLANNER_PROMPT),
             ("NARRATIVE_PLANNER_PROMPT", prompts.NARRATIVE_PLANNER_PROMPT),
-            ("AUDIT_PLANNER_PROMPT", prompts.AUDIT_PLANNER_PROMPT),
         ]
         for name, text in planner_prompts:
             assert "JSON" in text or "json" in text, (
@@ -45,15 +44,14 @@ class TestPromptConstraints:
             )
 
     def test_executor_prompts_forbid_findings(self) -> None:
-        """Non-audit executor prompts instruct agents not to submit findings.
+        """Non-narrative executor prompts instruct agents not to submit findings.
 
-        The audit executor is excluded because gap remediation explicitly
-        requires submitting findings for newly discovered evidence.
+        The narrative executor is excluded because its audit
+        responsibilities require submitting findings for gaps.
         """
         executor_prompts = [
             ("EXTRACT_EXECUTOR_PROMPT", prompts.EXTRACT_EXECUTOR_PROMPT),
             ("CROSS_SYSTEM_EXECUTOR_PROMPT", prompts.CROSS_SYSTEM_EXECUTOR_PROMPT),
-            ("NARRATIVE_EXECUTOR_PROMPT", prompts.NARRATIVE_EXECUTOR_PROMPT),
         ]
         for name, text in executor_prompts:
             lower = text.lower()
@@ -67,7 +65,6 @@ class TestPromptConstraints:
             ("EXTRACT_ANALYST_PROMPT", prompts.EXTRACT_ANALYST_PROMPT),
             ("CROSS_SYSTEM_ANALYST_PROMPT", prompts.CROSS_SYSTEM_ANALYST_PROMPT),
             ("NARRATIVE_ANALYST_PROMPT", prompts.NARRATIVE_ANALYST_PROMPT),
-            ("AUDIT_ANALYST_PROMPT", prompts.AUDIT_ANALYST_PROMPT),
         ]
         for name, text in analyst_prompts:
             lower = text.lower()

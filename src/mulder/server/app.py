@@ -5,6 +5,7 @@ from __future__ import annotations
 import functools
 import inspect
 import logging
+import os
 import re
 import threading
 import time
@@ -20,6 +21,7 @@ from mulder.audit import AuditLog
 from mulder.db import CaseDB
 from mulder.index.correlator import Correlator
 from mulder.server.jobs import JobStore
+from mulder.server.tool_access import EXECUTORS, tool_access
 
 logger = logging.getLogger(__name__)
 
@@ -362,47 +364,95 @@ def _build_context(case_id: str, db: CaseDB) -> ServerContext:
 
 
 def load_case(case_id: str) -> ServerContext:
-    """Open (or re-open) a case and set it as the active context."""
-    _close_current_ctx()
+    """Open (or re-open) a case and set it as the active context.
+
+    Swaps the context atomically so background threads never see
+    ``_ctx = None``.  The old database is closed *after* the new
+    context is installed.
+    """
+    global _ctx  # noqa: PLW0603
 
     cfg = get_cfg()
     logger.info("Opening case database for '%s' ...", case_id)
-    db = CaseDB.open(case_id, cfg.db_dir)
 
-    return _build_context(case_id, db)
+    with _ctx_lock:
+        if _ctx is not None and _job_store is not None:
+            for batch_id in _job_store.batch_ids():
+                status = _job_store.get_batch_status(batch_id)
+                if status and not status.get("all_done"):
+                    raise RuntimeError(
+                        f"Cannot switch cases: batch {batch_id} still has "
+                        f"active jobs. Wait for completion or call wait(batch_id)."
+                    )
+        old_ctx = _ctx
 
+    new_db = CaseDB.open(case_id, cfg.db_dir)
+    correlator = Correlator(db=new_db)
+    audit = AuditLog(cfg.db_dir / f"{case_id}.audit.jsonl")
+    new_ctx = ServerContext(
+        case_id=case_id,
+        db=new_db,
+        correlator=correlator,
+        audit=audit,
+    )
 
-def create_case(
-    case_id: str, evidence_root: str, replace: bool = False
-) -> ServerContext | dict[str, object]:
-    """Create a new empty case and set it as the active context.
+    with _ctx_lock:
+        _ctx = new_ctx
 
-    No extractors are run; the agent populates the case incrementally
-    by calling Tier 2 extraction tools.
-
-    If the case already exists and *replace* is ``False``, loads the
-    existing case and returns a summary instead of deleting it.
-    """
-    _close_current_ctx()
-
-    cfg = get_cfg()
-
-    db_file = cfg.db_dir / f"{case_id}.db"
-    if db_file.exists() and not replace:
+    if old_ctx is not None and old_ctx.db is not None:
         try:
-            existing = CaseDB.open(case_id, cfg.db_dir)
-            meta = existing.get_case_metadata()
-            source_count = existing.get_source_count()
+            old_ctx.db.close()
         except Exception:
-            logger.exception("Failed to open existing case '%s'", case_id)
-            return {
-                "status": "error",
-                "case_id": case_id,
-                "error_message": (
-                    "Existing case database is corrupted. Use replace=true to recreate."
-                ),
-            }
+            logger.warning("Error closing previous case DB", exc_info=True)
 
+    logger.info("Server context ready for case '%s'", case_id)
+    return new_ctx
+
+
+def _try_open_existing(
+    case_id: str,
+    evidence_root: str,
+    replace: bool,
+    db_dir: Path,
+) -> dict[str, object] | None:
+    """Attempt to open an existing case DB, protecting populated databases.
+
+    Returns a response dict if the existing DB was opened (or an error
+    response for corrupt DBs when ``replace`` is False). Returns ``None``
+    when the caller should proceed to create a fresh database (only
+    possible for empty, corrupt DBs with ``replace=True``).
+    """
+    try:
+        existing = CaseDB.open(case_id, db_dir)
+        meta = existing.get_case_metadata()
+        source_count = existing.get_source_count()
+    except Exception as exc:
+        if not replace:
+            logger.exception("Failed to open existing case '%s'", case_id)
+            from mulder.server.helpers import error_response, make_tool_call_id
+
+            return error_response(
+                make_tool_call_id(),
+                "create_case",
+                {"case_id": case_id, "evidence_root": evidence_root, "replace": replace},
+                f"Failed to open existing case DB: {exc}",
+                error_type="database_error",
+                suggestion="Use replace=true to recreate the case.",
+            )
+        logger.warning(
+            "Existing DB for '%s' is corrupt and replace=True; recreating.",
+            case_id,
+        )
+        return None
+
+    if source_count > 0:
+        if replace:
+            logger.warning(
+                "Refusing to replace case '%s': database has %d indexed "
+                "source(s). Opening existing database instead.",
+                case_id,
+                source_count,
+            )
         _build_context(case_id, existing)
         return {
             "status": "case_exists",
@@ -417,6 +467,70 @@ def create_case(
                 "run_evtx_parser, etc.). Do NOT re-extract archives."
             ),
         }
+
+    if not replace:
+        _build_context(case_id, existing)
+        return {
+            "status": "case_exists",
+            "case_id": case_id,
+            "created_at": meta.ingested_at,
+            "evidence_root": meta.evidence_root,
+            "source_count": source_count,
+            "message": (
+                f"Case '{case_id}' loaded (0 sources indexed). Proceed with extraction tools."
+            ),
+        }
+
+    existing.close()
+    return None
+
+
+def create_case(
+    case_id: str, evidence_root: str, replace: bool = False
+) -> ServerContext | dict[str, object]:
+    """Create a new empty case and set it as the active context.
+
+    No extractors are run; the agent populates the case incrementally
+    by calling Tier 2 extraction tools.
+
+    If a database for this case already exists and contains indexed
+    sources, it is always opened rather than replaced. This prevents
+    a second server instance (e.g. spawned between pipeline phases)
+    from silently wiping extraction data. The ``replace`` flag only
+    takes effect when the existing database is empty.
+
+    When ``MULDER_CASE_ID`` is set in the environment, only that case
+    ID is allowed. Attempts to create a different case are rejected
+    and the enforced case is loaded instead.
+    """
+    enforced_id = os.environ.get("MULDER_CASE_ID", "")
+    if enforced_id and case_id != enforced_id:
+        logger.warning(
+            "Refusing to create case '%s': MULDER_CASE_ID enforces '%s'. "
+            "Loading the enforced case instead.",
+            case_id,
+            enforced_id,
+        )
+        ctx = load_case(enforced_id)
+        return {
+            "status": "case_exists",
+            "case_id": enforced_id,
+            "source_count": ctx.db.get_source_count(),
+            "message": (
+                f"MULDER_CASE_ID enforces case '{enforced_id}'. "
+                f"Refused to create '{case_id}'. Using enforced case."
+            ),
+        }
+
+    _close_current_ctx()
+
+    cfg = get_cfg()
+
+    db_file = cfg.db_dir / f"{case_id}.db"
+    if db_file.exists():
+        existing = _try_open_existing(case_id, evidence_root, replace, cfg.db_dir)
+        if existing is not None:
+            return existing
 
     if db_file.exists():
         db_file.unlink()
@@ -477,6 +591,7 @@ _SEQUENTIAL_ONLY: set[str] = {
 
 
 @mcp.tool()
+@tool_access(EXECUTORS)
 async def run_parallel(tasks: list[dict[str, Any]]) -> dict[str, Any]:
     """Run multiple tool calls in parallel and return all results.
 

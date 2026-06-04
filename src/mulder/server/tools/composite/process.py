@@ -14,6 +14,7 @@ from mulder.server.helpers import (
     make_tool_call_id,
     slim_window,
 )
+from mulder.server.tool_access import Role, tool_access
 from mulder.server.tools.composite.core import (
     _EXE_CMD,
     _EXE_POWERSHELL,
@@ -368,6 +369,7 @@ def _evaluate_and_score_pids(
 
 
 @mcp.tool()
+@tool_access(Role.CROSS_EXECUTOR)
 def find_suspicious_processes() -> dict[str, object]:
     """Identify suspicious processes by cross-referencing memory forensics artifacts.
 

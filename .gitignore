@@ -43,5 +43,5 @@ dmypy.json
 
 # Logs
 *.log
-!examples/**/claude.log
+!examples/**/*.log
 SPEC/

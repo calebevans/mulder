@@ -13,7 +13,7 @@ YOUR JOB:
 
 CORRELATION TARGETS:
 - Shared IOCs across systems (IPs, domains, hashes, user accounts)
-- Lateral movement chains (RDP, PsExec, WMI, SSH between hosts)
+- Lateral movement chains (remote access and execution between hosts)
 - Synchronized timestamps across systems (concurrent actions)
 - Common malware families or toolkits on multiple hosts
 - Data staging and exfiltration paths across network segments

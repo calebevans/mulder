@@ -20,6 +20,7 @@ from mulder.models import AuditSummary, CaseMetadataRow, Finding, SourceRow
 from mulder.patterns import (
     EMAIL_RE,
     IP_RE,
+    SEVERITY_ORDER,
     classify_ip,
     format_token_count,
     is_external_ip,
@@ -42,7 +43,7 @@ def _normalize_source(s: SourceRow | dict[str, Any]) -> SourceRow:
     return SourceRow(**s)
 
 
-_SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4, "informational": 4}
+_SEVERITY_ORDER = SEVERITY_ORDER
 
 _ATTACK_TACTICS_PATH = Path(__file__).resolve().parent / "data" / "attack_tactics.json"
 
@@ -59,6 +60,143 @@ _FILE_EXT_AFTER_EMAIL = re.compile(
 )
 _SKIP_IP_CATEGORIES = frozenset({"loopback", "reserved", "link_local"})
 _NON_IOC_IPS = frozenset({"0.0.0.0", "255.255.255.255"})
+
+
+_FALSE_POSITIVE_RE = re.compile(r"false\s+positive", re.IGNORECASE)
+_IOC_EXCLUDED_SEVERITIES = frozenset({"low", "info"})
+
+
+def _build_enrichment_map(
+    enrichment_windows: list[dict[str, Any]] | None,
+) -> dict[str, dict[str, Any]]:
+    """Build IOC-keyed lookup from enrichment.iocs DB windows.
+
+    Parses the raw JSON text stored in enrichment windows and extracts
+    per-IOC metadata (country, ASN, abuse score) into a dict keyed by
+    the IOC value for O(1) lookups during report rendering.
+
+    Args:
+        enrichment_windows: List of window dicts from the
+            ``enrichment.iocs`` source, each containing a ``raw_text``
+            field with JSON enrichment data.
+
+    Returns:
+        Dict mapping IOC values to their enrichment metadata. Each value
+        dict may contain ``country``, ``asn``, ``abuse_score``, and
+        ``aggregate_score`` keys. Returns empty dict when no enrichment
+        data is available.
+    """
+    if not enrichment_windows:
+        return {}
+
+    enrichment_map: dict[str, dict[str, Any]] = {}
+    for window in enrichment_windows:
+        raw_text = window.get("raw_text", "")
+        if not raw_text:
+            continue
+        try:
+            data = json.loads(raw_text)
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+        items = data if isinstance(data, list) else [data]
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            ioc_value = item.get("ioc", "")
+            if not ioc_value:
+                continue
+
+            meta: dict[str, Any] = {}
+            if "aggregate_score" in item:
+                meta["aggregate_score"] = item["aggregate_score"]
+
+            for source_result in item.get("sources", []):
+                if not isinstance(source_result, dict) or not source_result.get("found"):
+                    continue
+                if source_result.get("country") and "country" not in meta:
+                    meta["country"] = source_result["country"]
+                if source_result.get("asn") and "asn" not in meta:
+                    meta["asn"] = source_result["asn"]
+                if (
+                    source_result.get("source") == "abuseipdb"
+                    and source_result.get("reputation_score") is not None
+                ):
+                    meta["abuse_score"] = source_result["reputation_score"]
+
+            if meta:
+                enrichment_map[ioc_value] = meta
+
+    return enrichment_map
+
+
+def _format_enrichment(enrichment: dict[str, Any]) -> str:
+    """Format enrichment metadata into a compact display string.
+
+    Args:
+        enrichment: Dict with optional ``country``, ``asn``, and
+            ``abuse_score`` keys.
+
+    Returns:
+        Formatted string like "Germany, AS24961 WIIT AG (abuse: 85%)"
+        or empty string if no enrichment data is present.
+    """
+    parts: list[str] = []
+    if enrichment.get("country"):
+        parts.append(str(enrichment["country"]))
+    if enrichment.get("asn"):
+        parts.append(str(enrichment["asn"]))
+    label = ", ".join(parts)
+    if enrichment.get("abuse_score") is not None:
+        abuse = enrichment["abuse_score"]
+        label += f" (abuse: {abuse}%)" if label else f"abuse: {abuse}%"
+    return label
+
+
+def _apply_enrichment(
+    iocs: list[dict[str, str]],
+    enrichment_map: dict[str, dict[str, Any]],
+) -> list[dict[str, str]]:
+    """Merge enrichment metadata into IOC dicts.
+
+    Adds an ``enrichment`` key with a formatted display string to each
+    IOC dict whose value matches an entry in the enrichment map.
+
+    Args:
+        iocs: List of IOC dicts with ``type``, ``value``, ``context``.
+        enrichment_map: IOC-keyed enrichment lookup from
+            ``_build_enrichment_map``.
+
+    Returns:
+        The same list with ``enrichment`` keys added in-place.
+    """
+    for ioc in iocs:
+        meta = enrichment_map.get(ioc["value"])
+        ioc["enrichment"] = _format_enrichment(meta) if meta else ""
+    return iocs
+
+
+def _filter_ioc_eligible(findings: list[Finding]) -> list[Finding]:
+    """Exclude findings that should not contribute IOCs to the appendix.
+
+    Filters out findings at LOW/INFO severity and findings whose title or
+    description explicitly documents a false positive, since their artifacts
+    are not actionable indicators of compromise.
+
+    Args:
+        findings: All positive findings from the case.
+
+    Returns:
+        Subset of findings eligible for IOC extraction.
+    """
+    eligible: list[Finding] = []
+    for f in findings:
+        if f.severity in _IOC_EXCLUDED_SEVERITIES:
+            continue
+        if _FALSE_POSITIVE_RE.search(f.title) or _FALSE_POSITIVE_RE.search(f.description):
+            continue
+        eligible.append(f)
+    return eligible
 
 
 def _extract_iocs(
@@ -853,6 +991,7 @@ class ReportRenderer:
         sources_list: Sequence[SourceRow | dict[str, Any]] | None = None,
         evidence_integrity: list[dict[str, object]] | None = None,
         source_windows: dict[str, list[dict[str, Any]]] | None = None,
+        enrichment_windows: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Assemble template variables from case metadata, findings, audit trail, and sources.
 
@@ -865,6 +1004,8 @@ class ReportRenderer:
             sources_list: Evidence source rows for the source table.
             evidence_integrity: Evidence registry entries with file hashes.
             source_windows: Per-source raw text windows for the HTML report.
+            enrichment_windows: Raw windows from the ``enrichment.iocs``
+                DB source containing threat intel metadata for IOCs.
 
         Returns:
             Dict of template variables ready for Jinja2 rendering.
@@ -898,7 +1039,14 @@ class ReportRenderer:
         for f in normalized_findings:
             all_sources.update(f.sources)
 
-        network_iocs, file_iocs, email_iocs = _extract_iocs(normalized_findings)
+        ioc_eligible_findings = _filter_ioc_eligible(positive_findings)
+        network_iocs, file_iocs, email_iocs = _extract_iocs(ioc_eligible_findings)
+
+        enrichment_map = _build_enrichment_map(enrichment_windows)
+        if enrichment_map:
+            _apply_enrichment(network_iocs, enrichment_map)
+            _apply_enrichment(file_iocs, enrichment_map)
+            _apply_enrichment(email_iocs, enrichment_map)
 
         if audit_entries is None:
             audit_entries = _parse_audit_log(audit_log_path)
@@ -1060,6 +1208,93 @@ class ReportRenderer:
         template = self._env.get_template("report.md.j2")
         return template.render(**ctx)
 
+    @staticmethod
+    def _build_print_css(case_id: str) -> str:
+        """Build CSS print overrides for PDF generation.
+
+        Forces a light color scheme, adds page margins, and injects
+        case ID and confidentiality headers into every page.
+
+        Args:
+            case_id: Case identifier for the page header.
+
+        Returns:
+            CSS string with @page rules and theme overrides.
+        """
+        return f"""
+            @page {{
+                size: A4;
+                margin: 2.5cm 2cm;
+                @top-left {{
+                    content: "Case: {case_id}";
+                    font-size: 8pt;
+                    color: #666;
+                }}
+                @top-right {{
+                    content: "CONFIDENTIAL";
+                    font-size: 8pt;
+                    color: #cc0000;
+                    font-weight: bold;
+                }}
+                @bottom-center {{
+                    content: "Page " counter(page) " of " counter(pages);
+                    font-size: 8pt;
+                    color: #666;
+                }}
+            }}
+            @page :first {{
+                @top-left {{ content: none; }}
+                @top-right {{ content: none; }}
+            }}
+            body {{
+                background: #ffffff !important;
+                color: #1a1a1a !important;
+            }}
+            .dark-theme, [data-theme="dark"] {{
+                background: #ffffff !important;
+                color: #1a1a1a !important;
+            }}
+            pre, code {{
+                background: #f5f5f5 !important;
+                color: #333 !important;
+            }}
+            table {{
+                page-break-inside: avoid;
+            }}
+            h1, h2, h3 {{
+                page-break-after: avoid;
+            }}
+        """
+
+    def _render_pdf(self, html_text: str, case_id: str) -> bytes | None:
+        """Render an HTML report string to PDF bytes.
+
+        Uses weasyprint to convert the self-contained HTML report to a
+        print-ready PDF with headers, footers, and page numbers. Returns
+        None if weasyprint is not installed.
+
+        Args:
+            html_text: Complete HTML report string.
+            case_id: Case identifier for page headers.
+
+        Returns:
+            PDF content as bytes, or None if weasyprint is unavailable.
+        """
+        try:
+            import weasyprint
+        except ImportError:
+            logger.warning(
+                "weasyprint not installed; skipping PDF generation. "
+                "Install with: pip install 'mulder-mcp[pdf]'"
+            )
+            return None
+
+        print_css = self._build_print_css(case_id)
+        html_doc = weasyprint.HTML(string=html_text)
+        css_override = weasyprint.CSS(string=print_css)
+        pdf_bytes: bytes = html_doc.write_pdf(stylesheets=[css_override])
+        return pdf_bytes
+
     def _render_html(self, ctx: dict[str, Any]) -> str:
         """Render the HTML report from a pre-built context.
 
@@ -1111,6 +1346,7 @@ class ReportRenderer:
         audit_entries: list[dict[str, Any]] | None = None,
         sources_list: list[SourceRow] | None = None,
         evidence_integrity: list[dict[str, object]] | None = None,
+        enrichment_windows: list[dict[str, Any]] | None = None,
     ) -> str:
         """Render the markdown report template (``report.md.j2``) to a string.
 
@@ -1125,6 +1361,8 @@ class ReportRenderer:
             audit_entries: Pre-parsed audit entries; parsed from file if None.
             sources_list: Evidence source rows for the source table.
             evidence_integrity: Evidence registry entries with file hashes.
+            enrichment_windows: Raw windows from the ``enrichment.iocs``
+                DB source for threat intel context.
 
         Returns:
             Rendered markdown report string.
@@ -1137,6 +1375,7 @@ class ReportRenderer:
             audit_entries=audit_entries,
             sources_list=sources_list,
             evidence_integrity=evidence_integrity,
+            enrichment_windows=enrichment_windows,
         )
         return self._render_markdown(ctx)
 
@@ -1150,6 +1389,7 @@ class ReportRenderer:
         sources_list: list[SourceRow] | None = None,
         evidence_integrity: list[dict[str, object]] | None = None,
         source_windows: dict[str, list[dict[str, Any]]] | None = None,
+        enrichment_windows: list[dict[str, Any]] | None = None,
     ) -> str:
         """Render the HTML report with markdown descriptions converted to HTML.
 
@@ -1165,6 +1405,8 @@ class ReportRenderer:
             sources_list: Evidence source rows for the source table.
             evidence_integrity: Evidence registry entries with file hashes.
             source_windows: Per-source raw text windows for the HTML report.
+            enrichment_windows: Raw windows from the ``enrichment.iocs``
+                DB source for threat intel context.
 
         Returns:
             Rendered HTML report string.
@@ -1178,6 +1420,7 @@ class ReportRenderer:
             sources_list=sources_list,
             evidence_integrity=evidence_integrity,
             source_windows=source_windows,
+            enrichment_windows=enrichment_windows,
         )
         return self._render_html(ctx)
 
@@ -1191,8 +1434,10 @@ class ReportRenderer:
         sources_list: list[SourceRow] | None = None,
         evidence_integrity: list[dict[str, object]] | None = None,
         source_windows: dict[str, list[dict[str, Any]]] | None = None,
-    ) -> tuple[str, str]:
-        """Render both markdown and HTML reports from a single context build.
+        generate_pdf: bool = True,
+        enrichment_windows: list[dict[str, Any]] | None = None,
+    ) -> tuple[str, str, bytes | None]:
+        """Render markdown, HTML, and optionally PDF reports.
 
         Avoids the cost of building the template context twice when both
         output formats are needed. Markdown is rendered first from the
@@ -1208,9 +1453,12 @@ class ReportRenderer:
             sources_list: Evidence source rows for the source table.
             evidence_integrity: Evidence registry entries with file hashes.
             source_windows: Per-source raw text windows for the HTML report.
+            generate_pdf: Attempt PDF generation if weasyprint is available.
+            enrichment_windows: Raw windows from the ``enrichment.iocs``
+                DB source for threat intel context.
 
         Returns:
-            Tuple of (markdown_text, html_text).
+            Tuple of (markdown_text, html_text, pdf_bytes_or_none).
         """
         ctx = self.build_context(
             case_metadata,
@@ -1221,7 +1469,13 @@ class ReportRenderer:
             sources_list=sources_list,
             evidence_integrity=evidence_integrity,
             source_windows=source_windows,
+            enrichment_windows=enrichment_windows,
         )
         md_text = self._render_markdown(ctx)
         html_text = self._render_html(dict(ctx))
-        return md_text, html_text
+
+        pdf_bytes: bytes | None = None
+        if generate_pdf:
+            pdf_bytes = self._render_pdf(html_text, case_metadata.case_id)
+
+        return md_text, html_text, pdf_bytes

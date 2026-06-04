@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mulder-mcp"
-version = "1.1.0"
+version = "1.2.0"
 description = "Custom MCP server for SANS SIFT Workstation forensic investigations"
 requires-python = ">=3.10"
 license = "Apache-2.0"
@@ -25,9 +25,13 @@ dependencies = [
     "rich>=15.0",
     "pyyaml>=6.0",
     "psutil>=5.9",
+    "httpx>=0.27",
+    "oletools>=0.60",
 ]
 
 [project.optional-dependencies]
+pdf = ["weasyprint>=60.0"]
+stix = ["stix2>=3.0"]
 dev = [
     "pytest",
     "pytest-asyncio",
@@ -67,6 +71,12 @@ module = [
     "rich.*",
     "markdown",
     "yaml",
+    "oletools",
+    "oletools.*",
+    "stix2",
+    "stix2.*",
+    "weasyprint",
+    "weasyprint.*",
 ]
 ignore_missing_imports = true
 

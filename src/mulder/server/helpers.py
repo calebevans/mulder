@@ -7,16 +7,18 @@ is meaningful to the consumer (e.g. verify_evidence_integrity).
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import re
 import shutil
 import subprocess
+import time
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Any
+from typing import Any, ParamSpec
 from uuid import uuid4
 
 from mulder.server.app import get_ctx, has_ctx
@@ -25,6 +27,38 @@ current_batch_id: ContextVar[str | None] = ContextVar("current_batch_id", defaul
 
 TOOL_TIMEOUT: int = 600
 """Default subprocess timeout (seconds) shared across extraction tools."""
+
+_GIB_THRESHOLD = 4
+"""File size (GiB) below which no extra time is added."""
+
+
+def adaptive_timeout(
+    file_path: str | Path,
+    base: int = 600,
+    per_gib: int = 120,
+    cap: int = 28800,
+) -> int:
+    """Compute a timeout that scales with file size.
+
+    For files under 4 GiB, returns the base timeout. For larger files,
+    adds *per_gib* seconds for each GiB above 4, capped at *cap* seconds.
+    Returns the base timeout if the file doesn't exist or can't be stat'd.
+
+    Args:
+        file_path: Path to the evidence file being processed.
+        base: Minimum timeout in seconds (default 600 = 10 min).
+        per_gib: Additional seconds per GiB above 4 GiB (default 120 = 2 min/GiB).
+        cap: Maximum timeout in seconds (default 28800 = 8 hours).
+
+    Returns:
+        Timeout in seconds, between *base* and *cap*.
+    """
+    try:
+        size_bytes = Path(file_path).stat().st_size
+    except OSError:
+        return base
+    gib = size_bytes / (1024**3)
+    return min(base + int(max(0, gib - _GIB_THRESHOLD) * per_gib), cap)
 
 
 def require_binary(name: str) -> str | None:
@@ -55,6 +89,64 @@ def run_subprocess(
 def make_tool_call_id() -> str:
     """Generate a short unique identifier for a tool invocation."""
     return f"tc_{uuid4().hex[:8]}"
+
+
+_P = ParamSpec("_P")
+
+
+def audited_tool(
+    tool_name: str,
+) -> Callable[[Callable[_P, dict[str, object]]], Callable[_P, dict[str, object]]]:
+    """Decorator that handles tool_call_id generation, timing, and audit logging.
+
+    Wraps an MCP tool function to automatically:
+      - Generate a unique ``tool_call_id``
+      - Time the function execution
+      - Log the call to the audit trail
+      - Inject ``tool_call_id`` into the returned dict
+
+    The wrapped function must return a ``dict[str, object]``.  The decorator
+    adds ``"tool_call_id"`` to it before returning.  The original function
+    signature is preserved so FastMCP introspection continues to work.
+
+    Args:
+        tool_name: The tool name recorded in the audit log.
+    """
+
+    def decorator(
+        func: Callable[_P, dict[str, object]],
+    ) -> Callable[_P, dict[str, object]]:
+        @functools.wraps(func)
+        def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> dict[str, object]:
+            ctx = get_ctx()
+            tc_id = make_tool_call_id()
+            t0 = time.monotonic()
+            try:
+                result = func(*args, **kwargs)
+                elapsed = (time.monotonic() - t0) * 1000
+                ctx.audit.log_tool_call(
+                    tool_call_id=tc_id,
+                    tool_name=tool_name,
+                    params=dict(kwargs),
+                    output_hash=hash_output(result),
+                    duration_ms=elapsed,
+                )
+                result["tool_call_id"] = tc_id
+                return result
+            except Exception:
+                elapsed = (time.monotonic() - t0) * 1000
+                ctx.audit.log_tool_call(
+                    tool_call_id=tc_id,
+                    tool_name=tool_name,
+                    params=dict(kwargs),
+                    output_hash="error",
+                    duration_ms=elapsed,
+                )
+                raise
+
+        return wrapper
+
+    return decorator
 
 
 _PREVIEW_CHAR_LIMIT = 500
@@ -186,7 +278,16 @@ def tool_response(
     source: str | None = None,
     elapsed_ms: float = 0,
 ) -> dict[str, object]:
-    """Build an audited success response and log the tool call."""
+    """Build an audited success response and log the tool call.
+
+    When *source* is provided (indicating data has been indexed into the
+    case DB), returns a compact response with only a preview of the output.
+    The agent should use ``search()`` or ``get_raw_output()`` to access
+    the full data.
+
+    When *source* is None, returns the full results (for read/reference
+    tools whose output is not indexed elsewhere).
+    """
     if has_ctx():
         ctx = get_ctx()
         ctx.audit.log_tool_call(
@@ -197,12 +298,47 @@ def tool_response(
             duration_ms=elapsed_ms,
             batch_id=current_batch_id.get(),
         )
-    return {
+
+    if source is None:
+        return {
+            "tool_call_id": tc_id,
+            "status": "success",
+            "results": results,
+            "source": source,
+        }
+
+    line_count: int | None = None
+    windows_indexed: int | None = None
+    if isinstance(results, dict):
+        lc = results.get("line_count")
+        if isinstance(lc, int):
+            line_count = lc
+        wi = results.get("windows_indexed")
+        if isinstance(wi, int):
+            windows_indexed = wi
+
+    preview = ""
+    if isinstance(results, dict | list):
+        preview = json.dumps(results, default=str)[:_PREVIEW_CHAR_LIMIT]
+    elif isinstance(results, str):
+        preview = results[:_PREVIEW_CHAR_LIMIT]
+
+    resp: dict[str, object] = {
         "tool_call_id": tc_id,
         "status": "success",
-        "results": results,
         "source": source,
+        "preview": preview + ("..." if len(preview) >= _PREVIEW_CHAR_LIMIT else ""),
+        "hint": (
+            f"Full output indexed as '{source}'. "
+            f"Use search(query, source='{source}') or "
+            f"get_raw_output('{source}') to access."
+        ),
     }
+    if line_count is not None:
+        resp["line_count"] = line_count
+    if windows_indexed is not None:
+        resp["windows_indexed"] = windows_indexed
+    return resp
 
 
 def error_response(
@@ -269,6 +405,97 @@ def extract_module_names(windows: Sequence[Any]) -> dict[str, list[Any]]:
             name = m.group(1).strip().lower()
             mod_map[name].append(w)
     return dict(mod_map)
+
+
+def sources_already_indexed(
+    source_prefixes: list[str],
+    evidence_path: str | None = None,
+) -> list[str]:
+    """Return source names matching any prefix that already have indexed data.
+
+    Used by extraction tools to skip re-running when data already exists
+    in the case database.  Returns an empty list (proceed normally) when
+    no case context is loaded, so callers never need to guard separately.
+
+    When *evidence_path* is provided, only sources whose ``source_path``
+    matches the given evidence file are considered. This ensures that
+    adding new evidence (e.g. a second memory dump) is not blocked by
+    sources produced from different evidence files.
+
+    Args:
+        source_prefixes: List of source name prefixes to check
+            (e.g. ``["bulk."]``, ``["evtx."]``).
+        evidence_path: If provided, only count sources originating from
+            this specific evidence file path.
+
+    Returns:
+        List of existing source names that match any of the given prefixes.
+        An empty list means no prior extraction data exists.
+    """
+    if not has_ctx():
+        return []
+    ctx = get_ctx()
+    sources = ctx.db.get_sources()
+    existing: list[str] = []
+    for src in sources:
+        if evidence_path and src.source_path != evidence_path:
+            continue
+        for prefix in source_prefixes:
+            if src.source_name.startswith(prefix):
+                existing.append(src.source_name)
+                break
+    return existing
+
+
+TOOL_SOURCE_PREFIXES: dict[str, list[str]] = {
+    "run_volatility_batch": ["volatility."],
+    "run_volatility": ["volatility."],
+    "run_fls": ["tsk.filelist"],
+    "run_bulk_extractor": ["bulk."],
+    "run_evtx_parser": ["evtx.", "ez.evtx"],
+    "run_hayabusa": ["hayabusa."],
+    "run_chainsaw": ["chainsaw."],
+    "run_registry_parser": ["registry."],
+    "run_prefetch_parser": ["prefetch.", "ez.prefetch"],
+    "run_amcache_parser": ["amcache.", "ez.amcache"],
+    "run_shimcache_parser": ["shimcache.", "ez.shimcache"],
+    "run_mft_parser": ["mft.", "ez.mft"],
+    "run_zircolite": ["zircolite."],
+    "parse_autoruns": ["autoruns."],
+}
+"""Maps extraction tool names to the source prefixes they produce.
+
+Used by ``start_extraction_batch`` to skip submitting jobs for tools
+whose output sources already exist in the case database. Tools not
+listed here are always submitted (they either lack idempotency checks
+or produce unique per-invocation sources).
+"""
+
+
+def tool_already_indexed(tool_name: str, evidence_path: str | None = None) -> list[str]:
+    """Check whether a tool's output sources already exist in the case DB.
+
+    Looks up the tool's known source prefixes in ``TOOL_SOURCE_PREFIXES``
+    and delegates to ``sources_already_indexed``. Returns an empty list
+    for tools without a known mapping or when no case context is loaded.
+
+    When *evidence_path* is provided, only sources produced from that
+    specific evidence file are considered. This allows the same tool to
+    run on new evidence without being blocked by prior results from
+    different evidence files.
+
+    Args:
+        tool_name: MCP tool function name (e.g. ``"run_fls"``).
+        evidence_path: If provided, scope the check to sources from
+            this evidence file only.
+
+    Returns:
+        List of existing source names, or empty if none found.
+    """
+    prefixes = TOOL_SOURCE_PREFIXES.get(tool_name)
+    if not prefixes:
+        return []
+    return sources_already_indexed(prefixes, evidence_path=evidence_path)
 
 
 def run_cli_tool(

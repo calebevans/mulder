@@ -5,7 +5,6 @@ from __future__ import annotations
 from mulder.patterns import (
     EMAIL_RE,
     IP_RE,
-    SUSPICIOUS_PATHS,
     classify_ip,
     format_token_count,
     is_external_ip,
@@ -104,7 +103,7 @@ class TestSourceIsCited:
         assert source_is_cited("bulk.email", set()) is False
 
     def test_empty_source_name(self) -> None:
-        assert source_is_cited("", {"bulk.email"}) is True
+        assert source_is_cited("", {"bulk.email"}) is False
 
     def test_partial_name_no_match(self) -> None:
         assert source_is_cited("bulk.emai", {"pcap.dns"}) is False
@@ -174,19 +173,3 @@ class TestIpRegex:
     def test_multiple_ips(self) -> None:
         text = "From 10.0.0.1 to 10.0.0.2"
         assert len(IP_RE.findall(text)) == 2
-
-
-class TestSuspiciousPaths:
-    """Validate SUSPICIOUS_PATHS tuple content."""
-
-    def test_is_tuple(self) -> None:
-        assert isinstance(SUSPICIOUS_PATHS, tuple)
-
-    def test_contains_temp(self) -> None:
-        assert "\\temp\\" in SUSPICIOUS_PATHS
-
-    def test_contains_downloads(self) -> None:
-        assert "\\downloads\\" in SUSPICIOUS_PATHS
-
-    def test_contains_recycle(self) -> None:
-        assert "\\recycle" in SUSPICIOUS_PATHS

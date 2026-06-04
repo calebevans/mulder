@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import atexit
 import contextlib
 import functools
 import logging
+import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from collections.abc import Mapping
 from pathlib import Path
@@ -16,13 +19,20 @@ from mulder.server.extract_helpers import extract_and_index, mount_disk_image
 from mulder.server.helpers import (
     _PREVIEW_CHAR_LIMIT,
     TOOL_TIMEOUT,
+    adaptive_timeout,
     error_response,
     make_tool_call_id,
     require_binary,
     run_cli_tool,
+    sources_already_indexed,
     tool_response,
 )
-from mulder.server.tools.extract.tsk import _tsk_extract_files
+from mulder.server.tool_access import Role, tool_access
+from mulder.server.tools.extract.tsk import (
+    _cleanup_tsk_extract_dir,
+    _resolve_partition_offset,
+    _tsk_extract_files,
+)
 
 __all__ = [
     "_DOTNET",
@@ -51,6 +61,26 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
+
+_dislocker_mounts: dict[str, str] = {}
+_dislocker_lock = threading.Lock()
+
+
+def _cleanup_dislocker_mounts() -> None:
+    """Unmount and remove all registered dislocker FUSE mounts."""
+    for mount_point in list(_dislocker_mounts.values()):
+        try:
+            subprocess.run(
+                ["fusermount", "-u", mount_point],
+                capture_output=True,
+                timeout=10,
+            )
+            shutil.rmtree(mount_point, ignore_errors=True)
+        except Exception:
+            pass
+
+
+atexit.register(_cleanup_dislocker_mounts)
 
 _EZ_TOOLS_DIR = Path("/opt/zimmermantools")
 _DOTNET = "dotnet"
@@ -127,19 +157,54 @@ def _run_ez_tool(
 
 
 @mcp.tool()
-def run_prefetch_parser(image_path: str) -> dict[str, object]:
+@tool_access(Role.EXTRACT_EXECUTOR)
+def run_prefetch_parser(image_path: str, force: bool = False) -> dict[str, object]:
     """Parse Windows Prefetch files from a disk image using PECmd (EZ Tools).
 
-    Mounts the disk image, locates Prefetch files, parses them for
-    execution history, and indexes the results.  Falls back to TSK
-    extraction when mounting fails.
+    Extracts Prefetch files via TSK (fls + icat) first since it reads
+    E01 images directly without FUSE, then falls back to mount if TSK
+    extraction is unavailable.
 
     Args:
         image_path: Path to the disk image (E01, dd, img).
+        force: Re-run extraction even if sources already exist.
     """
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
-    params = {"image_path": image_path}
+    params = {"image_path": image_path, "force": force}
+
+    if not force:
+        existing = sources_already_indexed(["prefetch.", "ez.prefetch"], evidence_path=image_path)
+        if existing:
+            return tool_response(
+                tc_id,
+                "run_prefetch_parser",
+                params,
+                {
+                    "status": "skipped",
+                    "reason": "Sources already indexed from prior extraction",
+                    "existing_sources": existing,
+                },
+                "ez.prefetch",
+                0.0,
+            )
+
+    extracted = _tsk_extract_files(image_path, ["Prefetch/", ".pf"])
+    if extracted:
+        extract_dir = str(extracted[0][1].parent)
+        try:
+            return _run_ez_tool(
+                "PECmd.dll",
+                ["-d", extract_dir],
+                "ez.prefetch",
+                image_path,
+                tc_id,
+                "run_prefetch_parser",
+                params,
+                t0,
+            )
+        finally:
+            _cleanup_tsk_extract_dir(extract_dir)
 
     try:
         with mount_disk_image(image_path) as mount_point:
@@ -168,41 +233,63 @@ def run_prefetch_parser(image_path: str) -> dict[str, object]:
     except RuntimeError:
         pass
 
-    extracted = _tsk_extract_files(image_path, ["Prefetch/", ".pf"])
-    if not extracted:
-        return error_response(
-            tc_id,
-            "run_prefetch_parser",
-            params,
-            "Mount failed and no Prefetch files found via TSK extraction",
-            (time.monotonic() - t0) * 1000,
-        )
-    pf_dir = extracted[0][1].parent
-    return _run_ez_tool(
-        "PECmd.dll",
-        ["-d", str(pf_dir)],
-        "ez.prefetch",
-        image_path,
+    return error_response(
         tc_id,
         "run_prefetch_parser",
         params,
-        t0,
+        "No Prefetch files found via TSK extraction or mount",
+        (time.monotonic() - t0) * 1000,
     )
 
 
 @mcp.tool()
-def run_amcache_parser(image_path: str) -> dict[str, object]:
+@tool_access(Role.EXTRACT_EXECUTOR)
+def run_amcache_parser(image_path: str, force: bool = False) -> dict[str, object]:
     """Parse Amcache from a disk image using AmcacheParser (EZ Tools).
 
     Shows program execution history with SHA1 hashes, file paths, and
-    timestamps.  Falls back to TSK extraction when mounting fails.
+    timestamps.  Extracts via TSK first, falls back to mount.
 
     Args:
         image_path: Path to the disk image.
+        force: Re-run extraction even if sources already exist.
     """
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
-    params = {"image_path": image_path}
+    params = {"image_path": image_path, "force": force}
+
+    if not force:
+        existing = sources_already_indexed(["amcache.", "ez.amcache"], evidence_path=image_path)
+        if existing:
+            return tool_response(
+                tc_id,
+                "run_amcache_parser",
+                params,
+                {
+                    "status": "skipped",
+                    "reason": "Sources already indexed from prior extraction",
+                    "existing_sources": existing,
+                },
+                "ez.amcache",
+                0.0,
+            )
+
+    extracted = _tsk_extract_files(image_path, ["Amcache.hve"])
+    if extracted:
+        extract_dir = str(extracted[0][1].parent)
+        try:
+            return _run_ez_tool(
+                "AmcacheParser.dll",
+                ["-f", str(extracted[0][1])],
+                "ez.amcache",
+                image_path,
+                tc_id,
+                "run_amcache_parser",
+                params,
+                t0,
+            )
+        finally:
+            _cleanup_tsk_extract_dir(extract_dir)
 
     try:
         with mount_disk_image(image_path) as mount_point:
@@ -229,40 +316,74 @@ def run_amcache_parser(image_path: str) -> dict[str, object]:
     except RuntimeError:
         pass
 
-    extracted = _tsk_extract_files(image_path, ["Amcache.hve"])
-    if not extracted:
-        return error_response(
-            tc_id,
-            "run_amcache_parser",
-            params,
-            "Mount failed and Amcache.hve not found via TSK extraction",
-            (time.monotonic() - t0) * 1000,
-        )
-    return _run_ez_tool(
-        "AmcacheParser.dll",
-        ["-f", str(extracted[0][1])],
-        "ez.amcache",
-        image_path,
+    return error_response(
         tc_id,
         "run_amcache_parser",
         params,
-        t0,
+        "Amcache.hve not found via TSK extraction or mount",
+        (time.monotonic() - t0) * 1000,
     )
 
 
 @mcp.tool()
-def run_shimcache_parser(image_path: str) -> dict[str, object]:
+@tool_access(Role.EXTRACT_EXECUTOR)
+def run_shimcache_parser(image_path: str, force: bool = False) -> dict[str, object]:
     """Parse ShimCache (AppCompatCache) from a disk image using AppCompatCacheParser.
 
-    Shows file existence evidence with timestamps.  Falls back to TSK
-    extraction when mounting fails.
+    Shows file existence evidence with timestamps.  Extracts the SYSTEM
+    hive via TSK first, falls back to mount.
 
     Args:
         image_path: Path to the disk image.
+        force: Re-run extraction even if sources already exist.
     """
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
-    params = {"image_path": image_path}
+    params = {"image_path": image_path, "force": force}
+
+    if not force:
+        existing = sources_already_indexed(
+            ["shimcache.", "ez.shimcache"], evidence_path=image_path
+        )
+        if existing:
+            return tool_response(
+                tc_id,
+                "run_shimcache_parser",
+                params,
+                {
+                    "status": "skipped",
+                    "reason": "Sources already indexed from prior extraction",
+                    "existing_sources": existing,
+                },
+                "ez.shimcache",
+                0.0,
+            )
+
+    extracted = _tsk_extract_files(image_path, ["config/SYSTEM"])
+    if extracted:
+        system_files = [
+            (r, p)
+            for r, p in extracted
+            if p.name.upper() == "SYSTEM" or "config_system" in p.name.lower()
+        ]
+        if system_files:
+            extract_dir = str(system_files[0][1].parent)
+            try:
+                return _run_ez_tool(
+                    "AppCompatCacheParser.dll",
+                    ["-f", str(system_files[0][1])],
+                    "ez.shimcache",
+                    image_path,
+                    tc_id,
+                    "run_shimcache_parser",
+                    params,
+                    t0,
+                )
+            finally:
+                _cleanup_tsk_extract_dir(extract_dir)
+        else:
+            extract_dir = str(extracted[0][1].parent)
+            _cleanup_tsk_extract_dir(extract_dir)
 
     try:
         with mount_disk_image(image_path) as mount_point:
@@ -291,46 +412,80 @@ def run_shimcache_parser(image_path: str) -> dict[str, object]:
     except RuntimeError:
         pass
 
-    extracted = _tsk_extract_files(image_path, ["config/SYSTEM"])
-    system_files = [
-        (r, p)
-        for r, p in extracted
-        if p.name.upper() == "SYSTEM" or "config_system" in p.name.lower()
-    ]
-    if not system_files:
-        return error_response(
-            tc_id,
-            "run_shimcache_parser",
-            params,
-            "Mount failed and SYSTEM hive not found via TSK extraction",
-            (time.monotonic() - t0) * 1000,
-        )
-    return _run_ez_tool(
-        "AppCompatCacheParser.dll",
-        ["-f", str(system_files[0][1])],
-        "ez.shimcache",
-        image_path,
+    return error_response(
         tc_id,
         "run_shimcache_parser",
         params,
-        t0,
+        "SYSTEM hive not found via TSK extraction or mount",
+        (time.monotonic() - t0) * 1000,
     )
 
 
 @mcp.tool()
-def run_mft_parser(image_path: str) -> dict[str, object]:
+@tool_access(Role.EXTRACT_EXECUTOR)
+def run_mft_parser(image_path: str, force: bool = False) -> dict[str, object]:
     """Parse the $MFT from a disk image using MFTECmd (EZ Tools).
 
     The Master File Table contains timestamps, sizes, and parent
-    directories for every file on an NTFS volume. Falls back to TSK
-    extraction when mounting fails.
+    directories for every file on an NTFS volume.  Extracts $MFT via
+    TSK icat (inode 0) first, falls back to mount.
 
     Args:
         image_path: Path to the disk image.
+        force: Re-run extraction even if sources already exist.
     """
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
-    params = {"image_path": image_path}
+    params = {"image_path": image_path, "force": force}
+
+    if not force:
+        existing = sources_already_indexed(["mft.", "ez.mft"], evidence_path=image_path)
+        if existing:
+            return tool_response(
+                tc_id,
+                "run_mft_parser",
+                params,
+                {
+                    "status": "skipped",
+                    "reason": "Sources already indexed from prior extraction",
+                    "existing_sources": existing,
+                },
+                "ez.mft",
+                0.0,
+            )
+
+    if require_binary("icat"):
+        offset = _resolve_partition_offset(image_path)
+        with tempfile.TemporaryDirectory(prefix="mulder_mft_") as tmpdir:
+            mft_dest = Path(tmpdir) / "$MFT"
+            cmd = ["icat"]
+            if offset > 0:
+                cmd.extend(["-o", str(offset)])
+            cmd.extend([image_path, "0"])
+            try:
+                proc = subprocess.run(cmd, capture_output=True, timeout=TOOL_TIMEOUT, check=False)
+            except subprocess.TimeoutExpired:
+                logger.warning("icat timed out extracting $MFT from %s; trying mount", image_path)
+                proc = None
+
+            if proc is not None and proc.returncode == 0 and proc.stdout:
+                mft_dest.write_bytes(proc.stdout)
+                return _run_ez_tool(
+                    "MFTECmd.dll",
+                    ["-f", str(mft_dest)],
+                    "ez.mft",
+                    image_path,
+                    tc_id,
+                    "run_mft_parser",
+                    params,
+                    t0,
+                )
+            elif proc is not None:
+                logger.warning(
+                    "icat $MFT extraction failed (rc=%d) for %s; trying mount",
+                    proc.returncode,
+                    image_path,
+                )
 
     try:
         with mount_disk_image(image_path) as mount_point:
@@ -359,27 +514,12 @@ def run_mft_parser(image_path: str) -> dict[str, object]:
     except RuntimeError:
         pass
 
-    extracted = _tsk_extract_files(image_path, ["$MFT"])
-    mft_files = [
-        (r, p) for r, p in extracted if p.name.upper() == "$MFT" or "mft" in p.name.lower()
-    ]
-    if not mft_files:
-        return error_response(
-            tc_id,
-            "run_mft_parser",
-            params,
-            "Mount failed and $MFT not found via TSK extraction",
-            (time.monotonic() - t0) * 1000,
-        )
-    return _run_ez_tool(
-        "MFTECmd.dll",
-        ["-f", str(mft_files[0][1])],
-        "ez.mft",
-        image_path,
+    return error_response(
         tc_id,
         "run_mft_parser",
         params,
-        t0,
+        "$MFT not found via TSK icat or mount",
+        (time.monotonic() - t0) * 1000,
     )
 
 
@@ -389,6 +529,7 @@ def run_mft_parser(image_path: str) -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def run_strings(target_path: str, min_length: int = 8) -> dict[str, object]:
     """Extract printable strings from a file or disk image.
 
@@ -407,10 +548,12 @@ def run_strings(target_path: str, min_length: int = 8) -> dict[str, object]:
         source_name="strings.output",
         source_path=target_path,
         extractor_label="strings",
+        timeout=adaptive_timeout(target_path),
     )
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def run_clamav(target_path: str) -> dict[str, object]:
     """Scan files for malware signatures using ClamAV.
 
@@ -432,7 +575,7 @@ def run_clamav(target_path: str) -> dict[str, object]:
             ["clamscan", "-r", "--no-summary", target_path],
             capture_output=True,
             text=True,
-            timeout=TOOL_TIMEOUT * 5,
+            timeout=adaptive_timeout(target_path),
             check=False,
         )
     except subprocess.TimeoutExpired:
@@ -449,6 +592,7 @@ def run_clamav(target_path: str) -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def run_hashdeep(target_path: str) -> dict[str, object]:
     """Compute recursive cryptographic hashes using hashdeep.
 
@@ -466,11 +610,12 @@ def run_hashdeep(target_path: str) -> dict[str, object]:
         source_name="hashdeep.hashes",
         source_path=target_path,
         extractor_label="hashdeep",
-        timeout=TOOL_TIMEOUT * 3,
+        timeout=adaptive_timeout(target_path),
     )
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR | Role.EXTRACT_ANALYST)
 def run_exiftool(target_path: str = "", file_path: str = "") -> dict[str, object]:
     """Extract file metadata (EXIF, document properties) using exiftool.
 
@@ -495,6 +640,7 @@ def run_exiftool(target_path: str = "", file_path: str = "") -> dict[str, object
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def run_regripper(hive_path: str, profile: str | None = None) -> dict[str, object]:
     """Analyze a Windows registry hive using RegRipper.
 
@@ -537,6 +683,7 @@ def run_regripper(hive_path: str, profile: str | None = None) -> dict[str, objec
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def run_ssdeep(target_path: str, recursive: bool = False) -> dict[str, object]:
     """Compute fuzzy hashes of files using ssdeep.
 
@@ -565,6 +712,7 @@ def run_ssdeep(target_path: str, recursive: bool = False) -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def run_pasco(indexdat_path: str) -> dict[str, object]:
     """Parse an Internet Explorer index.dat file for browser history.
 
@@ -587,6 +735,7 @@ def run_pasco(indexdat_path: str) -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def run_vshadow_info(image_path: str, offset: int = 0) -> dict[str, object]:
     """List Volume Shadow Copy (VSS) snapshots in a disk image.
 
@@ -653,6 +802,7 @@ def run_vshadow_info(image_path: str, offset: int = 0) -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def run_chkrootkit(target_path: str | None = None) -> dict[str, object]:
     """Scan for known Linux rootkits and suspicious kernel modifications.
 
@@ -686,7 +836,7 @@ def run_chkrootkit(target_path: str | None = None) -> dict[str, object]:
             cmd,
             capture_output=True,
             text=True,
-            timeout=TOOL_TIMEOUT * 3,
+            timeout=adaptive_timeout(target_path or "/"),
             check=False,
         )
     except subprocess.TimeoutExpired:
@@ -715,6 +865,7 @@ def run_chkrootkit(target_path: str | None = None) -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def run_radare2(
     target_path: str,
     commands: str = "iI;iS;iz;afl",
@@ -779,6 +930,7 @@ def run_radare2(
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def run_tcpflow(pcap_path: str) -> dict[str, object]:
     """Reconstruct TCP streams from a PCAP file using tcpflow.
 
@@ -817,7 +969,7 @@ def run_tcpflow(pcap_path: str) -> dict[str, object]:
                 ["tcpflow", "-r", pcap_path, "-o", tmpdir],
                 capture_output=True,
                 text=True,
-                timeout=TOOL_TIMEOUT,
+                timeout=adaptive_timeout(pcap_path),
                 check=False,
             )
         except subprocess.TimeoutExpired:
@@ -852,6 +1004,7 @@ def run_tcpflow(pcap_path: str) -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def run_tcpxtract(pcap_path: str) -> dict[str, object]:
     """Extract files from TCP streams in a PCAP using tcpxtract.
 
@@ -890,7 +1043,7 @@ def run_tcpxtract(pcap_path: str) -> dict[str, object]:
                 ["tcpxtract", "-f", pcap_path, "-o", tmpdir],
                 capture_output=True,
                 text=True,
-                timeout=TOOL_TIMEOUT,
+                timeout=adaptive_timeout(pcap_path),
                 check=False,
             )
         except subprocess.TimeoutExpired:
@@ -1041,6 +1194,9 @@ def _run_dislocker_decrypt_mode(
             f"dislocker-fuse failed: {proc.stderr.strip()[:_PREVIEW_CHAR_LIMIT]}",
         )
 
+    with _dislocker_lock:
+        _dislocker_mounts[image_path] = mount_point
+
     result_text = (
         f"BitLocker volume decrypted and mounted at: {mount_point}\n"
         f"Decrypted image: {mount_point}/dislocker-file\n"
@@ -1066,6 +1222,7 @@ def _run_dislocker_decrypt_mode(
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def run_dislocker(
     image_path: str,
     recovery_key: str = "",
@@ -1106,6 +1263,7 @@ def run_dislocker(
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def run_bdeinfo(image_path: str) -> dict[str, object]:
     """Extract metadata from a BitLocker-encrypted volume using libbde.
 
@@ -1165,6 +1323,7 @@ def run_bdeinfo(image_path: str) -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def run_fvdeinfo(image_path: str) -> dict[str, object]:
     """Extract metadata from a FileVault-encrypted macOS volume.
 

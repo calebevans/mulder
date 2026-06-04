@@ -27,6 +27,7 @@ _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*\n(.*?)\n\s*```", re.DOTALL)
 _PLAN_REQUIRED_KEYS: set[str] = {"tasks"}
 _EXECUTOR_REQUIRED_KEYS: set[str] = {"results"}
 _FOLLOW_UP_REQUIRED_KEYS: set[str] = {"request"}
+_CATALOG_REQUIRED_KEYS: set[str] = {"systems"}
 _FOLLOW_UP_REQUEST_VALUE = "additional_plan"
 
 
@@ -60,12 +61,18 @@ class ExecutionResults:
         results: List of result dicts with keys: tool, status, source, error.
         turns_used: SDK turns consumed.
         has_failures: True if any result has status "error".
+        messages: Raw text messages from the executor session, used to
+            extract batch IDs for the post-executor wait step.
+        batch_ids: Batch IDs captured structurally from start_extraction_batch
+            tool result blocks during execution.
     """
 
     plan_id: str
     results: list[dict[str, Any]]
     turns_used: int
     has_failures: bool
+    messages: list[str] = field(default_factory=list)
+    batch_ids: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -93,6 +100,9 @@ class PhaseResult:
         phase_name: Identifier of the completed phase.
         success: Whether the phase and its gate both passed.
         messages: Collected assistant text messages from the phase.
+        tool_names: MCP tool short names invoked during the phase,
+            captured from ToolUseBlock events. Used by gate validators
+            (e.g. report gate checks for ``finalize_report``).
         turns_used: Total tool-use turns consumed.
         session_id: Agent session identifier from the final attempt.
         gate_result: Validation gate outcome, if a gate was evaluated.
@@ -100,17 +110,21 @@ class PhaseResult:
         follow_ups_used: Number of follow-up iterations used.
         context_exhausted: True if the session ended due to context
             window limits (prompt too long or max turns reached).
+        batch_ids: Batch IDs captured structurally from start_extraction_batch
+            tool result blocks during the session.
     """
 
     phase_name: str
     success: bool = False
     messages: list[str] = field(default_factory=list)
+    tool_names: list[str] = field(default_factory=list)
     turns_used: int = 0
     session_id: str = ""
     gate_result: Any = None
     plans_executed: int = 0
     follow_ups_used: int = 0
     context_exhausted: bool = False
+    batch_ids: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -190,6 +204,32 @@ def extract_follow_up_request(messages: list[str]) -> dict[str, Any] | None:
     return None
 
 
+def extract_catalog_result(messages: list[str]) -> dict[str, Any] | None:
+    """Extract the structured catalog JSON from catalog agent messages.
+
+    Searches messages in reverse order for a valid JSON object containing
+    a "systems" key with a non-empty list. Each entry in "systems" must
+    have at least a "name" field.
+
+    Args:
+        messages: List of text messages from the catalog agent session.
+
+    Returns:
+        Parsed dict with catalog data if valid JSON found, None otherwise.
+    """
+    for msg in reversed(messages):
+        result = _try_extract_json(msg, _CATALOG_REQUIRED_KEYS)
+        if result is not None:
+            systems = result.get("systems")
+            if (
+                isinstance(systems, list)
+                and len(systems) > 0
+                and all(isinstance(s, dict) and s.get("name") for s in systems)
+            ):
+                return result
+    return None
+
+
 def _try_extract_json(text: str, required_keys: set[str]) -> dict[str, Any] | None:
     """Attempt to extract a JSON object from text.
 
@@ -213,6 +253,35 @@ def _try_extract_json(text: str, required_keys: set[str]) -> dict[str, Any] | No
         return parsed
 
     return None
+
+
+def extract_json_from_text(text: str) -> dict[str, Any]:
+    """Extract and parse a JSON object from free-form text.
+
+    Canonical implementation for extracting JSON from unstructured agent
+    output. Tries direct parsing, code-fenced blocks, and brace-delimited
+    fallback in order.
+
+    Args:
+        text: Raw text that may contain a JSON object.
+
+    Returns:
+        Parsed dictionary, or empty dict if no valid JSON is found.
+    """
+    stripped = text.strip()
+    try:
+        parsed: object = json.loads(stripped)
+        if isinstance(parsed, dict):
+            return parsed
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    result = _try_extract_json(stripped, set())
+    if result is not None:
+        return result
+
+    logger.warning("Failed to parse JSON from tool response: %s", text[:200])
+    return {}
 
 
 def _safe_parse(text: str, required_keys: set[str]) -> dict[str, Any] | None:

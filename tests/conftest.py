@@ -13,6 +13,7 @@ import pytest
 from mulder.audit import AuditLog
 from mulder.db import CaseDB
 from mulder.models import Finding
+from mulder.orchestrator.gates import reset_gate_failure_counters
 
 
 def _install_sdk_stub() -> None:
@@ -34,6 +35,12 @@ def _install_sdk_stub() -> None:
 
 
 _install_sdk_stub()
+
+
+@pytest.fixture(autouse=True)
+def _reset_gate_counters() -> None:
+    """Reset module-level gate failure counters between tests."""
+    reset_gate_failure_counters()
 
 
 @pytest.fixture()

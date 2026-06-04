@@ -16,8 +16,8 @@ CHALLENGE TARGETS:
 - Could lateral movement indicators be normal admin activity?
 - Are there timestamps that break the proposed attack timeline?
 - Could data exfiltration indicators be normal backups or transfers?
-- Are signature hits on dual-use tools being over-attributed to
-  specific threat actors?
+- Are detections on dual-use or common tools being over-attributed
+  to specific threat actors?
 - Is forensic collection or IR system activity being misclassified
   as malicious?
 
@@ -32,6 +32,14 @@ No markdown fences. Produce a JSON plan:
 
 Focus tasks on search queries and correlate_across_sources to find
 counter-evidence for each challenged claim.
+
+AUDIT TASKS (always include):
+In addition to counter-analysis tasks, your plan MUST include these
+audit tasks so the analyst can verify investigation completeness:
+- audit_evidence_coverage
+- audit_tool_coverage
+- deduplicate_findings
+- check_finalize_readiness
 
 CONSTRAINTS:
 - Do NOT call extraction or analysis tools yourself.

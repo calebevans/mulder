@@ -21,15 +21,16 @@ from typing import Any
 
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
-from mulder.server.helpers import _PREVIEW_CHAR_LIMIT, hash_output, make_tool_call_id
+from mulder.server.helpers import (
+    _PREVIEW_CHAR_LIMIT,
+    adaptive_timeout,
+    hash_output,
+    make_tool_call_id,
+)
+from mulder.server.tool_access import Role, tool_access
 
 logger = logging.getLogger(__name__)
 
-_YARA_FILE_TIMEOUT = 120
-_YARA_MEMORY_TIMEOUT = 600
-_YARA_VOL_TIMEOUT = 600
-
-_YARA_RULES_DIR = Path("/opt/yara-rules")
 _SIGNATURE_BASE_DIR = Path("/opt/signature-base")
 
 _rules_updated = False
@@ -46,32 +47,26 @@ _YARA_STRING_RE = re.compile(r"^(0x[0-9a-fA-F]+):(\S+):\s*(.*)$")
 
 
 def _update_community_rules() -> None:
-    """Pull latest YARA rules from upstream repos (best-effort, once per session)."""
+    """Pull latest YARA rules from signature-base (best-effort, once per session)."""
     global _rules_updated  # noqa: PLW0603
     with _rules_lock:
         if _rules_updated:
             return
         _rules_updated = True
-    for repo_dir in (_YARA_RULES_DIR, _SIGNATURE_BASE_DIR):
-        if not (repo_dir / ".git").is_dir():
-            continue
-        try:
-            subprocess.run(
-                ["git", "-C", str(repo_dir), "pull", "--ff-only", "-q"],
-                capture_output=True,
-                timeout=30,
-                check=False,
-            )
-            logger.info("Updated YARA rules: %s", repo_dir.name)
-        except (subprocess.TimeoutExpired, OSError):
-            logger.debug("Could not update %s (no network?), using cached rules", repo_dir.name)
-
-
-def _collect_yara_rules_community() -> list[str]:
-    """Return .yar paths from the Yara-Rules/rules repo."""
-    if not _YARA_RULES_DIR.is_dir():
-        return []
-    return sorted(str(p) for p in _YARA_RULES_DIR.rglob("*.yar"))
+    if not (_SIGNATURE_BASE_DIR / ".git").is_dir():
+        return
+    try:
+        subprocess.run(
+            ["git", "-C", str(_SIGNATURE_BASE_DIR), "pull", "--ff-only", "-q"],
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        logger.info("Updated YARA rules: %s", _SIGNATURE_BASE_DIR.name)
+    except (subprocess.TimeoutExpired, OSError):
+        logger.debug(
+            "Could not update %s (no network?), using cached rules", _SIGNATURE_BASE_DIR.name
+        )
 
 
 def _collect_signature_base() -> list[str]:
@@ -88,20 +83,12 @@ _VALID_RULESETS = ("builtin", "standard", "full")
 
 
 def _collect_rules_for_ruleset(ruleset: str) -> list[str]:
-    """Collect rule file paths for the given ruleset level.
+    """Collect rule file paths for the requested ruleset level.
 
-    - ``"builtin"``: Yara-Rules/rules (~1,500 rules)
-    - ``"standard"``: same as builtin
-    - ``"full"``: Neo23x0/signature-base only (~4,000 rules)
-
-    The two repos are NOT combined because they share duplicate rule
-    identifiers that cause YARA compilation errors.  Signature-base is
-    the more comprehensive library and a superset of most yara-rules
-    detections.
+    All levels now resolve to Neo23x0/signature-base (~4,000 rules).
+    The ``ruleset`` parameter is preserved for API compatibility.
     """
-    if ruleset == "full":
-        return _collect_signature_base()
-    return _collect_yara_rules_community()
+    return _collect_signature_base()
 
 
 _valid_rules_cache: dict[int, list[str]] = {}
@@ -109,11 +96,13 @@ _valid_rules_lock = threading.Lock()
 
 
 def _validate_rule_files(rule_paths: list[str]) -> list[str]:
-    """Return only rule files that compile without errors.
+    """Return only rule files that compile without errors when combined.
 
     Caches results so repeated scans don't re-validate.  Attempts batch
     validation via a single index file first; falls back to individual
-    compilation if the batch fails.
+    compilation if the batch fails.  After individual validation, runs a
+    final combined pass to catch cross-file conflicts (e.g. duplicate
+    rule identifiers across different files).
     """
     cache_key = hash(tuple(sorted(rule_paths)))
     with _valid_rules_lock:
@@ -160,10 +149,86 @@ def _validate_rule_files(rule_paths: list[str]) -> list[str]:
         except (subprocess.TimeoutExpired, OSError):
             continue
 
-    logger.info("YARA rule validation: %d/%d files valid", len(valid), len(rule_paths))
+    logger.info(
+        "YARA rule validation: %d/%d files valid (individual)", len(valid), len(rule_paths)
+    )
+
+    valid = _resolve_cross_file_conflicts(valid)
+
     with _valid_rules_lock:
         _valid_rules_cache[cache_key] = valid
     return valid
+
+
+def _resolve_cross_file_conflicts(valid_paths: list[str]) -> list[str]:
+    """Remove files that cause cross-file compilation errors.
+
+    Individual rule files may each compile fine on their own but conflict
+    when combined (e.g. duplicate rule identifiers like ``WindowsPE``
+    defined in multiple files).  This function does a combined validation
+    pass and, on failure, uses incremental compilation to identify and
+    exclude the conflicting files.
+
+    Args:
+        valid_paths: Rule file paths that each compile individually.
+
+    Returns:
+        Subset of *valid_paths* that compile together without conflicts.
+    """
+    if len(valid_paths) <= 1:
+        return valid_paths
+
+    if _try_combined_compile(valid_paths):
+        return valid_paths
+
+    logger.info(
+        "Cross-file conflict detected among %d individually valid rule files; "
+        "running incremental compilation to identify conflicting files",
+        len(valid_paths),
+    )
+
+    kept: list[str] = []
+    for rp in valid_paths:
+        candidate = kept + [rp]
+        if _try_combined_compile(candidate):
+            kept.append(rp)
+        else:
+            logger.debug("Excluding conflicting rule file: %s", rp)
+
+    logger.info(
+        "Cross-file conflict resolution: %d/%d files retained",
+        len(kept),
+        len(valid_paths),
+    )
+    return kept
+
+
+def _try_combined_compile(paths: list[str]) -> bool:
+    """Test whether a set of rule files compile together without errors.
+
+    Args:
+        paths: Rule file paths to combine into one include file.
+
+    Returns:
+        True if YARA compiles the combined file successfully.
+    """
+    fd, idx_path = tempfile.mkstemp(suffix=".yar", prefix="mulder_yara_combined_")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            for rp in paths:
+                fh.write(f'include "{rp}"\n')
+        proc = subprocess.run(
+            ["yara", idx_path, "/dev/null"],
+            capture_output=True,
+            timeout=120,
+            check=False,
+        )
+        return proc.returncode == 0
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(idx_path)
 
 
 def _build_index_file(rule_paths: list[str]) -> tuple[str, bool]:
@@ -218,8 +283,18 @@ def _build_rules_args(
     return ([idx], cleanup) if idx else ([], False)
 
 
+_MEMORY_DUMP_EXTS = frozenset({".raw", ".mem", ".vmem", ".dmp", ".lime", ".001"})
+
+
 def _find_memory_image() -> str:
-    """Look up the memory dump path from ingested Volatility sources."""
+    """Look up the memory dump path from DB sources or the extracted directory.
+
+    Checks Volatility sources first (fastest path). If none are indexed
+    yet (e.g. volatility is still running), searches the case's
+    ``extracted/`` directory for common memory dump file extensions.
+    """
+    from mulder.server.app import get_cfg
+
     ctx = get_ctx()
     sources = ctx.db.get_sources()
     for s in sources:
@@ -230,9 +305,36 @@ def _find_memory_image() -> str:
                     "Has the evidence been moved or unmounted?"
                 )
             return s.source_path
+
+    cfg = get_cfg()
+
+    # Search the evidence root (memory dumps may be alongside disk images)
+    meta = ctx.db.get_case_metadata()
+    evidence_root = Path(meta.evidence_root) if meta.evidence_root else None
+    if evidence_root and evidence_root.is_dir():
+        for mem_file in evidence_root.rglob("*"):
+            if (
+                mem_file.is_file()
+                and mem_file.suffix.lower() in _MEMORY_DUMP_EXTS
+                and ("memory" in mem_file.name.lower() or "mem" in mem_file.parent.name.lower())
+            ):
+                logger.info("Found memory dump in evidence root: %s", mem_file)
+                return str(mem_file)
+
+    # Fallback: search extracted directory
+    extracted_dir = cfg.db_dir / "extracted"
+    if extracted_dir.is_dir():
+        for mem_file in extracted_dir.rglob("*"):
+            if mem_file.is_file() and mem_file.suffix.lower() in _MEMORY_DUMP_EXTS:
+                logger.info(
+                    "No Volatility sources indexed yet; found memory dump via filesystem scan: %s",
+                    mem_file,
+                )
+                return str(mem_file)
+
     raise RuntimeError(
-        "No Volatility sources found in this case. "
-        "Was a memory dump ingested with 'mulder ingest'?"
+        "No memory sources found in this case. Run run_volatility_batch first, "
+        "or ensure a memory dump exists in the evidence directory."
     )
 
 
@@ -444,29 +546,31 @@ def _run_yara_scan(
             f"Use search(query, source='{source_name}') or "
             f"get_raw_output('{source_name}') to retrieve match details."
         ),
+        "caveat": (
+            "Rule names do not confirm malware. Inspect the matched "
+            "strings/bytes to determine if they are malware-specific or "
+            "generic content found in legitimate software."
+        ),
     }
     return response
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def yara_scan_files(
     target_path: str,
     rules: str | None = None,
     ruleset: str = "builtin",
 ) -> dict[str, object]:
-    """Scan files on a mounted filesystem or extracted directory with YARA.
+    """Scan a mounted filesystem or extracted directory for malware using YARA rules.
 
-    *target_path* is scanned recursively.  *rules* can be a path to a
-    ``.yar`` file, a YARA rule string, or None to use the *ruleset*.
-    *ruleset* controls which rule libraries to load when *rules* is None:
+    Call after extracting files from a disk image or archive. Uses the
+    Neo23x0/signature-base ruleset (~4,000 rules) by default, or provide
+    custom rules via the rules parameter. Requires ``yara`` on PATH.
 
-    - ``"builtin"``  -- Yara-Rules/rules (~1,500 rules)
-    - ``"standard"`` -- same as builtin
-    - ``"full"``     -- Neo23x0/signature-base (~4,000 rules; not combined
-      with builtin due to duplicate rule identifiers)
-
-    Community rule repos are auto-updated on first use if network is
-    available.  Requires ``yara`` on PATH.  Read-only.
+    Indexes matches as ``yara.files``; use search(source='yara.files') to
+    review match details. Rule names alone do not confirm malware; inspect
+    matched strings to distinguish from generic content.
     """
     ctx = get_ctx()
     tc_id = make_tool_call_id()
@@ -506,7 +610,7 @@ def yara_scan_files(
     cmd = ["yara", "-r", "-s", *rules_args, target_path]
     return _run_yara_scan(
         cmd=cmd,
-        timeout=_YARA_FILE_TIMEOUT,
+        timeout=adaptive_timeout(target_path, per_gib=300),
         source_name="yara.files",
         tool_name="yara_scan_files",
         rules_args=rules_args,
@@ -520,24 +624,20 @@ def yara_scan_files(
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def yara_scan_memory(
     rules: str | None = None,
     ruleset: str = "builtin",
 ) -> dict[str, object]:
-    """Scan the ingested memory image with YARA.
+    """Scan the memory dump with YARA rules for malware signatures.
 
-    The memory image path is resolved from the case's Volatility sources.
-    *rules* can be a path to a ``.yar`` file, a YARA rule string, or None
-    to use the *ruleset*.  *ruleset* controls which rule libraries to load
-    when *rules* is None:
+    Call after run_volatility_batch has indexed memory sources (the memory
+    path is resolved automatically from Volatility source metadata). Uses
+    signature-base (~4,000 rules) by default. Requires ``yara`` on PATH.
 
-    - ``"builtin"``  -- Yara-Rules/rules (~1,500 rules)
-    - ``"standard"`` -- same as builtin
-    - ``"full"``     -- Neo23x0/signature-base (~4,000 rules; not combined
-      with builtin due to duplicate rule identifiers)
-
-    Community rule repos are auto-updated on first use if network is
-    available.  Requires ``yara`` on PATH.  Read-only.
+    Indexes matches as ``yara.memory``; use search(source='yara.memory')
+    to review. Multiple rule family matches often indicate over-matching
+    rather than multi-actor presence.
     """
     ctx = get_ctx()
     tc_id = make_tool_call_id()
@@ -586,7 +686,7 @@ def yara_scan_memory(
     cmd = ["yara", "-s", *rules_args, image_path]
     return _run_yara_scan(
         cmd=cmd,
-        timeout=_YARA_MEMORY_TIMEOUT,
+        timeout=adaptive_timeout(image_path, per_gib=300),
         source_name="yara.memory",
         tool_name="yara_scan_memory",
         rules_args=rules_args,
@@ -600,15 +700,18 @@ def yara_scan_memory(
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def yara_scan_with_volatility(
     pid: int | None = None, rules: str | None = None
 ) -> dict[str, object]:
-    """Scan process memory using Volatility 3's vadyarascan plugin.
+    """Scan process virtual address descriptors with YARA via Volatility 3's vadyarascan.
 
-    Scans all processes by default, or a single process when *pid* is
-    given.  *rules* can be a path to a ``.yar`` file, a YARA rule string,
-    or None to use built-in detection rules.  Requires Volatility 3 on
-    PATH.  Read-only.
+    Call after run_volatility_batch when you need per-process YARA
+    scanning (more precise than raw memory scan). Optionally target a
+    single PID. Requires Volatility 3 on PATH.
+
+    Indexes matches as ``yara.volatility``; results include PID and
+    virtual address for each match, enabling targeted process analysis.
     """
     from mulder.extractors.volatility import _find_vol_binary
 
@@ -669,7 +772,7 @@ def yara_scan_with_volatility(
 
     return _run_yara_scan(
         cmd=cmd,
-        timeout=_YARA_VOL_TIMEOUT,
+        timeout=adaptive_timeout(image_path, per_gib=300),
         source_name="yara.volatility",
         tool_name="yara_scan_with_volatility",
         rules_args=rules_args,

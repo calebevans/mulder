@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from mulder.extractors import DISK_IMAGE_EXTS
+from mulder.patterns import DISK_IMAGE_EXTS
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +50,8 @@ _PHONE_DB_NAMES = {
 _SQLITE_EXTS = {".sqlite", ".sqlitedb", ".db"}
 
 _AUTO_EXCLUDE_DIRS = {"precooked", "baseline-memory", "baseline"}
+
+_AUTORUNS_CSV_PATTERNS: tuple[str, ...] = ("autorunsc", "autoruns")
 
 _SKIP_FILENAMES: set[str] = {
     "readme",
@@ -226,6 +228,10 @@ class EvidenceClassifier:
         """Infer artifact type from *path* name and extension, or return None if skipped."""
         ext = path.suffix.lower()
         name = path.name.lower()
+
+        # Autoruns CSV files are classified before the general extension skip
+        if ext == ".csv" and any(pat in name for pat in _AUTORUNS_CSV_PATTERNS):
+            return ClassifiedEvidence(path=path, artifact_type="autoruns_csv")
 
         if name in _SKIP_FILENAMES or ext in _SKIP_EXTENSIONS:
             return None

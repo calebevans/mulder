@@ -1,6 +1,6 @@
 # Architecture
 
-Mulder is a forensic investigation platform consisting of two core components: an MCP server that exposes 110+ typed forensic tools with no shell access, and an agentic orchestrator that runs multi-phase investigations with quality gates.
+Mulder is a forensic investigation platform consisting of two core components: an MCP server that exposes 145+ typed forensic tools with no shell access, and an agentic orchestrator that runs multi-phase investigations with quality gates.
 
 ## System Overview
 
@@ -10,7 +10,7 @@ flowchart TB
         CLI["mulder CLI"]
         Orchestrator["Orchestrator\n(multi-phase pipeline)"]
         AgentSDK["Agent SDK\n(Session Runtime)"]
-        MCPServer["MCP Server\n(FastMCP, 110+ tools)"]
+        MCPServer["MCP Server\n(FastMCP, 145+ tools)"]
         DB["SQLite + FTS5\n(per-case database)"]
         AuditLog["Audit Log\n(append-only JSONL)"]
         Extractors["Extractors\n(forensic binaries)"]
@@ -25,7 +25,7 @@ flowchart TB
         YARA["YARA"]
         BulkExt["bulk_extractor"]
         EZTools["EZ Tools"]
-        Others["40+ more tools"]
+        Others["60+ more tools"]
     end
 
     Evidence["/evidence\n(read-only mount)"]
@@ -64,11 +64,31 @@ flowchart LR
         runPlaso["run_plaso"]
         runEvtx["run_evtx_parser\nindex_evtx_file"]
         runRegistry["run_registry_parser\nrun_regripper"]
-        runPcap["run_pcap_analysis"]
+        runPcap["run_pcap_analysis\nrun_zeek_analysis\nrun_suricata"]
         runBulk["run_bulk_extractor"]
         runYara["yara_scan_files\nyara_scan_memory"]
         runCarving["run_foremost\nrun_scalpel\nrun_photorec"]
         runMisc["run_clamav / run_exiftool\nrun_strings / run_radare2"]
+    end
+
+    subgraph binaryTools [Binary Analysis]
+        runBinary["triage_binary\nrun_capa\nrun_floss\nrun_detect_it_easy"]
+    end
+
+    subgraph docTools [Document and Email Forensics]
+        runDocs["analyze_office_document\nanalyze_pdf\nparse_pst"]
+    end
+
+    subgraph logTools [Log and SIEM Analysis]
+        runLogs["run_chainsaw\nrun_zircolite\nparse_journal"]
+    end
+
+    subgraph mobileTools [Mobile Forensics]
+        runMobile["run_aleapp\nrun_ileapp\nrun_mvt_android\nrun_mvt_ios"]
+    end
+
+    subgraph enrichTools [Enrichment and Quality]
+        runEnrich["enrich_iocs\nget_evidence_gaps\ndeduplicate_findings"]
     end
 
     subgraph compositeTools [Composite Analysis]
@@ -101,11 +121,11 @@ flowchart LR
 
 ### Resource Throttling
 
-Every tool call passes through an async resource gate before execution:
+Synchronous tool calls pass through an async resource gate before execution (via `_wrap_sync_tool`). Async tools such as `run_parallel` and `enrich_iocs` bypass this wrapper and manage their own concurrency.
 
 ```mermaid
 flowchart LR
-    request["MCP Request"] --> asyncWrapper["Async Wrapper"]
+    request["MCP Request"] --> asyncWrapper["Async Wrapper\n(_wrap_sync_tool)"]
     asyncWrapper --> resourceCheck{"Memory/CPU\nunder limit?"}
     resourceCheck -->|"No"| wait["anyio.sleep\n(5s intervals)"]
     wait --> resourceCheck
@@ -118,11 +138,11 @@ The `CapacityLimiter` bounds concurrent tool execution to the `--workers` count 
 
 ## Orchestration Pipeline
 
-The orchestrator (`mulder investigate`) runs six investigation phases sequentially. Most phases use a plan-and-execute pipeline (planner/executor/analyst) while catalog and report use single-agent sessions. The orchestrator uses the [Claude Agent SDK](https://docs.anthropic.com/en/docs/agents/claude-code-sdk) (`claude-agent-sdk`) for managing agent sessions.
+The orchestrator (`mulder investigate`) runs five investigation phases sequentially. Most phases use a plan-and-execute pipeline (planner/executor/analyst) while catalog and report use single-agent sessions. The orchestrator uses the [Claude Agent SDK](https://docs.anthropic.com/en/docs/agents/claude-code-sdk) (`claude-agent-sdk`) for managing agent sessions.
 
 ```mermaid
 flowchart TD
-    start["mulder investigate /evidence/path"] --> catalog
+    start["mulder investigate /evidence &lt;case_id&gt;"] --> catalog
     catalog["Phase 1: Catalog\n(Planner model, single agent)"]
     catalog --> catalogGate{"Catalog Gate\nCase created?"}
     catalogGate -->|"Pass"| identifySystems["Identify Systems\nfrom Catalog Output"]
@@ -144,7 +164,7 @@ flowchart TD
     extractionGate -->|"Fail"| retryE["Retry (1.5x turn limit)"]
     retryE --> extraction
 
-    subgraph crossSystem [Phase 3: Cross-System Analysis]
+    subgraph crossSystem [Phase 3: Cross-System Analysis + TI Enrichment]
         cp["Planner"] --> ce["Executor"] --> ca["Analyst"]
         ca -->|"follow-up"| cp
     end
@@ -154,48 +174,43 @@ flowchart TD
     crossGate -->|"Fail"| retryCS["Retry (1.5x turn limit)"]
     retryCS --> crossSystem
 
-    subgraph altNarrative [Phase 4: Alternative Narrative]
+    subgraph altNarrative [Phase 4: Alternative Narrative + Audit]
         np["Planner"] --> ne["Executor"] --> na["Analyst"]
+        na -->|"follow-up"| np
     end
 
-    altNarrative --> audit
+    altNarrative --> narrativeGate{"Narrative Gate\nAll finalize gates pass?"}
+    narrativeGate -->|"Pass"| report
+    narrativeGate -->|"Fail"| retryN["Retry (1.5x turn limit)"]
+    retryN --> altNarrative
 
-    subgraph audit [Phase 5: Audit]
-        ap["Planner"] --> ae["Executor"] --> aa["Analyst"]
-    end
-
-    audit --> auditGate{"Audit Gate\nAll finalize gates pass?"}
-    auditGate -->|"Pass"| report
-    auditGate -->|"Fail"| retryA["Retry (1.5x turn limit)"]
-    retryA --> audit
-
-    report["Phase 6: Report\n(Analyst model, single agent)"]
+    report["Phase 5: Report\n(Analyst model, single agent)"]
     report --> reportGate{"Report Gate\nfinalize_report called?"}
     reportGate -->|"Pass"| done["Investigation Complete"]
     reportGate -->|"Fail"| retryR["Retry (1.5x turn limit)"]
     retryR --> report
 ```
 
-The Alternative Narrative phase (Phase 4) is advisory: it has no hard quality gate and always proceeds to the audit phase regardless of output.
+The Alternative Narrative phase (Phase 4) combines counter-analysis with audit responsibilities (evidence coverage, tool coverage, deduplication). Its gate checks finalize readiness before proceeding to the report phase.
 
 ### Phase Configuration
 
 Each phase is defined by a `PhaseConfig` dataclass specifying:
 
 - **Pipeline mode**: Either `split` (planner/executor/analyst) or `single` (one agent session)
-- **Tool whitelist**: Per-role tool access; planners get discovery tools, executors get action tools, analysts get query tools
+- **Dynamic tool allowlists**: Built at import time from `@tool_access` declarations on each tool (see [Tool Access Control](#tool-access-control) below). Executors see only plan-relevant tools rather than the full 145+ surface.
 - **Model assignment**: Each role resolves its model via `ModelConfig.resolve(phase, role)` with support for per-phase overrides via config file
 - **Turn limit**: Maximum tool-use round trips per role session
 - **Follow-up limit**: Maximum planner/executor cycles the analyst can request before being capped
 - **Workers**: Configurable via `--workers` for concurrent extraction sessions
 - **Auto-compaction**: When context is exhausted mid-phase, the orchestrator restarts with a compact prompt that recovers state from the database
-- **Retry policy**: Maximum retries with 1.5x turn limit multiplier on each retry
+- **Retry policy**: Maximum retries with 1.5x turn limit multiplier on each retry (applied in single-mode phases only; split-mode phases retry without the budget multiplier)
 
 ### Deferred Retry System
 
 When a quality gate fails after a phase completes, the orchestrator retries with escalating budgets:
 
-1. **Budget multiplier**: Each retry gets 1.5x the previous attempt's turn limit
+1. **Budget multiplier**: In single-mode phases, each retry gets 1.5x the previous attempt's turn limit (`_RETRY_BUDGET_MULTIPLIER`). Split-mode phases retry without this multiplier.
 2. **Gap-specific remediation**: The gate reports specific gaps (e.g., "no sources indexed", "no MITRE mappings"), which are prepended to the retry prompt so the agent focuses on what's missing
 3. **Follow-up cycles**: Within a single attempt, the analyst can request additional planner/executor iterations (capped at `max_follow_ups`) when it identifies gaps that need more tool execution
 4. **Auto-compaction on exhaustion**: If context is exhausted mid-phase, the orchestrator restarts with a compact prompt that preserves state via the database rather than failing immediately
@@ -204,20 +219,22 @@ The retry system is bounded: each phase allows up to 2 retries (configurable), a
 
 ### Phase Gates
 
+Gates read the database directly to validate phase outcomes, avoiding LLM utility queries for validation checks.
+
 ```mermaid
 flowchart LR
     subgraph gates [Quality Gates]
         catalogGate["Catalog Gate"]
         extractionGate["Extraction Gate"]
         crossSystemGate["Cross-System Gate"]
-        auditGate["Audit Gate"]
+        narrativeGate["Narrative Gate"]
         reportGate["Report Gate"]
     end
 
-    catalogGate --- catalogChecks["Case exists in DB"]
-    extractionGate --- extractionChecks["Sources indexed > 0"]
+    catalogGate --- catalogChecks["Structured JSON output\nwith case_id, evidence_root, systems[]"]
+    extractionGate --- extractionChecks["Sources indexed > 0\n(consecutive failure tracking)"]
     crossSystemGate --- crossChecks["Findings submitted > 0\nMITRE mappings present"]
-    auditGate --- auditChecks["All finalize_report gates pass\n(except narrative, deferred to report)"]
+    narrativeGate --- narrativeChecks["All finalize_report gates pass\n(except narrative, deferred to report)"]
     reportGate --- reportChecks["finalize_report called successfully"]
 ```
 
@@ -225,6 +242,43 @@ When a gate fails, the orchestrator retries the phase with:
 - 1.5x the original turn limit
 - Gap-specific instructions prepended to the prompt (e.g., "No sources indexed after extraction")
 - Up to 2 retries per phase (configurable)
+- Consecutive failure tracking prevents indefinite silent auto-passes
+
+## Tool Access Control
+
+Tools self-declare which pipeline roles may invoke them via the `@tool_access` decorator (`src/mulder/server/tool_access.py`). At import time, `phases.py` calls `get_tools_for_role(Role.EXTRACT_EXECUTOR)` (and similar) to build allowlists dynamically, eliminating manual tool list maintenance.
+
+### The `@tool_access` Decorator
+
+```python
+@mcp.tool()
+@tool_access(EXECUTORS)
+@audited_tool("run_volatility")
+def run_volatility(...):
+    ...
+```
+
+The `Role` flag enum covers every pipeline slot: `CATALOG`, `EXTRACT_PLANNER`, `EXTRACT_EXECUTOR`, `EXTRACT_ANALYST`, `CROSS_PLANNER`, etc. Convenience unions (`PLANNERS`, `EXECUTORS`, `ANALYSTS`, `ALL_ROLES`) simplify common patterns.
+
+### The `@audited_tool` Decorator
+
+The `@audited_tool` decorator (`src/mulder/server/helpers.py`) wraps MCP tool functions to automatically handle `tool_call_id` generation, execution timing, and audit log recording. This eliminates the boilerplate of manually generating IDs, measuring elapsed time, and calling `audit.log_tool_call()` in every tool function.
+
+### Adding a New Tool
+
+1. Define the function under `src/mulder/server/tools/`
+2. Apply `@mcp.tool()` (FastMCP registration)
+3. Apply `@tool_access(...)` with the appropriate role flags
+4. Apply `@audited_tool("tool_name")` for audit logging
+5. The tool automatically appears in the correct phase allowlists
+
+### Tool Response Truncation
+
+Write tools (extractors, composite analyses) return only metadata plus a 500-character content preview in their MCP response. The `tool_response()` helper enforces this truncation whenever a `source` argument is provided, returning only `source_name`, `windows_indexed`, `line_count`, and a `content_preview` (first 500 chars). Full output is persisted to the database and accessible via `search` (FTS5) or `get_raw_output`. This keeps agent context windows focused on reasoning rather than raw forensic output.
+
+### Composite Tool Indexing
+
+All composite analysis tools (`find_persistence_mechanisms`, `correlate_across_sources`, etc.) persist their results to the database as searchable sources. This means composite output can be queried, correlated, and cited by later phases without requiring the original agent context.
 
 ## Database Schema
 
@@ -305,6 +359,12 @@ erDiagram
         text recorded_at
     }
 
+    kvStore {
+        text key PK
+        text value
+        text updated_at
+    }
+
     caseMetadata ||--o{ sources : "has"
     sources ||--o{ windows : "contains"
     windows ||--|| windowsFts : "indexed by"
@@ -321,10 +381,11 @@ erDiagram
 - **evidence_registry**: SHA-256 chain-of-custody records for original evidence files
 - **bookmarks**: Agent-flagged windows of interest for later review
 - **progress**: Per-system records of tools executed and questions addressed
+- **kv_store**: General-purpose key-value persistence for cross-tool state sharing. Stores TSK partition offsets (`tsk_partition_offset:<image>`), EVTX extraction directory paths, and other data that must survive server restarts and context compaction
 
 ### Write Safety
 
-SQLite does not support concurrent writers. Mulder serializes all writes through a `WriteQueue`: a dedicated daemon thread that drains a queue of write callables. Worker threads submit operations and block until completion. This eliminates `SQLITE_BUSY` errors entirely.
+SQLite does not support concurrent writers. Mulder serializes all writes through a `_WriteQueue`: a dedicated daemon thread that drains a queue of write callables. Worker threads submit operations and block until completion. This eliminates `SQLITE_BUSY` errors entirely.
 
 Read operations bypass the queue since WAL mode allows concurrent readers.
 
@@ -364,13 +425,43 @@ The `EvidenceClassifier` scans evidence directories and categorizes files by typ
 |---------------|------------------------|---------------|
 | Memory dump | `.mem`, `.vmem`, `.dmp`, `.raw` (large) | Volatility 3, YARA |
 | Disk image | `.e01`, `.dd`, `.vmdk`, `.vhd`, `.img` | Sleuthkit, Plaso, bulk_extractor |
-| Windows event log | `.evtx` | python-evtx, Hayabusa |
-| Network capture | `.pcap`, `.pcapng` | tshark, tcpflow |
-| Phone dump | Android/iOS directory structures | MVT |
+| Windows event log | `.evtx` | python-evtx, Hayabusa, Chainsaw |
+| Network capture | `.pcap`, `.pcapng` | tshark, tcpflow, Zeek, Suricata |
+| Binary / executable | `.exe`, `.dll`, `.elf`, `.so` | CAPA, FLOSS, Detect-It-Easy, radare2 |
+| Office document | `.doc`, `.docx`, `.xls`, `.ppt` | oletools |
+| PDF document | `.pdf` | Didier Stevens PDF tools |
+| Email archive | `.pst`, `.ost` | pst-utils / libpst |
+| Phone dump (Android) | Android directory structures | MVT, ALEAPP |
+| Phone dump (iOS) | iOS directory structures | MVT, iLEAPP |
+| Linux logs | `/var/log/*`, journal files | Zircolite, native parsing |
 | Archive | `.zip`, `.7z`, `.tar`, `.gz` | Internal extraction |
-| Log directory | `/var/log/*`, text files | Native parsing |
 
 Each extractor normalizes output into `WindowRow` objects (source_id, line_start, line_end, event_time, raw_text) for uniform database storage and FTS indexing.
+
+## Disk Image Extraction Strategy
+
+### TSK-First Extraction
+
+All disk tools use TSK `icat` as the primary extraction method for retrieving files from disk images. FUSE mounting (`ewfmount`, `guestmount`) is only attempted as a fallback when `icat` fails. This approach is more reliable across image formats and eliminates the need for `--privileged` containers in many cases.
+
+The extraction flow:
+
+1. **Primary**: `icat -o <offset> <image> <inode>` extracts the file directly from the image
+2. **Fallback**: If `icat` fails (e.g., corrupted filesystem entries), attempt FUSE mount and filesystem-level access
+
+### E01 Multi-Segment Support
+
+TSK reads E01 (EnCase) evidence files directly without requiring FUSE mounting. Multi-segment E01 files (`.E01`, `.E02`, etc.) are handled natively by passing the first segment path to TSK commands. This eliminates the `ewfmount` dependency for most disk analysis operations.
+
+### Multi-Partition Support
+
+When `run_fls` is invoked on a disk image, it automatically detects and analyzes all NTFS partitions above 100 MB (approximately 204,800 sectors). The `_parse_all_partitions` function filters the `mmls` output and returns data partitions sorted by size descending.
+
+For single-partition tools that need a sector offset, `_parse_partition_offset` selects the largest NTFS partition rather than the first one encountered. This prevents analysis from targeting a small recovery or system-reserved partition when a large data partition exists.
+
+### Partition Offset Persistence
+
+Resolved partition offsets are stored in the database `kv_store` table under the key prefix `tsk_partition_offset:<image_path>`. This allows tools invoked later in the pipeline (e.g., `extract_file_by_inode`, `index_evtx_file`) to retrieve the correct offset without re-running `mmls`. The kv_store pattern is also used for EVTX extraction directory paths that must survive server restarts and context compaction.
 
 ## Docker Deployment Architecture
 
@@ -400,7 +491,7 @@ flowchart TB
             node22["Node.js 22"]
             forensicBins["vol3, fls, plaso, hayabusa,\nyara, bulk_extractor, EZ tools,\nradare2, clamav, mvt, ..."]
             symbolTables["Volatility symbols\n(Windows + Linux)"]
-            yaraRules["YARA rules\n(signature-base + yara-rules)"]
+            yaraRules["YARA rules\n(signature-base)"]
             attackData["MITRE ATT&CK STIX data"]
         end
     end
@@ -420,7 +511,15 @@ The `submit_finding` tool performs server-side evidence-ref validation: every `t
 
 ### Global Consistency Analysis
 
-Before the audit phase, the orchestrator builds a dedup index from all findings, grouping them by shared IOCs (IPs, file paths, process names) extracted via regex to identify per-host duplicates of the same artifact. This consistency analysis is prepended to the audit phase prompt so the agent acts on code-discovered clusters rather than re-deriving them from raw text.
+Before the alternative narrative phase, the orchestrator builds a dedup index from all findings, grouping them by shared IOCs (IPs, file paths, process names) extracted via regex to identify per-host duplicates of the same artifact. This consistency analysis is prepended to the narrative phase prompt so the agent acts on code-discovered clusters rather than re-deriving them from raw text.
+
+### Enrichment Tools
+
+Several enrichment tools are available for agents to call during relevant phases. These are exposed through tool access control and referenced in phase prompts, but do not run automatically at phase boundaries:
+
+- **TI enrichment** (cross-system phase): The `enrich_iocs` tool queries public threat intelligence sources for context on extracted indicators (IPs, domains, file hashes), annotating findings with reputation data and known campaign associations.
+- **Evidence gap detection** (narrative phase): The `get_evidence_gaps` tool identifies artifact types that were present but not examined, coverage blind spots, and systems with incomplete extraction. Gap reports are surfaced to the narrative planner and extraction analyst for remediation.
+- **Finding deduplication** (narrative phase): The `deduplicate_findings` tool merges duplicate findings that describe the same artifact observed on multiple hosts, consolidating evidence references while preserving source attribution.
 
 ## Security Model
 
@@ -485,7 +584,7 @@ The `Correlator` class performs time-bounded joins across evidence sources. Give
 
 ## Report Generation
 
-The `ReportRenderer` uses Jinja2 templates to produce both Markdown and HTML reports:
+The `ReportRenderer` uses Jinja2 templates to produce Markdown and HTML reports:
 
 1. Aggregate findings sorted by severity
 2. Extract IOCs from descriptions using regex patterns
@@ -498,6 +597,20 @@ The `ReportRenderer` uses Jinja2 templates to produce both Markdown and HTML rep
 
 - **Markdown** (`{case_id}.report.md`): Plain-text report for version control and review
 - **HTML** (`{case_id}.report.html`): Self-contained styled page with dark/light theme toggle, sidebar navigation, per-model token usage breakdown, and collapsible source window samples
+
+IOC export (STIX 2.1, CSV) and ATT&CK Navigator layer generation are separate CLI commands (`mulder export-iocs`, `mulder export-navigator`), not part of the `ReportRenderer` flow.
+
+## Investigation Quality
+
+The pipeline incorporates several quality mechanisms that improve finding accuracy and coverage:
+
+- **Validation-before-confirmation**: YARA and malfind results include tool caveats in responses (e.g., packed binaries flagging as suspicious without being malicious). Agents must corroborate before elevating to confirmed findings.
+- **Behavioral context synthesis**: Extraction prompts gather user behavior context (location, network environment, usage patterns) to distinguish adversary artifacts from benign user activity.
+- **Anti-evasion awareness**: Counter-analysis prompts explicitly instruct the agent to consider anti-forensic techniques (timestomping, log clearing, process injection) when evaluating findings.
+- **Cross-platform prompts**: Extraction and analysis prompts are generalized across operating systems rather than assuming Windows-first.
+- **Auto companion EVTX indexing**: When `index_evtx_file` is called on a Security log, it automatically indexes System.evtx and PowerShell operational logs from the same extraction directory (if present and not already indexed), ensuring persistence and execution coverage without requiring explicit agent calls.
+- **IOC enrichment display**: Reports include enrichment annotations from threat intelligence lookups alongside IOC tables.
+- **Skip redundant extraction**: Tools check whether their output sources already exist in the database before running, preventing duplicate work during retries or follow-up cycles.
 
 ## Limitations and Known Considerations
 

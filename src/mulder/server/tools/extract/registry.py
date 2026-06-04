@@ -17,10 +17,12 @@ from mulder.server.helpers import (
     error_response,
     make_tool_call_id,
     require_binary,
+    sources_already_indexed,
     tool_response,
 )
+from mulder.server.tool_access import Role, tool_access
 from mulder.server.tools.extract.misc import _DOTNET, _find_ez_tool
-from mulder.server.tools.extract.tsk import _tsk_extract_files
+from mulder.server.tools.extract.tsk import _cleanup_tsk_extract_dir, _tsk_extract_files
 
 __all__ = [
     "run_registry_parser",
@@ -69,7 +71,9 @@ def _discover_hives_from_mount(mount_path: Path) -> list[tuple[Path, str]]:
     return hives
 
 
-def _discover_hives_via_tsk(image_path: str, offset: int | None = None) -> list[tuple[Path, str]]:
+def _discover_hives_via_tsk(
+    image_path: str, offset: int | None = None
+) -> tuple[list[tuple[Path, str]], str | None]:
     """Extract registry hives from a disk image using The Sleuth Kit.
 
     Falls back to TSK file extraction when mount discovery is not
@@ -80,7 +84,10 @@ def _discover_hives_via_tsk(image_path: str, offset: int | None = None) -> list[
         offset: Partition offset in bytes (reserved for future use).
 
     Returns:
-        List of (extracted_hive_path, hive_name_lowercase) tuples.
+        Tuple of (hive list, extract_dir). Each hive entry is
+        (extracted_hive_path, hive_name_lowercase). extract_dir is the
+        temp directory path for caller cleanup, or None when nothing was
+        extracted.
     """
     _ = offset
     extracted = _tsk_extract_files(
@@ -89,7 +96,10 @@ def _discover_hives_via_tsk(image_path: str, offset: int | None = None) -> list[
     )
 
     hives: list[tuple[Path, str]] = []
+    extract_dir: str | None = None
     for _rel, fpath in extracted:
+        if extract_dir is None:
+            extract_dir = str(fpath.parent)
         name_lower = fpath.name.lower()
         if name_lower not in _HIVE_NAMES:
             for h in _HIVE_NAMES:
@@ -100,7 +110,7 @@ def _discover_hives_via_tsk(image_path: str, offset: int | None = None) -> list[
                 continue
         hives.append((fpath, name_lower))
 
-    return hives
+    return hives, extract_dir
 
 
 def _parse_single_hive(
@@ -141,7 +151,7 @@ def _parse_single_hive(
                 hive_status = "recmd_timeout"
             else:
                 combined = ""
-                for csv_file in sorted(Path(tmpdir).glob("*.csv")):
+                for csv_file in sorted(Path(tmpdir).rglob("*.csv")):
                     combined += csv_file.read_text(encoding="utf-8", errors="replace")
                 if combined:
                     return extract_and_index(combined, source_name, image_path, "eztools")
@@ -209,40 +219,55 @@ def _summarize_hive_results(statuses: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 @mcp.tool()
-def run_registry_parser(image_path: str, hive: str | None = None) -> dict[str, object]:
-    """Parse Windows registry hives from a disk image.
+@tool_access(Role.EXTRACT_EXECUTOR)
+def run_registry_parser(
+    image_path: str,
+    hive: str | None = None,
+    force: bool = False,
+) -> dict[str, object]:
+    """Parse Windows registry hives from a disk image using RECmd or RegRipper.
 
-    Uses RECmd (EZ Tools) when available, falls back to RegRipper.
-    Parses all standard hives (SYSTEM, SOFTWARE, SAM, SECURITY,
-    NTUSER.DAT) unless a specific hive is requested.
+    Call after run_fls on disk images containing Windows installations.
+    Extracts hive files via TSK, then parses all standard hives (SYSTEM,
+    SOFTWARE, SAM, SECURITY) unless a specific hive is requested.
+
+    Indexes as ``registry.<hive>`` (e.g. ``registry.system``). Contains
+    service configurations, installed software, user accounts, and
+    autorun entries.
 
     Args:
         image_path: Path to the disk image.
         hive: Optional specific hive to parse (e.g. "SYSTEM", "SOFTWARE").
+        force: Re-run extraction even if sources already exist.
     """
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
-    params = {"image_path": image_path, "hive": hive}
+    params = {"image_path": image_path, "hive": hive, "force": force}
 
-    try:
-        with mount_disk_image(image_path) as mount_point:
-            try:
-                discovered = _discover_hives_from_mount(Path(mount_point))
-            except FileNotFoundError:
-                return error_response(
-                    tc_id, "run_registry_parser", params, "Registry config directory not found"
-                )
+    if not force:
+        existing = sources_already_indexed(["registry."], evidence_path=image_path)
+        if existing:
+            return tool_response(
+                tc_id,
+                "run_registry_parser",
+                params,
+                {
+                    "status": "skipped",
+                    "reason": "Sources already indexed from prior extraction",
+                    "existing_sources": existing,
+                },
+                "registry",
+                0.0,
+            )
 
-            if hive:
-                discovered = [(p, n) for p, n in discovered if n == hive.lower()]
+    discovered_tsk, tsk_extract_dir = _discover_hives_via_tsk(image_path)
+    if hive:
+        discovered_tsk = [(p, n) for p, n in discovered_tsk if n == hive.lower()]
 
-            if not discovered:
-                return error_response(
-                    tc_id, "run_registry_parser", params, "No registry hives found to parse"
-                )
-
+    if discovered_tsk:
+        try:
             results: list[dict[str, Any]] = []
-            for hive_path, hive_name in discovered:
+            for hive_path, hive_name in discovered_tsk:
                 source_name = f"registry.{hive_name}"
                 results.append(_parse_single_hive(hive_path, source_name, image_path))
 
@@ -255,33 +280,51 @@ def run_registry_parser(image_path: str, hive: str | None = None) -> dict[str, o
                 "registry",
                 elapsed,
             )
+        finally:
+            if tsk_extract_dir:
+                _cleanup_tsk_extract_dir(tsk_extract_dir)
+
+    if tsk_extract_dir:
+        _cleanup_tsk_extract_dir(tsk_extract_dir)
+
+    try:
+        with mount_disk_image(image_path) as mount_point:
+            try:
+                discovered_mount = _discover_hives_from_mount(Path(mount_point))
+            except FileNotFoundError:
+                return error_response(
+                    tc_id, "run_registry_parser", params, "Registry config directory not found"
+                )
+
+            if hive:
+                discovered_mount = [(p, n) for p, n in discovered_mount if n == hive.lower()]
+
+            if not discovered_mount:
+                return error_response(
+                    tc_id, "run_registry_parser", params, "No registry hives found to parse"
+                )
+
+            results_mount: list[dict[str, Any]] = []
+            for hive_path, hive_name in discovered_mount:
+                source_name = f"registry.{hive_name}"
+                results_mount.append(_parse_single_hive(hive_path, source_name, image_path))
+
+            elapsed = (time.monotonic() - t0) * 1000
+            return tool_response(
+                tc_id,
+                "run_registry_parser",
+                params,
+                _summarize_hive_results(results_mount),
+                "registry",
+                elapsed,
+            )
     except RuntimeError:
         pass
 
-    discovered_tsk = _discover_hives_via_tsk(image_path)
-    if hive:
-        discovered_tsk = [(p, n) for p, n in discovered_tsk if n == hive.lower()]
-
-    if not discovered_tsk:
-        return error_response(
-            tc_id,
-            "run_registry_parser",
-            params,
-            "Mount failed and no registry hives found via TSK extraction",
-            (time.monotonic() - t0) * 1000,
-        )
-
-    results_fb: list[dict[str, Any]] = []
-    for hive_path, hive_name in discovered_tsk:
-        source_name = f"registry.{hive_name}"
-        results_fb.append(_parse_single_hive(hive_path, source_name, image_path))
-
-    elapsed = (time.monotonic() - t0) * 1000
-    return tool_response(
+    return error_response(
         tc_id,
         "run_registry_parser",
         params,
-        _summarize_hive_results(results_fb),
-        "registry",
-        elapsed,
+        "No registry hives found via TSK extraction or mount",
+        (time.monotonic() - t0) * 1000,
     )

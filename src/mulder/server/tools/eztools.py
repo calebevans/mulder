@@ -12,6 +12,7 @@ from typing import Any
 
 from mulder.server.app import get_ctx, mcp
 from mulder.server.helpers import hash_output, make_tool_call_id, windowed_response
+from mulder.server.tool_access import Role, tool_access
 
 _EZ_SUMMARY_SAMPLE_CAP = 10
 _EZ_SUMMARY_TEXT_CAP = 200
@@ -131,11 +132,14 @@ def _make_ez_tool(source_name: str, tool_name: str) -> Any:
 # shares the same implementation (_make_ez_tool). The trade-off is that
 # these tools are invisible to @mcp.tool() grep searches and IDE
 # go-to-definition. If you add a new EZ tool, append to _EZ_TOOLS above.
+_EZ_TOOL_ROLES = Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR
+
 for _name, _source, _doc in _EZ_TOOLS:
     _fn = _make_ez_tool(_source, _name)
     _fn.__name__ = _name
     _fn.__qualname__ = _name
     _fn.__doc__ = _doc
+    _fn = tool_access(_EZ_TOOL_ROLES)(_fn)
     mcp.tool()(_fn)
 
 
@@ -151,6 +155,7 @@ _MFT_USN_CAP = 15
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR)
 def parse_mft(t_start: str, t_end: str) -> dict[str, object]:
     """Return MFT entries within a time range, parsed by MFTECmd (EZ Tools).
 
@@ -174,6 +179,7 @@ def parse_mft(t_start: str, t_end: str) -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR)
 def parse_usn_journal(t_start: str, t_end: str) -> dict[str, object]:
     """Return USN Journal entries within a time range, parsed by MFTECmd (EZ Tools).
 

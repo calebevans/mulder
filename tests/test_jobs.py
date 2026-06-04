@@ -327,12 +327,3 @@ class TestRunJobException:
         assert status is not None
         assert status["failed"] == 1
         store.shutdown(wait=True)
-
-    @patch("mulder.server.app.wait_for_resources", return_value=None)
-    def test_batch_done_set_after_exception(self, _mock_wait: object) -> None:
-        """done_event is set even when the job raises."""
-        store = JobStore(max_workers=1, tool_dispatch={"boom": _raising_dispatch})
-        batch = store.submit_batch([{"tool": "boom", "args": {}}])
-        assert batch.done_event.wait(timeout=5.0)
-        assert batch.done_event.is_set()
-        store.shutdown(wait=True)

@@ -1,12 +1,15 @@
 """MCP tools for artifact extraction and analysis.
 
-Browser history, plist parsing, generic SQLite queries, and
-steganography detection.  All tools use TSK icat to extract files from
-disk images without mounting, then parse the extracted content.
+Browser history, plist parsing, generic SQLite queries,
+steganography detection, and timestomping analysis.  All tools use
+TSK icat to extract files from disk images without mounting, then
+parse the extracted content.
 """
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import logging
 import plistlib
@@ -16,11 +19,14 @@ import sqlite3
 import subprocess
 import tempfile
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from mulder.server.app import get_cfg, get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import hash_output, make_tool_call_id
+from mulder.server.tool_access import Role, tool_access
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +85,11 @@ def _icat_extract(image_path: str, offset: int, inode: str, dest: Path) -> bool:
 
 
 def _resolve_image_and_offset() -> tuple[str, int]:
-    """Get disk image path and partition offset from indexed TSK data."""
+    """Get disk image path and primary partition offset from indexed TSK data.
+
+    Returns:
+        Tuple of ``(image_path, primary_partition_offset)``.
+    """
     ctx = get_ctx()
     sources = ctx.db.get_sources()
 
@@ -106,24 +116,50 @@ def _resolve_image_and_offset() -> tuple[str, int]:
     return image_path, offset
 
 
-def _find_inodes_by_pattern(pattern: str) -> list[tuple[str, str]]:
-    """Search fls listing for files matching a name pattern.
+_KV_SOURCE_OFFSET_PREFIX = "tsk_source_offset:"
 
-    Returns list of (inode_str, relative_path) tuples.
+
+def _find_inodes_by_pattern(pattern: str) -> list[tuple[str, str, int]]:
+    """Search all fls listings for files matching a name pattern.
+
+    Searches the primary ``tsk.filelist`` and any secondary partition
+    sources (``tsk.filelist.p1``, etc.), returning the correct partition
+    offset for each match so callers can extract via ``icat`` with the
+    right offset.
+
+    Args:
+        pattern: Regex pattern with at least two capture groups:
+            group(1) = inode string, group(2) = relative path.
+
+    Returns:
+        List of ``(inode_str, relative_path, partition_offset)`` tuples.
     """
     ctx = get_ctx()
-    windows = ctx.db.get_windows_by_source("tsk.filelist")
+    sources = ctx.db.get_sources()
+    fls_sources = sorted(
+        [s for s in sources if s.source_name.startswith("tsk.filelist")],
+        key=lambda s: s.source_name,
+    )
+
+    _, primary_offset = _resolve_image_and_offset()
     pat = re.compile(pattern, re.IGNORECASE | re.MULTILINE)
-    results: list[tuple[str, str]] = []
-    for w in windows:
-        for m in pat.finditer(w.raw_text):
-            inode_str = m.group(1).split("-")[0]
-            rel_path = m.group(2).strip()
-            results.append((inode_str, rel_path))
+    results: list[tuple[str, str, int]] = []
+
+    for src in fls_sources:
+        stored = ctx.db.get_kv(f"{_KV_SOURCE_OFFSET_PREFIX}{src.source_name}:{src.source_path}")
+        offset = int(stored) if stored is not None else primary_offset
+
+        windows = ctx.db.get_windows_by_source(src.source_name)
+        for w in windows:
+            for m in pat.finditer(w.raw_text):
+                inode_str = m.group(1).split("-")[0]
+                rel_path = m.group(2).strip()
+                results.append((inode_str, rel_path, offset))
     return results
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR | Role.CROSS_ANALYST)
 def parse_browser_history() -> dict[str, object]:
     """Extract browser history from Chrome, Firefox, and Safari databases.
 
@@ -138,7 +174,7 @@ def parse_browser_history() -> dict[str, object]:
     if not shutil.which("icat"):
         return {"tool_call_id": tc_id, "status": "error", "error_message": "icat not found"}
 
-    image_path, offset = _resolve_image_and_offset()
+    image_path, _ = _resolve_image_and_offset()
     if not image_path:
         return {"tool_call_id": tc_id, "status": "error", "error_message": "No disk image indexed"}
 
@@ -157,9 +193,9 @@ def parse_browser_history() -> dict[str, object]:
     with tempfile.TemporaryDirectory(prefix="mulder_browser_") as tmpdir:
         for pattern, browser in browser_patterns:
             matches = _find_inodes_by_pattern(pattern)
-            for inode_str, rel_path in matches:
+            for inode_str, rel_path, match_offset in matches:
                 db_path = Path(tmpdir) / f"{browser}_{inode_str}.sqlite"
-                if not _icat_extract(image_path, offset, inode_str, db_path):
+                if not _icat_extract(image_path, match_offset, inode_str, db_path):
                     continue
 
                 try:
@@ -227,6 +263,7 @@ def parse_browser_history() -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR | Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR)
 def parse_plist(plist_filter: str | None = None) -> dict[str, object]:
     """Extract and parse macOS plist files from a disk image.
 
@@ -246,7 +283,7 @@ def parse_plist(plist_filter: str | None = None) -> dict[str, object]:
     if not shutil.which("icat"):
         return {"tool_call_id": tc_id, "status": "error", "error_message": "icat not found"}
 
-    image_path, offset = _resolve_image_and_offset()
+    image_path, _ = _resolve_image_and_offset()
     if not image_path:
         return {"tool_call_id": tc_id, "status": "error", "error_message": "No disk image indexed"}
 
@@ -264,9 +301,9 @@ def parse_plist(plist_filter: str | None = None) -> dict[str, object]:
     all_results: list[str] = []
 
     with tempfile.TemporaryDirectory(prefix="mulder_plist_") as tmpdir:
-        for inode_str, rel_path in matches[:50]:
+        for inode_str, rel_path, match_offset in matches[:50]:
             plist_path = Path(tmpdir) / f"plist_{inode_str}.plist"
-            if not _icat_extract(image_path, offset, inode_str, plist_path):
+            if not _icat_extract(image_path, match_offset, inode_str, plist_path):
                 continue
 
             try:
@@ -302,6 +339,7 @@ def parse_plist(plist_filter: str | None = None) -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR | Role.EXTRACT_ANALYST)
 def query_sqlite_from_image(inode: int, query: str, description: str = "") -> dict[str, object]:
     """Extract a SQLite database from a disk image and run a SQL query.
 
@@ -398,6 +436,7 @@ def query_sqlite_from_image(inode: int, query: str, description: str = "") -> di
 
 
 @mcp.tool()
+@tool_access(Role.CATALOG | Role.EXTRACT_PLANNER | Role.EXTRACT_EXECUTOR)
 def list_directory(
     path: str,
     recursive: bool = False,
@@ -487,6 +526,7 @@ def list_directory(
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR | Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR)
 def read_evidence_file(
     file_path: str = "",
     max_bytes: int = 1_048_576,
@@ -614,6 +654,7 @@ def _convert_heic_to_jpeg(heic_files: list[Path], tmpdir: str) -> list[Path]:
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR | Role.EXTRACT_ANALYST)
 def detect_steganography(target_path: str) -> dict[str, object]:
     """Scan image files for hidden steganographic content.
 
@@ -788,6 +829,7 @@ def detect_steganography(target_path: str) -> dict[str, object]:
 
 
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def extract_steganography(
     image_path: str,
     passwords: list[str] | None = None,
@@ -937,4 +979,509 @@ def extract_steganography(
         "source": "steg.extracted",
         "password_used": password_used,
         "extracted_size": len(extracted_content) if extracted_content else 0,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Timestomping detection
+# ---------------------------------------------------------------------------
+
+_TIMESTOMP_THRESHOLD = timedelta(seconds=10)
+
+_TIMESTOMP_FALSE_POSITIVE_PATHS: tuple[str, ...] = (
+    "\\windows\\winsxs\\",
+    "\\windows\\installer\\",
+    "\\windows\\servicing\\",
+    "\\windows\\softwaredistribution\\",
+    "\\$recycle.bin\\",
+    "\\system volume information\\",
+    "\\windows\\assembly\\",
+)
+
+_SI_CREATED_COLUMNS = ("Created0x10_0", "Created0x10")
+_FN_CREATED_COLUMNS = ("Created0x30_0", "Created0x30")
+_SI_MODIFIED_COLUMNS = ("LastModified0x10_0", "Modified0x10_0", "Modified0x10", "LastModified0x10")
+_FILENAME_COLUMN_CANDIDATES = ("FileName", "Filename", "filename", "File Name")
+_PARENT_PATH_COLUMNS = ("ParentPath", "Parent Path", "parentpath")
+
+
+def _find_column(headers: list[str], candidates: tuple[str, ...]) -> str | None:
+    """Find the first matching column name from a list of candidates."""
+    for c in candidates:
+        if c in headers:
+            return c
+    return None
+
+
+def _parse_mft_timestamp(value: str) -> datetime | None:
+    """Parse a timestamp string from MFTECmd CSV output."""
+    if not value or not value.strip():
+        return None
+    value = value.strip()
+    for fmt in (
+        "%Y-%m-%d %H:%M:%S.%f",
+        "%Y-%m-%d %H:%M:%S",
+        "%m/%d/%Y %H:%M:%S",
+        "%m/%d/%Y %H:%M",
+    ):
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+    try:
+        return datetime.fromisoformat(value)
+    except (ValueError, TypeError):
+        return None
+
+
+def _is_false_positive_path(filepath: str) -> bool:
+    """Return True if the file path is a known source of benign timestamp anomalies."""
+    lower = filepath.lower()
+    return any(fp in lower for fp in _TIMESTOMP_FALSE_POSITIVE_PATHS)
+
+
+def _analyze_mft_windows_for_timestomping(
+    windows: list[Any],
+) -> list[dict[str, Any]]:
+    """Analyze raw MFT window text for timestamp anomalies.
+
+    Handles both CSV-formatted MFT data and tab-delimited output
+    by parsing each window's content.
+    """
+    suspicious: list[dict[str, Any]] = []
+
+    for w in windows:
+        text = w.raw_text
+        if not text.strip():
+            continue
+
+        lines = text.strip().splitlines()
+        if len(lines) < 2:
+            continue
+
+        reader = csv.reader(io.StringIO(text))
+        try:
+            headers = next(reader)
+        except StopIteration:
+            continue
+
+        headers = [h.strip() for h in headers]
+
+        si_created_col = _find_column(headers, _SI_CREATED_COLUMNS)
+        fn_created_col = _find_column(headers, _FN_CREATED_COLUMNS)
+        si_modified_col = _find_column(headers, _SI_MODIFIED_COLUMNS)
+        filename_col = _find_column(headers, _FILENAME_COLUMN_CANDIDATES)
+        parent_col = _find_column(headers, _PARENT_PATH_COLUMNS)
+
+        if not si_created_col or not fn_created_col:
+            continue
+
+        for row in reader:
+            if len(row) <= max(
+                headers.index(si_created_col),
+                headers.index(fn_created_col),
+            ):
+                continue
+
+            try:
+                si_created_val = row[headers.index(si_created_col)]
+                fn_created_val = row[headers.index(fn_created_col)]
+            except (IndexError, ValueError):
+                continue
+
+            si_created = _parse_mft_timestamp(si_created_val)
+            fn_created = _parse_mft_timestamp(fn_created_val)
+
+            if si_created is None or fn_created is None:
+                continue
+
+            fname = ""
+            if filename_col and headers.index(filename_col) < len(row):
+                fname = row[headers.index(filename_col)].strip()
+            parent = ""
+            if parent_col and headers.index(parent_col) < len(row):
+                parent = row[headers.index(parent_col)].strip()
+
+            full_path = f"{parent}\\{fname}" if parent else fname
+            if _is_false_positive_path(full_path):
+                continue
+
+            reasons: list[str] = []
+
+            # SI Created significantly earlier than FN Created = backdated
+            if fn_created - si_created > _TIMESTOMP_THRESHOLD:
+                reasons.append(
+                    f"SI Created ({si_created_val}) is earlier than "
+                    f"FN Created ({fn_created_val}) by "
+                    f"{fn_created - si_created}"
+                )
+
+            # SI Created > SI Modified is impossible without manipulation
+            if si_modified_col:
+                try:
+                    si_modified_val = row[headers.index(si_modified_col)]
+                    si_modified = _parse_mft_timestamp(si_modified_val)
+                    if si_modified and si_created > si_modified:
+                        reasons.append(
+                            f"SI Created ({si_created_val}) is after "
+                            f"SI Modified ({si_modified_val})"
+                        )
+                except (IndexError, ValueError):
+                    pass
+
+            if reasons:
+                suspicious.append(
+                    {
+                        "file": full_path,
+                        "si_created": si_created_val,
+                        "fn_created": fn_created_val,
+                        "reasons": reasons,
+                    }
+                )
+
+    return suspicious
+
+
+@mcp.tool()
+@tool_access(Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR | Role.NARRATIVE_EXECUTOR)
+def detect_timestomping() -> dict[str, object]:
+    """Analyze MFT data for files with manipulated timestamps (timestomping).
+
+    Reads the indexed ``ez.mft`` source (MFTECmd output) and compares
+    $STANDARD_INFORMATION timestamps against $FILE_NAME timestamps for
+    each file entry.  Flags files where:
+
+    - $SI Created is significantly earlier than $FN Created (SI was
+      backdated to blend in with legitimate files)
+    - $SI Created is later than $SI Modified (impossible without
+      timestamp manipulation)
+
+    Filters out known false positives from Windows Update, servicing,
+    and installer paths.  Read-only.
+    """
+    ctx = get_ctx()
+    tc_id = make_tool_call_id()
+    t0 = time.monotonic()
+
+    sources = ctx.db.get_sources()
+    mft_source = next(
+        (s for s in sources if s.source_name == "ez.mft" or s.source_name.startswith("ez.mft.")),
+        None,
+    )
+
+    if mft_source is None:
+        elapsed = (time.monotonic() - t0) * 1000
+        ctx.audit.log_tool_call(
+            tool_call_id=tc_id,
+            tool_name="detect_timestomping",
+            params={},
+            output_hash=hash_output({"error": "no_mft"}),
+            duration_ms=elapsed,
+        )
+        return {
+            "tool_call_id": tc_id,
+            "status": "error",
+            "error_message": (
+                "No MFT data indexed. Run MFTECmd first: run_ez_tool('MFTECmd', '<image_path>')"
+            ),
+            "suggestion": "run_ez_tool('MFTECmd', '<image_path>')",
+        }
+
+    windows = ctx.db.get_windows_by_source_prefix("ez.mft")
+    if not windows:
+        elapsed = (time.monotonic() - t0) * 1000
+        ctx.audit.log_tool_call(
+            tool_call_id=tc_id,
+            tool_name="detect_timestomping",
+            params={},
+            output_hash=hash_output({"error": "empty_mft"}),
+            duration_ms=elapsed,
+        )
+        return {
+            "tool_call_id": tc_id,
+            "status": "error",
+            "error_message": "MFT source is indexed but contains no data windows.",
+        }
+
+    suspicious = _analyze_mft_windows_for_timestomping(windows)
+
+    if suspicious:
+        output_lines: list[str] = []
+        for entry in suspicious:
+            reasons_str = "; ".join(entry["reasons"])
+            output_lines.append(
+                f"{entry['file']}\tSI_Created={entry['si_created']}\t"
+                f"FN_Created={entry['fn_created']}\t{reasons_str}"
+            )
+        combined = "\n".join(output_lines)
+        summary = extract_and_index(
+            combined, "forensic.timestomping", "mft_analysis", "timestomp_detector"
+        )
+    else:
+        summary = {
+            "status": "no_results",
+            "message": (
+                f"No timestomping indicators found in {len(windows)} MFT windows. "
+                "This does not guarantee absence of timestomping if SI/FN columns "
+                "are not present in the MFTECmd output format."
+            ),
+        }
+
+    elapsed = (time.monotonic() - t0) * 1000
+    ctx.audit.log_tool_call(
+        tool_call_id=tc_id,
+        tool_name="detect_timestomping",
+        params={},
+        output_hash=hash_output(summary),
+        duration_ms=elapsed,
+    )
+    return {
+        "tool_call_id": tc_id,
+        "status": "success",
+        "results": summary,
+        "source": "forensic.timestomping",
+        "result_count": len(suspicious),
+        "total_mft_windows_analyzed": len(windows),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Sysinternals Autoruns CSV parsing
+# ---------------------------------------------------------------------------
+
+_AUTORUNS_GLOB_PATTERNS: tuple[str, ...] = (
+    "*autorunsc*.csv",
+    "*autoruns*.csv",
+)
+
+_AUTORUNS_KEY_COLUMNS: tuple[str, ...] = (
+    "Entry Location",
+    "Entry",
+    "Enabled",
+    "Category",
+    "Image Path",
+    "Launch String",
+    "Signer",
+    "Company",
+    "Description",
+    "MD5",
+    "SHA-256",
+    "Time",
+    "Profile",
+)
+
+
+def _discover_autoruns_csvs(evidence_path: str) -> list[Path]:
+    """Find Autoruns CSV files in the evidence or extracted directories.
+
+    Searches both the evidence root and the case db_dir for files matching
+    common Autoruns export naming patterns.
+    """
+    import fnmatch as _fnmatch
+
+    candidates: list[Path] = []
+    search_roots: list[Path] = []
+
+    ctx = get_ctx()
+    meta = ctx.db.get_case_metadata()
+    if meta and meta.evidence_root:
+        search_roots.append(Path(meta.evidence_root))
+    cfg = get_cfg()
+    search_roots.append(Path(cfg.db_dir))
+
+    if evidence_path:
+        ep = Path(evidence_path)
+        if ep.is_file():
+            return [ep] if ep.exists() else []
+        if ep.is_dir():
+            search_roots.insert(0, ep)
+
+    seen: set[Path] = set()
+    for root in search_roots:
+        if not root.exists():
+            continue
+        for item in root.rglob("*.csv"):
+            name_lower = item.name.lower()
+            if any(_fnmatch.fnmatch(name_lower, pat) for pat in _AUTORUNS_GLOB_PATTERNS):
+                resolved = item.resolve()
+                if resolved not in seen:
+                    seen.add(resolved)
+                    candidates.append(item)
+
+    return sorted(candidates)
+
+
+def _parse_autoruns_csv_content(csv_path: Path) -> tuple[list[str], str]:
+    """Parse an Autoruns CSV and return formatted lines and hostname hint.
+
+    Handles both comma-separated and tab-separated variants, and is
+    robust to missing columns. Returns (lines, hostname).
+    """
+    try:
+        raw = csv_path.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        raw = csv_path.read_text(encoding="utf-8", errors="replace")
+
+    if not raw.strip():
+        return [], ""
+
+    # Detect delimiter: if header has tabs, treat as TSV
+    first_line = raw.split("\n", 1)[0]
+    delimiter = "\t" if "\t" in first_line and "," not in first_line else ","
+
+    reader = csv.DictReader(io.StringIO(raw), delimiter=delimiter)
+    if not reader.fieldnames:
+        return [], ""
+
+    fieldnames = [f.strip() for f in reader.fieldnames]
+    reader.fieldnames = fieldnames
+
+    hostname = ""
+    if "Profile" in fieldnames:
+        pass  # extract from first row below
+
+    lines: list[str] = []
+    for row in reader:
+        entry_location = row.get("Entry Location", "").strip()
+        entry_name = row.get("Entry", "").strip()
+        category = row.get("Category", "").strip()
+        image_path = row.get("Image Path", "").strip()
+        enabled = row.get("Enabled", "").strip()
+        signer = row.get("Signer", "").strip()
+        launch_string = row.get("Launch String", "").strip()
+        company = row.get("Company", "").strip()
+        description = row.get("Description", "").strip()
+        timestamp = row.get("Time", "").strip()
+        profile = row.get("Profile", "").strip()
+        md5 = row.get("MD5", "").strip()
+        sha256 = row.get("SHA-256", row.get("SHA256", "")).strip()
+
+        if not hostname and profile:
+            hostname = profile.replace("\\", "_").replace(" ", "_").lower()
+
+        parts = [
+            f"Category={category}" if category else "",
+            f"Location={entry_location}" if entry_location else "",
+            f"Entry={entry_name}" if entry_name else "",
+            f"ImagePath={image_path}" if image_path else "",
+            f"LaunchString={launch_string}" if launch_string else "",
+            f"Enabled={enabled}" if enabled else "",
+            f"Signer={signer}" if signer else "",
+            f"Company={company}" if company else "",
+            f"Description={description}" if description else "",
+            f"Time={timestamp}" if timestamp else "",
+            f"MD5={md5}" if md5 else "",
+            f"SHA256={sha256}" if sha256 else "",
+        ]
+        line = "\t".join(p for p in parts if p)
+        if line:
+            lines.append(line)
+
+    return lines, hostname
+
+
+@mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR | Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR)
+def parse_autoruns(csv_path: str = "", force: bool = False) -> dict[str, object]:
+    """Parse Sysinternals Autoruns CSV output to identify persistence mechanisms.
+
+    Call when autoruns CSV files are present in the evidence. Indexes all
+    autostart entries (services, registry, scheduled tasks, drivers) for
+    searching. Output indexed as 'autoruns.*'.
+
+    Args:
+        csv_path: Path to the Autoruns CSV file (or auto-discover from
+            evidence/extracted directories if empty).
+        force: Re-run even if already indexed.
+    """
+    from mulder.server.helpers import sources_already_indexed
+
+    ctx = get_ctx()
+    tc_id = make_tool_call_id()
+    t0 = time.monotonic()
+    params: dict[str, object] = {"csv_path": csv_path, "force": force}
+
+    if not force:
+        existing = sources_already_indexed(["autoruns."])
+        if existing:
+            elapsed = (time.monotonic() - t0) * 1000
+            ctx.audit.log_tool_call(
+                tool_call_id=tc_id,
+                tool_name="parse_autoruns",
+                params=params,
+                output_hash=hash_output({"skipped": existing}),
+                duration_ms=elapsed,
+            )
+            return {
+                "tool_call_id": tc_id,
+                "status": "already_indexed",
+                "existing_sources": existing,
+                "hint": "Use force=True to re-index.",
+            }
+
+    csv_files = (
+        [Path(csv_path)]
+        if csv_path and Path(csv_path).is_file()
+        else _discover_autoruns_csvs(csv_path)
+    )
+
+    if not csv_files:
+        elapsed = (time.monotonic() - t0) * 1000
+        ctx.audit.log_tool_call(
+            tool_call_id=tc_id,
+            tool_name="parse_autoruns",
+            params=params,
+            output_hash=hash_output({"error": "no_csv"}),
+            duration_ms=elapsed,
+        )
+        return {
+            "tool_call_id": tc_id,
+            "status": "error",
+            "error_message": (
+                "No Autoruns CSV files found. "
+                "Provide csv_path or place files in evidence directory."
+            ),
+        }
+
+    total_entries = 0
+    indexed_sources: list[str] = []
+
+    for csv_file in csv_files:
+        lines, hostname = _parse_autoruns_csv_content(csv_file)
+        if not lines:
+            continue
+
+        source_name = f"autoruns.{hostname}" if hostname else "autoruns"
+        combined = "\n".join(lines)
+        extract_and_index(combined, source_name, str(csv_file), "autoruns_parser")
+        total_entries += len(lines)
+        indexed_sources.append(source_name)
+
+    if not indexed_sources:
+        summary: dict[str, object] = {
+            "status": "no_results",
+            "message": "Autoruns CSV files found but contained no parseable entries.",
+        }
+    else:
+        summary = {
+            "status": "success",
+            "sources_indexed": indexed_sources,
+            "total_entries": total_entries,
+            "files_parsed": len(csv_files),
+        }
+
+    elapsed = (time.monotonic() - t0) * 1000
+    ctx.audit.log_tool_call(
+        tool_call_id=tc_id,
+        tool_name="parse_autoruns",
+        params=params,
+        output_hash=hash_output(summary),
+        duration_ms=elapsed,
+    )
+    return {
+        "tool_call_id": tc_id,
+        "status": "success" if indexed_sources else "no_results",
+        "results": summary,
+        "sources": indexed_sources,
+        "result_count": total_entries,
     }

@@ -2,18 +2,21 @@
 
 Provides ``extract_and_index`` (the store pipeline used by every
 extraction tool) and ``mount_disk_image`` (a context manager for safely
-mounting E01/raw disk images).
+mounting E01/raw disk images with thread-safe caching).
 """
 
 from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import re
 import shutil
 import tempfile
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -189,26 +192,116 @@ def extract_and_index(
     }
 
 
+@dataclass
+class _MountEntry:
+    """Internal bookkeeping for a single cached mount point."""
+
+    mount_dir: Path
+    refcount: int = 0
+    ready: threading.Event = field(default_factory=threading.Event)
+    error: BaseException | None = None
+    mounted: bool = False
+
+
+class _MountCache:
+    """Thread-safe cache that deduplicates concurrent disk image mounts.
+
+    Each unique image path (canonicalized via ``os.path.realpath``) gets at
+    most one active FUSE mount.  Concurrent callers block until the initial
+    mount completes, then share the resulting mount point.  The mount is
+    torn down only when the last caller releases it.
+    """
+
+    def __init__(self) -> None:
+        """Initialize an empty cache with its protecting lock."""
+        self._lock = threading.Lock()
+        self._entries: dict[str, _MountEntry] = {}
+
+    @contextmanager
+    def acquire(self, image_path: str) -> Iterator[str]:
+        """Yield a shared mount point for *image_path*, mounting if needed.
+
+        The first caller performs the actual mount; subsequent concurrent
+        callers for the same canonical path block until that mount finishes,
+        then receive the same mount point.  On context exit the reference
+        count is decremented, and the last caller unmounts and cleans up.
+
+        Args:
+            image_path: Filesystem path to the disk image file.
+
+        Yields:
+            The directory where the image is mounted.
+
+        Raises:
+            RuntimeError: If the underlying mount operation fails.
+        """
+        canonical = os.path.realpath(image_path)
+        is_owner = False
+
+        with self._lock:
+            if canonical not in self._entries:
+                mount_dir = Path(tempfile.mkdtemp(prefix="mulder_mount_"))
+                self._entries[canonical] = _MountEntry(mount_dir=mount_dir)
+                is_owner = True
+            entry = self._entries[canonical]
+            entry.refcount += 1
+
+        if is_owner:
+            try:
+                mounted = _mount_image(Path(image_path), entry.mount_dir)
+                if mounted:
+                    entry.mounted = True
+                else:
+                    entry.error = RuntimeError(f"Failed to mount disk image: {image_path}")
+            except Exception as exc:
+                entry.error = exc
+            finally:
+                entry.ready.set()
+        else:
+            entry.ready.wait()
+
+        if entry.error is not None:
+            self._release(canonical, entry)
+            raise RuntimeError(f"Failed to mount disk image: {image_path}") from entry.error
+
+        try:
+            yield str(entry.mount_dir)
+        finally:
+            self._release(canonical, entry)
+
+    def _release(self, canonical: str, entry: _MountEntry) -> None:
+        """Decrement refcount, unmounting and cleaning up if last user.
+
+        Args:
+            canonical: Canonical (realpath) cache key.
+            entry: The mount entry being released.
+        """
+        do_cleanup = False
+        with self._lock:
+            entry.refcount -= 1
+            if entry.refcount == 0:
+                self._entries.pop(canonical, None)
+                do_cleanup = True
+
+        if do_cleanup:
+            if entry.mounted:
+                _unmount_image(entry.mount_dir)
+            with suppress(OSError):
+                shutil.rmtree(entry.mount_dir, ignore_errors=True)
+
+
+_mount_cache = _MountCache()
+
+
 @contextmanager
 def mount_disk_image(image_path: str) -> Iterator[str]:
     """Mount a disk image (E01 or raw) read-only and yield the mount point.
 
-    On exit, the image is unmounted and the temp directory cleaned up.
+    Uses a thread-safe cache so that concurrent callers for the same image
+    share a single mount.  The image is unmounted and the temp directory
+    cleaned up when the last caller exits.
+
     Raises ``RuntimeError`` if the image cannot be mounted.
     """
-    img = Path(image_path)
-    mount_dir = Path(tempfile.mkdtemp(prefix="mulder_mount_"))
-    mounted = False
-
-    try:
-        mounted = _mount_image(img, mount_dir)
-
-        if not mounted:
-            raise RuntimeError(f"Failed to mount disk image: {image_path}")
-
-        yield str(mount_dir)
-    finally:
-        if mounted:
-            _unmount_image(mount_dir)
-        with suppress(OSError):
-            shutil.rmtree(mount_dir, ignore_errors=True)
+    with _mount_cache.acquire(image_path) as mount_point:
+        yield mount_point

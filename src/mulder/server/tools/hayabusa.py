@@ -17,14 +17,18 @@ import time
 from collections import Counter
 from pathlib import Path
 
+from mulder.patterns import DISK_IMAGE_EXTS
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
     _PREVIEW_CHAR_LIMIT,
+    adaptive_timeout,
     error_response,
-    hash_output,
     make_tool_call_id,
+    sources_already_indexed,
+    tool_response,
 )
+from mulder.server.tool_access import Role, tool_access
 
 logger = logging.getLogger(__name__)
 
@@ -33,48 +37,133 @@ _HAYABUSA_TIMEOUT = 300
 _VALID_SEVERITIES = ("informational", "low", "medium", "high", "critical")
 
 
+def _dir_has_evtx(directory: str) -> bool:
+    """Return True if *directory* contains at least one ``.evtx`` file."""
+    return next(Path(directory).rglob("*.evtx"), None) is not None
+
+
 def _resolve_evtx_dir(evtx_dir: str | None, image_path: str | None = None) -> str | None:
     """Return a valid EVTX directory path, or None.
 
-    Checks *evtx_dir* first, then looks up *image_path* in the
-    per-image extraction dict, and finally falls back to the most
-    recently extracted directory.
+    Each candidate is validated to contain at least one ``.evtx`` file
+    before being accepted, so stale or empty extraction directories are
+    skipped automatically.
+
+    Resolution order:
+    1. Explicit *evtx_dir* if it exists and contains EVTX files.
+    2. Prior extraction from ``run_evtx_parser`` keyed by *image_path*
+       (in-memory cache).
+    3. Any prior extraction directory (newest first) that still has files
+       (in-memory cache).
+    4. DB ``kv_store`` fallback (``evtx_extract_dir:{image_path}`` then
+       ``evtx_extract_dir``), for cross-process persistence when the
+       server restarts between orchestrator phases.
+    5. Inline EVTX extraction from *image_path* using the same TSK +
+       carved-EVTX strategy as ``run_evtx_parser``.
+
+    Args:
+        evtx_dir: Explicit directory containing ``.evtx`` files.
+        image_path: Disk image path; used for lookup or inline extraction.
+
+    Returns:
+        Path to a directory containing EVTX files, or None.
     """
-    if evtx_dir and Path(evtx_dir).is_dir():
+    if evtx_dir and Path(evtx_dir).is_dir() and _dir_has_evtx(evtx_dir):
         return evtx_dir
 
     from mulder.server.tools.extract.evtx import _evtx_extract_dirs
 
     if image_path and image_path in _evtx_extract_dirs:
         d = _evtx_extract_dirs[image_path]
-        if Path(d).is_dir():
+        if Path(d).is_dir() and _dir_has_evtx(d):
             return d
-    if _evtx_extract_dirs:
-        d = next(reversed(_evtx_extract_dirs.values()))
-        if Path(d).is_dir():
+
+    for d in reversed(list(_evtx_extract_dirs.values())):
+        if Path(d).is_dir() and _dir_has_evtx(d):
             return d
+
+    try:
+        ctx = get_ctx()
+        if image_path:
+            db_dir = ctx.db.get_kv(f"evtx_extract_dir:{image_path}")
+            if db_dir and Path(db_dir).is_dir() and _dir_has_evtx(db_dir):
+                return db_dir
+        db_dir = ctx.db.get_kv("evtx_extract_dir") or ""
+        if db_dir and Path(db_dir).is_dir() and _dir_has_evtx(db_dir):
+            return db_dir
+    except Exception:
+        logger.debug("Failed to read evtx_extract_dir from DB kv_store", exc_info=True)
+
+    if (
+        image_path
+        and Path(image_path).exists()
+        and Path(image_path).suffix.lower() in DISK_IMAGE_EXTS
+    ):
+        return _extract_evtx_inline(image_path)
 
     return None
 
 
+def _extract_evtx_inline(image_path: str) -> str | None:
+    """Extract EVTX files from a disk image for Hayabusa analysis.
+
+    Uses the same two-stage strategy as ``run_evtx_parser``: TSK
+    icat extraction first, then a bulk_extractor carved-EVTX fallback.
+    The extracted directory is registered in ``_evtx_extract_dirs`` so
+    subsequent tools can reuse it.
+
+    Args:
+        image_path: Path to a disk image (E01, raw, dd).
+
+    Returns:
+        Path to the extraction directory, or None if no EVTX files found.
+    """
+    from mulder.server.tools.extract.evtx import (
+        _evtx_extract_dirs,
+        _extract_evtx_from_image,
+        _find_carved_evtx,
+    )
+
+    logger.info(
+        "Hayabusa: no prior EVTX extraction found; extracting inline from %s",
+        image_path,
+    )
+    extract_dir = tempfile.mkdtemp(prefix="mulder_hayabusa_evtx_")
+    evtx_files = _extract_evtx_from_image(image_path, extract_dir)
+    if not evtx_files:
+        evtx_files = _find_carved_evtx(extract_dir)
+    if evtx_files:
+        _evtx_extract_dirs[image_path] = extract_dir
+        logger.info(
+            "Hayabusa: extracted %d EVTX files from %s",
+            len(evtx_files),
+            image_path,
+        )
+        return extract_dir
+
+    shutil.rmtree(extract_dir, ignore_errors=True)
+    return None
+
+
 @mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
 def run_hayabusa(
     evtx_dir: str = "",
     min_severity: str = "medium",
     image_path: str = "",
+    force: bool = False,
 ) -> dict[str, object]:
-    """Scan EVTX files with Hayabusa against 3,700+ Sigma detection rules.
+    """Detect threats in EVTX files using 3,700+ Sigma rules via Hayabusa.
 
-    Runs the Hayabusa Sigma rule engine against all ``.evtx`` files in a
-    directory.  Returns detection alerts with severity levels and MITRE
-    ATT&CK technique mappings.  Results are indexed into the case DB as
-    ``hayabusa.alerts`` for subsequent searching.
+    Call immediately after run_evtx_parser to get a prioritized list of
+    suspicious events with MITRE ATT&CK technique mappings. Automatically
+    locates the EVTX extraction directory from the prior run_evtx_parser
+    call. If no prior extraction exists and image_path is a disk image,
+    extracts EVTX files inline.
 
-    Run this **immediately after** ``run_evtx_parser`` for each disk
-    image to get a prioritised list of suspicious events before manual
-    EVTX analysis.  Each ``run_evtx_parser`` call stores its extracted
-    EVTX directory keyed by image path, so pass *image_path* to target
-    a specific extraction when multiple images have been processed.
+    Indexes as ``hayabusa.alerts``; returns severity breakdown, top rules,
+    and MITRE technique IDs. Use search(source='hayabusa.alerts') for
+    detailed alert inspection.
 
     Args:
         evtx_dir: Directory containing ``.evtx`` files.  If empty, falls
@@ -86,11 +175,33 @@ def run_hayabusa(
             should be used.  Only needed when *evtx_dir* is empty and
             multiple images have been processed.  Matches the path
             previously passed to ``run_evtx_parser``.
+        force: Re-run extraction even if sources already exist.
     """
-    ctx = get_ctx()
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
-    params = {"evtx_dir": evtx_dir, "min_severity": min_severity, "image_path": image_path}
+    params = {
+        "evtx_dir": evtx_dir,
+        "min_severity": min_severity,
+        "image_path": image_path,
+        "force": force,
+    }
+
+    if not force:
+        hayabusa_evidence = evtx_dir or image_path
+        existing = sources_already_indexed(["hayabusa."], evidence_path=hayabusa_evidence or None)
+        if existing:
+            return tool_response(
+                tc_id,
+                "run_hayabusa",
+                params,
+                {
+                    "status": "skipped",
+                    "reason": "Sources already indexed from prior extraction",
+                    "existing_sources": existing,
+                },
+                "hayabusa.alerts",
+                0.0,
+            )
     tool_name = "run_hayabusa"
 
     if not shutil.which("hayabusa") and not Path(_HAYABUSA_BIN).exists():
@@ -150,63 +261,59 @@ def run_hayabusa(
         severity,
     ]
 
+    timeout = adaptive_timeout(image_path or resolved_dir, base=_HAYABUSA_TIMEOUT)
     try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=_HAYABUSA_TIMEOUT,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        return error_response(
-            tc_id,
-            tool_name,
-            params,
-            f"Hayabusa timed out after {_HAYABUSA_TIMEOUT}s",
-            elapsed_ms=(time.monotonic() - t0) * 1000,
-        )
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return error_response(
+                tc_id,
+                tool_name,
+                params,
+                f"Hayabusa timed out after {timeout}s",
+                elapsed_ms=(time.monotonic() - t0) * 1000,
+            )
 
-    if proc.returncode != 0 and not Path(out_path).exists():
-        stderr_preview = (proc.stderr or "")[:_PREVIEW_CHAR_LIMIT]
-        return error_response(
-            tc_id,
-            tool_name,
-            params,
-            f"Hayabusa exited {proc.returncode}: {stderr_preview}",
-            elapsed_ms=(time.monotonic() - t0) * 1000,
-        )
+        if proc.returncode != 0 and not Path(out_path).exists():
+            stderr_preview = (proc.stderr or "")[:_PREVIEW_CHAR_LIMIT]
+            return error_response(
+                tc_id,
+                tool_name,
+                params,
+                f"Hayabusa exited {proc.returncode}: {stderr_preview}",
+                elapsed_ms=(time.monotonic() - t0) * 1000,
+            )
 
-    try:
-        csv_text = Path(out_path).read_text(errors="replace")
-    except OSError:
-        csv_text = ""
+        try:
+            csv_text = Path(out_path).read_text(errors="replace")
+        except OSError:
+            csv_text = ""
     finally:
         Path(out_path).unlink(missing_ok=True)
 
     if not csv_text.strip():
         elapsed = (time.monotonic() - t0) * 1000
-        result: dict[str, object] = {
-            "total_alerts": 0,
-            "by_severity": {},
-            "top_rules": [],
-            "mitre_techniques": [],
-            "evtx_dir": resolved_dir,
-            "evtx_file_count": len(evtx_files),
-        }
-        ctx.audit.log_tool_call(
-            tool_call_id=tc_id,
-            tool_name=tool_name,
-            params=params,
-            output_hash=hash_output(result),
-            duration_ms=elapsed,
+        return tool_response(
+            tc_id,
+            tool_name,
+            params,
+            {
+                "total_alerts": 0,
+                "by_severity": {},
+                "top_rules": [],
+                "mitre_techniques": [],
+                "evtx_dir": resolved_dir,
+                "evtx_file_count": len(evtx_files),
+            },
+            "hayabusa.alerts",
+            elapsed,
         )
-        return {
-            "tool_call_id": tc_id,
-            "status": "success",
-            "results": result,
-            "source": "hayabusa.alerts",
-        }
 
     alerts = _parse_hayabusa_csv(csv_text)
 
@@ -239,7 +346,7 @@ def run_hayabusa(
     top_rules = [{"rule": name, "count": count} for name, count in rule_counts.most_common(10)]
 
     elapsed = (time.monotonic() - t0) * 1000
-    result = {
+    result: dict[str, object] = {
         "total_alerts": len(alerts),
         "by_severity": dict(severity_counts),
         "top_rules": top_rules,
@@ -249,19 +356,7 @@ def run_hayabusa(
         "index": index_result,
     }
 
-    ctx.audit.log_tool_call(
-        tool_call_id=tc_id,
-        tool_name=tool_name,
-        params=params,
-        output_hash=hash_output(result),
-        duration_ms=elapsed,
-    )
-    return {
-        "tool_call_id": tc_id,
-        "status": "success",
-        "results": result,
-        "source": "hayabusa.alerts",
-    }
+    return tool_response(tc_id, tool_name, params, result, "hayabusa.alerts", elapsed)
 
 
 def _parse_hayabusa_csv(csv_text: str) -> list[dict[str, str]]:
