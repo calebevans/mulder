@@ -636,8 +636,18 @@ def yara_scan_memory(
     signature-base (~4,000 rules) by default. Requires ``yara`` on PATH.
 
     Indexes matches as ``yara.memory``; use search(source='yara.memory')
-    to review. Multiple rule family matches often indicate over-matching
-    rather than multi-actor presence.
+    to review.
+
+    Interpreting results:
+    - A single rule matching on generic strings (common paths, format
+      specifiers, file extensions) is likely a false positive. Check
+      the matched_strings content, not just the rule name.
+    - Multiple DISTINCT rule families matching in the same process
+      or memory region compounds significance. Evaluate matches in
+      context: which process contained the match matters as much as
+      what matched.
+    - Rule names suggest but do not prove attribution. The underlying
+      matched content is the evidence, not the label.
     """
     ctx = get_ctx()
     tc_id = make_tool_call_id()

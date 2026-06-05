@@ -294,6 +294,17 @@ def search(
     ``source='volatility.netscan'``). For large sources, prefer this
     over paginating get_raw_output.
 
+    IMPORTANT: Before asserting any factual claim in a finding, search
+    for the specific artifact you are citing. Zero results means the
+    claim is unsupported by indexed evidence.
+
+    Common forensic search patterns:
+    - Network: search(query='192.168', source='volatility.netscan')
+    - Registry: search(query='UserAuthentication', source='registry.system')
+    - Process: search(query='svchost', source='volatility.pslist')
+    - Lateral movement: search(queries=['psexec', 'wmic', 'winrm'])
+    - Time-bounded: search(query='4625', t_start='...', t_end='...')
+
     Returns matching windows with source names, match counts, and
     truncated raw text. Use get_raw_output(source_name) for full content.
 

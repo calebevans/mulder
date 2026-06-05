@@ -152,7 +152,7 @@ EXTRACTION: PhaseConfig = PhaseConfig(
     executor_system_prompt=EXTRACT_EXECUTOR_PROMPT,
     executor_prompt_template="{plan}",
     executor_allowed_tools=get_tools_for_role(Role.EXTRACT_EXECUTOR),
-    executor_max_turns=60,
+    executor_max_turns=80,
     executor_max_budget_usd=5.0,
     analyst_system_prompt=EXTRACT_ANALYST_PROMPT,
     analyst_prompt_template=(
@@ -161,7 +161,7 @@ EXTRACTION: PhaseConfig = PhaseConfig(
         "Investigation questions:\n{investigation_questions}"
     ),
     analyst_allowed_tools=get_tools_for_role(Role.EXTRACT_ANALYST),
-    analyst_max_turns=50,
+    analyst_max_turns=60,
     analyst_max_budget_usd=5.0,
 )
 
@@ -186,7 +186,7 @@ CROSS_SYSTEM: PhaseConfig = PhaseConfig(
         "Investigation questions:\n{investigation_questions}"
     ),
     analyst_allowed_tools=get_tools_for_role(Role.CROSS_ANALYST),
-    analyst_max_turns=30,
+    analyst_max_turns=50,
     analyst_max_budget_usd=7.0,
 )
 

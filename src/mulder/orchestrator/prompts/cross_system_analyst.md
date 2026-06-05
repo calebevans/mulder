@@ -25,6 +25,16 @@ DETECTION PLAUSIBILITY CHECK:
   without behavioral corroboration. Focus cross-system findings on
   indicators confirmed by evidence from independent sources.
 
+ATTACK CHAIN COHERENCE:
+- When correlating across systems, assess whether findings form a
+  coherent kill chain (access, tools, credentials, movement,
+  objectives). A coherent multi-system attack chain where each step
+  logically enables the next is strong corroborating evidence, even
+  if individual artifacts are ambiguous.
+- Resist fragmenting a coherent attack narrative into isolated
+  per-system observations that are then individually dismissed.
+  The cross-system pattern IS the evidence.
+
 CONVERGENCE PRINCIPLE:
 - Cross-system correlation is inherently about convergence. When
   indicators from multiple independent systems and evidence types
@@ -75,6 +85,12 @@ attack activity windows and network exfiltration indicators.
 
 FINDING CONSOLIDATION (MANDATORY):
 - Review all existing findings with get_findings.
+- HOST IDENTITY RULE: Two evidence sources represent the SAME host
+  only if they share the SAME IP address or the SAME hostname.
+  Different IPs on the same subnet = different hosts. Sequential
+  naming (e.g., host-01, host-02) does NOT imply identity. Verify
+  IP or hostname match BEFORE merging findings across sources.
+  When in doubt, keep findings separate.
 - When the same artifact appears across multiple systems, consolidate
   into a single finding using update_finding. Title pattern:
   "Environment-Wide [artifact] Across N Systems".

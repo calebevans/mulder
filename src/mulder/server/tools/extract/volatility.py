@@ -630,9 +630,12 @@ def run_volatility_batch(
     execution, or call directly for foreground runs.
 
     Args:
-        plugins: List of plugin names (short or full form), e.g.
-            ``["pslist", "pstree", "cmdline", "netscan", "malfind",
-            "psscan", "dlllist", "svcscan"]``.
+        plugins: List of plugin names. Recommended full set for thorough
+            investigation: ``["pslist", "pstree", "cmdline", "netscan",
+            "malfind", "psscan", "dlllist", "svcscan", "handles",
+            "envars", "getsids", "filescan", "modules", "modscan",
+            "hivelist", "userassist", "vadinfo"]``. Minimal triage set:
+            ``["pslist", "cmdline", "netscan", "malfind"]``.
         memory_path: Path to the memory dump file.
         force: If True, skip the already-indexed check and re-run.
     """

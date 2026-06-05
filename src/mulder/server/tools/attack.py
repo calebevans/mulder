@@ -132,7 +132,7 @@ def _search_techniques(
 
 
 @mcp.tool()
-@tool_access(Role.CROSS_ANALYST)
+@tool_access(Role.EXTRACT_ANALYST | Role.CROSS_ANALYST)
 def lookup_attack_technique(
     query: str,
     max_results: int = 5,

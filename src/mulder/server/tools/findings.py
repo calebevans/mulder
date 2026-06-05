@@ -191,9 +191,14 @@ def submit_finding(
 
     Call after discovering evidence worth reporting. Every evidence_ref
     must be a tool_call_id from a prior tool invocation (validated against
-    the audit log). Timestamps must be precise ISO-8601 values copied
-    from tool output; pass null rather than fabricating. Day-precision
-    placeholders are auto-nullified.
+    the audit log). The evidence_ref must be from a tool call whose output
+    you directly examined and that specifically supports this finding's
+    claims. Citing a tool_call_id from a search you did not review is
+    insufficient.
+
+    Timestamps must be precise ISO-8601 values copied from tool output;
+    pass null rather than fabricating. Day-precision placeholders are
+    auto-nullified.
 
     Returns finding_id on acceptance. Severity must be
     critical/high/medium/low/info. Confidence must be "confirmed"

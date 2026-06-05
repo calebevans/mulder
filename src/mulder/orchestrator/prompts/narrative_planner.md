@@ -21,6 +21,21 @@ CHALLENGE TARGETS:
 - Is forensic collection or IR system activity being misclassified
   as malicious?
 
+REVERSE CHALLENGE TARGETS (mandatory):
+- Are findings being dismissed individually that form a coherent
+  attack chain when viewed together? (e.g., initial access + tool
+  deployment + credential theft + lateral movement + data access
+  = structured intrusion, not a series of coincidences)
+- Are signature or detection hits being dismissed without verifying
+  that the detection context (which process, which file path, which
+  memory region) is actually consistent with the proposed benign
+  explanation?
+- Are pre-existing forensic analysis artifacts (prior examiner
+  output, analyst notes, IR tool results) being ignored or treated
+  as less authoritative than current automated scans?
+- Could multiple "low confidence" indicators that align with a
+  single threat hypothesis constitute convergent evidence?
+
 OUTPUT (MANDATORY):
 Your FINAL message MUST be ONLY valid JSON. No text before or after it.
 No markdown fences. Produce a JSON plan:

@@ -21,6 +21,25 @@ YOUR JOB (Counter-Analysis):
 6. After all challenges, reassess the full picture again. Does the
    overall narrative still hold? Update your assessment accordingly.
 
+ATTACK CHAIN COHERENCE (check BEFORE individual challenges):
+- Before challenging individual findings, map all findings to kill
+  chain phases: Initial Access, Execution, Persistence, Privilege
+  Escalation, Defense Evasion, Credential Access, Discovery,
+  Lateral Movement, Collection, Exfiltration, C2.
+- If findings span 3+ kill chain phases in a temporally coherent
+  sequence, the overall chain is MORE credible than any individual
+  finding alone. Individual findings within a coherent chain
+  require STRONGER counter-evidence to dismiss than isolated
+  findings.
+- When downgrading a finding that is part of a kill chain, you MUST
+  explain how the chain narrative survives without it. If removing
+  a finding breaks the chain's logical coherence, that is evidence
+  AGAINST downgrading.
+- Do NOT dismiss correlated artifacts one-by-one without assessing
+  whether the combined dismissal is plausible. Dismissing 5
+  independent attack indicators each for different reasons is less
+  plausible than accepting a coherent attack narrative.
+
 WHEN MODIFYING FINDINGS:
 - Use update_finding to adjust severity, confidence, or description.
 - When downgrading, explain whether the finding was isolated (weak
@@ -64,6 +83,16 @@ ANTI-EVASION AWARENESS FOR MEMORY ANALYSIS:
   patterns before classifying a detection as benign.
 - The goal is nuanced assessment: "This is LIKELY benign JIT behavior,
   but here is what I checked to confirm" rather than blanket dismissal.
+
+DETECTION CONTEXT MATTERS:
+- WHERE a detection occurs changes its weight. A signature match
+  inside a process whose role aligns with the detection is far
+  stronger than the same match in unrelated memory or in a security
+  product's signature store.
+- Multiple distinct, unrelated signatures matching in the same
+  attack-relevant context compounds their significance. Each
+  additional independent match in the same location reduces the
+  probability of coincidental false positive.
 
 YOUR JOB (Quality Audit):
 After completing the counter-analysis above, perform these audit checks:

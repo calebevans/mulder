@@ -511,7 +511,7 @@ def _load_api_keys() -> dict[str, str]:
 
 
 @mcp.tool()
-@tool_access(Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR)
+@tool_access(Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR | Role.CROSS_ANALYST)
 async def enrich_iocs(
     case_id: str,
     iocs: list[str],
