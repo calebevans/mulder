@@ -147,7 +147,7 @@ EXTRACTION: PhaseConfig = PhaseConfig(
         "EVIDENCE CONTEXT:\n{evidence_context}"
     ),
     planner_allowed_tools=get_tools_for_role(Role.EXTRACT_PLANNER),
-    planner_max_turns=5,
+    planner_max_turns=15,
     planner_max_budget_usd=2.0,
     executor_system_prompt=EXTRACT_EXECUTOR_PROMPT,
     executor_prompt_template="{plan}",
