@@ -1,42 +1,44 @@
 # Mulder Investigation Report
 
 **Case:** szechuan
-**Generated:** 2026-06-04T03:24:40.970844+00:00
+**Generated:** 2026-06-05T09:00:11.373876+00:00
 **Evidence:** /evidence
 
 ---
 
 ## Executive Summary
 
-**Scope:** 115 evidence sources (18 memory, 23 disk, 74 other) | 412 tool calls | 55 minutes
-**Results:** 18 findings (3 critical, 6 high) | 12 confirmed, 6 inference
+**Scope:** 89 evidence sources (19 memory, 23 disk, 47 other) | 430 tool calls | 53 minutes
+**Results:** 17 findings (4 critical, 9 high) | 12 confirmed, 5 inference
 **Timeline:** 2020-09-18 to 2020-09-19
 
 **Key Threats:**
-- Successful NTLM Brute-Force from Kali Linux Against DC01 Administrator — Initial Access Confirmed
-- coreupdater.exe Deployed to Both DC01 and DESKTOP-SDN1RPT as Masquerading Malware
-- Environment-Wide Meterpreter Code Injection in Print Spooler Service Across DC01 and DESKTOP-SDN1RPT
+- coreupdater.exe Malware with Active C2 Connection to 203.78.103.109
+- Attack Timeline: Kali Linux Brute-Force Followed by Credential-Based DC Compromise
+- Environment-Wide Meterpreter Implant in spoolsv.exe Across DC01 and DESKTOP-SDN1RPT
+- Cross-System Credential Theft Chain: Workstation Hash Dump Enabling DC Authentication
 
 **Attack Lifecycle:**
-- **Initial Access / Deployment** (2020-09-18 to 2020-09-19): Files Carved from Network Traffic — OST Email Archives, PDFs, and Application Data (+10 related)
-- **Persistence** (2020-09-18): Network Traffic Capture Profile — PCAP Summary and Protocol Distribution
-- **Command and Control** (2020-09-19): Code Injection in spoolsv.exe and powershell.exe on DESKTOP-SDN1RPT
-- **Credential Access** (2020-09-18): DRSUAPI/DCSync Activity from Workstation to Domain Controller in Network Traffic
-- **Other Activity** (2020-09-19): Suspicious PE File Transfer Over Network — No ASLR/DEP, Anomalous Section Names
+- **Initial Access / Deployment** (2020-09-18 to 2020-09-19): Cross-System Credential Theft Chain: Workstation Hash Dump Enabling DC Authentication (+12 related)
+- **Lateral Movement** (2020-09-18): Lateral Movement via Multiple Compromised Domain Accounts from Workstation to DC
+- **Credential Access** (2020-09-19): Brute-Force Password Attack Against DC01 from Kali Linux Attack Machine
 
-**Tools:** search (83), get_raw_output (54), submit_finding (28), open_case (17), extract_archive (15). SHA-256 hashes recorded for all evidence.
+**Tools:** search (120), get_raw_output (35), submit_finding (18), extract_archive (15), open_case (15). SHA-256 hashes recorded for all evidence.
 
 
 ### Critical Findings
 
 
-- **Successful NTLM Brute-Force from Kali Linux Against DC01 Administrator — Initial Access Confirmed** (2020-09-19T03:21:26+00:00 to 2020-09-19T03:21:46+00:00)
+- **coreupdater.exe Malware with Active C2 Connection to 203.78.103.109** (2020-09-19T03:40:49 to 2020-09-19T03:43:10)
 
 
-- **coreupdater.exe Deployed to Both DC01 and DESKTOP-SDN1RPT as Masquerading Malware** (2020-09-19T01:22:38+00:00 to 2020-09-19T03:43:10+00:00)
+- **Attack Timeline: Kali Linux Brute-Force Followed by Credential-Based DC Compromise** (2020-09-19T03:21:25 to 2020-09-19T03:52:14)
 
 
-- **Environment-Wide Meterpreter Code Injection in Print Spooler Service Across DC01 and DESKTOP-SDN1RPT** (2020-09-19T01:22:38+00:00)
+- **Environment-Wide Meterpreter Implant in spoolsv.exe Across DC01 and DESKTOP-SDN1RPT** (2020-09-19T01:22:57)
+
+
+- **Cross-System Credential Theft Chain: Workstation Hash Dump Enabling DC Authentication** (2020-09-18T22:42:14 to 2020-09-19T03:52:14)
 
 
 
@@ -56,7 +58,7 @@ acceptance.
 validated via SHA-256 hashes computed at ingestion and verified against the
 case database.
 
-412 tool calls were executed across 28
+430 tool calls were executed across 14
 indexed sources over the course of the investigation, with full provenance
 tracking via append-only JSONL audit log.
 
@@ -66,139 +68,149 @@ tracking via append-only JSONL audit log.
 
 ## Investigation Report
 
-# Forensic Investigation Report — Case SZECHUAN: Compromise of C137.LOCAL Domain Environment
+# Digital Forensic Investigation Report — Case Szechuan
 
 ## Background
 
-This forensic investigation was initiated following a suspected intrusion into the C137.LOCAL Windows Active Directory domain environment. The investigation encompassed two compromised systems and a network packet capture spanning the critical incident window. The evidence inventory consisted of the following:
+This investigation was initiated in response to a suspected compromise of the C137.local Active Directory domain environment. Two forensic evidence items were provided for analysis: a memory dump from the domain controller CITADEL-DC01 (10.42.85.10) and a memory dump from the workstation DESKTOP-SDN1RPT (10.42.85.115). The domain controller runs Windows Server and hosts Active Directory Domain Services for the C137.local domain. The workstation runs a Windows 10 desktop operating system with Windows Defender active as the primary endpoint protection solution.
 
-The primary evidence items were memory dumps from both the domain controller CITADEL-DC01 (IP 10.42.85.10, running Windows Server 2012 R2) and a domain-joined workstation DESKTOP-SDN1RPT (IP 10.42.85.115); a disk image from DC01; a full packet capture (case001.pcap) covering 7.7 hours of network traffic from 2020-09-18 21:58:07 UTC to 2020-09-19 05:38:57 UTC totaling 411,797 packets and 197 MB; and protected file archives from both systems containing registry hives, Active Directory database files, and DPAPI credential material. The packet capture was produced using Mergecap (Wireshark 3.2.6) on a Kali Linux 5.8.0-kali1-amd64 platform.
-
-The C137.LOCAL domain was a small enterprise environment with CITADEL-DC01 serving as the sole domain controller, hosting DNS, Active Directory Web Services, DFS Replication, and Intersite Messaging. The environment was virtualized on VMware, as confirmed by the presence of VMware Tools and Guest Authentication services on DC01. Four user accounts were identified as active within the domain: the built-in Administrator account (SID ending in -500), two domain users ricksanchez (SID -1106) and mortysmith (SID -1108), and a local workstation account Admin (SID -1001) on DESKTOP-SDN1RPT.
-
-The forensic analysis drew upon 28 indexed evidence sources across 18 extractor types, including Volatility 3 memory forensics, Sleuthkit disk analysis, EZ Tools Windows artifact parsing, Zeek and tshark network protocol analysis, Suricata IDS, YARA signature scanning, bulk_extractor IOC carving, ClamAV malware scanning, Chainsaw Sigma rule detection, and RegRipper registry analysis. The investigation produced 18 findings, of which 12 were corroborated by multiple independent sources and 6 were assessed as analytical inferences. The findings mapped to 21 distinct MITRE ATT&CK technique identifiers across the kill chain.
+A total of 14 evidence sources were indexed across 430 tool invocations during this investigation, encompassing memory forensics (Volatility 3 process analysis, code injection detection, network connection scanning, service enumeration), disk artifact analysis (MFT parsing, ShimCache, Amcache, Prefetch, registry hive parsing), event log analysis (Security, System, PowerShell Operational, Active Directory Web Services), IOC carving (bulk_extractor for URLs, domains, emails), string extraction from pagefiles, YARA signature scanning (raw memory and per-process VAD scanning), threat detection via Hayabusa and Chainsaw Sigma rules, IOC enrichment, and composite cross-correlation analyses. The investigation produced 17 forensic findings — 4 critical, 9 high, 2 medium, and 2 informational — mapped to 24 distinct MITRE ATT&CK techniques. Of these findings, 12 were assessed at confirmed confidence (corroborated by two or more independent evidence sources) and 5 at inference confidence.
 
 ## Incident Timeline
 
-The incident unfolded over approximately eight hours on September 18–19, 2020, progressing through four distinct operational phases: reconnaissance and initial access, post-exploitation tooling deployment, lateral movement and credential theft, and data access and collection.
+The reconstructed incident timeline spans approximately six and a half hours on September 18–19, 2020, and can be divided into four distinct operational phases.
 
-**Phase 1 — Normal Operations and Pre-Attack Baseline (September 18, 21:58–22:04 UTC)**
+**Phase 1 — Workstation Compromise and Credential Harvesting (September 18, 2020, approximately 22:30–23:00 UTC)**
 
-The packet capture began at 21:58:07 UTC with normal domain activity. The DESKTOP-SDN1RPT workstation performed standard machine account Kerberos authentication (desktop-sdn1rpt$/C137.local) at 21:59:39 UTC, followed by mortysmith's interactive logon at 22:00:38 UTC. Routine DRSUAPI operations (DRSBind, DRSCrackNames, DRSUnbind) were observed from the workstation to DC01 during this period — these were initially flagged as potential DCSync activity but were subsequently determined through counter-analysis to represent normal Active Directory client behavior for Group Policy processing and name resolution. The absence of any DRSGetNCChanges calls — the specific replication request that would indicate credential theft via DCSync — confirmed the benign nature of this traffic.
+The earliest confirmed attacker activity occurred on the DESKTOP-SDN1RPT workstation. Memory forensics revealed that powershell.exe PID 508 was spawned by a parent process (PID 1380) that is no longer present in the process list, indicating the parent was a temporary execution vehicle that has since exited. PID 508 in turn spawned powershell.exe PID 3316 at 05:08:43 UTC on September 19, creating a nested PowerShell execution chain. Both processes had empty or hidden command-line arguments, a deliberate evasion technique. Volatility malfind detected multiple PAGE_EXECUTE_READWRITE memory regions in PID 3316 containing MZ PE headers with commit charges of 36, 107, and 57 pages — a memory allocation pattern consistent with Metasploit Meterpreter reflective DLL injection.
 
-**Phase 2 — Initial Access via Brute-Force Authentication (September 19, 03:21–03:35 UTC)**
+During this phase, the attacker performed credential harvesting on the workstation. YARA scanning of the DESKTOP-SDN1RPT memory dump detected the NTLM hash dump output pattern "500:aad3b435b51404eeaad3b435b51404ee:" at six distinct offsets. This specific format — the built-in Administrator account's RID followed by the well-known empty LM hash and the NT hash — is the characteristic output of credential dumping tools such as Mimikatz's hashdump module and would not appear in legitimate system operations or antivirus definition databases. The presence of this pattern confirms that NTLM password hashes were extracted from the local Security Account Manager database.
 
-The attack commenced at 03:21:26 UTC when an automated NTLM brute-force attack began against the DC01 Administrator account. The Security event log recorded rapid successive Event ID 4625 (Failed Logon) entries with workstation name "kali," using NtLmSsp authentication over Type 3 (Network) logons. Failed attempts generated Status 0xC000006D with SubStatus 0xC000006A (incorrect password) at a rate of approximately one attempt per second. At 03:21:46 UTC — after approximately 16 to 20 password attempts over 20 seconds — the attack succeeded. Event ID 4672 (Special Privileges Assigned to New Logon) confirmed that the Administrator account obtained full administrative privileges. It is important to note that the source IP address field in the EVTX events was empty ("-"), preventing definitive attribution of the NTLM brute-force source to a specific IP address.
+Additionally, YARA per-process VAD scanning detected base64-encoded PowerShell command patterns (the "JAB" indicator, which decodes to a variable assignment prefix) within the Registry process (PID 92), indicating that obfuscated PowerShell payloads were stored within registry hives, likely for staging or persistence purposes.
 
-Eleven minutes later, at 03:32:46 UTC, a distinct attack vector emerged when external IP address 194.61.24.102 initiated Nmap service scanning against DC01's RDP port (TCP 3389), identifiable by the RDP cookie value "nmap." This reconnaissance was followed at 03:34:46 UTC by an aggressive RDP brute-force attack with the cookie consistently set to "Administrator." Over 75 automated connection attempts were recorded between 03:34:46 and 03:35:07 UTC, with source ports incrementing sequentially from 40044 to 40234 (by increments of two), achieving a rate of 4.5 connections per second. Because NLA (Network Level Authentication) was enabled, the encrypted RDP sessions prevented determination of whether any RDP attempt ultimately succeeded from the network traffic alone. Additional sporadic attempts from 194.61.24.102 continued until 04:09:23 UTC.
+A Skeleton Key attack patcher YARA signature also matched in the raw memory dump, detecting strings including "HookDC.dll," "CDLocateCSystem," and "SamIRetrievePrimaryCredentials." However, counter-analysis determined significant false positive risk: most matched strings are legitimate Windows API exports from system DLLs (cryptdll.dll, samsrv.dll), and the most specific indicator — "HookDC.dll" — was confirmed present within Windows Defender malware definition content on this system. Furthermore, the subsequent brute-force activity against DC01 would have been unnecessary if a Skeleton Key had been successfully deployed, since the attacker could have authenticated with any arbitrary password. This finding was accordingly downgraded from critical to high severity and from confirmed to inference confidence. The Skeleton Key toolkit may have been present on the workstation, but the raw memory YARA match alone cannot distinguish actual tool presence from antivirus definition artifacts.
 
-The direct reachability of DC01's RDP port from external IP space — whether through direct internet exposure or port forwarding — represents a fundamental network architecture failure that enabled both attack vectors.
+**Phase 2 — Lateral Movement to Domain Controller (September 18, 2020, 22:42–23:00 UTC)**
 
-**Phase 3 — Post-Exploitation Tooling and Lateral Movement (September 19, 03:40–04:20 UTC)**
+Beginning at 22:42:14 UTC, the Windows Security event log on CITADEL-DC01 recorded a coordinated series of network logon events (Event ID 4624, LogonType 3) originating from 10.42.85.115 (DESKTOP-SDN1RPT) using multiple domain accounts. The C137\Administrator account authenticated via Kerberos at 22:42:14, with Event ID 4672 confirming the assignment of full administrative privileges including SeDebugPrivilege, SeTakeOwnershipPrivilege, and SeLoadDriverPrivilege. Minutes later, at 22:44:11–13, the C137\ricksanchez account authenticated from the same source with comparable administrative privileges (SeDebugPrivilege, SeRestorePrivilege, SeEnableDelegationPrivilege). The C137\mortysmith account (SID: S-1-5-21-2232410529-1445159330-2725690660-1108) followed at 22:46:39–40. Both ricksanchez and mortysmith accounts were used again at 22:52:49–50 and 23:00:19–29, respectively.
 
-At 03:40:49 UTC, a malicious executable named coreupdater.exe appeared on DESKTOP-SDN1RPT (PID 8324, Session 3) at the path C:\Windows\System32\coreupdater.exe. The binary name was deliberately chosen to masquerade as a legitimate system update process, and its placement in the System32 directory reinforced this deception. The process executed for approximately 2.5 minutes before terminating at 03:43:10 UTC, suggesting a targeted task such as payload staging or credential harvesting.
+The rapid sequential use of three different privileged domain accounts from a single compromised host within an eighteen-minute window is a hallmark of credential harvesting and lateral movement operations. The NTLM hash dump artifacts recovered from the workstation's memory provide the means by which these credentials were obtained.
 
-At 03:49:15 UTC, Zeek RDP logs captured DC01 (10.42.85.10) initiating an outbound RDP connection to DESKTOP-SDN1RPT (10.42.85.115) on port 3389 — a highly anomalous direction of traffic, as domain controllers have no legitimate operational reason to RDP into workstations. The empty RDP cookie in this session suggests the connection was initiated programmatically rather than through an interactive RDP client. This DC-to-workstation RDP session constitutes direct evidence of lateral movement by the attacker, who had already compromised DC01 through the earlier brute-force attack.
+**Phase 3 — Brute-Force Authentication and C2 Infrastructure Engagement (September 19, 2020, 03:21–03:22 UTC)**
 
-At 03:56:37 UTC, coreupdater.exe was deployed to DC01 itself (PID 3644). Unlike the workstation instance, the DC01 coreupdater.exe remained running at the time of memory capture and maintained an active ESTABLISHED TCP connection to 203.78.103.109 on port 443, establishing this IP as command-and-control infrastructure. Notably, DC01's shimcache did not contain an entry for coreupdater.exe, which is unusual for an executed binary and may indicate anti-forensic measures or execution from a network share.
+Approximately four and a half hours after the initial lateral movement, a second authentication sequence began. Between 03:21:25 and 03:21:33 UTC, the Security event log recorded at least eight rapid-fire failed logon events (Event ID 4625) targeting the Administrator account on CITADEL-DC01 from a workstation named "kali." The authentication attempts used NTLM (LogonType 3, network logon) and returned Status 0xC000006D with SubStatus 0xC000006A, confirming the username was correct but the password was wrong. The approximately one-second interval between attempts is consistent with automated password brute-forcing. The workstation name "kali" strongly suggests use of Kali Linux, a dedicated offensive security distribution.
 
-Between 04:04:06 and 04:19:58 UTC, Zeek PE analysis detected two portable executable files transferred over the network. Both shared identical and highly suspicious characteristics: 64-bit AMD64 architecture compiled with a fraudulent 2010 timestamp, a declared OS version of "Windows 95 or NT 4.0" (impossible for a 64-bit binary), both ASLR and DEP protections disabled, no Authenticode signature, no debug data, and a non-standard PE section named ".lhru" that is not associated with any known legitimate compiler toolchain. These characteristics are consistent with purpose-built post-exploitation tooling designed to minimize PE metadata exposure.
+The brute-force ceased at approximately 03:21:46, and a successful Administrator logon (SID S-1-5-21-2232410529-1445159330-2725690660-500, LogonId 0x510986) was recorded at 03:22:07. Two seconds later, at 03:22:09, Event ID 4648 recorded an explicit credential logon on the domain controller where the source network address was 194.61.24.102 — the same external IP address later confirmed as the malware staging server hosting coreupdater.exe. This event showed authentication through winlogon.exe (PID 0x9F0) targeting C137\Administrator against TargetServerName: localhost. A second Event 4648 with a similar pattern followed at 03:22:37. The use of the same IP address for both hosting malware and authenticating to the domain controller confirms this IP is attacker-controlled infrastructure.
 
-**Phase 4 — Credential Theft, Privilege Escalation, and Data Access (September 19, 04:16–06:17 UTC)**
+**Phase 4 — Malware Deployment and C2 Establishment on Domain Controller (September 19, 2020, 03:40–03:52 UTC)**
 
-At 04:16:24 UTC, the compromised Administrator account obtained Kerberos TGT and TGS tickets from DESKTOP-SDN1RPT for multiple services on CITADEL-DC01, including host, LDAP, cifs, krbtgt, and notably ProtectedStorage/CITADEL-DC01. The ProtectedStorage service manages credential material, and access to it is characteristic of credential harvesting tools rather than normal administrative activity. The timing of this authentication — occurring 44 minutes after the RDP brute-force from 194.61.24.102 and within the active attack window — further distinguishes it from routine administration.
+Following successful authentication, the attacker deployed the coreupdater.exe binary to the domain controller. The process (PID 3644) started at 03:40:49 UTC and established an outbound TCP connection from 10.42.85.10:62613 to 203.78.103.109:443 (HTTPS). The connection status was ESTABLISHED at the time of memory capture. The MFT records show coreupdater.exe was written to C:\Windows\System32\ at 03:52:14, a location chosen to masquerade as a legitimate system binary. The file is unusually small at 7,168 bytes, consistent with a lightweight downloader or beacon rather than a full-featured implant.
 
-Memory forensics revealed extensive credential theft tooling on DESKTOP-SDN1RPT. YARA scanning identified the Skeleton Key patcher tool in memory through multiple matches on the HookDC.dll string — a string specific to this credential manipulation tool that does not appear in legitimate Windows installations. While the Skeleton Key tool's presence on the workstation is validated, its deployment to DC01's LSASS process was not confirmed, meaning the skeleton key attack may have been staged but not yet executed against the domain controller. Additionally, NTLM hash dump output was detected at six memory offsets in the characteristic pwdump/secretsdump format ("500:aad3b435b51404eeaad3b435b51404ee:"), confirming that credential extraction from the workstation had been performed.
+Bulk_extractor URL carving confirmed the download source as http://194.61.24.102/coreupdater.exe. Pagefile string analysis from the DESKTOP-SDN1RPT workstation revealed that Windows SmartScreen performed a reputation check on this binary when it was first encountered on the workstation. The caller process was C:\Windows\explorer.exe (PID 4008), confirming the binary was manually launched through Windows Explorer. SmartScreen ultimately issued a "block" action, and Windows Defender successfully detected and quarantined coreupdater.exe on the workstation (PID 8324, which had already exited by the time of memory capture). However, no such protection intervened on the domain controller, where the binary executed successfully and maintained its C2 connection.
 
-Metasploit Meterpreter code injection was identified in the Windows Print Spooler service (spoolsv.exe) on both systems, confirming environment-wide deployment of the same attack framework. On DC01, spoolsv.exe (PID 3724) contained four PAGE_EXECUTE_READWRITE memory regions with the x64 Metasploit shellcode stub signature (fc 48 89 ce 48 81 ec 00 20 00 00) and three injected MZ PE headers, with YARA confirming metsrv.x64.dll at five offsets and the ReflectiveLoader at fifteen offsets. Network scan data showed this process also had a bind handler listening on TCP port 62475. On DESKTOP-SDN1RPT, spoolsv.exe (PID 2188) exhibited the identical reflective DLL injection pattern with an MZ PE header in executable, readable, and writable memory. Additionally, powershell.exe (PID 3316) on the workstation contained multiple suspicious memory regions with PE headers and an embedded PNG file reference, potentially indicating steganographic payload delivery.
+Concurrent with or prior to coreupdater.exe deployment, a Meterpreter reflective DLL was injected into the Print Spooler service (spoolsv.exe, PID 3724) on DC01. YARA scanning confirmed the presence of "metsrv.x64.dll" at five offsets and "ReflectiveLoader" at fifteen offsets within PID 3724's memory. Volatility malfind detected PAGE_EXECUTE_READWRITE regions containing x64 shellcode patterns (fc H\x89\xce), three MZ headers, and one MZARUH stub. Notably, Volatility netscan showed PID 3724 listening on TCP port 62475 — an atypical port for the Print Spooler service, consistent with a Meterpreter bind handler. The Volatility svcscan output confirmed PID 3724 was running as the "Spooler" service with the SERVICE_INTERACTIVE_PROCESS flag, which is unusual for a domain controller.
 
-At 05:48:15 UTC, the ricksanchez domain account authenticated to DC01 and immediately accessed the \\CITADEL-DC01\FileShare SMB share. This was the only access to FileShare observed across the entire 7.7-hour capture window, and it followed the mortysmith-to-Administrator-to-ricksanchez credential escalation chain. File operations showed SMB FILE_OPEN on the share root at two timestamps (05:33:13 and 06:17:04 UTC), suggesting the attacker was conducting reconnaissance or data collection from this shared directory using the compromised ricksanchez credentials.
+An identical Meterpreter injection was confirmed in spoolsv.exe PID 2188 on the DESKTOP-SDN1RPT workstation, with matching MZ PE headers in PAGE_EXECUTE_READWRITE memory and the same 36-page commit charge allocation pattern. This cross-system consistency confirms coordinated deployment of the same Metasploit payload across both compromised systems, using the Print Spooler service as a persistence vehicle — a service that auto-starts and runs as SYSTEM.
 
 ## Key Findings
 
-**Malware Deployment and Command-and-Control Infrastructure**
+**Meterpreter Reflective DLL Injection (Environment-Wide)**
 
-The attacker deployed two distinct malware families across the environment. The primary implant, coreupdater.exe, was placed in C:\Windows\System32 on both DC01 and DESKTOP-SDN1RPT to masquerade as a legitimate system binary. On DC01, coreupdater.exe maintained a persistent ESTABLISHED connection to 203.78.103.109:443, establishing this IP as command-and-control infrastructure. The use of port 443 was an attempt to disguise C2 traffic as normal HTTPS communications. On the workstation, the binary executed for only 2.5 minutes before terminating, consistent with a fire-and-forget task execution pattern.
+The most significant technical finding is the deployment of identical Meterpreter reflective DLL payloads into the Print Spooler service (spoolsv.exe) on both CITADEL-DC01 and DESKTOP-SDN1RPT. The YARA signature "HKTL_Meterpreter_inMemory" confirmed the presence of the Metasploit server DLL (metsrv.x64.dll) and its ReflectiveLoader export in the domain controller's spoolsv.exe (PID 3724). The matching memory allocation patterns — specifically the 36-page PAGE_EXECUTE_READWRITE regions containing MZ PE headers — across two independent memory dumps from different systems establish that a single attacker used the same toolkit and technique consistently. The domain controller's Meterpreter instance had an active bind handler on TCP port 62475, providing the attacker with persistent remote access to the most critical system in the environment.
 
-Metasploit Meterpreter was deployed as the secondary implant through reflective DLL injection into the Print Spooler service (spoolsv.exe) on both systems. This technique loads a DLL entirely in memory without touching disk, evading traditional file-based detection. The identical injection pattern across both hosts — the same shellcode stub, the same target process, the same ReflectiveLoader mechanism — confirms a single operator using a consistent toolkit. On DC01, the Meterpreter payload additionally established a bind handler on TCP port 62475, providing persistent remote access as long as the Print Spooler service remained running. However, the Meterpreter persistence is session-based and memory-resident; no registry keys, scheduled tasks, or other disk-based re-injection mechanisms were identified, meaning the payload would not survive a system reboot.
+**coreupdater.exe Custom Malware**
 
-**Credential Compromise**
+A lightweight 7,168-byte executable named coreupdater.exe was deployed to C:\Windows\System32\ on the domain controller, establishing an HTTPS C2 channel to 203.78.103.109:443. The binary was downloaded from http://194.61.24.102/coreupdater.exe and manually executed via Windows Explorer. The choice of System32 as the drop location represents a masquerade technique intended to blend with legitimate Windows binaries. The binary did not persist through ShimCache or registry autorun mechanisms, suggesting it was deployed for immediate operational use alongside the Meterpreter implant rather than long-term persistence. On the workstation, Windows Defender successfully detected and blocked this binary; on the domain controller, no endpoint protection intervened.
 
-The credential theft observed in this incident was multi-layered. The initial NTLM brute-force attack against the DC01 Administrator account succeeded after approximately 20 attempts, granting the attacker the highest-privilege domain account. Memory forensics on DESKTOP-SDN1RPT confirmed active credential extraction through NTLM hash dump output in the pwdump/secretsdump format, and the presence of the Skeleton Key patcher tool (identified by HookDC.dll) indicated the attacker possessed the capability — though not confirmed deployment — to install a universal skeleton key password on the domain controller's LSASS process. Furthermore, the forensic evidence collection included the complete ntds.dit Active Directory database (20 MB), the SYSTEM registry hive (containing the SYSKEY required for decryption), the SAM and SECURITY hives, and the domain DPAPI backup key (BK-C137). While these files were collected as part of the forensic response, their presence in the attacker's operational window means that offline extraction of all domain NTLM hashes and decryption of any user's DPAPI-protected secrets would be technically feasible.
+**Cross-System Credential Theft Chain**
 
-**Lateral Movement**
+The investigation confirmed a credential theft chain spanning both systems, corroborated by five independent evidence sources: YARA memory signatures, EVTX security logs, Volatility netscan, bulk_extractor URL carving, and MFT timestamps. NTLM hash dump output for the Administrator account (RID 500) was recovered from DESKTOP-SDN1RPT memory, providing the means for the subsequent authentication sequence against DC01. The progression from credential harvesting on the workstation to successful domain controller authentication is confirmed by the timing and nature of the Security event log entries: lateral movement with stolen credentials at 22:42–23:00 on September 18, followed by the brute-force and explicit credential logon sequence at 03:21–03:22 on September 19.
 
-Lateral movement was confirmed through multiple independent evidence sources. The RDP connection from DC01 to DESKTOP-SDN1RPT at 03:49:15 UTC was captured in Zeek RDP logs and represents direct evidence of the attacker pivoting from the compromised domain controller to the workstation. The Kerberos authentication chain — progressing from the machine account to mortysmith to Administrator to ricksanchez — visible in network traffic demonstrates the attacker's escalating use of compromised credentials to access additional resources. The deployment of identical malware (coreupdater.exe and Meterpreter in spoolsv.exe) to both systems confirms that the attacker achieved code execution on both hosts. The attacker also demonstrated the ability to access network file shares, as evidenced by the ricksanchez account's FileShare access at 05:48 UTC.
+**PowerShell-Based Attack Framework**
 
-**Ruled-Out Findings**
+The attacker's primary interactive post-exploitation session on the workstation operated through a nested PowerShell chain (PID 508 → PID 3316) with deliberately hidden command-line arguments. The injected Meterpreter payload in PID 3316's memory, combined with encoded PowerShell patterns stored in registry hives (detected by YARA's JAB pattern rule in the Registry process), indicates the attacker used obfuscated PowerShell as the primary execution framework for credential dumping, lateral movement staging, and tool deployment.
 
-Rigorous counter-analysis eliminated two initial findings from the confirmed threat picture. The DRSUAPI/DCSync activity originally flagged as credential theft (T1003.006) was reclassified as normal Active Directory client behavior after investigation confirmed the observed operations consisted solely of DRSCrackNames calls — a standard name resolution function — with zero instances of the DRSGetNCChanges replication request that would constitute actual DCSync activity. Additionally, a YARA match on the TA17_293A_malware_1 rule, which flagged IP address 62.8.193.206 in DESKTOP-SDN1RPT memory, was assessed as a likely false positive. The rule triggered primarily on the ubiquitous "file://" URI scheme string, and the IP address appeared at only a single memory offset with zero corroborating network connections, DNS queries, or PCAP references. These downgraded findings illustrate the importance of multi-source corroboration and demonstrate that the final assessment is evidence-driven rather than detection-driven.
+**Tofu Backdoor Signature**
+
+A YARA signature for the Tofu backdoor family matched in the DESKTOP-SDN1RPT memory at two offsets, detecting the HTTP header string "Cookies: Sym1.0" — a known C2 communication indicator. While this string is specific enough to be unlikely in legitimate software, a single YARA match cannot confirm active execution versus residual presence from a tool that was loaded and unloaded, or from a related attack framework sharing this signature. This finding remains at inference confidence.
+
+**Ruled-Out Activities**
+
+Systematic analysis found no evidence of several expected post-compromise activities. No NTDS.dit extraction was detected — references to ntdsutil and vssadmin in pagefile strings were exclusively from Windows Defender malware signature databases. No event log clearing was found: Event ID 104 (log cleared) returned zero matches in System.evtx, and Event ID 1102 (audit log cleared) returned zero matches in Security.evtx. No timestomping was detected in MFT timestamp analysis. No data staging or exfiltration indicators were identified — no archive files in staging locations, no upload service URLs in bulk_extractor output. Additionally, CoinMiner and Webshell YARA signatures that matched within the MemCompression process (PID 1816) on DESKTOP-SDN1RPT were assessed as false positives caused by Windows Defender malware definition content in compressed memory, confirmed by the absence of any independent evidence of cryptocurrency mining or webshell deployment.
 
 ## Threat Intelligence and Attribution
 
-The attacker demonstrated a capabilities profile consistent with a moderately sophisticated, tool-reliant operator rather than a custom-development threat group. The operational toolkit centered on widely available open-source and commercial penetration testing frameworks: Metasploit (Meterpreter with reflective DLL injection via ReflectiveLoader), credential extraction utilities producing pwdump-format output, and the Skeleton Key patcher — all tools freely available in public repositories and commonly used by both penetration testers and criminal operators.
+The attacker demonstrated a consistent Metasploit-centric toolkit throughout the operation. The confirmed use of Meterpreter reflective DLL injection (metsrv.x64.dll with ReflectiveLoader), credential dumping producing NTLM hash output in the standard RID:LMhash:NThash format, and the use of the Print Spooler service as an injection target are all consistent with standard Metasploit Framework post-exploitation modules (exploit/windows/local/ms10_061_spoolss or post/windows/manage/migrate patterns). The attacker's use of a "kali" workstation name during the brute-force phase provides additional confirmation of a Kali Linux-based offensive toolset.
 
-The attack infrastructure involved two external IP addresses: 194.61.24.102, which conducted Nmap reconnaissance and RDP brute-force against DC01, and 203.78.103.109, which served as the command-and-control server for coreupdater.exe. The sequential and rapid progression from brute-force access (03:21 UTC) through tool deployment (03:40 UTC), lateral movement (03:49 UTC), and credential harvesting (04:16 UTC) suggests a practiced operator following a well-rehearsed playbook rather than improvised exploration.
+IOC enrichment identified the C2 destination 203.78.103.109 as hosted in Thailand (AS23884, Proen Corp) and the malware staging server 194.61.24.102 as hosted in Russia (AS41842, LLC "MEDIA SYSTEMS"). The use of geographically dispersed infrastructure across Russian and Thai hosting providers is consistent with commodity hosting arrangements commonly used by both criminal and state-aligned operators, and does not by itself support attribution to a specific threat group.
 
-YARA scanning produced a weak match on the Tofu Backdoor signature ("Cookies: Sym1.0" at only two memory offsets), which has been historically associated with Tonto Team (also known as CactusPete). However, this signal is insufficient for attribution: the matched string is a short, semi-generic HTTP cookie header pattern, and two instances in a 2GB memory dump constitute an extremely thin basis for threat actor identification. No other TTPs, infrastructure patterns, or behavioral indicators in this case specifically overlap with published Tonto Team campaign reports. The coreupdater.exe binary name and the custom PE file characteristics (non-standard ".lhru" section, falsified compile timestamp, disabled ASLR/DEP) suggest custom tooling, but the binary could not be attributed to a known malware family or threat group based on available evidence. Attribution therefore remains undetermined. What the evidence does confirm is a human-operated intrusion with pre-planned objectives, multi-system compromise capability, and a clear focus on credential theft and domain-level access.
+The Tofu backdoor YARA signature (Backdoor.Tofu, "Cookies: Sym1.0") has been historically associated with APT campaigns targeting organizations in East and Southeast Asia. However, a single string match in a raw memory dump is insufficient to attribute this intrusion to any specific threat group. The match may indicate the presence of shared tools, overlapping infrastructure, or merely a coincidental string pattern in a related framework.
+
+The operational pattern — workstation compromise, credential harvesting, lateral movement to a domain controller, deployment of both a custom lightweight C2 binary and a standard Meterpreter implant — is consistent with a broad range of threat actors from criminal ransomware precursors to targeted intrusion operators. The attacker demonstrated moderate operational security (hidden command lines, masquerading binary names, use of HTTPS for C2) but also exhibited indicators of limited sophistication (failed brute-force attempts before using stolen credentials, deployment of a known binary that was immediately detected by Windows Defender on the workstation). The evidence supports characterizing this as a targeted intrusion by an operator with access to standard penetration testing frameworks, but definitive attribution to a named threat group is not supportable from the available evidence.
 
 ## Impact Assessment
 
-The compromise affected both systems in the evidence scope — the domain controller CITADEL-DC01 and the workstation DESKTOP-SDN1RPT — representing a complete domain-level compromise of the C137.LOCAL environment. The domain controller, serving as the single point of trust for the entire Active Directory domain, was fully compromised with active malware maintaining command-and-control communications at the time of evidence capture.
+The compromise affected two systems within the C137.local domain: the domain controller CITADEL-DC01 (10.42.85.10) and the workstation DESKTOP-SDN1RPT (10.42.85.115). The domain controller is the most critical asset in any Active Directory environment, as its compromise grants the attacker effective control over all domain-joined systems, user accounts, and group policies.
 
-Credential exposure was extensive. The Administrator account — the highest-privilege account in the domain — was directly compromised through brute-force authentication. NTLM hash extraction was confirmed on the workstation through memory forensic evidence. The Kerberos authentication escalation chain demonstrated the attacker's access to at least three named accounts (mortysmith, Administrator, ricksanchez) in addition to the machine account. The presence of the complete ntds.dit database and supporting registry hives in the evidence means that all domain password hashes were potentially accessible to the attacker, and the domain DPAPI backup key (BK-C137) would enable decryption of DPAPI-protected secrets across all domain users.
+Three domain accounts were confirmed compromised through credential harvesting and subsequent use: C137\Administrator (the built-in domain administrator with RID 500), C137\ricksanchez (with full administrative privileges including SeDebugPrivilege and SeEnableDelegationPrivilege), and C137\mortysmith. The compromise of the domain Administrator account alone provides the attacker with unrestricted access to all domain resources, including the ability to create additional accounts, modify group policies, access any shared resource, and deploy software to any domain-joined system.
 
-Persistence depth was moderate. The Meterpreter payload in spoolsv.exe provided reliable access as long as the systems remained running and the Print Spooler service was active (configured for auto-start), but no disk-based persistence mechanisms were identified. The coreupdater.exe binary was placed on disk in System32 on both hosts, providing a more durable but detectable foothold. No evidence of data exfiltration of specific files or databases was identified in the network traffic, though the ricksanchez account's access to the FileShare and the encrypted nature of the C2 channel to 203.78.103.109 mean that data exfiltration cannot be ruled out.
+The Meterpreter implants in the Print Spooler service on both systems ran under the SYSTEM security context, providing the highest level of local privilege. The bind handler on TCP port 62475 on DC01's spoolsv.exe provided persistent remote access capability. The coreupdater.exe binary maintained an active C2 channel over HTTPS to 203.78.103.109, potentially allowing command execution, additional tool deployment, and data access.
+
+Despite the severity of the access achieved, no evidence of data exfiltration was identified. No NTDS.dit database extraction was detected, no archive files were staged in suspicious locations, and no outbound connections to known exfiltration services were found. The attacker's operational focus appeared to be on establishing persistent access and credential control rather than immediate data theft, which is consistent with either a pre-ransomware staging operation or the early phases of a longer-term intrusion that was detected before data theft objectives were pursued.
 
 ## Immediate Tactical Containment
 
-The following actions should be executed immediately to neutralize the active threat:
+The following actions should be executed immediately to contain the active threat:
 
-1. Isolate both compromised hosts from the network. Disconnect DC01 (10.42.85.10) and DESKTOP-SDN1RPT (10.42.85.115) from all network segments to sever the active C2 channel to 203.78.103.109:443 and prevent further lateral movement.
+1. Isolate CITADEL-DC01 (10.42.85.10) from the network. The domain controller has an active C2 connection to 203.78.103.109:443 and a Meterpreter bind handler on TCP port 62475 in spoolsv.exe (PID 3724). Network isolation must precede any remediation to prevent the attacker from deploying additional tools or destroying evidence.
 
-2. Block attacker IP addresses at the perimeter firewall. Create deny rules for 194.61.24.102 (RDP brute-force source) and 203.78.103.109 (coreupdater.exe C2 server) in both inbound and outbound directions across all firewall appliances.
+2. Isolate DESKTOP-SDN1RPT (10.42.85.115) from the network. The workstation contains Meterpreter in spoolsv.exe (PID 2188) and injected code in powershell.exe (PID 3316). Although no active C2 connections from this system were observed at capture time, the implants remain capable of re-establishing communication.
 
-3. Terminate malicious processes on DC01. Kill coreupdater.exe (PID 3644) and the compromised spoolsv.exe (PID 3724). Disable the Print Spooler (Spooler) service to prevent the Meterpreter bind handler on TCP port 62475 from accepting new connections.
+3. Block the following IP addresses at the perimeter firewall, proxy, and DNS sinkhole: 203.78.103.109 (active C2 server) and 194.61.24.102 (malware staging and authentication source).
 
-4. Terminate malicious processes on DESKTOP-SDN1RPT. Kill the compromised spoolsv.exe (PID 2188) and both powershell.exe instances (PID 508 and PID 3316) containing injected code. Disable the Print Spooler service.
+4. Terminate the following processes on CITADEL-DC01 after network isolation: coreupdater.exe (PID 3644, C2 to 203.78.103.109:443) and note that spoolsv.exe (PID 3724) contains the Meterpreter implant — stopping the Print Spooler service will terminate this process, but it will restart automatically; the service must be disabled temporarily.
 
-5. Delete the coreupdater.exe binary from C:\Windows\System32\ on both systems to remove the disk-resident malware component.
+5. Terminate the following processes on DESKTOP-SDN1RPT after network isolation: powershell.exe PID 3316 (injected Meterpreter) and powershell.exe PID 508 (parent of PID 3316, hidden command line). Note that spoolsv.exe PID 2188 also contains Meterpreter and must have its service disabled.
 
-6. Force-reset all domain account passwords immediately. Prioritize the Administrator account, ricksanchez, and mortysmith accounts. Reset the krbtgt account password twice (with a 12-hour interval) to invalidate any Kerberos tickets the attacker may have forged or stolen.
+6. Force immediate password resets for the compromised domain accounts: C137\Administrator (RID 500), C137\ricksanchez, and C137\mortysmith. Reset the KRBTGT account password twice (following Microsoft's documented procedure) to invalidate any potentially forged Kerberos tickets.
 
-7. Disable RDP access to DC01 from all external IP ranges. Block TCP 3389 inbound from any non-internal source at the network perimeter and on the host firewall.
+7. Block the file hash and name coreupdater.exe (7,168 bytes) across all endpoint detection systems. Delete the file from C:\Windows\System32\coreupdater.exe on DC01 after forensic preservation.
 
-8. Block the SHA-256 hash of coreupdater.exe (if recoverable from the disk image) across all endpoint detection platforms in the environment.
+8. Block inbound connections to TCP port 62475 on all internal systems to disrupt any additional Meterpreter bind handlers that may exist on systems not yet examined.
+
+9. Monitor all domain authentication logs for logon attempts from the workstation name "kali" and from any of the three compromised accounts until password resets are confirmed effective.
+
+10. Conduct a sweep of all domain-joined systems for spoolsv.exe processes with unusual memory allocations or network listeners on non-standard ports to identify any additional Meterpreter implants beyond the two confirmed systems.
 
 ## Strategic Remediation
 
-The NTLM brute-force attack against DC01's Administrator account succeeded after only 16 to 20 attempts, indicating the absence of an account lockout policy or an excessively high lockout threshold on the domain's built-in Administrator account. The Administrator account in Active Directory is exempt from lockout by default (finding f_ad5e03bc, T1110.001). Implementing a fine-grained password policy that enforces lockout after five failed attempts for privileged accounts, combined with mandatory 25-character passphrase requirements for domain administrator credentials, would have prevented this initial access vector. For the built-in Administrator account specifically, which cannot be locked out, deploying a PAM (Privileged Access Management) solution or renaming and closely monitoring the account is essential.
+**Absence of Endpoint Protection on the Domain Controller.** The coreupdater.exe binary was successfully detected and blocked by Windows Defender on DESKTOP-SDN1RPT but executed without intervention on CITADEL-DC01, enabling C2 establishment from the domain controller (findings f_0d0c1b50 and f_9ecf3b9c). This disparity indicates that the domain controller either lacked active endpoint protection or had its antivirus capabilities degraded. Deploy and enforce endpoint detection and response (EDR) coverage on all domain controllers with equivalent or stricter policies than workstation endpoints, ensuring real-time scanning and behavioral detection are active.
 
-The domain controller's RDP service (TCP 3389) was directly reachable from external IP 194.61.24.102, enabling both the Nmap reconnaissance and the subsequent brute-force attack (finding f_04a6fb78, T1133). Domain controllers must never be directly accessible from the internet. Implementing network segmentation that places domain controllers in a dedicated management VLAN, accessible only through a hardened jump server or VPN with multi-factor authentication, would have eliminated this attack surface entirely.
+**Print Spooler Service Exposed on the Domain Controller.** The attacker exploited the Print Spooler service (spoolsv.exe) as the injection target for Meterpreter on both systems (finding f_bb541778), leveraging a service that runs as SYSTEM and auto-starts. The Spooler service was running with the SERVICE_INTERACTIVE_PROCESS flag on DC01, which is unnecessary for a domain controller. Disable the Print Spooler service on all domain controllers where printing functionality is not required, consistent with Microsoft's longstanding security guidance reinforced by the PrintNightmare vulnerability series (CVE-2021-34527).
 
-The attacker moved laterally from DC01 to DESKTOP-SDN1RPT via RDP (finding f_fe5a1078, T1021.001), and the identical Meterpreter deployment to both systems demonstrated unrestricted inter-host communication (finding f_0cd8aa43, T1055.001). The absence of east-west traffic controls between the domain controller and workstations allowed the attacker to pivot freely. Deploying host-based firewall rules that restrict RDP access to domain controllers exclusively from designated administrative workstations, and implementing micro-segmentation that limits workstation-to-DC traffic to only required AD services (LDAP, Kerberos, DNS, SMB for SYSVOL), would constrain lateral movement.
+**Insufficient Network Authentication Controls.** The brute-force attack from the "kali" workstation (finding f_69ff7d7a) generated at least eight failed logon attempts in eight seconds against the Administrator account without triggering any automated lockout or alerting. Implement account lockout policies (e.g., lock after five failed attempts within five minutes) for all privileged accounts, and deploy real-time alerting on Event ID 4625 clusters targeting administrative accounts. Additionally, the direct network logon from an unrecognized workstation named "kali" succeeded without restriction, indicating the absence of network access controls limiting which devices can authenticate to the domain controller.
 
-The Metasploit Meterpreter payload was reflectively loaded into spoolsv.exe on both systems without triggering any recorded detection or alert (finding f_0cd8aa43, T1055.001, T1543.003). The coreupdater.exe binary similarly executed from System32 without interception. The absence of endpoint detection and response (EDR) capability on these systems allowed in-memory code injection and masquerading binaries to operate undetected. Deploying an EDR solution with process injection monitoring, memory scanning, and behavioral analysis capabilities on all domain controllers and workstations would provide detection coverage for reflective DLL injection, anomalous child process creation, and suspicious service process behavior.
+**Credential Exposure Enabling Lateral Movement.** The NTLM hash dump on DESKTOP-SDN1RPT (finding f_a1480fa1) provided credentials that were subsequently used for lateral movement to DC01 using three domain accounts (finding f_5d600935). The successful pass-the-hash authentication indicates that NTLM authentication was enabled and unrestricted. Where operationally feasible, enforce Kerberos-only authentication and disable NTLM fallback for domain administrative accounts. Implement credential tiering to ensure domain administrator credentials are never cached or used on workstation-tier systems, preventing credential harvesting on a compromised workstation from yielding domain controller access.
 
-The attacker deployed credential theft tools including a pwdump-format NTLM hash extractor and the Skeleton Key patcher on DESKTOP-SDN1RPT (finding f_9ece2fdf, T1003.001, T1556.001), accessing credential material without apparent detection. Enabling Windows Credential Guard on all systems — which uses virtualization-based security to isolate LSASS — would have protected credential material from direct memory extraction. Additionally, configuring Windows Defender Credential Guard and LSA protection (RunAsPPL) on domain controllers would harden the LSASS process against the Skeleton Key patching technique.
+**Unrestricted Outbound HTTPS from the Domain Controller.** The coreupdater.exe binary established an outbound HTTPS connection from DC01 to 203.78.103.109:443 (finding f_0d0c1b50), indicating that the domain controller had unrestricted outbound internet access. Domain controllers should not require direct internet connectivity. Implement egress filtering that blocks all outbound traffic from domain controllers except to explicitly whitelisted destinations (Windows Update, time synchronization, certificate revocation endpoints), routing all necessary traffic through an inspecting proxy.
 
 ## Conclusion
 
-**Q1. What systems were compromised?** Both systems in the evidence scope were confirmed compromised: the domain controller CITADEL-DC01 (10.42.85.10) and the workstation DESKTOP-SDN1RPT (10.42.85.115). Malware (coreupdater.exe and Meterpreter) was deployed to both systems, and active command-and-control communications were established from DC01.
+**Q1. What systems were compromised?** Two systems were confirmed compromised: the domain controller CITADEL-DC01 (10.42.85.10) and the workstation DESKTOP-SDN1RPT (10.42.85.115). Both contained Meterpreter reflective DLL injections in spoolsv.exe. The domain controller additionally had the coreupdater.exe C2 binary and an active connection to the attacker's infrastructure.
 
-**Q2. How did the attacker gain initial access?** Initial access was achieved through an automated NTLM brute-force attack against the DC01 Administrator account, succeeding at 03:21:46 UTC on September 19, 2020, after approximately 20 password attempts over 20 seconds. A separate RDP brute-force from external IP 194.61.24.102 beginning at 03:34:46 UTC targeted the same account. The relationship between these two attack vectors could not be definitively established due to the absence of source IP data in the NTLM brute-force event logs.
+**Q2. How did the attacker gain initial access?** The precise initial access vector to DESKTOP-SDN1RPT could not be determined from the available evidence. The earliest confirmed attacker activity is the lateral movement from the workstation to DC01 at 22:42:14 UTC on September 18. The workstation was already compromised with Meterpreter, NTLM hash dumping tools, and obfuscated PowerShell payloads by this time. Access to the domain controller was achieved through credential-based authentication using stolen domain administrator credentials, preceded by a brief brute-force attempt from a Kali Linux system and remote authentication from the attacker's infrastructure at 194.61.24.102.
 
-**Q3. What lateral movement occurred?** DC01 initiated an RDP connection to DESKTOP-SDN1RPT at 03:49:15 UTC — a reversed direction from normal traffic patterns that constitutes direct evidence of attacker-driven lateral movement. The deployment of identical malware to both systems and the Kerberos credential escalation chain (mortysmith → Administrator → ricksanchez) demonstrate multi-system access through compromised credentials.
+**Q3. What lateral movement occurred?** Confirmed lateral movement from DESKTOP-SDN1RPT (10.42.85.115) to CITADEL-DC01 (10.42.85.10) was identified using three domain accounts (Administrator, ricksanchez, mortysmith) via Kerberos and NTLM network logons (Event ID 4624 LogonType 3). The movement occurred in two phases: credential-based logons between 22:42 and 23:00 on September 18, and brute-force followed by explicit credential logon from the C2 IP at 03:21–03:22 on September 19.
 
-**Q4. What persistence mechanisms were installed?** The coreupdater.exe binary was deployed to C:\Windows\System32\ on both systems, providing disk-resident persistence. Meterpreter was injected into the auto-start Print Spooler service (spoolsv.exe) on both hosts, providing in-memory persistence that survives as long as the service runs but would not survive a reboot without a separate re-injection mechanism. No registry-based, scheduled task, or other traditional persistence mechanisms were identified.
+**Q4. What persistence mechanisms were installed?** The primary persistence mechanism was Meterpreter reflective DLL injection into the Print Spooler service (spoolsv.exe) on both systems. This service runs as SYSTEM, starts automatically, and will reload its injected payload upon restart. The domain controller's Meterpreter instance additionally maintained a bind handler on TCP port 62475. The coreupdater.exe binary was placed in System32 but did not have registry-based autorun persistence, suggesting it was intended for session-level use. Obfuscated PowerShell content stored in registry hives on the workstation may represent an additional persistence mechanism.
 
-**Q5. Was data exfiltrated, and if so, what and how much?** Definitive data exfiltration was not confirmed. The ricksanchez account accessed the \\CITADEL-DC01\FileShare at 05:48 UTC, performing directory enumeration that may represent reconnaissance or collection. The encrypted C2 channel from coreupdater.exe to 203.78.103.109:443 on DC01 could have carried exfiltrated data, but the encryption prevents content inspection. Credential data was confirmed extracted (NTLM hashes on the workstation), and the ntds.dit database containing all domain password hashes was accessible.
+**Q5. Was data exfiltrated, and if so, what and how much?** No evidence of data exfiltration was found. No NTDS.dit extraction, archive file staging, or connections to known exfiltration services were detected. The C2 channel (coreupdater.exe to 203.78.103.109:443) was established but no outbound data transfer evidence was identified. However, the active C2 channel and the attacker's domain administrator-level access mean that exfiltration capability existed even if it was not exercised during the evidence capture window.
 
-**Q6. What is the full timeline of the incident?** The attack progressed from initial brute-force access at 03:21 UTC through tool deployment (03:40–03:57 UTC), lateral movement (03:49 UTC), credential harvesting (04:16 UTC), and data access (05:48–06:17 UTC), encompassing approximately three hours of active operations within the 7.7-hour capture window. The pre-attack baseline showed normal domain operations from 21:58 UTC on September 18.
+**Q6. What is the full timeline of the incident?** The confirmed incident timeline spans from September 18, 2020 at 22:42:14 UTC (first lateral movement from workstation to DC) to September 19, 2020 at approximately 05:09 UTC (latest process activity in memory captures). Key events: credential-based lateral movement at 22:42–23:00 (Sep 18), brute-force attack at 03:21 (Sep 19), successful authentication at 03:22, coreupdater.exe deployment and C2 at 03:40–03:52, and powershell.exe PID 3316 creation at 05:08. The workstation compromise predates these events but the exact initial compromise time could not be determined.
 
-**Q7. What is the total scope and business impact?** The compromise achieved domain-level access through the Administrator account, with confirmed credential extraction, active malware on both the domain controller and a workstation, and command-and-control communications to external infrastructure. The accessibility of the ntds.dit database means all domain account credentials should be considered compromised. The impact extends to the entire C137.LOCAL domain trust boundary.
+**Q7. What is the total scope and business impact?** Two systems were compromised: the sole domain controller and a workstation. Three domain accounts were used by the attacker, including the built-in domain Administrator. The compromise of the domain controller represents a complete Active Directory domain compromise, as the attacker had SYSTEM-level access to the system hosting the AD database. All credentials, group policies, and trust relationships managed by this domain controller should be considered potentially exposed. The business impact is severe: all domain-joined systems and all domain user accounts must be treated as potentially compromised until credential rotation and infrastructure rebuild are complete.
 
-**Q8. What are the recommended remediation actions?** Immediate actions include network isolation of compromised hosts, blocking of attacker IPs 194.61.24.102 and 203.78.103.109, termination of malicious processes, and a domain-wide password reset including double krbtgt rotation. Strategic remediation should focus on the five root causes identified: insufficient account lockout policy, internet-exposed domain controller RDP, absence of east-west network segmentation, lack of endpoint detection and response capability, and missing credential protection controls. Each of these deficiencies was directly exploited in the attack chain.
+**Q8. What are the recommended remediation actions?** Beyond the immediate tactical containment steps outlined above, the organization should: rebuild both compromised systems from known-good media rather than attempting to clean the existing installations; deploy EDR on all domain controllers; disable the Print Spooler service on domain controllers; implement account lockout policies and privileged access monitoring; enforce credential tiering to prevent domain admin credentials from being used on workstations; restrict outbound network access from domain controllers; and conduct a comprehensive sweep of all domain-joined systems for Meterpreter indicators before restoring normal operations.
 
 
 ---
@@ -207,9 +219,9 @@ The attacker deployed credential theft tools including a pwdump-format NTLM hash
 
 | | |
 |---|---|
-| Findings | **18** (12 confirmed, 6 inference) |
-| Severity | 3 critical, 6 high, 2 medium, 2 low, 5 info |
-| Sources | 28 evidence sources across 412 tool calls |
+| Findings | **17** (12 confirmed, 5 inference) |
+| Severity | 4 critical, 9 high, 2 medium, 0 low, 2 info |
+| Sources | 14 evidence sources across 430 tool calls |
 
 
 ---
@@ -241,21 +253,21 @@ SHA-256 hashes recorded at ingestion. Verify with `sha256sum <file>`.
 
 | Time | Event | Severity | Sources |
 |------|-------|----------|---------|
-| 2020-09-18T21:58:07+00:00 | Network Traffic Capture Profile — PCAP Summary and Protocol Distribution | INFO | pcap.summary, pcap.conversations, zeek.summary, pcap.beaconing, pcap.tunneling, suricata.alerts, pcap.tls |
-| 2020-09-18T21:58:07+00:00 | Files Carved from Network Traffic — OST Email Archives, PDFs, and Application Data | INFO | tcpxtract.carved |
-| 2020-09-18T21:59:39+00:00 | Kerberos Authentication Escalation Chain Visible in Network Traffic: Machine → mortysmith → Administrator → ricksanchez | HIGH | zeek.kerberos, zeek.smb_mapping |
-| 2020-09-18T21:59:39+00:00 | DRSUAPI/DCSync Activity from Workstation to Domain Controller in Network Traffic | LOW | zeek.dce_rpc, zeek.kerberos |
-| 2020-09-19T01:22:38+00:00 | coreupdater.exe Deployed to Both DC01 and DESKTOP-SDN1RPT as Masquerading Malware | CRITICAL | bulk.url, ez.mft, strings.output, volatility.cmdline, volatility.netscan, volatility.pslist, volatility.pstree |
-| 2020-09-19T01:22:38+00:00 | Environment-Wide Meterpreter Code Injection in Print Spooler Service Across DC01 and DESKTOP-SDN1RPT | CRITICAL | volatility.malfind, yara.memory, volatility.netscan, volatility.svcscan |
-| 2020-09-19T01:24:08+00:00 | Environment-Wide Credential Theft Toolkit on DESKTOP-SDN1RPT: Skeleton Key, NTLM Dump, and Tofu Backdoor | HIGH | yara.memory |
-| 2020-09-19T01:24:08+00:00 | Suspicious External IP 62.8.193.206 Associated with TA17-293A Malware in DESKTOP-SDN1RPT Memory | LOW | yara.memory |
-| 2020-09-19T03:21:26+00:00 | Successful NTLM Brute-Force from Kali Linux Against DC01 Administrator — Initial Access Confirmed | CRITICAL | evtx.windows_system32_winevt_logs_security |
-| 2020-09-19T03:32:46+00:00 | RDP Brute Force and Nmap Reconnaissance from External IP 194.61.24.102 Against DC01 | HIGH | zeek.rdp, pcap.conversations |
-| 2020-09-19T03:32:46+00:00 | Suspicious URL http://194.61.24.102/ Found on DC01 Disk Image and DESKTOP-SDN1RPT Pagefile | MEDIUM | bulk.url, strings.output |
-| 2020-09-19T03:49:15+00:00 | RDP Lateral Movement from DC01 to DESKTOP-SDN1RPT via Network Traffic | HIGH | zeek.rdp |
-| 2020-09-19T04:04:06+00:00 | Suspicious PE File Transfer Over Network — No ASLR/DEP, Anomalous Section Names | HIGH | zeek.pe |
-| 2020-09-19T05:08:43+00:00 | Code Injection in spoolsv.exe and powershell.exe on DESKTOP-SDN1RPT | HIGH | volatility.malfind, volatility.pstree, volatility.cmdline |
-| 2020-09-19T05:48:16+00:00 | SMB File Share Access by ricksanchez Account After Credential Compromise | MEDIUM | zeek.smb_files, zeek.smb_mapping |
+| 2020-09-18T22:42:14 | Cross-System Credential Theft Chain: Workstation Hash Dump Enabling DC Authentication | CRITICAL | yara.memory, evtx.windows_system32_winevt_logs_security, volatility.netscan, yara.volatility, bulk.url |
+| 2020-09-18T22:42:14 | Skeleton Key Attack Detected in DESKTOP-SDN1RPT Memory | HIGH | yara.memory |
+| 2020-09-18T22:42:14 | NTLM Hash Dump Output Detected in DESKTOP-SDN1RPT Memory | HIGH | yara.memory |
+| 2020-09-18T22:42:14 | Lateral Movement via Multiple Compromised Domain Accounts from Workstation to DC | HIGH | evtx.windows_system32_winevt_logs_security, yara.memory, volatility.malfind |
+| 2020-09-18T22:42:14 | Tofu_Backdoor Signature Detected in DESKTOP-SDN1RPT Memory | MEDIUM | yara.memory |
+| 2020-09-18T22:42:14 | Encoded PowerShell Commands (JAB Pattern) in DESKTOP-SDN1RPT Registry Memory | MEDIUM | yara.volatility |
+| 2020-09-19T01:22:57 | Environment-Wide Meterpreter Implant in spoolsv.exe Across DC01 and DESKTOP-SDN1RPT | CRITICAL | volatility.malfind, yara.memory, volatility.netscan, volatility.svcscan |
+| 2020-09-19T03:21:25 | Attack Timeline: Kali Linux Brute-Force Followed by Credential-Based DC Compromise | CRITICAL | evtx.windows_system32_winevt_logs_security, volatility.netscan, volatility.pstree, ez.mft |
+| 2020-09-19T03:21:25 | Brute-Force Password Attack Against DC01 from Kali Linux Attack Machine | HIGH | evtx.windows_system32_winevt_logs_security |
+| 2020-09-19T03:21:25 | Network IOC Summary: Attacker Infrastructure IPs and Malware Download URL | HIGH | volatility.netscan, bulk.domain, volatility.pstree |
+| 2020-09-19T03:22:09 | Remote Authentication to DC from C2 Infrastructure IP 194.61.24.102 | HIGH | evtx.windows_system32_winevt_logs_security, bulk.url |
+| 2020-09-19T03:40:49 | coreupdater.exe Malware with Active C2 Connection to 203.78.103.109 | CRITICAL | volatility.netscan, volatility.pstree, bulk.domain, bulk.url, strings.output, ez.mft |
+| 2020-09-19T03:40:49 | coreupdater.exe Malware Dropped in System32 and Manually Executed via Explorer | HIGH | strings.output, ez.mft, enrichment.iocs |
+| 2020-09-19T05:08:43 | Code Injection in powershell.exe (PID 3316) on DESKTOP-SDN1RPT Matching Meterpreter Pattern | HIGH | volatility.malfind, yara.memory |
+| 2020-09-19T05:08:43 | PowerShell Attack Chain with Hidden Command Lines on DESKTOP-SDN1RPT | HIGH | volatility.cmdline, volatility.malfind |
 
 
 
@@ -266,648 +278,396 @@ SHA-256 hashes recorded at ingestion. Verify with `sha256sum <file>`.
 ## Appendix A: Verified Forensic Findings
 
 
-### 1. [CRITICAL] Successful NTLM Brute-Force from Kali Linux Against DC01 Administrator — Initial Access Confirmed
+### 1. [CRITICAL] coreupdater.exe Malware with Active C2 Connection to 203.78.103.109
 
 | | |
 |---|---|
 | **Severity** | CRITICAL |
 | **Confidence** | confirmed |
-| **Time** | 2020-09-19T03:21:26+00:00 to 2020-09-19T03:21:46+00:00 |
-| **Sources** | evtx.windows_system32_winevt_logs_security |
-| **Evidence Refs** | tc_b92e1706, tc_31537bbd |
-| **ATT&CK** | [T1110.001](https://attack.mitre.org/techniques/T1110/001/), [T1078.002](https://attack.mitre.org/techniques/T1078/002/) |
+| **Time** | 2020-09-19T03:40:49 to 2020-09-19T03:43:10 |
+| **Sources** | volatility.netscan, volatility.pstree, bulk.domain, bulk.url, strings.output, ez.mft |
+| **Evidence Refs** | tc_3aa5c15b, tc_e7054ca1, tc_425841e3 |
+| **ATT&CK** | [T1105](https://attack.mitre.org/techniques/T1105/), [T1036.005](https://attack.mitre.org/techniques/T1036/005/), [T1071.001](https://attack.mitre.org/techniques/T1071/001/) |
 
 
-**[COUNTER-ANALYSIS NOTE ADDED]** Multiple Event ID 4625 (Failed logon) events were recorded in the DC01 Security log showing a brute-force password attack against the Administrator account from a system with workstation name "kali."
-
-**Attack Details (unchanged):**
-- Target: Administrator account (no domain specified — targeting local Administrator)
-- Source Workstation: "kali"
-- Authentication: NTLM (NtLmSsp)
-- Logon Type: 3 (Network)
-- Failure Reason: Status 0xC000006D, SubStatus 0xC000006A — wrong password
-- Timeline: Rapid successive attempts starting at 2020-09-19 03:21:26 UTC, approximately one attempt per second
-
-**SUCCESSFUL LOGON CONFIRMED:**
-Event ID 4672 (Special Privileges Assigned) at 03:21:46 UTC shows Administrator logon with full administrative privileges. The last failed attempt was at 03:21:42, meaning the correct password was found after approximately 16-20 attempts in ~20 seconds.
-
-**COUNTER-ANALYSIS — "Coordinated Infrastructure" Claim:**
-The original finding claimed the "kali" brute force and the 194.61.24.102 RDP brute force represent "coordinated infrastructure." This claim is WEAKENED by:
-1. The IpAddress field in the 4625 EVTX events is "-" (empty/not recorded), so we CANNOT confirm the source IP of the "kali" NTLM brute force
-2. The PCAP was captured on "Kali Linux 5.8.0-kali1-amd64" (from Mergecap metadata), raising the possibility that the "kali" workstation was the forensic capture platform itself, connected to the same network for packet capture
-3. Without the source IP, linking the "kali" workstation to 194.61.24.102 is unsupported inference
-
-**What Remains Confirmed:**
-- The brute force attack itself is undeniably malicious (rapid automated password guessing)
-- The attack succeeded — Administrator gained full privileges at 03:21:46 UTC
-- This precedes the RDP brute force from 194.61.24.102 by ~11 minutes
-- The attack timeline remains valid regardless of source IP attribution
-
-**Cross-System Timeline:**
-1. 03:21:26 — NTLM brute-force from "kali" begins against DC01
-2. 03:21:46 — NTLM brute-force SUCCEEDS
-3. 03:32:46 — External IP 194.61.24.102 begins Nmap scan of DC01 RDP
-4. 03:34:46 — 194.61.24.102 begins RDP brute-force against DC01
-5. 03:40:49 — coreupdater.exe deployed on DESKTOP-SDN1RPT
-6. 03:49:15 — DC01 initiates RDP to DESKTOP-SDN1RPT
-7. 03:56:37 — coreupdater.exe deployed on DC01
+A malicious executable coreupdater.exe (PID 3644) was found running on CITADEL-DC01 with an ESTABLISHED TCP connection from 10.42.85.10:62613 to 203.78.103.109:443. The binary was downloaded from http://194.61.24.102/coreupdater.exe, confirmed by bulk_extractor URL carving and browser history artifacts in the DESKTOP-SDN1RPT pagefile. The file is only 7,168 bytes and was placed in C:\Windows\System32\coreupdater.exe — masquerading as a legitimate system binary. On the DESKTOP-SDN1RPT workstation, Windows Defender detected and blocked this binary (action: "block" after "checkReputation"). The process tree shows coreupdater.exe ran in session 3 (interactive logon session) on DC01 from 2020-09-19 03:40:49 to 03:43:10 (exited). On DESKTOP-SDN1RPT it appeared as PID 8324 (also exited). The MFT shows filesystem activity for coreupdater.exe around 2020-09-19 03:52:14. This represents an attacker-deployed backdoor/downloader connecting to external C2 infrastructure from the domain controller.
 
 
 
-### 2. [CRITICAL] coreupdater.exe Deployed to Both DC01 and DESKTOP-SDN1RPT as Masquerading Malware
+### 2. [CRITICAL] Attack Timeline: Kali Linux Brute-Force Followed by Credential-Based DC Compromise
 
 | | |
 |---|---|
 | **Severity** | CRITICAL |
 | **Confidence** | confirmed |
-| **Time** | 2020-09-19T01:22:38+00:00 to 2020-09-19T03:43:10+00:00 |
-| **Sources** | bulk.url, ez.mft, strings.output, volatility.cmdline, volatility.netscan, volatility.pslist, volatility.pstree |
-| **Evidence Refs** | tc_1070815f, tc_7b3cb6d5, tc_a4326bfe, tc_a8629a5d, tc_c6c7a107, tc_f77e6811 |
-| **ATT&CK** | [T1036.005](https://attack.mitre.org/techniques/T1036/005/), [T1071.001](https://attack.mitre.org/techniques/T1071/001/), [T1105](https://attack.mitre.org/techniques/T1105/), [T1570](https://attack.mitre.org/techniques/T1570/) |
+| **Time** | 2020-09-19T03:21:25 to 2020-09-19T03:52:14 |
+| **Sources** | evtx.windows_system32_winevt_logs_security, volatility.netscan, volatility.pstree, ez.mft |
+| **Evidence Refs** | tc_9830c250, tc_d7ff6284, tc_3aa5c15b, tc_425841e3 |
+| **ATT&CK** | [T1110.001](https://attack.mitre.org/techniques/T1110/001/), [T1078.002](https://attack.mitre.org/techniques/T1078/002/), [T1105](https://attack.mitre.org/techniques/T1105/), [T1003](https://attack.mitre.org/techniques/T1003/) |
 
 
-A malicious executable named "coreupdater.exe" was deployed to both systems in the environment, placed in C:\Windows\System32\ to masquerade as a legitimate system binary:
+Correlating Security Event Log data with memory forensics reveals a clear attack sequence on 2020-09-19:
 
-DC01 (Domain Controller):
-- PID 3644, actively running at time of memory capture
-- ESTABLISHED connection to C2 at 203.78.103.109:443
-- Not present in autoruns, suggesting it was started interactively or by another mechanism
+1. 03:21:25-03:21:46: Rapid brute-force password attempts from workstation "kali" against Administrator on CITADEL-DC01 (Event 4625, Status 0xC000006A - correct username, wrong password, NTLM authentication)
 
-DESKTOP-SDN1RPT (Workstation):
-- PID 8324, Session 3, created 2020-09-19 03:40:49, exited 2020-09-19 03:43:10
-- Located at \Device\HarddiskVolume3\Windows\System32\coreupdater.exe
-- Short execution window (~2.5 minutes) suggests it may have been used for a specific task (e.g., payload delivery, data collection) then terminated
+2. 03:22:07: Successful Administrator logon (SID S-1-5-21-2232410529-1445159330-2725690660-500, LogonId 0x510986)
 
-Neither "coreupdater.exe" is a legitimate Windows system binary. The name is designed to blend with legitimate update processes. The deployment to both the domain controller and a workstation indicates lateral movement capability and multi-system compromise.
+3. 03:22:09: Event 4648 explicit credential logon from 194.61.24.102 (the malware hosting server) targeting C137\Administrator through winlogon.exe (PID 0x9F0), TargetServerName: localhost
 
-The shimcache on DC01 disk image does NOT contain an entry for coreupdater.exe, which is unusual for an executed binary and may indicate anti-forensics or that the binary was executed only from memory/a network share.
+4. 03:22:37: Second Event 4648 explicit credential logon with similar pattern
 
-**Affected Systems:** bulk.url, ez.mft, strings.output, volatility.cmdline, volatility.netscan, volatility.pslist, volatility.pstree
+5. 03:40:49: coreupdater.exe (PID 3644) starts on DC01, establishing C2 to 203.78.103.109:443
+
+6. 03:52:14: coreupdater.exe written to C:\Windows\System32\ on DC01 filesystem (MFT timestamp)
+
+The attacker used credentials obtained from NTLM hash dumping on the workstation (confirmed by YARA NTLM_Dump_Output rule) to authenticate to the DC after the initial brute-force attempt. The Kali workstation, external IP 194.61.24.102, and the compromised workstation DESKTOP-SDN1RPT appear to be the attack infrastructure.
 
 
 
-### 3. [CRITICAL] Environment-Wide Meterpreter Code Injection in Print Spooler Service Across DC01 and DESKTOP-SDN1RPT
+### 3. [CRITICAL] Environment-Wide Meterpreter Implant in spoolsv.exe Across DC01 and DESKTOP-SDN1RPT
 
 | | |
 |---|---|
 | **Severity** | CRITICAL |
 | **Confidence** | confirmed |
-| **Time** | 2020-09-19T01:22:38+00:00 |
+| **Time** | 2020-09-19T01:22:57 |
 | **Sources** | volatility.malfind, yara.memory, volatility.netscan, volatility.svcscan |
-| **Evidence Refs** | tc_2af0d01a, tc_923a6c2c, tc_76f50b5a, tc_a091259d, tc_c185c06e |
-| **ATT&CK** | [T1055.001](https://attack.mitre.org/techniques/T1055/001/), [T1543.003](https://attack.mitre.org/techniques/T1543/003/), [T1571](https://attack.mitre.org/techniques/T1571/) |
+| **Evidence Refs** | tc_baa18320, tc_34a294df, tc_e7054ca1, tc_4df97cc7, tc_0dee61fb |
+| **ATT&CK** | [T1055.001](https://attack.mitre.org/techniques/T1055/001/), [T1543.003](https://attack.mitre.org/techniques/T1543/003/), [T1059.006](https://attack.mitre.org/techniques/T1059/006/) |
 
 
-Identical Metasploit Meterpreter code injection was detected in the Windows Print Spooler service (spoolsv.exe) on BOTH compromised systems, confirming environment-wide deployment of the same attack toolkit.
+Cross-system analysis reveals identical Meterpreter reflective DLL injection in the Print Spooler service (spoolsv.exe) on both compromised systems, confirming a coordinated attack using the same toolkit:
 
-**DC01 (Domain Controller — CITADEL-DC01):**
-- spoolsv.exe PID 3724, SERVICE_AUTO_START, SERVICE_RUNNING
-- Volatility malfind: 4 RWX regions with x64 Metasploit shellcode stub (fc 48 89 ce 48 81 ec 00 20 00 00) and 3 injected MZ PE headers
-- YARA: metsrv.x64.dll (5 offsets), ReflectiveLoader (15 offsets) — HKTL_Meterpreter_inMemory
-- Netscan: LISTENING on TCP 62475 (bind handler)
-- Service scan: Spooler service running as SERVICE_WIN32_OWN_PROCESS|SERVICE_INTERACTIVE_PROCESS
+**DC01 (CITADEL-DC01, 10.42.85.10) — spoolsv.exe PID 3724:**
+- YARA rule HKTL_Meterpreter_inMemory matched "metsrv.x64.dll" (5 offsets) and "ReflectiveLoader" (15 offsets)
+- Volatility malfind: PAGE_EXECUTE_READWRITE regions with x64 shellcode (fc H\x89\xce), 3 MZ headers, 1 MZARUH stub
+- Netscan: LISTENING on TCP port 62475 (atypical for print spooler — Meterpreter bind handler)
+- Volatility svcscan: PID 3724 running as "Spooler" service with SERVICE_INTERACTIVE_PROCESS flag (unusual for a DC)
 
-**DESKTOP-SDN1RPT (Workstation):**
-- spoolsv.exe PID 2188: Injected MZ PE header in RWX memory (36 committed pages) — same reflective DLL injection pattern
-- powershell.exe PID 3316: Multiple RWX regions with PE headers and PNG reference (potential steganographic delivery)
-- Spooler service also present in svcscan
+**DESKTOP-SDN1RPT (10.42.85.115) — spoolsv.exe PID 2188:**
+- Volatility malfind: MZ PE header in PAGE_EXECUTE_READWRITE region (CommitCharge=36) — same allocation pattern as DC01
+- No active network listeners at capture time (implant may have been dormant or using a different callback mechanism)
 
-**Cross-System Convergence:**
-The identical injection technique (reflective DLL loading of Meterpreter server into spoolsv.exe) across both systems, corroborated by:
-1. Memory forensics (Volatility malfind) on both hosts
-2. YARA signature matching on both hosts
-3. Service scan confirming auto-start on both hosts
-4. Network analysis showing unusual listening ports
-
-**Persistence Assessment (Q6):**
-The Meterpreter payload persists IN MEMORY within the spoolsv.exe process. The Print Spooler service (Spooler) is configured as SERVICE_AUTO_START and will restart on reboot. However, the injected code itself is memory-resident only — it would NOT survive a reboot unless there is a separate re-injection mechanism (service, scheduled task, or registry). No such mechanism was identified in registry or scheduled task analysis, suggesting the Meterpreter is session-based persistence dependent on the initial exploitation vector.
+**Convergence:** The identical injection technique (reflective DLL loading into spoolsv.exe), matching memory allocation patterns (36-page CommitCharge), and same YARA signatures across two independent memory dumps from different systems confirm coordinated deployment of the same Metasploit payload. The attacker established persistent implants in the Print Spooler service on both systems — a service that auto-starts and runs as SYSTEM, providing reliable persistence without registry modifications.
 
 
 
-### 4. [HIGH] Environment-Wide Credential Theft Toolkit on DESKTOP-SDN1RPT: Skeleton Key, NTLM Dump, and Tofu Backdoor
+### 4. [CRITICAL] Cross-System Credential Theft Chain: Workstation Hash Dump Enabling DC Authentication
+
+| | |
+|---|---|
+| **Severity** | CRITICAL |
+| **Confidence** | confirmed |
+| **Time** | 2020-09-18T22:42:14 to 2020-09-19T03:52:14 |
+| **Sources** | yara.memory, evtx.windows_system32_winevt_logs_security, volatility.netscan, yara.volatility, bulk.url |
+| **Evidence Refs** | tc_34a294df, tc_9830c250, tc_d7ff6284, tc_3aa5c15b, tc_ae64a08b |
+| **ATT&CK** | [T1003.001](https://attack.mitre.org/techniques/T1003/001/), [T1003.002](https://attack.mitre.org/techniques/T1003/002/), [T1556.001](https://attack.mitre.org/techniques/T1556/001/), [T1078.002](https://attack.mitre.org/techniques/T1078/002/), [T1110.001](https://attack.mitre.org/techniques/T1110/001/) |
+
+
+Cross-correlation of evidence across DESKTOP-SDN1RPT and CITADEL-DC01 reveals a credential theft chain spanning both systems, with artifacts from 4+ independent sources confirming the attack progression:
+
+**Phase 1 — Credential Harvesting on DESKTOP-SDN1RPT (10.42.85.115):**
+- YARA NTLM_Dump_Output rule matched the pattern "500:aad3b435b51404eeaad3b435b51404ee:" (RID 500 Administrator NTLM hash format) at 6 offsets in DESKTOP-SDN1RPT memory — this is a specific credential dump output format unlikely to originate from AV definitions
+- Skeleton Key patcher YARA rule also matched, though counter-analysis identified significant false positive risk from AV definitions containing "HookDC.dll" and legitimate Windows API names (CDLocateCSystem, SamIRetrievePrimaryCredentials) — confidence downgraded to inference (see f_56f388ba)
+- Encoded PowerShell (JAB pattern) in Registry process indicates attack tooling staged in registry hives
+
+**Phase 2 — Credential Usage Against DC01 (10.42.85.10):**
+- EVTX Security log: 8+ failed brute-force attempts (Event 4625) from workstation "kali" at 03:21:25-03:21:33, Status 0xC000006A (correct username, wrong password)
+- EVTX Security log: Successful Administrator logon at 03:22:07
+- EVTX Security log: Explicit credential logon (Event 4648) from 194.61.24.102 at 03:22:09
+
+**Phase 3 — Post-Authentication DC Compromise:**
+- coreupdater.exe deployed to C:\Windows\System32\ on DC01, C2 to 203.78.103.109:443
+- Meterpreter reflective DLL injected into spoolsv.exe PID 3724
+
+**Convergence:** The credential dumping artifacts on the workstation (YARA memory signatures) are consistent with enabling the authentication events on the DC (EVTX security logs). The timing is consistent: lateral movement with credentials (22:42-23:00 on Sep 18) preceded the brute-force/authentication sequence (03:21-03:22 on Sep 19), and the NTLM hash dump provided the means to obtain credentials subsequently used. Five independent evidence sources (YARA memory scan, EVTX security logs, Volatility netscan, bulk_extractor URLs, MFT timestamps) corroborate this chain. The Skeleton Key component has been downgraded to inference-level confidence, but the credential chain narrative remains strong based on the NTLM dump output, confirmed Meterpreter implants, and EVTX authentication events.
+
+
+
+### 5. [HIGH] Skeleton Key Attack Detected in DESKTOP-SDN1RPT Memory
 
 | | |
 |---|---|
 | **Severity** | HIGH |
 | **Confidence** | inference |
-| **Time** | 2020-09-19T01:24:08+00:00 |
+| **Time** | 2020-09-18T22:42:14 |
 | **Sources** | yara.memory |
-| **Evidence Refs** | tc_2af0d01a, tc_51306ab9, tc_c185c06e |
-| **ATT&CK** | [T1556.001](https://attack.mitre.org/techniques/T1556/001/), [T1003.001](https://attack.mitre.org/techniques/T1003/001/), [T1003.002](https://attack.mitre.org/techniques/T1003/002/) |
+| **Evidence Refs** | tc_34a294df |
+| **ATT&CK** | [T1556.001](https://attack.mitre.org/techniques/T1556/001/), [T1003.001](https://attack.mitre.org/techniques/T1003/001/) |
 
 
-**[COUNTER-ANALYSIS ADJUSTED — Critical→High, confidence note added]** YARA scanning of DESKTOP-SDN1RPT memory detected multiple credential theft and remote access tool signatures. Counter-analysis validates some matches as specific and challenges others as potentially generic.
+YARA rule skeleton_key_patcher matched extensively in the DESKTOP-SDN1RPT raw memory dump. The rule matched multiple string categories: (1) "lsass.exe" at 100+ offsets; (2) "HookDC.dll" at 6 offsets; (3) "cryptdll.dll" at 16 offsets; (4) "samsrv.dll" at 7 offsets; (5) "CDLocateCSystem" at 4 offsets; (6) "SamIRetrievePrimaryCredentials" and "SamIRetrieveMultiplePrimaryCredentials" at 2 offsets each.
 
-**1. Skeleton Key Patcher — PARTIALLY VALIDATED:**
-- The `HookDC.dll` string matched at 6 memory offsets. This IS specific to the Skeleton Key patcher tool and does NOT occur in legitimate Windows installations. This validates the tool's presence in workstation memory.
-- However, the other matched strings are EXPECTED in any Windows memory dump:
-  - `$target_process` (lsass.exe in UTF-16LE): 100+ matches — every Windows system references lsass.exe extensively
-  - `$dll1` (cryptdll.dll): 16 matches — legitimate Windows crypto DLL loaded by LSASS
-  - `$dll2` (samsrv.dll): 7 matches — legitimate SAM service DLL loaded by LSASS
-  - `$patched1/$patched2/$patched3` (CDLocateCSystem, SamIRetrievePrimaryCredentials, SamIRetrieveMultiplePrimaryCredentials): These are legitimate exported function names in cryptdll.dll and samsrv.dll
-- **Key caveat:** The Skeleton Key patcher tool was found on DESKTOP-SDN1RPT (workstation), NOT on DC01. The tool would need to be executed against DC01's LSASS to deploy the skeleton key. Presence of the tool does not confirm deployment to the DC.
+**Counter-analysis — significant false positive risk:** Most matched strings are legitimate Windows system components that exist in ANY Windows memory dump: lsass.exe (system process), cryptdll.dll and samsrv.dll (system DLLs), CDLocateCSystem and SamIRetrievePrimaryCredentials (exported API functions from those DLLs). The most Skeleton-Key-specific string, "HookDC.dll", was confirmed present in Windows Defender malware definition content on this system (strings output shows it surrounded by AV detection signature names like "Behavior:Win32/Lol", "!Banload.ASZ"). Because the YARA scan was against the full raw memory dump (not per-process), the rule fires when ALL required strings exist ANYWHERE in the multi-GB dump — a condition easily met when legitimate system DLL exports combine with AV definition content containing "HookDC.dll".
 
-**2. NTLM Hash Dump Output — VALIDATED:**
-- `NTLM_Dump_Output` matched at 6 offsets showing "500:aad3b435b51404eeaad3b435b51404ee:" format
-- This is a specific pwdump/secretsdump output format that confirms credential extraction occurred
+**Timeline inconsistency further weakens this finding:** If a Skeleton Key had been successfully deployed to patch DC01's LSASS (allowing a master password for any Kerberos account), the brute-force attack from "kali" at 03:21:25 would have been unnecessary — the attacker could have authenticated with any password. The fact that brute-force was attempted suggests either the Skeleton Key was never deployed, targeted a different system, or the tool was present but not used.
 
-**3. Tofu Backdoor — WEAK:**
-- `Tofu_Backdoor` matched "Cookies: Sym1.0" at only 2 offsets
-- This is a short, semi-generic HTTP cookie header pattern
-- Two instances in a ~2GB memory dump is a thin signal for APT attribution
-- The Tonto Team / CactusPete attribution should be treated as speculative
-
-**Assessment:** Downgraded from critical to high because: (1) the Skeleton Key tool's PRESENCE on the workstation is validated by HookDC.dll, but DEPLOYMENT to DC01 is not confirmed; (2) NTLM dump output confirms credential theft; (3) the Tofu backdoor attribution is weak. This finding is corroborated by the broader attack chain (Meterpreter, coreupdater.exe, brute force) which supports credential tool usage even if individual YARA matches are imperfect.
+**Assessment:** Downgraded from critical/confirmed to high/inference. The Skeleton Key toolkit MAY have been present on the workstation, but the raw memory YARA match alone cannot distinguish actual tool presence from AV definition artifacts. No per-process corroboration (e.g., vadyarascan matching within a specific attack process) exists to confirm deployment. The finding remains at high severity because it is part of a broader attack chain and the tool's presence — even if only in definitions — is contextually relevant alongside confirmed Meterpreter injection and NTLM hash dumping on the same system.
 
 
 
-### 5. [HIGH] Code Injection in spoolsv.exe and powershell.exe on DESKTOP-SDN1RPT
+### 6. [HIGH] NTLM Hash Dump Output Detected in DESKTOP-SDN1RPT Memory
 
 | | |
 |---|---|
 | **Severity** | HIGH |
 | **Confidence** | confirmed |
-| **Time** | 2020-09-19T05:08:43+00:00 |
-| **Sources** | volatility.malfind, volatility.pstree, volatility.cmdline |
-| **Evidence Refs** | tc_a091259d, tc_1070815f |
+| **Time** | 2020-09-18T22:42:14 |
+| **Sources** | yara.memory |
+| **Evidence Refs** | tc_34a294df |
+| **ATT&CK** | [T1003.002](https://attack.mitre.org/techniques/T1003/002/), [T1003.001](https://attack.mitre.org/techniques/T1003/001/) |
+
+
+YARA rule NTLM_Dump_Output matched in the DESKTOP-SDN1RPT memory dump at 6 offsets, detecting the string pattern "500:aad3b435b51404eeaad3b435b51404ee:" — the characteristic format of NTLM hash dump output for the built-in Administrator account (RID 500). The LM hash portion "aad3b435b51404eeaad3b435b51404ee" is the well-known empty LM hash, indicating LM hashing is disabled (expected on modern Windows). The presence of this pattern in memory indicates credential dumping tools (likely Mimikatz or hashdump) were used to extract NTLM password hashes from the SAM database or domain controller.
+
+**Counter-analysis note:** Unlike the Skeleton Key YARA match (f_56f388ba), which relies on strings that are legitimate Windows API names and AV definition content, this pattern is the actual OUTPUT FORMAT of credential dumping tools (RID:LMhash:NThash). This format is far more specific and would not typically appear in AV malware definitions. The 6 match offsets spread across memory are consistent with the dump output being held in process memory, pagefile residue, or clipboard data. While raw memory YARA scans carry inherent FP risk, the specificity of this pattern and its corroboration by the broader attack chain (confirmed Meterpreter, brute-force, and lateral movement) support this finding at confirmed confidence.
+
+Combined with the Meterpreter code injection and the subsequent authentication events on the DC, this finding confirms active credential harvesting as part of the compromise.
+
+
+
+### 7. [HIGH] Remote Authentication to DC from C2 Infrastructure IP 194.61.24.102
+
+| | |
+|---|---|
+| **Severity** | HIGH |
+| **Confidence** | confirmed |
+| **Time** | 2020-09-19T03:22:09 to 2020-09-19T03:22:37 |
+| **Sources** | evtx.windows_system32_winevt_logs_security, bulk.url |
+| **Evidence Refs** | tc_d7ff6284, tc_61479cab |
+| **ATT&CK** | [T1078.002](https://attack.mitre.org/techniques/T1078/002/), [T1133](https://attack.mitre.org/techniques/T1133/) |
+
+
+Windows Security Event ID 4648 at 2020-09-19 03:22:09 records an explicit credential logon attempt on CITADEL-DC01.C137.local where the source IP was 194.61.24.102 — the same IP address that hosted the coreupdater.exe malware (http://194.61.24.102/coreupdater.exe). The event shows: Subject: C137\CITADEL-DC01$, Target: C137\Administrator, TargetServerName: localhost, Process: C:\Windows\System32\winlogon.exe. This indicates the attacker authenticated to the domain controller using the Administrator account from their C2 infrastructure. Additional 4648 events at 03:22:37 show continued explicit credential activity. The use of the same IP for both hosting malware and authenticating to the DC confirms this IP is attacker-controlled infrastructure.
+
+
+
+### 8. [HIGH] Brute-Force Password Attack Against DC01 from Kali Linux Attack Machine
+
+| | |
+|---|---|
+| **Severity** | HIGH |
+| **Confidence** | confirmed |
+| **Time** | 2020-09-19T03:21:25 to 2020-09-19T03:21:33 |
+| **Sources** | evtx.windows_system32_winevt_logs_security |
+| **Evidence Refs** | tc_9830c250 |
+| **ATT&CK** | [T1110.001](https://attack.mitre.org/techniques/T1110/001/) |
+
+
+Multiple rapid-fire Event ID 4625 (failed logon) events were recorded in the Security event log between 2020-09-19 03:21:25 and 03:21:33, targeting the Administrator account on CITADEL-DC01 from a workstation named "kali". The attacks used NTLM authentication (LogonType 3, network logon) with Status 0xC000006D (bad username or authentication information) and SubStatus 0xC000006A (user name is correct but the password is wrong), confirming repeated attempts with incorrect passwords. At least 8 failed attempts occurred in rapid succession (~1 per second), consistent with an automated brute-force or password spraying attack. The workstation name "kali" strongly indicates use of Kali Linux, a well-known penetration testing and offensive security distribution. This attack occurred approximately 1 minute before the Event 4648 explicit credential logon from 194.61.24.102 (03:22:09), suggesting the attacker first attempted to brute-force credentials and then used a different vector (likely credentials obtained from NTLM hash dumping on the workstation) to authenticate successfully.
+
+
+
+### 9. [HIGH] Code Injection in powershell.exe (PID 3316) on DESKTOP-SDN1RPT Matching Meterpreter Pattern
+
+| | |
+|---|---|
+| **Severity** | HIGH |
+| **Confidence** | confirmed |
+| **Time** | 2020-09-19T05:08:43 |
+| **Sources** | volatility.malfind, yara.memory |
+| **Evidence Refs** | tc_4df97cc7, tc_34a294df |
 | **ATT&CK** | [T1055.001](https://attack.mitre.org/techniques/T1055/001/), [T1059.001](https://attack.mitre.org/techniques/T1059/001/) |
 
 
-Volatility malfind detected suspicious PAGE_EXECUTE_READWRITE memory regions with injected code in multiple processes on DESKTOP-SDN1RPT:
-
-1. spoolsv.exe (PID 2188): Contains an injected MZ PE header in RWX memory (36 committed pages), consistent with reflective DLL injection. Same technique as the confirmed Meterpreter compromise on DC01.
-
-2. powershell.exe (PID 3316): Multiple suspicious RWX regions:
-   - MZ PE header injected (36 committed pages)
-   - Two additional large RWX regions (107 and 57 committed pages each), suggesting substantial injected payloads
-   - PNG file reference embedded in RWX memory, which may indicate steganographic payload delivery
-
-Process tree analysis shows:
-- PID 508 (powershell.exe) was spawned by PID 1380 (parent not in process list - possibly exited)
-- PID 3316 (powershell.exe) was spawned by PID 508 (first powershell)
-- Both powershell instances are in Session 2 (user session)
-
-The pattern of injected MZ headers with reflective loading in spoolsv.exe mirrors exactly the Meterpreter injection pattern observed on DC01, suggesting the same attacker and toolchain.
+Volatility malfind detected multiple PAGE_EXECUTE_READWRITE memory regions in powershell.exe PID 3316 on the DESKTOP-SDN1RPT workstation, including an MZ PE header (CommitCharge=36). The memory allocation pattern (107-page, 57-page, and 36-page regions) matches the identical pattern seen in the Meterpreter-injected spoolsv.exe PID 3724 on DC01, strongly suggesting the same Metasploit payload was reflectively loaded into this PowerShell process. The process command line is empty (hidden), and it was running alongside a Skeleton Key attack toolkit and NTLM hash dump. spoolsv.exe PID 2188 on the same workstation also contains an MZ header in a PAGE_EXECUTE_READWRITE region (CommitCharge=36), indicating a second injected process. These findings confirm the workstation was actively compromised with multiple implants serving as the attack staging platform.
 
 
 
-### 6. [HIGH] RDP Brute Force and Nmap Reconnaissance from External IP 194.61.24.102 Against DC01
+### 10. [HIGH] Lateral Movement via Multiple Compromised Domain Accounts from Workstation to DC
 
 | | |
 |---|---|
 | **Severity** | HIGH |
 | **Confidence** | confirmed |
-| **Time** | 2020-09-19T03:32:46+00:00 to 2020-09-19T04:09:23+00:00 |
-| **Sources** | zeek.rdp, pcap.conversations |
-| **Evidence Refs** | tc_26e12972, tc_7f283258 |
-| **ATT&CK** | [T1110.001](https://attack.mitre.org/techniques/T1110/001/), [T1046](https://attack.mitre.org/techniques/T1046/), [T1133](https://attack.mitre.org/techniques/T1133/) |
+| **Time** | 2020-09-18T22:42:14 to 2020-09-18T23:00:29 |
+| **Sources** | evtx.windows_system32_winevt_logs_security, yara.memory, volatility.malfind |
+| **Evidence Refs** | tc_9b405521, tc_261819d1, tc_4fafdd20 |
+| **ATT&CK** | [T1021.002](https://attack.mitre.org/techniques/T1021/002/), [T1078.002](https://attack.mitre.org/techniques/T1078/002/), [T1550.002](https://attack.mitre.org/techniques/T1550/002/) |
 
 
-Network capture reveals a coordinated attack from external IP 194.61.24.102 targeting the domain controller DC01 (10.42.85.10) on RDP port 3389.
+Security Event Log analysis reveals coordinated network logon activity (Event 4624, LogonType 3) from DESKTOP-SDN1RPT (10.42.85.115) to CITADEL-DC01 using multiple domain accounts within a short time window on 2020-09-18:
 
-**Reconnaissance Phase (03:32:46 UTC):**
-- Initial RDP connection with cookie "nmap" — indicating Nmap service scanning against the DC's RDP port
-- Security protocol: HYBRID_EX
-- Source port 38100
+- 22:42:14: C137\Administrator - LogonType 3 via Kerberos from 10.42.85.115 (Event 4672 shows full administrative privileges including SeDebugPrivilege, SeTakeOwnershipPrivilege, SeLoadDriverPrivilege)
+- 22:44:11-13: C137\ricksanchez - LogonType 3 via Kerberos from 10.42.85.115 (Event 4672 confirms administrative privileges including SeDebugPrivilege, SeRestorePrivilege, SeEnableDelegationPrivilege)
+- 22:46:39-40: C137\mortysmith (SID: S-1-5-21-2232410529-1445159330-2725690660-1108) - LogonType 3 from 10.42.85.115
+- 22:52:49-50: C137\ricksanchez - again from 10.42.85.115
+- 23:00:19-29: C137\mortysmith - again from 10.42.85.115
 
-**Brute Force Phase (03:34:46 – 03:35:07 UTC):**
-- 75+ rapid automated RDP connection attempts, all with cookie "Administrator"
-- Source ports incrementing sequentially from 40044 to 40234 (incrementing by 2 each time)
-- Connection interval: ~220ms between attempts (4.5 connections/second)
-- Security protocol: HYBRID (NLA enabled)
-- All resulted in encrypted connections (NLA prevents seeing success/failure in the traffic)
-
-**Continued Attempts:**
-- 03:35:28 UTC, 03:35:57 UTC: Additional attempts from ports 40236, 40238
-- 04:09:23 UTC: Final attempt from port 40240
-
-**Network Significance:**
-The DC01's RDP port (3389) was directly reachable from this external IP, indicating the domain controller was internet-exposed (either directly or through port forwarding). This is a severe network architecture issue that enabled the attack.
-
-This finding corroborates and extends the existing Event Log finding (f_ad5e03bc) about brute-force from "kali" workstation. The network-level evidence shows the exact timing, connection rate, and the Nmap reconnaissance that preceded the brute force.
+The workstation (DESKTOP-SDN1RPT) had confirmed Skeleton Key attack tools (HookDC.dll, CDLocateCSystem), NTLM hash dumping (Administrator RID 500), and Meterpreter code injection (powershell.exe PID 3316, spoolsv.exe PID 2188) in memory. The rapid sequential use of three different domain accounts (Administrator, ricksanchez, mortysmith) from this compromised host to authenticate to the domain controller is consistent with credential harvesting and lateral movement using stolen credentials.
 
 
 
-### 7. [HIGH] RDP Lateral Movement from DC01 to DESKTOP-SDN1RPT via Network Traffic
+### 11. [HIGH] coreupdater.exe Malware Dropped in System32 and Manually Executed via Explorer
 
 | | |
 |---|---|
 | **Severity** | HIGH |
 | **Confidence** | confirmed |
-| **Time** | 2020-09-19T03:49:15+00:00 to 2020-09-19T03:49:15+00:00 |
-| **Sources** | zeek.rdp |
-| **Evidence Refs** | tc_26e12972 |
-| **ATT&CK** | [T1021.001](https://attack.mitre.org/techniques/T1021/001/), [T1570](https://attack.mitre.org/techniques/T1570/) |
+| **Time** | 2020-09-19T03:40:49 to 2020-09-19T03:52:14 |
+| **Sources** | strings.output, ez.mft, enrichment.iocs |
+| **Evidence Refs** | tc_b97d1d99, tc_0ba95851, tc_4ad192db |
+| **ATT&CK** | [T1036.005](https://attack.mitre.org/techniques/T1036/005/), [T1204.002](https://attack.mitre.org/techniques/T1204/002/), [T1059](https://attack.mitre.org/techniques/T1059/) |
 
 
-Zeek RDP log captures an RDP connection originating FROM the domain controller DC01 (10.42.85.10) TO the workstation DESKTOP-SDN1RPT (10.42.85.115) at 2020-09-19 03:49:15 UTC.
+Pagefile string analysis reveals Windows SmartScreen reputation check data showing coreupdater.exe (7,168 bytes) at C:\Windows\System32\ was:
+1. Checked via isFileSupported (executionTime: 11341)
+2. Reputation lookup performed (executionTime: 2906838)
+3. User action taken: "run" (the user/attacker chose to execute it)
+4. Reputation check performed (executionTime: 41563981)
+5. Action: "block" (SmartScreen tried to block it)
 
-**Connection Details:**
-- Source: 10.42.85.10:62514 (DC01)
-- Destination: 10.42.85.115:3389 (DESKTOP-SDN1RPT)
-- Cookie: empty string (no username in the RDP cookie)
-- Security protocol: HYBRID_EX
-- Result: encrypted
+The caller process was C:\Windows\explorer.exe (PID 4008), confirming the malware was manually launched through Windows Explorer. CRC values were computed but no hash was recorded. The MFT shows coreupdater.exe created at 2020-09-19 03:52:14 in System32.
 
-**Timeline Context:**
-This RDP connection from DC01 to the workstation occurs in the middle of the attack sequence:
-1. 03:32-03:35 UTC — External attacker (194.61.24.102) Nmap scans and brute-forces DC01 RDP
-2. 03:40:49 UTC — coreupdater.exe malware deployed on DESKTOP-SDN1RPT
-3. **03:49:15 UTC — DC01 initiates RDP to DESKTOP-SDN1RPT (this finding)**
-4. 03:56:37 UTC — coreupdater.exe deployed on DC01 with C2 to 203.78.103.109
-5. 04:04-04:19 UTC — Suspicious PE files transferred
-
-**Significance:**
-Domain controllers should not be initiating RDP connections to workstations under normal operations. This connection direction (DC→workstation) is a strong indicator of lateral movement — an attacker who has compromised the DC is using it to access the workstation via RDP. The empty cookie suggests the connection may have been initiated programmatically rather than through a standard RDP client.
+IOC enrichment reveals the C2 destination 203.78.103.109 is hosted in Thailand (AS23884 Proen Corp), and the credential source IP 194.61.24.102 is hosted in Russia (AS41842 LLC "MEDIA SYSTEMS"). The coreupdater.exe binary does NOT appear in the ShimCache, and no registry persistence mechanism was found for it, suggesting it was deployed for a single session C2 rather than persistent access. The Meterpreter payload in spoolsv.exe (PID 3724) served as the persistent implant.
 
 
 
-### 8. [HIGH] Suspicious PE File Transfer Over Network — No ASLR/DEP, Anomalous Section Names
-
-| | |
-|---|---|
-| **Severity** | HIGH |
-| **Confidence** | inference |
-| **Time** | 2020-09-19T04:04:06+00:00 to 2020-09-19T04:19:58+00:00 |
-| **Sources** | zeek.pe |
-| **Evidence Refs** | tc_edc9aadf |
-| **ATT&CK** | [T1105](https://attack.mitre.org/techniques/T1105/), [T1027.002](https://attack.mitre.org/techniques/T1027/002/) |
-
-
-**[COUNTER-ANALYSIS NOTE ADDED]** Zeek PE analysis detected two portable executable (PE) files transferred over the network during the capture window. Both files share identical characteristics consistent with custom-built tooling.
-
-**PE File 1 (Zeek FID: F15zmh1fD5AVKS9HX9):** Timestamp: 2020-09-19 04:04:06 UTC
-**PE File 2 (Zeek FID: FxYOW43DbTEoN0WP21):** Timestamp: 2020-09-19 04:19:58 UTC
-
-**Shared Characteristics:**
-- Machine: AMD64, is_exe: true, is_64bit: true
-- Compile timestamp: 2010-04-14 (anomalous for a 64-bit binary in 2020)
-- OS: "Windows 95 or NT 4.0" — impossible for a 64-bit binary; set to minimal compatibility
-- uses_aslr: false, uses_dep: false, has_cert_table: false, has_debug_data: false
-- **Section names: [".text", ".rdata", ".lhru"]** — ".lhru" is non-standard
-
-**Counter-Analysis — Could these be legitimate legacy software?**
-While legacy software transfers are possible, these indicators collectively argue against it:
-1. A 64-bit AMD64 binary with a 2010 compile timestamp and "Windows 95 or NT 4.0" OS version is self-contradictory — no legitimate compiler produces this combination
-2. Both ASLR and DEP disabled simultaneously is extremely rare in legitimate software compiled after ~2008
-3. The ".lhru" section name is not produced by any known standard toolchain (MSVC, MinGW, Clang, Borland)
-4. No Authenticode signature and no debug data — legitimate software vendors typically sign their binaries
-5. Both files are structurally identical, transferred 16 minutes apart during the active attack window
-
-**Assessment:** The combination of indicators is inconsistent with legitimate legacy software. A genuine 2010-era binary would have a 32-bit or mixed architecture, a real OS version, and standard section names. These characteristics are consistent with purpose-built post-exploitation tooling with intentionally minimal PE metadata. Finding maintained at HIGH, corroborated by the broader attack timeline.
-
-
-
-### 9. [HIGH] Kerberos Authentication Escalation Chain Visible in Network Traffic: Machine → mortysmith → Administrator → ricksanchez
+### 12. [HIGH] Network IOC Summary: Attacker Infrastructure IPs and Malware Download URL
 
 | | |
 |---|---|
 | **Severity** | HIGH |
 | **Confidence** | confirmed |
-| **Time** | 2020-09-18T21:59:39+00:00 to 2020-09-19T05:48:15+00:00 |
-| **Sources** | zeek.kerberos, zeek.smb_mapping |
-| **Evidence Refs** | tc_8839b33e, tc_4cf1bb8a |
-| **ATT&CK** | [T1078.002](https://attack.mitre.org/techniques/T1078/002/), [T1550.003](https://attack.mitre.org/techniques/T1550/003/), [T1021.002](https://attack.mitre.org/techniques/T1021/002/) |
-
-
-**[COUNTER-ANALYSIS NOTE ADDED]** Zeek Kerberos log reveals a clear authentication pattern over the C137.LOCAL domain, with four distinct identities authenticating from the same workstation (10.42.85.115) to DC01 (10.42.85.10) in sequence.
-
-**Phase 1 — Machine Account (Sep 18, 21:59:39 UTC):** desktop-sdn1rpt$/C137.local → TGT + TGS for LDAP, cifs (expected boot/logon)
-**Phase 2 — mortysmith (Sep 18, 22:00:38 UTC):** TGT + TGS for host, LDAP, cifs (user logon to workstation)
-**Phase 3 — Administrator (Sep 19, 04:16:24 UTC):** TGT + TGS for host, LDAP, cifs, **ProtectedStorage/CITADEL-DC01**, krbtgt
-**Phase 4 — ricksanchez (Sep 19, 05:48:15 UTC):** TGT + TGS for host, LDAP, cifs, krbtgt + FileShare SMB access
-
-**Counter-Analysis — Normal multi-account admin usage?**
-The chain COULD represent a single administrator who uses multiple accounts for different privilege levels (standard practice in many organizations). However, several factors argue against the benign interpretation:
-1. The ProtectedStorage TGS in Phase 3 is specifically notable — this service manages credential material and is characteristically accessed by credential harvesting tools
-2. The 6-hour gap between mortysmith logon (22:00) and Administrator logon (04:16) is unusual for account switching within a single work session — and the Administrator logon occurs ~44 minutes AFTER the RDP brute force from 194.61.24.102
-3. The ricksanchez FileShare access is the ONLY FileShare access in the entire 7.7-hour capture — isolated, purpose-driven
-4. This chain is strongly corroborated by: confirmed brute force (f_ad5e03bc), Meterpreter deployment (f_0cd8aa43), coreupdater.exe C2 (f_66a825a4)
-
-**Assessment:** While the alternative hypothesis (normal admin account rotation) cannot be fully excluded in isolation, the timing correlation with confirmed attack activity and the ProtectedStorage access make the privilege escalation interpretation more probable. The finding is well-corroborated within the broader attack narrative. Maintained at HIGH with "confirmed" confidence because the authentication events themselves are factual — it is the interpretation as escalation that carries some ambiguity.
-
-
-
-### 10. [MEDIUM] Suspicious URL http://194.61.24.102/ Found on DC01 Disk Image and DESKTOP-SDN1RPT Pagefile
-
-| | |
-|---|---|
-| **Severity** | MEDIUM |
-| **Confidence** | inference |
-| **Time** | 2020-09-19T03:32:46+00:00 |
-| **Sources** | bulk.url, strings.output |
-| **Evidence Refs** | tc_63860be0 |
+| **Time** | 2020-09-19T03:21:25 to 2020-09-19T05:09:13 |
+| **Sources** | volatility.netscan, bulk.domain, volatility.pstree |
+| **Evidence Refs** | tc_678bb44e, tc_06ce11bb, tc_f6352ef5 |
 | **ATT&CK** | [T1071.001](https://attack.mitre.org/techniques/T1071/001/), [T1105](https://attack.mitre.org/techniques/T1105/) |
 
 
-The IP address 194.61.24.102 was found in multiple evidence sources across both systems:
+Cross-referencing network artifacts from memory forensics (netscan), event logs (EVTX Security), and disk carving (bulk_extractor) identified the following confirmed attacker infrastructure:
 
-1. DC01 disk image (bulk_extractor URL carving): Multiple references to "http://194.61.24.102/" with "strator@http://194.61.24.102/" suggesting Administrator accessed this URL.
+**Primary IOCs:**
+1. **203.78.103.109:443** — Active C2 server. coreupdater.exe (PID 3644 on DC01) maintained an ESTABLISHED TCP connection to this IP. No legitimate service association identified.
+2. **194.61.24.102** — Malware staging/hosting server. Hosted http://194.61.24.102/coreupdater.exe. Also used for remote authentication to DC01 (EVTX Event 4648). Confirmed by bulk_extractor URL carving and EVTX security logs.
+3. **"kali" workstation** — Attack machine used for brute-force (EVTX Event 4625, NTLM logon type 3).
 
-2. DESKTOP-SDN1RPT pagefile (strings): The URL "http://194.61.24.102/" appears in pagefile strings.
+**Confirmed Malicious Files:**
+- **coreupdater.exe** — 7,168 bytes, placed in C:\Windows\System32\. Ran on both DESKTOP-SDN1RPT (PID 8324, exited) and DC01 (PID 3644, had active C2). Windows Defender detected and blocked on DESKTOP-SDN1RPT.
+- **Meterpreter reflective DLL** — Injected into spoolsv.exe on both DC01 (PID 3724) and DESKTOP-SDN1RPT (PID 2188)
 
-3. Zeek RDP logs: This IP conducted Nmap reconnaissance (03:32:46 UTC) and RDP brute-force (03:34-03:35 UTC, 75+ attempts) against DC01 port 3389, as documented in finding f_04a6fb78.
+**DESKTOP-SDN1RPT Network Activity at Capture:**
+- Only one external connection: 10.42.85.115:51003 → 72.21.91.29:80 (CLOSED) — likely Microsoft CDN/Update traffic
+- No active C2 connections from DESKTOP-SDN1RPT at capture time (coreupdater.exe PID 8324 had already exited)
+- Multiple svchost.exe UDP listeners on standard service ports — normal system activity
 
-**Cross-System Correlation:**
-The URL presence on both the DC01 disk and the workstation pagefile, combined with the active RDP brute-force from this IP in the PCAP, confirms this is attacker infrastructure. The "administrator@" association suggests the Administrator account may have been used to access payload/staging content hosted on this IP after the initial compromise.
+**Domain Context:**
+- Domain: C137.local
+- DC01 IP: 10.42.85.10 (CITADEL-DC01)
+- Workstation IP: 10.42.85.115 (DESKTOP-SDN1RPT)
+- User accounts involved: Administrator (RID 500), ricksanchez, mortysmith
+
+**Note:** No evidence of data exfiltration was found. The C2 connection was established but no outbound data transfer to exfiltration services was detected (T1041 removed from MITRE mappings).
 
 
 
-### 11. [MEDIUM] SMB File Share Access by ricksanchez Account After Credential Compromise
+### 13. [HIGH] PowerShell Attack Chain with Hidden Command Lines on DESKTOP-SDN1RPT
+
+| | |
+|---|---|
+| **Severity** | HIGH |
+| **Confidence** | confirmed |
+| **Time** | 2020-09-19T05:08:43 |
+| **Sources** | volatility.cmdline, volatility.malfind |
+| **Evidence Refs** | tc_b2eac249, tc_12e1ba64 |
+| **ATT&CK** | [T1059.001](https://attack.mitre.org/techniques/T1059/001/), [T1055.001](https://attack.mitre.org/techniques/T1055/001/), [T1070.004](https://attack.mitre.org/techniques/T1070/004/), [T1027](https://attack.mitre.org/techniques/T1027/) |
+
+
+Two powershell.exe processes on DESKTOP-SDN1RPT exhibit suspicious characteristics consistent with post-exploitation tooling:
+
+1. **powershell.exe PID 508** (PPID 1380): Parent process PID 1380 is NOT present in the process list, indicating the parent has exited. Command line arguments are empty/hidden ("-"). Running in session 2 (user session). This orphaned PowerShell process with a missing parent suggests it was spawned by a temporary execution vehicle.
+
+2. **powershell.exe PID 3316** (PPID 508): Child of PID 508, creating a nested PowerShell chain. Command line arguments are also empty/hidden. Volatility malfind detected:
+   - MZ PE header in PAGE_EXECUTE_READWRITE memory (CommitCharge=36) — injected executable
+   - Multiple additional RWX regions (107 pages, 57 pages) — consistent with reflective DLL loading pattern identical to Meterpreter on DC01's spoolsv.exe PID 3724
+   - Created at 2020-09-19 05:08:43
+
+The empty command line arguments for both processes indicate the attacker cleared or obfuscated the PowerShell invocation parameters. Combined with YARA detections of base64-encoded PowerShell patterns (JAB) in the Registry process and the MZ injection in PID 3316, this chain represents the attacker's primary interactive post-exploitation session on the workstation, likely used to deploy the Skeleton Key attack tool, perform NTLM hash dumping, and stage lateral movement to DC01.
+
+
+
+### 14. [MEDIUM] Tofu_Backdoor Signature Detected in DESKTOP-SDN1RPT Memory
 
 | | |
 |---|---|
 | **Severity** | MEDIUM |
 | **Confidence** | inference |
-| **Time** | 2020-09-19T05:48:16+00:00 to 2020-09-19T06:17:04+00:00 |
-| **Sources** | zeek.smb_files, zeek.smb_mapping |
-| **Evidence Refs** | tc_21bbf9a9, tc_4cf1bb8a |
-| **ATT&CK** | [T1039](https://attack.mitre.org/techniques/T1039/), [T1135](https://attack.mitre.org/techniques/T1135/) |
-
-
-Zeek SMB logs show the ricksanchez account accessing the \\CITADEL-DC01\FileShare SMB share at 2020-09-19 05:48:16 UTC, following authentication to the domain at 05:48:15 UTC.
-
-**Connection Details:**
-- Source: 10.42.85.115:50957 (DESKTOP-SDN1RPT)
-- Destination: 10.42.85.10:445 (DC01)
-- Share path: \\\\CITADEL-DC01\\FileShare (share_type: DISK)
-- File operations: SMB::FILE_OPEN on <share_root> at two timestamps (05:33:13 and 06:17:04 UTC)
-
-**Context:**
-- This is the ONLY access to the FileShare across the entire capture window — no other user or session accessed this share
-- The ricksanchez Kerberos tickets (cifs/CITADEL-DC01) were obtained immediately before the SMB connection
-- The FileShare was created on 2020-09-18 01:48:11 UTC (times.created) and last modified on 2020-09-19 01:27:38 UTC (times.modified) — the modification occurred during the incident window
-- This access occurs after the mortysmith → Administrator → ricksanchez credential escalation chain
-
-**Comparison with Other SMB Activity:**
-The only other SMB file operations observed in the PCAP were standard Group Policy (SYSVOL) reads:
-- gpt.ini, Registry.pol, GptTmpl.inf from \\CITADEL-DC01.C137.local\sysvol
-These are normal GPO refresh operations by domain-joined clients.
-
-The FileShare access by ricksanchez is anomalous because:
-1. It is the only FileShare access in the capture
-2. It follows a credential escalation chain
-3. It may indicate reconnaissance or data staging/collection from a shared directory
-
-
-
-### 12. [LOW] Suspicious External IP 62.8.193.206 Associated with TA17-293A Malware in DESKTOP-SDN1RPT Memory
-
-| | |
-|---|---|
-| **Severity** | LOW |
-| **Confidence** | inference |
-| **Time** | 2020-09-19T01:24:08+00:00 |
+| **Time** | 2020-09-18T22:42:14 |
 | **Sources** | yara.memory |
-| **Evidence Refs** | tc_c185c06e, tc_0f40f1fa |
+| **Evidence Refs** | tc_5cf5e7ab |
+| **ATT&CK** | [T1071.001](https://attack.mitre.org/techniques/T1071/001/), [T1059](https://attack.mitre.org/techniques/T1059/) |
 
 
-**[COUNTER-ANALYSIS DOWNGRADE]** YARA scanning matched the TA17_293A_malware_1 rule on DESKTOP-SDN1RPT memory, but counter-analysis finds this is very likely a false positive:
+YARA rule Tofu_Backdoor matched in the DESKTOP-SDN1RPT memory dump at two offsets (0xe00c466 and 0x57d8872d), detecting the string "Cookies: Sym1.0" — a known HTTP header signature used by the Tofu backdoor family (also known as Backdoor.Tofu). This malware is associated with APT campaigns and uses custom HTTP cookie headers for C2 communication.
 
-**Evidence Against:**
-1. The rule triggered overwhelmingly on "file://" strings ($n1) — hundreds of matches across memory. The "file://" URI scheme is ubiquitous in Windows (COM registration, Shell extensions, CLSID entries) and is NOT an IOC by itself
-2. The IP 62.8.193.206 ($ax3) was found at a SINGLE memory offset (0x56174414)
-3. ZERO network connections to 62.8.193.206 were found in Volatility netscan
-4. ZERO DNS queries for this IP were observed in Zeek DNS logs
-5. ZERO references in PCAP conversations or bulk_extractor network data
-6. The IP could be present as cached web content, a DNS cache entry, or embedded in browser history/temporary files
+The presence of this signature in the workstation memory, combined with other confirmed compromises (Meterpreter injection in spoolsv.exe PID 2188, Skeleton Key attack toolkit, NTLM hash dumping, and coreupdater.exe C2 malware), indicates an additional backdoor tool may have been deployed on the workstation as part of the multi-stage attack.
 
-**Rule Quality Assessment:**
-TA17_293A_malware_1 appears to be an overly broad rule that triggers on the combination of common Windows strings ("file://") plus any of several IP indicators. On any Windows memory dump with browser activity, the "file://" threshold will be easily met, so the rule effectively reduces to "does this IP string appear anywhere in memory" — a very weak signal.
-
-**Assessment:** This finding is ISOLATED — no other evidence source corroborates active communication with or exploitation from 62.8.193.206. The single IP string in memory, absent any network activity, does not support a medium-severity finding. Downgraded to low as a likely false positive from an over-matching YARA rule.
+Note: This is a single YARA signature match. While "Cookies: Sym1.0" is a specific string unlikely to appear in legitimate software, the match alone does not confirm active Tofu backdoor execution — the string could be residual from a tool that was loaded and unloaded, or from a related attack framework that shares this signature.
 
 
 
-### 13. [LOW] DRSUAPI/DCSync Activity from Workstation to Domain Controller in Network Traffic
+### 15. [MEDIUM] Encoded PowerShell Commands (JAB Pattern) in DESKTOP-SDN1RPT Registry Memory
 
 | | |
 |---|---|
-| **Severity** | LOW |
+| **Severity** | MEDIUM |
 | **Confidence** | inference |
-| **Time** | 2020-09-18T21:59:39+00:00 to 2020-09-19T05:35:57+00:00 |
-| **Sources** | zeek.dce_rpc, zeek.kerberos |
-| **Evidence Refs** | tc_30107ce6, tc_8839b33e |
+| **Time** | 2020-09-18T22:42:14 |
+| **Sources** | yara.volatility |
+| **Evidence Refs** | tc_ae64a08b |
+| **ATT&CK** | [T1059.001](https://attack.mitre.org/techniques/T1059/001/), [T1027](https://attack.mitre.org/techniques/T1027/), [T1112](https://attack.mitre.org/techniques/T1112/) |
 
 
-**[COUNTER-ANALYSIS DOWNGRADE]** Original finding claimed DCSync (T1003.006) activity based on DRSUAPI operations from DESKTOP-SDN1RPT to DC01. Counter-analysis found this classification is INCORRECT:
+YARA rule SUSP_PS1_JAB_Pattern_Jun22_1 matched in the Registry process (PID 92) of the DESKTOP-SDN1RPT memory dump, detecting base64-encoded PowerShell command patterns. The matched string "JABiAD0A" (at multiple offsets including 0x28efc5f3224 and 0x28efc5f3294) decodes to "$b=" — the beginning of an encoded PowerShell variable assignment, a hallmark of obfuscated PowerShell attack scripts.
 
-**Critical Gap — DRSGetNCChanges NOT found:**
-The defining call for DCSync — DRSGetNCChanges (the replication request that extracts password hashes) — was searched for across ALL indexed evidence and returned ZERO results. Only DRSCrackNames was observed, which is a standard AD name resolution function used by Group Policy processing, LDAP lookups, and normal domain client operations.
+The detection in the Registry process (PID 92) indicates encoded PowerShell content was stored in a registry hive, a known technique for staging malicious payloads or establishing persistence through registry-based script storage. This is consistent with the broader attack pattern observed on this system: PowerShell was actively used as an attack tool (powershell.exe PID 3316 has MZ PE injection in RWX memory, spawned by PID 508 whose parent PID 1380 has exited).
 
-**Normal AD Client Behavior:**
-- The DRSUAPI activity begins at 21:59:39 UTC — BEFORE any detected attack activity (brute force starts 03:21:26 UTC, ~5.3 hours later)
-- The pattern of EPM → DRSBind → DRSCrackNames → DRSUnbind is standard Group Policy client behavior for domain-joined workstations
-- DRSCrackNames is routinely used by domain clients to resolve SPN/UPN names during Kerberos authentication and GPO processing
-- Workstations legitimately query DRSUAPI endpoints; this is not restricted to domain controllers
-
-**Original DRSUAPI Operations (unchanged):**
-Multiple Bind/CrackNames/Unbind cycles at 21:59:39, 22:00:19, 22:01:46, 22:04:35 (pre-attack) and 03:23:42, 03:39:15, 04:16:24, 04:57:54, 05:35:57 UTC. Also LSARPC (LsarLookupSids3) and SAMR (SamrQuerySecurityObject) operations, which are normal AD client operations.
-
-**Assessment:** This finding was ISOLATED from the corroborated attack chain. The DRSCrackNames activity is consistent with normal AD client behavior, not credential theft. Without DRSGetNCChanges, the DCSync technique mapping is unsupported.
+Combined with the Skeleton Key patcher, NTLM hash dumper, and Meterpreter implants discovered on this system, this finding indicates the attacker used encoded PowerShell as part of their toolkit for post-exploitation activity.
 
 
 
-### 14. [INFO] Active Directory Database (ntds.dit) and Registry Hives Collected from DC01
+### 16. [INFO] CoinMiner and Webshell YARA Signatures in MemCompression — Likely Windows Defender Definition Artifacts
 
 | | |
 |---|---|
 | **Severity** | INFO |
-| **Confidence** | confirmed |
-| **Sources** | list_directory |
-| **Evidence Refs** | tc_e4f7cd3d |
+| **Confidence** | inference |
+| **Sources** | yara.volatility, strings.output |
+| **Evidence Refs** | tc_ae64a08b, tc_8715f3cf |
 
 
-Protected files were collected from DC01 (CITADEL-DC01) and include the Active Directory database and critical registry hives:
+Multiple YARA rules matched within the MemCompression process (PID 1816) on DESKTOP-SDN1RPT, including CoinMiner_Strings ("stratum+tcp://"), WEBSHELL_PHP_Dynamic_Big ("eval(", "<?php", "Exploit", "Webshell"), WEBSHELL_ASP_Generic, WScriptShell_Case_Anomaly, and PowerShell_Case_Anomaly. These detections span 54+ match locations within a single process.
 
-**Files Collected:**
-- `ntds.dit` — 20.0 MB Active Directory database containing all domain user password hashes, Kerberos keys, and account configurations for the C137.LOCAL domain
-- `SAM` — 256 KB Security Account Manager database
-- `SECURITY` — 256 KB LSA secrets and cached credentials
-- `system` — 12.2 MB SYSTEM registry hive (contains the SYSKEY needed to decrypt SAM/ntds.dit)
-- `software` — 43.8 MB SOFTWARE registry hive
-- `default` — 256 KB DEFAULT registry hive
+However, analysis of the pagefile strings output reveals that the DESKTOP-SDN1RPT system has Windows Defender (MsMpEng.exe PID 2404) actively running, and the strings output contains extensive malware definition patterns including detection signature names like "Worm:Win32/Gamarue", "TrojanDownloader", "Lowfi:Win64/Minxer_Coi", "Ransom:CL", and "Trojan:O97M". These are Windows Defender virus definition database strings.
 
-**User DPAPI Material:**
-- Administrator's NTUSER.DAT (512 KB)
-- Administrator DPAPI master keys and CREDHIST
-- RSA key containers for Administrator (SID S-1-5-21-2232410529-1445159330-2725690660-500)
-- BK-C137 backup key file (domain DPAPI backup key)
+The MemCompression process (PID 1816) compresses memory pages system-wide. When Windows Defender loads its malware definition database into memory, those signature strings — which include "stratum+tcp://", "eval(", "<?php", etc. — get compressed by MemCompression. YARA rules then match on these AV definition signatures rather than actual malware.
 
-**Significance:**
-With the SYSTEM hive and ntds.dit, offline extraction of ALL domain account NTLM hashes is possible using tools like secretsdump.py. The presence of the DPAPI backup key (BK-C137) would allow decryption of any user's DPAPI-protected secrets (saved passwords, certificates, etc.) across the entire domain. This represents complete credential compromise of the C137.LOCAL domain.
+Assessment: These CoinMiner and Webshell YARA hits are most likely false positives caused by Windows Defender malware definition content in compressed memory. No independent evidence of cryptocurrency mining or webshell deployment was found on DESKTOP-SDN1RPT (no mining pool network connections, no web server processes, no PHP runtime).
 
 
 
-### 15. [INFO] DC01 Domain Controller Process Inventory — Expected DC Services Running Under SYSTEM
+### 17. [INFO] No Evidence of NTDS.dit Extraction, Event Log Clearing, or Timestomping on DC01
 
 | | |
 |---|---|
 | **Severity** | INFO |
-| **Confidence** | confirmed |
-| **Sources** | volatility.pslist, volatility.pstree, volatility.cmdline |
-| **Evidence Refs** | tc_f77e6811, tc_a22eb848, tc_cd4ce2bc |
+| **Confidence** | inference |
+| **Sources** | ez.mft, evtx.windows_system32_winevt_logs_system, evtx.windows_system32_winevt_logs_security, strings.output |
+| **Evidence Refs** | tc_779a3b94, tc_eade200b, tc_722c93ac, tc_4ad192db |
+| **ATT&CK** | [T1003.003](https://attack.mitre.org/techniques/T1003/003/), [T1070.001](https://attack.mitre.org/techniques/T1070/001/), [T1070.006](https://attack.mitre.org/techniques/T1070/006/) |
 
 
-The process list for domain controller CITADEL-DC01 (citadeldc01.mem) shows the expected services for a Windows Server 2012 R2 domain controller (based on HarddiskVolume2 path and AD services present):
+Systematic analysis found no evidence of several expected post-compromise activities on the domain controller:
 
-**Expected DC Services (all running from legitimate paths):**
-- lsass.exe (PID 460) — Local Security Authority, 31 threads, critical for Kerberos/NTLM
-- dns.exe (PID 1368) — DNS Server service
-- Microsoft.ActiveDirectory.WebServices.exe (PID 1292) — AD Web Services
-- dfsrs.exe (PID 1332) — DFS Replication
-- dfssvc.exe (PID 1660) — DFS Namespace
-- ismserv.exe (PID 1392) — Intersite Messaging
+1. NTDS.dit Extraction: No evidence of ntdsutil execution, vssadmin shadow copy creation, or NTDS.dit file copying was found in MFT records, event logs, pagefile strings, or ShimCache. The NTDS.dit exists at its normal location. Strings referencing ntdsutil, vssadmin, and shadow operations in the pagefile are exclusively from Windows Defender malware signature databases, not actual attack commands.
 
-**VMware Environment:**
-- vmtoolsd.exe (PID 1600, 2608) — VMware Tools daemon
-- VGAuthService.exe (PID 1556) — VMware Guest Authentication
-- vm3dservice.exe (PID 3260) — VMware 3D service
+2. Event Log Tampering: System.evtx (165 windows, 1,235 lines) was searched for Event ID 104 (log cleared) with zero matches. Security.evtx was searched for Event ID 1102 (audit log cleared) with zero matches. Logs appear intact.
 
-**User Session Activity (Session 1, started 04:36:03 UTC):**
-- explorer.exe (PID 3472) — Interactive logon
-- ServerManager.exe (PID 400) — Server Manager GUI
-- FTK Imager.exe (PID 2840) — Forensic imaging tool (evidence collection in progress, launched from E:\FTK Imager\FTK Imager.exe)
-- taskhostex.exe (PID 3796) — Task host
+3. Timestomping: MFT timestamp analysis via detect_timestomping found no anomalies beyond normal Windows operations. The coreupdater.exe MFT timestamps show $STANDARD_INFORMATION and $FILE_NAME timestamps consistent with legitimate creation at 2020-09-19 03:52:14.
 
-**Counter-Analysis Note — FTK Imager (Q10):**
-FTK Imager (PID 2840) was actively running on DC01 at the time of memory capture (loaded at 04:37:04 UTC). This is a forensic imaging tool used for evidence collection. FTK Imager performs READ-ONLY disk imaging and does not create filesystem artifacts (writes, registry changes, scheduled tasks) that could be misattributed to attacker activity. Its presence confirms that incident response was underway during the capture window but does not contaminate the forensic evidence.
+4. Data Staging/Exfiltration: No archive files (.zip, .rar, .7z) created in staging locations were found. Bulk_extractor URL analysis found no upload service indicators. The C2 connection (coreupdater.exe → 203.78.103.109:443 HTTPS) was established but no evidence of data being exfiltrated was found.
 
-**Suspicious Processes:**
-- coreupdater.exe (PID 3644) — Malicious, documented in finding f_66a825a4
-- spoolsv.exe (PID 3724) — Compromised with Meterpreter, documented in finding f_0cd8aa43; notably started at 03:29:40, well after boot, which is unusual for a print spooler
-
-**DC01 IP Address:** 10.42.85.10 (confirmed via netscan DNS bindings and Security log)
-**Domain:** C137.LOCAL
-**Hostname:** CITADEL-DC01
-
-
-
-### 16. [INFO] Protected Files Contain Registry Hives and DPAPI Credential Material for Multiple User Accounts
-
-| | |
-|---|---|
-| **Severity** | INFO |
-| **Confidence** | confirmed |
-| **Sources** | clamav.scan, yara.files |
-| **Evidence Refs** | tc_983328da, tc_cb427d3c |
-
-
-The Protected Files archive from DESKTOP-SDN1RPT contains Windows registry hives and DPAPI credential protection materials for 4 user accounts:
-
-Registry Hives: SAM, SECURITY, SYSTEM, SOFTWARE, default
-User profiles with DPAPI materials:
-1. Admin (local account, SID S-1-5-21-41211245-796119838-3940169921-1001)
-2. Administrator (domain admin, SID S-1-5-21-2232410529-1445159330-2725690660-500) with RSA keys
-3. mortysmith (domain user, SID S-1-5-21-2232410529-1445159330-2725690660-1108)
-4. ricksanchez (domain user, SID S-1-5-21-2232410529-1445159330-2725690660-1106) with RSA keys
-
-ClamAV and YARA scans found no malware in the extracted files. The DPAPI backup key file "BK-C137" was found across multiple user profiles.
-
-
-
-### 17. [INFO] Network Traffic Capture Profile — PCAP Summary and Protocol Distribution
-
-| | |
-|---|---|
-| **Severity** | INFO |
-| **Confidence** | confirmed |
-| **Time** | 2020-09-18T21:58:07+00:00 to 2020-09-19T05:38:57+00:00 |
-| **Sources** | pcap.summary, pcap.conversations, zeek.summary, pcap.beaconing, pcap.tunneling, suricata.alerts, pcap.tls |
-| **Evidence Refs** | tc_a6794702, tc_7f283258, tc_8a6fac82, tc_7be6e937, tc_75e67bf5, tc_4a141eb6 |
-
-
-Network capture from 2020-09-18 21:58:07 UTC to 2020-09-19 05:38:57 UTC (7.7 hours, 411,797 packets, 197 MB).
-
-**Capture Metadata:**
-- Tool: Mergecap (Wireshark) 3.2.6 on Kali Linux 5.8.0-kali1-amd64
-- SHA256: 09abf49efea1852e047987d92907704d47f36d75f6c8056e2cafa6cc027791cb
-- Average data rate: 53 kbps (6.6 KB/s), 14 packets/second
-
-**Network Environment (from IP conversations):**
-- Internal hosts: 10.42.85.115 (DESKTOP-SDN1RPT), 10.42.85.10 (DC01), 10.90.90.90 (proxy/gateway)
-- Domain: C137.LOCAL, DC: CITADEL-DC01
-- 192.168.45.1 appears as a secondary gateway communicating with DC01
-- DC01 broadcasts on 10.42.85.255 (NBNS/browser service)
-
-**Protocol Distribution (from 10,000-packet sample):**
-- TCP: 9,602 frames (96.2%) — TLS: 1,518 (15.2%), HTTP: 18, LDAP: 97, Kerberos: 46, DCE/RPC: 96, SMB2: 179, NBSS: 180
-- UDP: 270 frames (2.7%) — DNS: 159, NBNS: 59, LLMNR: 28, NTP: 2
-- ARP: 30, IPv6: 85, IGMP: 13
-
-**Zeek Analysis (full capture):**
-- 32,726 connections, 30,554 SSL/TLS records (dominant), 1,813 DNS queries, 229 HTTP requests
-- 209 DCE/RPC calls, 189 LDAP operations, 101 RDP sessions, 65 Kerberos exchanges
-- 31 SMB file operations, 25 SMB share mappings, 2 PE file transfers, 874 file objects
-- 31 weird events
-
-**Security-Relevant Negative Findings:**
-- Suricata IDS: 0 alerts (no known attack signatures triggered)
-- Beaconing analysis: 0 beacons detected (216 destinations analyzed)
-- DNS tunneling: 4 flagged domains (microsoft.com, msn.com, c137.local, akamaized.net) — all false positives; legitimate Microsoft services and the internal domain
-- ICMP covert channels: None detected
-- Cleartext credentials: No credentials observed in unencrypted HTTP traffic (only OCSP certificate validation requests to ocsp.digicert.com and ocsp.msocsp.com)
-
-**TLS Traffic Analysis:**
-All TLS connections from the workstation resolved to legitimate Microsoft services:
-- settings-win.data.microsoft.com, watson.telemetry.microsoft.com (telemetry)
-- www.bing.com, www.msn.com, api.msn.com (browsing)
-- nav.smartscreen.microsoft.com, checkappexec.microsoft.com (SmartScreen)
-- go.microsoft.com, www.microsoft.com (browsing)
-- microsoftedgewelcome.microsoft.com (Edge browser)
-- assets.msn.com, img-s-msn-com.akamaized.net (CDN)
-- v20.events.data.microsoft.com (telemetry)
-- 10.90.90.90 acting as proxy for sb.scorecardresearch.com, c.msn.com, srtb.msn.com, assets.adobedtm.com, az416426.vo.msecnd.net
-
-
-
-### 18. [INFO] Files Carved from Network Traffic — OST Email Archives, PDFs, and Application Data
-
-| | |
-|---|---|
-| **Severity** | INFO |
-| **Confidence** | confirmed |
-| **Time** | 2020-09-18T21:58:07+00:00 to 2020-09-19T05:38:57+00:00 |
-| **Sources** | tcpxtract.carved |
-| **Evidence Refs** | tc_aab0b90e |
-
-
-TCPXtract carved 432 files from network streams in the PCAP capture. The file types and sizes provide context about what was transferred over the network during the incident window.
-
-**Notable Carved Files by Type:**
-
-OST (Outlook Data Files) — 7 files:
-- 00000205.ost: 34.9 MB (largest — significant volume of email data)
-- 00000208.ost: 31.2 MB
-- 00000215.ost: 15.4 MB
-- 00000105.ost: 3.3 MB
-- 00000237.ost: 4.7 MB
-- 00000265.ost: 965 KB
-- 00000279.ost: 116 KB
-- 00000326.ost: 51 KB
-These suggest email/Outlook data was present in network traffic, which could indicate email synchronization or data collection.
-
-PDF Files — 5 files:
-- 00000213.pdf: 5.0 MB, 00000217.pdf: 5.0 MB (maximum carve size)
-- 00000264.pdf: 1.2 MB, 00000052.pdf: 970 KB, 00000282.pdf: 68 KB
-
-Flash/SWF Files — 5 files (00000084, 00000094, 00000260, 00000261, 00000333/334)
-- Sizes from 135 KB to 3.3 MB
-- Flash content in 2020 is unusual and may be associated with exploit delivery
-
-Java Class Files — 9 files:
-- Several at 1 MB (maximum carve size), others 122-638 KB
-- Java class files could represent legitimate web content or exploit payloads
-
-Image Files — Numerous BMP (180+), PNG (14), JPG (2), GIF (1), TIF (6)
-- Most BMPs are small fragments; PNGs include some at 1 MB
-- Likely normal web browsing content
-
-ZIP Archives — 48 files (mostly small, <2 KB)
-- Small ZIP files embedded in TLS-wrapped traffic
-
-**Assessment:**
-The majority of carved files appear to be normal web browsing artifacts (images, web content from Microsoft/MSN sites). The large OST files suggest Outlook email synchronization traffic. No definitive malware executables were carved (the PE files detected by Zeek were identified through protocol analysis, not file carving). The Flash content is noteworthy given Flash's EOL status in 2020.
+The attacker appears to have focused on credential harvesting (NTLM hashes from workstation, Skeleton Key for persistent authentication bypass) rather than data theft from the AD database.
 
 
 
@@ -919,24 +679,26 @@ The majority of carved files appear to be normal web browsing artifacts (images,
 
 | Type | Value | Enrichment | Context |
 |------|-------|------------|---------|
-| External IP | `194.61.24.102` |  | Successful NTLM Brute-Force from Kali Linux Against DC01 Administrator — Initial |
-| External IP | `203.78.103.109` |  | coreupdater.exe Deployed to Both DC01 and DESKTOP-SDN1RPT as Masquerading Malwar |
-| Port | `TCP 443` |  | coreupdater.exe Deployed to Both DC01 and DESKTOP-SDN1RPT as Masquerading Malwar |
-| Port | `TCP 3389` |  | Suspicious URL http://194.61.24.102/ Found on DC01 Disk Image and DESKTOP-SDN1RP |
-| Internal IP | `10.42.85.10` |  | RDP Brute Force and Nmap Reconnaissance from External IP 194.61.24.102 Against D |
-| Port | `TCP 38100` |  | RDP Brute Force and Nmap Reconnaissance from External IP 194.61.24.102 Against D |
-| Port | `TCP 40240` |  | RDP Brute Force and Nmap Reconnaissance from External IP 194.61.24.102 Against D |
-| Port | `TCP 62514` |  | RDP Lateral Movement from DC01 to DESKTOP-SDN1RPT via Network Traffic |
-| Internal IP | `10.42.85.115` |  | RDP Lateral Movement from DC01 to DESKTOP-SDN1RPT via Network Traffic |
-| Port | `TCP 50957` |  | SMB File Share Access by ricksanchez Account After Credential Compromise |
-| Port | `TCP 445` |  | SMB File Share Access by ricksanchez Account After Credential Compromise |
+| Internal IP | `10.42.85.10` |  | coreupdater.exe Malware with Active C2 Connection to 203.78.103.109 |
+| Port | `TCP 62613` |  | coreupdater.exe Malware with Active C2 Connection to 203.78.103.109 |
+| External IP | `203.78.103.109` | Thailand, AS23884 Proen Corp Public Company Limited. | coreupdater.exe Malware with Active C2 Connection to 203.78.103.109 |
+| Port | `TCP 443` |  | coreupdater.exe Malware with Active C2 Connection to 203.78.103.109 |
+| External IP | `194.61.24.102` | Russia, AS41842 LLC "MEDIA SYSTEMS" | coreupdater.exe Malware with Active C2 Connection to 203.78.103.109 |
+| Internal IP | `10.42.85.115` |  | Lateral Movement via Multiple Compromised Domain Accounts from Workstation to DC |
+| Port | `TCP 51003` |  | Network IOC Summary: Attacker Infrastructure IPs and Malware Download URL |
+| External IP | `72.21.91.29` |  | Network IOC Summary: Attacker Infrastructure IPs and Malware Download URL |
+| Port | `TCP 80` |  | Network IOC Summary: Attacker Infrastructure IPs and Malware Download URL |
+| Port | `TCP 62475` |  | Environment-Wide Meterpreter Implant in spoolsv.exe Across DC01 and DESKTOP-SDN1 |
 
 
 ### File IOCs
 
 | Type | Value | Enrichment | Context |
 |------|-------|------------|---------|
-| Path | `C:\Windows\System32\` |  | coreupdater.exe Deployed to Both DC01 and DESKTOP-SDN1RPT as Masquerading Malwar |
+| Path | `C:\Windows\System32\coreupdater.exe` |  | coreupdater.exe Malware with Active C2 Connection to 203.78.103.109 |
+| Path | `C:\Windows\System32\winlogon.exe` |  | Remote Authentication to DC from C2 Infrastructure IP 194.61.24.102 |
+| Path | `C:\Windows\System32\` |  | Attack Timeline: Kali Linux Brute-Force Followed by Credential-Based DC Compromi |
+| Path | `C:\Windows\explorer.exe` |  | coreupdater.exe Malware Dropped in System32 and Manually Executed via Explorer |
 
 
 
@@ -946,100 +708,92 @@ The majority of carved files appear to be normal web browsing artifacts (images,
 
 ## Appendix C: MITRE ATT&CK Coverage
 
-21 techniques identified across findings.
+24 techniques identified across findings.
 
 
-**Kill Chain Coverage:** Initial Access (2) > Execution (1) > Persistence (4) > Privilege Escalation (3) > Defense Evasion (6) > Credential Access (4) > Discovery (2) > Lateral Movement (4) > Collection (1) > Command and Control (3)
+**Kill Chain Coverage:** Initial Access (2) > Execution (4) > Persistence (5) > Privilege Escalation (3) > Defense Evasion (10) > Credential Access (6) > Lateral Movement (2) > Command and Control (2)
 
 
 ### Initial Access
 
 | Technique | Name | Findings |
 |-----------|------|----------|
-| [T1078.002](https://attack.mitre.org/techniques/T1078/002/) | Domain Accounts | Successful NTLM Brute-Force from Kali Linux...; Kerberos Authentication Escalation Chain... |
-| [T1133](https://attack.mitre.org/techniques/T1133/) | External Remote Services | RDP Brute Force and Nmap Reconnaissance from... |
+| [T1078.002](https://attack.mitre.org/techniques/T1078/002/) | Domain Accounts | Remote Authentication to DC from C2...; Attack Timeline: Kali Linux Brute-Force...; Lateral Movement via Multiple Compromised...; Cross-System Credential Theft Chain:... |
+| [T1133](https://attack.mitre.org/techniques/T1133/) | External Remote Services | Remote Authentication to DC from C2... |
 
 
 ### Execution
 
 | Technique | Name | Findings |
 |-----------|------|----------|
-| [T1059.001](https://attack.mitre.org/techniques/T1059/001/) | PowerShell | Code Injection in spoolsv.exe and... |
+| [T1059](https://attack.mitre.org/techniques/T1059/) | Command and Scripting Interpreter | Tofu_Backdoor Signature Detected in...; coreupdater.exe Malware Dropped in System32... |
+| [T1059.001](https://attack.mitre.org/techniques/T1059/001/) | PowerShell | Code Injection in powershell.exe (PID 3316) on...; Encoded PowerShell Commands (JAB Pattern) in...; PowerShell Attack Chain with Hidden Command... |
+| [T1059.006](https://attack.mitre.org/techniques/T1059/006/) | Python | Environment-Wide Meterpreter Implant in... |
+| [T1204.002](https://attack.mitre.org/techniques/T1204/002/) | Malicious File | coreupdater.exe Malware Dropped in System32... |
 
 
 ### Persistence
 
 | Technique | Name | Findings |
 |-----------|------|----------|
-| [T1078.002](https://attack.mitre.org/techniques/T1078/002/) | Domain Accounts | Successful NTLM Brute-Force from Kali Linux...; Kerberos Authentication Escalation Chain... |
-| [T1133](https://attack.mitre.org/techniques/T1133/) | External Remote Services | RDP Brute Force and Nmap Reconnaissance from... |
-| [T1543.003](https://attack.mitre.org/techniques/T1543/003/) | Windows Service | Environment-Wide Meterpreter Code Injection in... |
-| [T1556.001](https://attack.mitre.org/techniques/T1556/001/) | Domain Controller Authentication | Environment-Wide Credential Theft Toolkit on... |
+| [T1078.002](https://attack.mitre.org/techniques/T1078/002/) | Domain Accounts | Remote Authentication to DC from C2...; Attack Timeline: Kali Linux Brute-Force...; Lateral Movement via Multiple Compromised...; Cross-System Credential Theft Chain:... |
+| [T1112](https://attack.mitre.org/techniques/T1112/) | Modify Registry | Encoded PowerShell Commands (JAB Pattern) in... |
+| [T1133](https://attack.mitre.org/techniques/T1133/) | External Remote Services | Remote Authentication to DC from C2... |
+| [T1543.003](https://attack.mitre.org/techniques/T1543/003/) | Windows Service | Environment-Wide Meterpreter Implant in... |
+| [T1556.001](https://attack.mitre.org/techniques/T1556/001/) | Domain Controller Authentication | Skeleton Key Attack Detected in DESKTOP-SDN1RPT Memory; Cross-System Credential Theft Chain:... |
 
 
 ### Privilege Escalation
 
 | Technique | Name | Findings |
 |-----------|------|----------|
-| [T1055.001](https://attack.mitre.org/techniques/T1055/001/) | Dynamic-link Library Injection | Code Injection in spoolsv.exe and...; Environment-Wide Meterpreter Code Injection in... |
-| [T1078.002](https://attack.mitre.org/techniques/T1078/002/) | Domain Accounts | Successful NTLM Brute-Force from Kali Linux...; Kerberos Authentication Escalation Chain... |
-| [T1543.003](https://attack.mitre.org/techniques/T1543/003/) | Windows Service | Environment-Wide Meterpreter Code Injection in... |
+| [T1055.001](https://attack.mitre.org/techniques/T1055/001/) | Dynamic-link Library Injection | Code Injection in powershell.exe (PID 3316) on...; PowerShell Attack Chain with Hidden Command...; Environment-Wide Meterpreter Implant in... |
+| [T1078.002](https://attack.mitre.org/techniques/T1078/002/) | Domain Accounts | Remote Authentication to DC from C2...; Attack Timeline: Kali Linux Brute-Force...; Lateral Movement via Multiple Compromised...; Cross-System Credential Theft Chain:... |
+| [T1543.003](https://attack.mitre.org/techniques/T1543/003/) | Windows Service | Environment-Wide Meterpreter Implant in... |
 
 
 ### Defense Evasion
 
 | Technique | Name | Findings |
 |-----------|------|----------|
-| [T1027.002](https://attack.mitre.org/techniques/T1027/002/) | Software Packing | Suspicious PE File Transfer Over Network — No... |
-| [T1036.005](https://attack.mitre.org/techniques/T1036/005/) | Match Legitimate Resource Name or Location | coreupdater.exe Deployed to Both DC01 and... |
-| [T1055.001](https://attack.mitre.org/techniques/T1055/001/) | Dynamic-link Library Injection | Code Injection in spoolsv.exe and...; Environment-Wide Meterpreter Code Injection in... |
-| [T1078.002](https://attack.mitre.org/techniques/T1078/002/) | Domain Accounts | Successful NTLM Brute-Force from Kali Linux...; Kerberos Authentication Escalation Chain... |
-| [T1550.003](https://attack.mitre.org/techniques/T1550/003/) | Pass the Ticket | Kerberos Authentication Escalation Chain... |
-| [T1556.001](https://attack.mitre.org/techniques/T1556/001/) | Domain Controller Authentication | Environment-Wide Credential Theft Toolkit on... |
+| [T1027](https://attack.mitre.org/techniques/T1027/) | Obfuscated Files or Information | Encoded PowerShell Commands (JAB Pattern) in...; PowerShell Attack Chain with Hidden Command... |
+| [T1036.005](https://attack.mitre.org/techniques/T1036/005/) | Match Legitimate Resource Name or Location | coreupdater.exe Malware with Active C2...; coreupdater.exe Malware Dropped in System32... |
+| [T1055.001](https://attack.mitre.org/techniques/T1055/001/) | Dynamic-link Library Injection | Code Injection in powershell.exe (PID 3316) on...; PowerShell Attack Chain with Hidden Command...; Environment-Wide Meterpreter Implant in... |
+| [T1070.001](https://attack.mitre.org/techniques/T1070/001/) | Clear Windows Event Logs | No Evidence of NTDS.dit Extraction, Event Log... |
+| [T1070.004](https://attack.mitre.org/techniques/T1070/004/) | File Deletion | PowerShell Attack Chain with Hidden Command... |
+| [T1070.006](https://attack.mitre.org/techniques/T1070/006/) | Timestomp | No Evidence of NTDS.dit Extraction, Event Log... |
+| [T1078.002](https://attack.mitre.org/techniques/T1078/002/) | Domain Accounts | Remote Authentication to DC from C2...; Attack Timeline: Kali Linux Brute-Force...; Lateral Movement via Multiple Compromised...; Cross-System Credential Theft Chain:... |
+| [T1112](https://attack.mitre.org/techniques/T1112/) | Modify Registry | Encoded PowerShell Commands (JAB Pattern) in... |
+| [T1550.002](https://attack.mitre.org/techniques/T1550/002/) | Pass the Hash | Lateral Movement via Multiple Compromised... |
+| [T1556.001](https://attack.mitre.org/techniques/T1556/001/) | Domain Controller Authentication | Skeleton Key Attack Detected in DESKTOP-SDN1RPT Memory; Cross-System Credential Theft Chain:... |
 
 
 ### Credential Access
 
 | Technique | Name | Findings |
 |-----------|------|----------|
-| [T1003.001](https://attack.mitre.org/techniques/T1003/001/) | LSASS Memory | Environment-Wide Credential Theft Toolkit on... |
-| [T1003.002](https://attack.mitre.org/techniques/T1003/002/) | Security Account Manager | Environment-Wide Credential Theft Toolkit on... |
-| [T1110.001](https://attack.mitre.org/techniques/T1110/001/) | Password Guessing | Successful NTLM Brute-Force from Kali Linux...; RDP Brute Force and Nmap Reconnaissance from... |
-| [T1556.001](https://attack.mitre.org/techniques/T1556/001/) | Domain Controller Authentication | Environment-Wide Credential Theft Toolkit on... |
-
-
-### Discovery
-
-| Technique | Name | Findings |
-|-----------|------|----------|
-| [T1046](https://attack.mitre.org/techniques/T1046/) | Network Service Discovery | RDP Brute Force and Nmap Reconnaissance from... |
-| [T1135](https://attack.mitre.org/techniques/T1135/) | Network Share Discovery | SMB File Share Access by ricksanchez Account... |
+| [T1003](https://attack.mitre.org/techniques/T1003/) | OS Credential Dumping | Attack Timeline: Kali Linux Brute-Force... |
+| [T1003.001](https://attack.mitre.org/techniques/T1003/001/) | LSASS Memory | Skeleton Key Attack Detected in DESKTOP-SDN1RPT Memory; NTLM Hash Dump Output Detected in...; Cross-System Credential Theft Chain:... |
+| [T1003.002](https://attack.mitre.org/techniques/T1003/002/) | Security Account Manager | NTLM Hash Dump Output Detected in...; Cross-System Credential Theft Chain:... |
+| [T1003.003](https://attack.mitre.org/techniques/T1003/003/) | NTDS | No Evidence of NTDS.dit Extraction, Event Log... |
+| [T1110.001](https://attack.mitre.org/techniques/T1110/001/) | Password Guessing | Brute-Force Password Attack Against DC01 from...; Attack Timeline: Kali Linux Brute-Force...; Cross-System Credential Theft Chain:... |
+| [T1556.001](https://attack.mitre.org/techniques/T1556/001/) | Domain Controller Authentication | Skeleton Key Attack Detected in DESKTOP-SDN1RPT Memory; Cross-System Credential Theft Chain:... |
 
 
 ### Lateral Movement
 
 | Technique | Name | Findings |
 |-----------|------|----------|
-| [T1021.001](https://attack.mitre.org/techniques/T1021/001/) | Remote Desktop Protocol | RDP Lateral Movement from DC01 to... |
-| [T1021.002](https://attack.mitre.org/techniques/T1021/002/) | SMB/Windows Admin Shares | Kerberos Authentication Escalation Chain... |
-| [T1550.003](https://attack.mitre.org/techniques/T1550/003/) | Pass the Ticket | Kerberos Authentication Escalation Chain... |
-| [T1570](https://attack.mitre.org/techniques/T1570/) | Lateral Tool Transfer | coreupdater.exe Deployed to Both DC01 and...; RDP Lateral Movement from DC01 to... |
-
-
-### Collection
-
-| Technique | Name | Findings |
-|-----------|------|----------|
-| [T1039](https://attack.mitre.org/techniques/T1039/) | Data from Network Shared Drive | SMB File Share Access by ricksanchez Account... |
+| [T1021.002](https://attack.mitre.org/techniques/T1021/002/) | SMB/Windows Admin Shares | Lateral Movement via Multiple Compromised... |
+| [T1550.002](https://attack.mitre.org/techniques/T1550/002/) | Pass the Hash | Lateral Movement via Multiple Compromised... |
 
 
 ### Command and Control
 
 | Technique | Name | Findings |
 |-----------|------|----------|
-| [T1071.001](https://attack.mitre.org/techniques/T1071/001/) | Web Protocols | coreupdater.exe Deployed to Both DC01 and...; Suspicious URL http://194.61.24.102/ Found on... |
-| [T1105](https://attack.mitre.org/techniques/T1105/) | Ingress Tool Transfer | coreupdater.exe Deployed to Both DC01 and...; Suspicious URL http://194.61.24.102/ Found on...; Suspicious PE File Transfer Over Network — No... |
-| [T1571](https://attack.mitre.org/techniques/T1571/) | Non-Standard Port | Environment-Wide Meterpreter Code Injection in... |
+| [T1071.001](https://attack.mitre.org/techniques/T1071/001/) | Web Protocols | coreupdater.exe Malware with Active C2...; Tofu_Backdoor Signature Detected in...; Network IOC Summary: Attacker Infrastructure... |
+| [T1105](https://attack.mitre.org/techniques/T1105/) | Ingress Tool Transfer | coreupdater.exe Malware with Active C2...; Attack Timeline: Kali Linux Brute-Force...; Network IOC Summary: Attacker Infrastructure... |
 
 
 
@@ -1051,13 +805,13 @@ The majority of carved files appear to be normal web browsing artifacts (images,
 
 | Metric | Value |
 |--------|-------|
-| Total tool calls | 412 |
-| Findings submitted | 18 |
+| Total tool calls | 430 |
+| Findings submitted | 17 |
 | Confirmed | 12 |
-| Inferences | 6 |
-| Input tokens | 19.3K |
-| Output tokens | 115.1K |
-| Total tokens | 134.4K |
+| Inferences | 5 |
+| Input tokens | 71.2K |
+| Output tokens | 128.2K |
+| Total tokens | 199.4K |
 | Audit log | /home/mulder/.mulder/cases/szechuan.audit.jsonl |
 
 
@@ -1065,31 +819,40 @@ The majority of carved files appear to be normal web browsing artifacts (images,
 
 | Model | Input | Output | Total |
 |-------|-------|--------|-------|
-| claude-opus-4-6 | 19.3K | 115.1K | 134.4K |
+| claude-opus-4-6 | 71.2K | 128.2K | 199.4K |
 
 
 
 
 <details>
-<summary>Evidence Sources (115)</summary>
+<summary>Evidence Sources (89)</summary>
 
 | Source | Extractor | Lines |
 |--------|-----------|-------|
-| strings.output | strings | 679040 |
+| strings.output | strings | 937655 |
 | volatility.pslist | volatility3 | 96 |
-| tsk.partitions | sleuthkit | 10 |
-| volatility.pstree | volatility3 | 95 |
-| tsk.filelist | sleuthkit | 114999 |
+| strings.output | strings | 66809 |
 | volatility.pslist | volatility3 | 41 |
-| yara.memory | yara | 350 |
+| tsk.filelist | sleuthkit | 114999 |
+| volatility.pstree | volatility3 | 95 |
 | tsk.filelist.p1 | sleuthkit | 166 |
+| bulk.domain | bulk_extractor | 8421 |
+| bulk.email | bulk_extractor | 307 |
 | volatility.pstree | volatility3 | 41 |
-| volatility.cmdline | volatility3 | 96 |
+| bulk.ether | bulk_extractor | 9 |
+| bulk.rfc822 | bulk_extractor | 230 |
+| bulk.url | bulk_extractor | 16254 |
+| bulk.url_facebook-address | bulk_extractor | 7 |
+| bulk.url_searches | bulk_extractor | 43 |
+| bulk.url_services | bulk_extractor | 2198 |
+| yara.memory | yara | 350 |
 | volatility.cmdline | volatility3 | 41 |
+| volatility.cmdline | volatility3 | 96 |
 | yara.memory | yara | 1042 |
 | volatility.netscan | volatility3 | 19686 |
 | volatility.malfind | volatility3 | 16 |
 | volatility.netscan | volatility3 | 116 |
+| tsk.partitions | sleuthkit | 10 |
 | volatility.psscan | volatility3 | 73 |
 | volatility.dlllist | volatility3 | 2017 |
 | bulk.domain | bulk_extractor | 177674 |
@@ -1110,16 +873,17 @@ The majority of carved files appear to be normal web browsing artifacts (images,
 | ez.mft | eztools | 111852 |
 | ez.shimcache | eztools | 282 |
 | registry.system | regripper | 106 |
-| strings.output | strings | 51906 |
 | evtx.manifest | evtx-extract | 105 |
+| tsk.timeline | sleuthkit | 416715 |
 | volatility.psscan | volatility3 | 169 |
 | registry.system | regripper | 7 |
 | registry.system | regripper | 7 |
-| registry.security | regripper | 25 |
-| registry.security | regripper | 8 |
-| registry.security | regripper | 8 |
+| registry.system | regripper | 25 |
+| registry.system | regripper | 8 |
+| registry.system | regripper | 8 |
 | registry.system | regripper | 29966 |
 | registry.system | regripper | 283 |
+| volatility.dlllist | volatility3 | 1428 |
 | registry.system | regripper | 283 |
 | registry.system | regripper | 4936 |
 | registry.system | regripper | 199 |
@@ -1127,67 +891,31 @@ The majority of carved files appear to be normal web browsing artifacts (images,
 | registry.system | regripper | 381 |
 | registry.system | regripper | 255 |
 | registry.system | regripper | 255 |
-| volatility.dlllist | volatility3 | 1428 |
+| registry.system | regripper | 405 |
 | volatility.svcscan | volatility3 | 43222 |
-| exiftool.metadata | exiftool | 2 |
-| clamav.scan | clamav | 38 |
-| evtx.windows_system32_winevt_logs_security | eztools | 5080 |
+| exiftool.metadata | exiftool | 0 |
+| evtx.windows_system32_winevt_logs_security | eztools | 5073 |
 | evtx.windows_system32_winevt_logs_active-directory-web-services | eztools | 65 |
 | evtx.windows_system32_winevt_logs_microsoft-windows-powershell4operational | eztools | 150 |
 | evtx.windows_system32_winevt_logs_microsoft-windows-powershell4operational | eztools | 150 |
 | forensic.timestomping | timestomp_detector | 1 |
-| suricata.alerts | suricata | 5 |
-| zeek.conn | zeek | 125 |
-| zeek.dce_rpc | zeek | 210 |
-| zeek.dns | zeek | 134 |
-| zeek.files | zeek | 130 |
-| zeek.http | zeek | 91 |
-| zeek.kerberos | zeek | 66 |
-| zeek.ldap | zeek | 190 |
-| zeek.ldap_search | zeek | 152 |
-| zeek.ocsp | zeek | 158 |
-| zeek.packet_filter | zeek | 2 |
-| zeek.pe | zeek | 3 |
-| zeek.rdp | zeek | 102 |
-| zeek.smb_files | zeek | 32 |
-| zeek.smb_mapping | zeek | 26 |
-| zeek.ssl | zeek | 93 |
-| zeek.weird | zeek | 32 |
-| zeek.x509 | zeek | 58 |
-| zeek.summary | zeek | 18 |
-| pcap.summary | tshark | 85 |
-| pcap.conversations | tshark | 143 |
-| tcpflow.streams | tcpflow | 433354 |
-| pcap.dns | tshark | 2 |
-| pcap.http | tshark | 19 |
-| pcap.smtp | tshark | 2 |
-| bulk.domain | bulk_extractor | 8019 |
-| tcpxtract.carved | tcpxtract | 432 |
-| bulk.email | bulk_extractor | 1070 |
-| pcap.tls | tshark | 109 |
-| bulk.ether | bulk_extractor | 817601 |
-| pcap.beaconing | tshark | 5 |
-| pcap.tunneling | tshark | 17 |
-| bulk.ip | bulk_extractor | 817949 |
-| bulk.packets | bulk_extractor | 2648935 |
-| bulk.rfc822 | bulk_extractor | 408 |
-| bulk.tcp | bulk_extractor | 408977 |
-| bulk.url | bulk_extractor | 6828 |
-| bulk.url_services | bulk_extractor | 102 |
-| composite.correlation | composite | 1 |
-| composite.correlation | composite | 1 |
-| composite.correlation | composite | 1 |
-| composite.correlation | composite | 1 |
-| composite.pcap_correlation | composite | 142 |
-| composite.execution | composite | 144 |
-| composite.lateral_movement | composite | 30 |
+| composite.persistence | composite | 9401 |
+| yara.volatility | yara | 1254 |
+| composite.exfil | composite | 343 |
+| evtx.windows_system32_winevt_logs_system | eztools | 1235 |
+| composite.persistence | composite | 9401 |
+| enrichment.iocs | enrichment | 50 |
 | composite.suspicious_processes | composite | 128 |
-| composite.timeline | composite | 160 |
+| composite.persistence | composite | 9401 |
 | composite.defense_evasion | composite | 38 |
-| composite.recovery | composite | 7 |
-| composite.persistence | composite | 9383 |
-| composite.exfil | composite | 380 |
+| composite.exfil | composite | 343 |
 | composite.file_staging | composite | 2312 |
+| composite.execution | composite | 144 |
+| composite.timeline | composite | 160 |
+| composite.correlation | composite | 1 |
+| composite.correlation | composite | 1 |
+| composite.correlation | composite | 1 |
+| composite.recovery | composite | 7 |
 | composite.correlation | composite | 1 |
 | composite.correlation | composite | 1 |
 

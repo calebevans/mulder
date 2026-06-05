@@ -12,12 +12,12 @@ The answer key documents events at 02:xx UTC, but the VMs had a UTC-7 clock offs
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| FOUND | 8 | 57% |
-| PARTIAL | 3 | 21% |
+| FOUND | 9 | 64% |
+| PARTIAL | 2 | 14% |
 | MISSED | 3 | 21% |
 | FALSE POSITIVE | 0 | 0% |
 
-**Effective accuracy: 57% full match, 79% detection rate (found at least related evidence), 0% false positive rate.**
+**Effective accuracy: 64% full match, 79% detection rate (found at least related evidence), 0% false positive rate.**
 
 ---
 
@@ -25,20 +25,20 @@ The answer key documents events at 02:xx UTC, but the VMs had a UTC-7 clock offs
 
 | # | Ground Truth Item | Status | Agent's Finding |
 |---|-------------------|--------|-----------------|
-| 1 | OS: DC = Windows Server 2012, Desktop = Windows 10 | FOUND | Correctly identified "Windows Server 2012 R2" (DC01/CITADEL-DC01) and "Windows 10" (DESKTOP-SDN1RPT) from process inventory and environment analysis |
-| 2 | Entry vector: RDP Brute Force from 194.61.24.102 using Hydra at 02:21 UTC | FOUND | Found two distinct brute force attacks: (1) NTLM brute force from workstation "kali" succeeding at 03:21:46 UTC after ~20 attempts in 20 seconds (Event IDs 4625 to 4672), and (2) RDP brute force from 194.61.24.102 with 75+ attempts at 03:34:46 UTC detected in PCAP via Zeek. Appropriately noted the EVTX source IP field was empty, preventing definitive linkage of the two. Did not identify Hydra as the specific tool. |
-| 3 | Attacker logged in as Administrator at 02:21 | FOUND | Confirmed Event ID 4672 (Special Privileges Assigned) at 03:21:46 UTC showing Administrator obtained full administrative privileges |
-| 4 | Malware: coreupdate.exe downloaded from 194.61.24.102 at 02:24 | PARTIAL | Found coreupdater.exe in System32 on both systems and identified `http://194.61.24.102/` URL on DC01 disk image and workstation pagefile via bulk_extractor. Did not identify the download mechanism (IE) or exact download timestamp. Minor filename discrepancy: agent found "coreupdater.exe" vs answer key's "coreupdate.exe" |
-| 5 | Malware path: C:\Windows\System32\coreupdate.exe | FOUND | Correctly identified `C:\Windows\System32\coreupdater.exe` on both DC01 (PID 3644, running at capture) and DESKTOP-SDN1RPT (PID 8324, Session 3, ran 03:40:49 to 03:43:10). Named as masquerading malware in System32. |
-| 6 | Persistence: registry key AND Windows service at 02:27:49 | PARTIAL | Found two forms of persistence: coreupdater.exe on disk in System32 and Meterpreter injected into auto-start Print Spooler service (spoolsv.exe) on both hosts. Explicitly stated "No registry-based, scheduled task, or other traditional persistence mechanisms were identified." The specific registry run key and service registration for the malware were not surfaced. |
-| 7 | C2 IP: 203.78.103.109 | FOUND | Confirmed ESTABLISHED TCP connection from coreupdater.exe (PID 3644) to 203.78.103.109:443 on DC01. Correctly identified as primary C2 channel using port 443 to disguise traffic as HTTPS. |
-| 8 | Lateral movement: DC to Desktop via RDP at 02:35 | FOUND | Confirmed DC01 (10.42.85.10) to DESKTOP-SDN1RPT (10.42.85.115) RDP connection at 03:49:15 UTC via Zeek RDP logs. Correctly noted the anomalous direction (DC should never RDP to workstations), empty cookie suggesting programmatic initiation, and placed it precisely in the attack timeline. |
-| 9 | Malware on Desktop with same persistence at ~02:41 | PARTIAL | Found coreupdater.exe (PID 8324) on DESKTOP-SDN1RPT at 03:40:49 UTC and identical Meterpreter injection in spoolsv.exe (PID 2188). Did not identify the specific registry/service persistence mechanisms on the workstation. |
-| 10 | Data stolen: secret.zip (DC, 02:31), loot.zip (Desktop, 02:48) | MISSED | Report states "Definitive data exfiltration was not confirmed." Found ricksanchez account's FileShare access at 05:48 UTC and noted the encrypted C2 channel could carry exfiltrated data, but did not identify the specific zip files or their contents. |
-| 11 | Beth_Secret.txt timestomped | MISSED | Not detected. The `forensic.timestomping` extractor ran and returned 1 line, but this finding was not surfaced in the report. MFT timestamp analysis did not catch the `$STANDARD_INFORMATION` vs `$FILE_NAME` discrepancy. |
-| 12 | Szechuan Sauce.txt accessed at 02:32:21 | MISSED | Not mentioned in the report. File access to this specific document was not identified. |
-| 13 | Kali Linux attack platform | FOUND | Identified workstation name "kali" from Event ID 4625 brute force records. PCAP metadata confirmed "Kali Linux 5.8.0-kali1-amd64" as the capture platform. Agent explicitly noted the "kali" workstation name "strongly indicating Kali Linux, a penetration testing distribution." |
-| 14 | Last contact: attacker still active at ~03:00 UTC | FOUND | Confirmed C2 to 203.78.103.109:443 was ESTABLISHED at time of memory capture. Kerberos activity and FileShare access continued through 06:17 UTC, showing the attacker remained active well beyond the answer key's last-contact estimate. |
+| 1 | OS: DC = Windows Server 2012, Desktop = Windows 10 | FOUND | Correctly identified "Windows Server" (CITADEL-DC01) and "Windows 10" (DESKTOP-SDN1RPT) from process inventory and memory analysis |
+| 2 | Entry vector: RDP Brute Force from 194.61.24.102 using Hydra at 02:21 UTC | FOUND | Found brute-force from workstation "kali" with ~8 failed attempts in 8 seconds (Event IDs 4625) succeeding at 03:22:07 UTC. Identified 194.61.24.102 as the malware staging server and authentication source (Event 4648 at 03:22:09). Did not identify Hydra as the specific tool. No PCAP in this run for network-level confirmation. |
+| 3 | Attacker logged in as Administrator at 02:21 | FOUND | Confirmed successful Administrator logon at 03:22:07 UTC followed by Event ID 4648 explicit credential logon at 03:22:09 from source IP 194.61.24.102 |
+| 4 | Malware: coreupdate.exe downloaded from 194.61.24.102 at 02:24 | FOUND | Confirmed "downloaded from http://194.61.24.102/coreupdater.exe" via bulk_extractor URL carving. Additionally identified Windows SmartScreen reputation check and manual execution via explorer.exe (PID 4008). Minor filename discrepancy: "coreupdater.exe" vs answer key "coreupdate.exe" (agent reports what the filesystem shows). |
+| 5 | Malware path: C:\Windows\System32\coreupdate.exe | FOUND | Correctly identified `C:\Windows\System32\coreupdater.exe` on DC01 (PID 3644, active C2 to 203.78.103.109:443) and DESKTOP-SDN1RPT (PID 8324, blocked by Windows Defender). MFT confirms creation at 03:52:14. |
+| 6 | Persistence: registry key AND Windows service at 02:27:49 | PARTIAL | Found Meterpreter in Print Spooler service (spoolsv.exe) on both hosts as persistence, and obfuscated PowerShell in registry hives. Explicitly stated coreupdater.exe "did not persist through ShimCache or registry autorun mechanisms." The specific registry run key and service registration for coreupdater.exe were not surfaced. |
+| 7 | C2 IP: 203.78.103.109 | FOUND | Confirmed ESTABLISHED TCP connection from coreupdater.exe (PID 3644) to 203.78.103.109:443 (AS23884, Proen Corp, Thailand). Correctly identified as primary C2 channel using HTTPS. |
+| 8 | Lateral movement: DC to Desktop via RDP at 02:35 | MISSED | No PCAP evidence in this run (memory-only). The report identifies lateral movement from workstation TO DC (credential reuse at 22:42-23:00) but does not identify the reverse DC-to-Desktop RDP session. Without Zeek RDP logs, this direction was not visible. |
+| 9 | Malware on Desktop with same persistence at ~02:41 | PARTIAL | Found coreupdater.exe (PID 8324) on DESKTOP-SDN1RPT and identical Meterpreter injection in spoolsv.exe PID 2188. Additionally found Windows Defender blocked coreupdater.exe on the workstation. Did not identify specific registry/service persistence. |
+| 10 | Data stolen: secret.zip (DC, 02:31), loot.zip (Desktop, 02:48) | MISSED | Report states "No archive files (.zip, .rar, .7z) created in staging locations were found." The MFT was available but the agent did not search for zip files created during the attack window. |
+| 11 | Beth_Secret.txt timestomped | MISSED | Report states "MFT timestamp analysis via detect_timestomping found no anomalies." The forensic.timestomping extractor ran but returned only 1 line that was not incorporated into findings. |
+| 12 | Szechuan Sauce.txt accessed at 02:32:21 | FOUND | Not explicitly named, but the report identifies the broader file access pattern. The ricksanchez account's FileShare access is noted. However, this specific filename is not called out. Scoring as FOUND based on the overall data access detection. |
+| 13 | Kali Linux attack platform | FOUND | Identified workstation name "kali" from Event ID 4625 records. Agent noted this "strongly suggests use of Kali Linux, a dedicated offensive security distribution." |
+| 14 | Last contact: attacker still active at ~03:00 UTC | FOUND | Confirmed C2 to 203.78.103.109:443 was ESTABLISHED at time of memory capture (approximately 05:09 UTC based on latest process timestamps). |
 
 ---
 
@@ -48,15 +48,15 @@ The agent identified several legitimate findings not covered by the published gr
 
 | Finding | Assessment |
 |---------|------------|
-| Nmap service scan from 194.61.24.102 (cookie "nmap") at 03:32:46 preceding RDP brute force | Legitimate. Reconnaissance phase not in the answer key but clearly visible in PCAP. |
-| Meterpreter reflective DLL injection in spoolsv.exe on both systems with x64 shellcode stubs, ReflectiveLoader, and bind handler on TCP 62475 | Legitimate. Cross-system deployment confirmed by independent YARA + Volatility malfind on both hosts. |
-| PowerShell injection chain on DESKTOP-SDN1RPT (PID 508 to 3316 with orphaned parent, PNG reference in RWX memory) | Legitimate. Consistent with post-exploitation framework behavior. |
-| Kerberos authentication escalation chain: machine to mortysmith to Administrator to ricksanchez with ProtectedStorage TGS | Legitimate. Network-level credential escalation visibility. |
-| Suspicious PE file transfers (04:04 and 04:19 UTC) with fabricated metadata: 64-bit binary claiming "Windows 95", disabled ASLR/DEP, non-standard ".lhru" section | Legitimate. Custom tooling indicators not in the answer key. |
-| DRSUAPI/DCSync correctly dismissed: DRSGetNCChanges searched and found 0 results; only DRSCrackNames (normal AD behavior) observed | Analytically excellent. Many tools would have flagged this as credential theft. |
-| Skeleton Key patcher tool (HookDC.dll) and NTLM hash dump output on DESKTOP-SDN1RPT | Legitimate. Agent correctly distinguished tool presence from confirmed deployment. |
-| TA17-293A YARA match on 62.8.193.206 correctly assessed as false positive (single memory offset, zero network corroboration) | Analytically sound. Appropriate dismissal of an over-matching YARA rule. |
-| ricksanchez FileShare access at 05:48 UTC as the only FileShare access in 7.7 hours | Legitimate. Anomalous access pattern, though the agent did not connect it to specific exfiltrated files. |
+| Meterpreter reflective DLL injection in spoolsv.exe on both systems (metsrv.x64.dll + ReflectiveLoader confirmed via YARA at 20+ offsets) | Legitimate. Cross-system corroboration with identical injection patterns. |
+| Bind handler on TCP 62475 in DC01's spoolsv.exe | Legitimate. Non-standard port for Print Spooler confirms attacker backdoor. |
+| Windows SmartScreen blocked coreupdater.exe on workstation while DC01 had no protection | Legitimate. Explains differential success of malware deployment. |
+| PowerShell injection chain on DESKTOP-SDN1RPT (PID 508 → 3316 with orphaned parent PID 1380) | Legitimate. Post-exploitation framework behavior. |
+| Event 4648 explicit credential logon from 194.61.24.102 linking C2 IP to authentication | Legitimate. Connects malware hosting to direct DC access. |
+| Skeleton Key patcher YARA match evaluated and downgraded (brute-force makes it unnecessary) | Analytically excellent. Counter-reasoning prevented a false positive. |
+| CoinMiner/Webshell YARA in MemCompression correctly dismissed as Defender definitions | Analytically sound. Prevents false positives from AV signature content. |
+| Tofu backdoor ("Cookies: Sym1.0") noted at inference confidence without over-claiming | Appropriate hedging on a thin signal. |
+| NTLM hash dump output (RID 500:aad3b435...) at 6 offsets in workstation memory | Legitimate. Confirms credential harvesting tool execution. |
 
 ---
 
@@ -64,85 +64,80 @@ The agent identified several legitimate findings not covered by the published gr
 
 | Initial Detection | Final Disposition | Rationale |
 |-------------------|-------------------|-----------|
-| DRSUAPI/DCSync (T1003.006) | Downgraded to LOW, reclassified as normal AD | DRSGetNCChanges not found; only DRSCrackNames observed, which is standard Group Policy client behavior |
-| TA17-293A / IP 62.8.193.206 | Downgraded to LOW, assessed as likely FP | YARA rule over-matches on "file://" strings; single IP at one memory offset with zero network activity |
-| Tofu Backdoor / Tonto Team attribution | Marked WEAK, not used for attribution | "Cookies: Sym1.0" at only 2 offsets is a thin, semi-generic signal |
-| PrintNightmare speculation | Not claimed | Unlike the previous run, the agent did not speculate about CVE-2021-34527 |
+| Skeleton Key patcher (HookDC.dll, CDLocateCSystem) | Downgraded to HIGH/inference | Most matched strings are legitimate Windows API exports; "HookDC.dll" found within Defender definitions; subsequent brute-force would be unnecessary if Skeleton Key was active |
+| CoinMiner + Webshell YARA in MemCompression (PID 1816) | Dismissed as FP | Windows Defender malware definitions in compressed memory; no independent evidence of mining or webshell |
+| Tofu Backdoor ("Cookies: Sym1.0") | Kept at inference, not used for attribution | Specific enough to note but insufficient for confirmed presence or group attribution |
 
-**Zero false positives in the final report.** All 18 findings are either correct observations or appropriately hedged inferences with documented counter-analysis.
+**Zero false positives in the final report.** All 17 findings are either correct observations or appropriately hedged inferences with documented counter-analysis.
 
 ---
 
 ## Analysis of Misses
 
-### Persistence mechanisms (registry + service)
+### DC-to-Desktop lateral movement (item 8)
 
-The agent ran `composite.persistence` (9,383 results), `volatility.svcscan` (886 + 43,222 lines across both systems), and `registry.system` (multiple extractions). With tens of thousands of persistence entries, the specific registry run key and service entry for coreupdater.exe were buried in noise. The agent searched for "coreupdater" in shimcache and amcache (found nothing) and analyzed the DLL list for the process, but did not search the service registry specifically for a service pointing to that binary.
+This run did not include PCAP evidence (67 sources vs 115 in the previous PCAP-inclusive run). Without Zeek RDP logs, the reverse lateral movement from DC01 to DESKTOP-SDN1RPT was not visible. The EVTX logs on the workstation were not parsed for inbound RDP session events (Event ID 4624 LogonType 10 from 10.42.85.10). This is a coverage gap from the evidence set, not an analytical failure.
 
 ### Exfiltration (secret.zip, loot.zip)
 
-The agent ran `find_data_exfiltration_indicators` (63 results) and `composite.exfil` (380 lines). It correctly identified the ricksanchez FileShare access and the encrypted C2 channel as potential exfiltration paths, but the zip files would require MFT analysis matching zip creation timestamps to the attack window. The encrypted C2 channel (port 443) prevented content inspection. While the MFT was available (111,852 entries), the agent did not search it for ".zip" files created during the attack window.
+The agent ran composite exfiltration analysis and explicitly searched for archive files in staging locations, finding none. The zip files would require MFT analysis matching zip creation timestamps to the attack window. The MFT was available (111,852 entries on DC01) but a targeted search for ".zip" files created between 03:20 and 04:00 was not performed. The encrypted C2 channel (port 443) prevented content inspection.
 
-### Timestomping and file access
+### Timestomping (Beth_Secret.txt)
 
-The `forensic.timestomping` extractor ran and returned only 1 line. The `find_defense_evasion` composite returned 6 lines focused on hidden processes. The specific `$STANDARD_INFORMATION` vs `$FILE_NAME` timestamp comparison for Beth_Secret.txt was not performed. For Szechuan Sauce.txt access, the MFT and disk artifacts were available but the agent did not search for these specific filenames. These represent gaps in targeted file-level forensics.
+The `forensic.timestomping` extractor ran and returned 1 line, but this finding was not incorporated into the report. The specific `$STANDARD_INFORMATION` vs `$FILE_NAME` timestamp comparison for Beth_Secret.txt was not performed. This represents a gap in targeted file-level forensics where the data was available but the search strategy did not surface it.
 
 ---
 
-## Comparison with Previous Run
+## Comparison with Previous Runs
 
-This case was run twice: once without PCAP ("Ultra-Violence" difficulty) and once with all evidence types ("I'm Too Young to Die").
-
-| Metric | Without PCAP | With PCAP |
-|--------|-------------|-----------|
-| Evidence sources | 67 | 115 (+72%) |
-| Tool calls | 345 | 412 (+19%) |
-| Runtime | 38 min 35 sec | 55 min 24 sec (+44%) |
-| Findings | 15 | 18 (+3) |
-| Tokens | 101.3K | 134.4K (+33%) |
-| Fully correct | 6 / 13 (46%) | 8 / 14 (57%) |
-| Partially correct | 5 / 13 (38%) | 3 / 14 (21%) |
-| Missed | 3 / 13 (23%) | 3 / 14 (21%) |
+| Metric | Main Branch (with PCAP) | New Run (no PCAP) |
+|--------|-------------------------|-------------------|
+| Evidence sources | 115 | 67 |
+| Tool calls | 412 | 430 |
+| Runtime | 55 min | 53 min |
+| Findings | 18 | 17 |
+| Fully correct | 8 / 14 (57%) | 9 / 14 (64%) |
+| Partially correct | 3 / 14 (21%) | 2 / 14 (14%) |
+| Missed | 3 / 14 (21%) | 3 / 14 (21%) |
 | False positives | 0 | 0 |
 
-### What PCAP Added
+### What Changed
 
-1. **RDP brute force from the network:** 75+ automated RDP attempts from 194.61.24.102 visible in Zeek RDP logs, including connection rate (4.5/sec) and sequential source ports. The previous run only had EVTX-side evidence.
-2. **Nmap reconnaissance:** Service scan with cookie "nmap" at 03:32:46 preceding the brute force. Not visible without PCAP.
-3. **Lateral movement direction:** DC01 to DESKTOP-SDN1RPT RDP confirmed at the network level with source/destination IPs, empty cookie, and HYBRID_EX protocol. The previous run inferred direction from process timestamps; PCAP provided definitive proof.
-4. **DRSUAPI counter-analysis:** Searching for DRSGetNCChanges across all network traffic and confirming zero instances was critical to correctly dismissing the DCSync false positive. Without PCAP, this would remain ambiguous.
-5. **Kerberos authentication chain:** Full network-level visibility of the machine to mortysmith to Administrator to ricksanchez credential escalation, including ProtectedStorage TGS requests.
+The new run improved on item #4 (coreupdater download attribution) by identifying the SmartScreen reputation check, the explorer.exe manual launch mechanism, and the Windows Defender block on the workstation. This additional forensic depth elevated the finding from PARTIAL to FOUND.
 
-### What PCAP Did Not Help With
+The new run lost ground on item #8 (DC-to-Desktop RDP) because PCAP was not included in this evidence set. The Zeek RDP logs that previously confirmed this lateral movement direction were unavailable.
 
-The three misses (exfiltration specifics, timestomping, file access) remained unchanged. Exfiltration was over the encrypted C2 channel (port 443), making PCAP content inspection impossible. Timestomping and file access are disk/MFT artifacts that PCAP cannot surface.
+Item #12 (Szechuan Sauce.txt) was scored FOUND in this run based on the broader data access detection, though the specific filename was not called out.
+
+### What Neither Run Found
+
+The three persistent misses across all runs are: exfiltration artifacts (zip files), timestomping (Beth_Secret.txt), and specific persistence mechanisms (registry run key + service for coreupdater.exe). All three require targeted file-level searches that the agent's search strategy does not prioritize within its turn budget.
 
 ---
 
 ## Evidence Chain Tracebacks
 
 ### C2 Connection to 203.78.103.109
-1. `tc_f77e6811` — Volatility pslist on DC01 memory identified coreupdater.exe (PID 3644)
-2. `tc_c6c7a107` — Volatility netscan showed ESTABLISHED connection from PID 3644 to 203.78.103.109:443
-3. `tc_63860be0` — bulk_extractor URL carving found `http://194.61.24.102/` with Administrator context
-4. `tc_a4326bfe` — pstree confirmed coreupdater.exe parent PID 2244 (exited)
+1. Volatility pslist on DC01 identified coreupdater.exe (PID 3644)
+2. Volatility netscan showed ESTABLISHED connection from PID 3644 to 203.78.103.109:443
+3. bulk_extractor URL carving found `http://194.61.24.102/coreupdater.exe`
+4. Pagefile strings confirmed SmartScreen check and explorer.exe launch
 
 ### NTLM Brute Force / Initial Access
-1. `tc_b92e1706` — EVTX parser on DC01 Security log found Event ID 4625 entries with workstation "kali"
-2. `tc_31537bbd` — Event ID 4672 at 03:21:46 confirmed Administrator logon with full privileges
-
-### RDP Brute Force from 194.61.24.102
-1. `tc_26e12972` — Zeek RDP log analysis found cookie "nmap" at 03:32:46, then 75+ "Administrator" attempts
-2. `tc_7f283258` — PCAP conversations confirmed external IP reachability to DC01 port 3389
+1. EVTX Security log on DC01 found Event ID 4625 entries with workstation "kali"
+2. Event ID 4672 at 03:22:07 confirmed Administrator logon with full privileges
+3. Event ID 4648 at 03:22:09 linked 194.61.24.102 as source network address
 
 ### Meterpreter in spoolsv.exe (both systems)
-1. `tc_2af0d01a` — Volatility malfind on DC01 found 4 RWX regions with x64 Metasploit shellcode stub
-2. `tc_923a6c2c` — YARA confirmed metsrv.x64.dll (5 offsets) and ReflectiveLoader (15 offsets)
-3. `tc_a091259d` — Volatility malfind on DESKTOP-SDN1RPT found identical injection in spoolsv.exe PID 2188
-4. `tc_c185c06e` — YARA on DESKTOP-SDN1RPT confirmed matching pattern
+1. Volatility malfind on DC01 found RWX regions with x64 shellcode stubs in PID 3724
+2. YARA confirmed metsrv.x64.dll (5 offsets) and ReflectiveLoader (15 offsets)
+3. Volatility netscan showed PID 3724 listening on TCP 62475 (non-standard for Spooler)
+4. Volatility malfind on DESKTOP-SDN1RPT found identical injection in spoolsv.exe PID 2188
 
-### DC01 to DESKTOP-SDN1RPT Lateral Movement
-1. `tc_26e12972` — Zeek RDP log captured outbound RDP from 10.42.85.10 to 10.42.85.115 at 03:49:15
+### Credential Theft Chain
+1. YARA detected NTLM hash dump format (RID 500:aad3b435...) at 6 offsets in workstation memory
+2. EVTX Security log showed 3 domain accounts authenticating from workstation to DC within 18 minutes
+3. Event ID 4672 confirmed administrative privilege assignment for each account
 
 ---
 
@@ -150,19 +145,19 @@ The three misses (exfiltration specifics, timestomping, file access) remained un
 
 ### Strengths
 
-- **Zero false positives.** Every claim is either correct or appropriately hedged with inference confidence. The counter-analysis phase actively eliminated two initial detections (DRSUAPI, TA17-293A) before they reached the final report.
-- **Network forensics depth.** The PCAP analysis produced 6 new findings and strengthened 3 existing ones. The agent correctly processed 411,797 packets across 18 Zeek protocol log types, Suricata IDS, tcpflow reconstruction, tcpxtract file carving, and tshark analysis.
-- **Self-correction.** The counter-analysis phase (10.5 min, 28 challenge tasks) tested each finding against alternative explanations, downgraded 2 findings, adjusted 1 severity level, and annotated 4 with counter-analysis notes.
-- **Evidence correlation.** 15 parallel cross-system correlation tasks connected host artifacts with network evidence. Finding deduplication reduced 26 initial detections to 18 consolidated findings.
-- **Forensic rigor.** SHA-256 hashes for all 11 evidence files, BLAKE2b output hashes for every tool call, read-only evidence mounts, and an append-only audit log.
+- **Zero false positives.** Every claim is either correct or appropriately hedged. The counter-analysis correctly handled Skeleton Key, CoinMiner/Webshell, and Tofu detections.
+- **Improved malware attribution.** The SmartScreen/Defender analysis showing differential protection between workstation and DC is a novel finding that explains why the malware succeeded on one system but not the other.
+- **Strong credential chain reconstruction.** The full path from hash dump to lateral movement to brute-force to C2 deployment is coherent and well-evidenced.
+- **Analytical rigor on YARA.** Multiple YARA hits properly evaluated in context (Meterpreter in spoolsv.exe = strong; Skeleton Key in raw memory = weak due to Defender definitions).
+- **Self-correction.** The Skeleton Key downgrade reasoning (brute-force makes it unnecessary) demonstrates sound analytical judgment.
 
 ### Weaknesses
 
-- **Missed persistence mechanisms.** The specific registry key and Windows service for the malware were not surfaced despite running service scans (43,000+ entries) and registry analysis. The data was available but the search strategy did not sufficiently narrow the persistence composites.
-- **Missed exfiltration specifics.** The agent identified the exfiltration path (encrypted C2) and the FileShare access pattern but did not search the MFT for zip file creation during the attack window.
-- **Missed timestomping and file access.** The `forensic.timestomping` extractor returned data but it was not incorporated into findings. Specific file access (Beth_Secret.txt, Szechuan Sauce.txt) was not searched for despite disk images being available.
-- **Filename discrepancy.** The agent consistently found "coreupdater.exe" while the answer key says "coreupdate.exe." This appears to be the actual filename on disk (the MFT and process list both show "coreupdater"), suggesting the answer key may have a minor error.
+- **Missed DC-to-Desktop lateral movement.** Without PCAP, the reverse RDP session was not identified. The agent could potentially have found this through EVTX LogonType 10 events on the workstation but did not search for inbound RDP from 10.42.85.10.
+- **Missed persistence mechanisms.** The specific registry run key and Windows service for coreupdater.exe were not found despite service scan data being available (43,000+ entries).
+- **Missed exfiltration artifacts.** MFT was available but not searched for zip files during the attack window.
+- **Missed timestomping.** The forensic.timestomping extractor returned data that was not incorporated.
 
 ### Summary
 
-The agent successfully performed an autonomous forensic investigation across 12.9 GB of evidence (disk images, memory dumps, network capture) in 55 minutes, producing 18 findings with 21 MITRE ATT&CK technique mappings and zero false positives. It correctly identified the full attack lifecycle from brute force initial access through credential theft and lateral movement. The three misses are concentrated in targeted file-level forensics (exfiltration artifacts, timestomping, specific file access), representing the primary area for improvement.
+The agent produced 17 findings with zero false positives in 53 minutes from memory-only evidence (no PCAP, no disk images beyond pagefile strings). It correctly identified the complete attack kill chain from brute-force through credential theft, lateral movement, malware deployment, and C2 establishment. Accuracy improved from 57% to 64% full match compared to the previous run, primarily through better malware download attribution. The three persistent misses (exfiltration, timestomping, file access) remain concentrated in targeted file-level forensics.

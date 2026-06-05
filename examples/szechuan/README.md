@@ -10,40 +10,40 @@ An attacker compromises the C137.LOCAL domain through brute-force RDP access to 
 
 ## Key Findings
 
-- **Initial access:** NTLM brute force from workstation "kali" succeeded against Administrator at 03:21 UTC, followed by RDP brute force from 194.61.24.102 with 75+ attempts
-- **Malware:** coreupdater.exe deployed to `C:\Windows\System32` on both DC01 and DESKTOP-SDN1RPT, masquerading as a system binary
+- **Initial access:** NTLM brute force from workstation "kali" succeeded against Administrator at 03:22 UTC, with 194.61.24.102 confirmed as both malware staging server and authentication source (Event 4648)
+- **Malware:** coreupdater.exe (7,168 bytes) deployed to `C:\Windows\System32` on both DC01 and DESKTOP-SDN1RPT; Windows Defender blocked it on the workstation but not the DC
 - **C2:** ESTABLISHED connection from coreupdater.exe (PID 3644) to 203.78.103.109:443
-- **Lateral movement:** DC01 → DESKTOP-SDN1RPT via RDP at 03:49 UTC, confirmed by Zeek logs showing anomalous DC-to-workstation direction with empty cookie (programmatic initiation)
-- **Process injection:** Meterpreter reflective DLL injection in spoolsv.exe on both systems, with x64 shellcode stubs and ReflectiveLoader confirmed by YARA + Volatility malfind independently
-- **Credential theft:** Kerberos escalation chain (machine → mortysmith → Administrator → ricksanchez), Skeleton Key patcher tools, NTLM hash dump output on workstation
-- **Correct dismissals:** DCSync (DRSGetNCChanges searched, zero results — only normal DRSCrackNames observed), TA17-293A YARA match (over-matching on "file://" strings)
+- **Lateral movement:** Credential-based movement from workstation to DC using three domain accounts (Administrator, ricksanchez, mortysmith) within 18 minutes
+- **Process injection:** Meterpreter reflective DLL injection (metsrv.x64.dll + ReflectiveLoader) in spoolsv.exe on both systems, with bind handler on TCP 62475 on DC
+- **Credential theft:** NTLM hash dump output (RID 500:aad3b435...) at 6 memory offsets on workstation; Skeleton Key patcher YARA match downgraded after counter-analysis (brute-force would be unnecessary if Skeleton Key was active)
+- **Correct dismissals:** CoinMiner/Webshell YARA in MemCompression (Windows Defender definitions), Tofu backdoor (insufficient for attribution)
 
 ## Investigation Stats
 
 | Metric | Value |
 |--------|-------|
-| Systems analyzed | 2 (DC01, DESKTOP-SDN1RPT) + PCAP |
+| Systems analyzed | 2 (DC01, DESKTOP-SDN1RPT) |
 | Evidence files | 11 archives (12.9 GB compressed) |
-| Evidence sources indexed | 115 (18 memory, 23 disk, 74 other) |
-| Extractor types used | 18 |
-| Total tool calls | 412 |
-| Findings | 18 (3 critical, 6 high, 2 medium, 2 low, 5 info) |
-| Confirmed / Inference | 12 / 6 |
+| Evidence sources indexed | 89 (19 memory, 23 disk, 47 other) |
+| Extractor types used | 14 |
+| Total tool calls | 430 |
+| Findings | 17 (4 critical, 9 high, 2 medium, 0 low, 2 info) |
+| Confirmed / Inference | 12 / 5 |
 | False positives | 0 |
-| MITRE ATT&CK techniques | 21 across 10 tactics |
-| Runtime | 55 min 24 sec |
+| MITRE ATT&CK techniques | 24 across 8 tactics |
+| Runtime | 53 min |
 | Model | claude-opus-4-6 |
-| Total tokens | 134.4K (19.3K input, 115.1K output) |
+| Total tokens | 199.4K |
 
 ## Phase Breakdown
 
-| Phase | Duration | Description |
-|-------|----------|-------------|
-| Catalog | 3 min | Scanned evidence, extracted 11 archives, identified 2 Windows systems + 1 PCAP |
-| Extraction | 26 min | Parallel extraction across both hosts (Volatility 14 plugins, YARA, TSK, bulk_extractor, EVTX, registry, MFT, strings) and PCAP (Zeek, tshark, Suricata, tcpflow, tcpxtract) |
-| Cross-System | 11 min | 15 parallel correlation tasks, persistence/exfil/defense-evasion composites, deduplication (26 → 18 findings) |
-| Counter-Analysis | 10.5 min | 28 challenge tasks testing each finding against alternatives; downgraded 2, adjusted 1, annotated 4 |
-| Report | 4 min | Narrative generation, HTML/Markdown output |
+| Phase | Description |
+|-------|-------------|
+| Catalog | Scanned evidence, extracted 11 archives, identified 2 Windows systems |
+| Extraction | Parallel extraction across both hosts (Volatility 17 plugins, YARA raw + per-process VAD, TSK, bulk_extractor, EVTX, registry, MFT, ShimCache, Amcache, Prefetch, pagefile strings) |
+| Cross-System | Correlation tasks, persistence/exfil/defense-evasion composites, deduplication |
+| Counter-Analysis | Challenge tasks testing each finding against alternatives; downgraded Skeleton Key, dismissed CoinMiner/Webshell YARA |
+| Report | Narrative generation, HTML/Markdown output |
 
 ## Evidence Dataset
 
@@ -75,7 +75,7 @@ An attacker compromises the C137.LOCAL domain through brute-force RDP access to 
 |------|-------------|
 | `szechuan.report.md` | Full investigation report (Markdown) |
 | `szechuan.report.html` | Investigation report (HTML with navigation) |
-| `szechuan.audit.jsonl` | Structured tool execution audit log (442 entries, BLAKE2b hashed) |
-| `orchestrator.log` | Agent phase transitions and reasoning (1,262 lines) |
-| `mulder.log` | MCP server tool execution log (840 lines) |
+| `szechuan.audit.jsonl` | Structured tool execution audit log (453 entries, BLAKE2b hashed) |
+| `orchestrator.log` | Agent phase transitions and reasoning (1,203 lines) |
+| `mulder.log` | MCP server tool execution log (1,003 lines) |
 | `ACCURACY-REPORT.md` | Ground truth comparison against published answer key |
