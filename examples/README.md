@@ -10,7 +10,7 @@ against forensic evidence datasets.
 | Rocba | [Rocba.report.html](https://calebevans.github.io/mulder/examples/rocba/Rocba.report.html) |
 | SRL-2015 | [SRL-2015.report.html](https://calebevans.github.io/mulder/examples/srl-2015/SRL-2015.report.html) |
 | SRL-2018 | [SRL-2018.report.html](https://calebevans.github.io/mulder/examples/srl-2018/SRL-2018.report.html) |
-| Szechuan | [szechuan.report.html](https://calebevans.github.io/mulder/examples/szechuan/szechuan.report.html) |
+| NIST Data Leakage | [ndlc.report.html](https://calebevans.github.io/mulder/examples/ndlc/ndlc.report.html) |
 
 ## Investigations
 
@@ -19,7 +19,7 @@ against forensic evidence datasets.
 | [Rocba](rocba/) | 1 | 67 | 292 | 7 (1 high) | 66 min | 313.1K | opus-4-6 | [HTML](https://calebevans.github.io/mulder/examples/rocba/Rocba.report.html) |
 | [SRL-2015](srl-2015/) | 4 | 159 | 610 | 29 (4 critical, 9 high) | 126 min | 299.8K | opus-4-6 | [HTML](https://calebevans.github.io/mulder/examples/srl-2015/SRL-2015.report.html) |
 | [SRL-2018](srl-2018/) | 11 | 457 | 1508 | 55 (11 critical, 19 high) | 336 min | 698.4K | opus-4-6 | [HTML](https://calebevans.github.io/mulder/examples/srl-2018/SRL-2018.report.html) |
-| [Szechuan](szechuan/) | 2 | 118 | 516 | 26 (8 critical, 8 high) | 60 min | 204.2K | opus-4-6 | [HTML](https://calebevans.github.io/mulder/examples/szechuan/szechuan.report.html) |
+| [NIST Data Leakage](ndlc/) | 4 | 88 | 723 | 33 (15 high) | 102 min | 330.3K | opus-4-6 | [HTML](https://calebevans.github.io/mulder/examples/ndlc/ndlc.report.html) |
 
 ## Case Descriptions
 
@@ -41,13 +41,13 @@ against forensic evidence datasets.
 - **Key findings:** PowerView/PowerSploit recon from DC; WMI→PowerShell→Rundll32 attack chain across 8+ systems; msadvapi2 backdoor on multiple systems; complete 10-day attack timeline with 6+ compromised systems; environment-wide C2 proxy tunneling via 172.16.4.10:8080; dual intrusion campaigns (msadvapi2 persistent backdoor pre-August, Metasploit PowerShell operations August-September)
 - **Files:** [SRL-2018.report.md](srl-2018/SRL-2018.report.md), [SRL-2018.report.html](https://calebevans.github.io/mulder/examples/srl-2018/SRL-2018.report.html), `SRL-2018.audit.jsonl`, `orchestrator.log`, `mulder.log`
 
-### Szechuan (with Accuracy Report)
+### NIST Data Leakage Case (with Accuracy Report)
 
-- **Scenario:** APT compromise of the C137.LOCAL domain with NTLM brute-force initial access from Kali Linux, Meterpreter deployment, and lateral movement between domain controller and workstation
-- **Key findings:** Nmap RDP reconnaissance probe followed by ~100 brute-force attempts in 21 seconds (Zeek); coreupdater.exe deployed to both systems with C2 to 203.78.103.109:443; Meterpreter reflective DLL injection in Print Spooler service on both systems; DC→Desktop lateral movement confirmed via Zeek RDP logs; DRSGetNCChanges (DCSync) absence confirmed in PCAP
-- **Accuracy:** Has a detailed [accuracy report](szechuan/ACCURACY-REPORT.md) comparing findings against published ground truth (71% full match, 86% detection rate, 0% false positives)
-- **Validation:** Used as the validation case for hackathon submission against [DFIR Madness Case 001](https://dfirmadness.com/the-stolen-szechuan-sauce/)
-- **Files:** [szechuan.report.md](szechuan/szechuan.report.md), [szechuan.report.html](https://calebevans.github.io/mulder/examples/szechuan/szechuan.report.html), `szechuan.audit.jsonl`, `orchestrator.log`, `mulder.log`, [README.md](szechuan/README.md)
+- **Scenario:** Insider threat data leakage at a technology company. Employee researched exfiltration methods, copied proprietary research documents to USB media with deliberate file masquerading, deployed cloud sync for secondary exfiltration, burned a final copy to CD-ROM, then systematically destroyed forensic artifacts using CCleaner and Eraser
+- **Key findings:** Five "Secret Project" documents (~74 MB) exfiltrated to USB in a 42-second copy window; documents renamed with false extensions (.gif, .amr, .png, .zip) on FAT32 partition; Google Drive and iCloud deployed as secondary exfiltration channels; premeditated anti-forensics campaign (85 "anti-forensic tools" search hits); CCleaner destroyed browser history, Jump Lists, LNK files, Shellbags; complete 5-month timeline reconstructed from Oct 2014 through Mar 2015
+- **Accuracy:** Has a detailed [accuracy report](ndlc/ACCURACY-REPORT.md) comparing findings against published ground truth (75% full match, 95% detection rate, 0% false positives)
+- **Validation:** Scored against the [NIST CFReDS Data Leakage Case answer key](https://cfreds-archive.nist.gov/data_leakage_case/leakage-answers.pdf) (55-page official ground truth)
+- **Files:** [ndlc.report.md](ndlc/ndlc.report.md), [ndlc.report.html](https://calebevans.github.io/mulder/examples/ndlc/ndlc.report.html), `ndlc.audit.jsonl`, `orchestrator.log`, `mulder.log`, [README.md](ndlc/README.md)
 
 ## File Structure
 

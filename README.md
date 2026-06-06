@@ -18,7 +18,7 @@ Four autonomous investigations against real forensic datasets, unmodified from t
 | [Rocba](examples/rocba/) | 1 | ~8 GB | 67 | 292 | 7 (1 high) | 66 min | 313K | [HTML](https://calebevans.github.io/mulder/examples/rocba/Rocba.report.html) |
 | [SRL-2015](examples/srl-2015/) | 4 | ~30 GB | 159 | 610 | 29 (4 crit, 9 high) | 126 min | 300K | [HTML](https://calebevans.github.io/mulder/examples/srl-2015/SRL-2015.report.html) |
 | [SRL-2018](examples/srl-2018/) | 11 | ~120 GB | 457 | 1,508 | 55 (11 crit, 19 high) | 336 min | 698K | [HTML](https://calebevans.github.io/mulder/examples/srl-2018/SRL-2018.report.html) |
-| [Szechuan](examples/szechuan/) | 2 | ~13 GB | 118 | 516 | 26 (8 crit, 8 high) | 60 min | 204K | [HTML](https://calebevans.github.io/mulder/examples/szechuan/szechuan.report.html) |
+| [NIST Data Leakage](examples/ndlc/) | 4 | ~8 GB | 88 | 723 | 33 (15 high) | 102 min | 330K | [HTML](https://calebevans.github.io/mulder/examples/ndlc/ndlc.report.html) |
 
 The Szechuan case has a [detailed accuracy report](examples/szechuan/ACCURACY-REPORT.md) validated against [published ground truth](https://dfirmadness.com/the-stolen-szechuan-sauce/): 71% full match, 86% detection rate, 0% false positive rate. The Alternative Narrative phase caught and corrected two would-be false positives (a Skeleton Key misclassification and CoinMiner/Webshell YARA over-matching in Windows Defender memory) before they reached the final report.
 
