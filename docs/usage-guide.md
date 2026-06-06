@@ -212,6 +212,62 @@ mulder investigate /evidence my-case \
 
 See the [LiteLLM documentation](https://docs.litellm.ai/docs/proxy/configs) for config file format details.
 
+## Case Briefing
+
+You can provide investigation context by placing a `MULDER.md` file in the root of your evidence directory. This is optional but recommended when you have background knowledge about the case.
+
+### What to Include
+
+- **What We Know**: Facts established before the investigation (incident reports, help desk tickets, network topology, known-compromised accounts)
+- **What We're Looking For**: Specific questions the investigation should answer (who, what, when, how)
+- **Supplementary Context**: Class rosters, org charts, IP ranges, account naming conventions, or anything that helps interpret evidence
+- **Constraints**: Timezone information, scope limitations, legal holds
+
+### How It Works
+
+The contents of `MULDER.md` are prepended as an "INVESTIGATOR BRIEFING" to the planner and analyst prompts in every phase. This means:
+
+- The extraction planner uses it to prioritize which tools to run
+- The analyst uses it to focus analysis on relevant questions
+- The cross-system correlator uses it to understand relationships
+- The report writer uses it to frame conclusions around your questions
+
+### Example
+
+```markdown
+# Case Briefing
+
+## Background
+Employee John Doe (username: jdoe) reported suspicious activity on his
+workstation on 2024-03-15. IT observed outbound connections to unknown
+IPs. The workstation and a file server were imaged.
+
+## Known Facts
+- Affected systems: WKSTN-042 (10.1.2.42), FILE-SRV (10.1.2.10)
+- Suspect timeframe: March 14-15, 2024
+- jdoe has local admin on WKSTN-042
+
+## Investigation Questions
+1. How did the attacker gain access to jdoe's workstation?
+2. Did the attacker move laterally to FILE-SRV?
+3. Was any data staged or exfiltrated?
+4. Are there persistence mechanisms that survive a reboot?
+```
+
+If no `MULDER.md` is present, the investigation proceeds without additional context (fully autonomous mode).
+
+## Artifact Awareness
+
+The extraction planner adapts its tool selection based on what the evidence actually contains, not just its type. Standard toolsets (Volatility for memory, Sleuthkit for disk) always run, but the planner also looks for signals that indicate targeted analysis is warranted.
+
+**Windows disk images** automatically trigger registry queries for system metadata (timezone, install date, shutdown time) and NTUSER.DAT parsing for user activity artifacts (TypedURLs, RecentDocs, UserAssist, MRU lists).
+
+**Execution artifacts** (ShimCache, Prefetch, Amcache, UserAssist) are inspected for communication and networking tools. When the planner detects IRC clients, email clients, chat applications, or remote access tools in execution history, it plans `index_app_files` tasks targeting their configuration and data directories. When packet capture tools like Wireshark appear, the planner adds `analyze_disk_pcaps` to discover saved captures on disk.
+
+**Investigator briefing keywords** also influence tool selection. Briefings mentioning hacking or intrusion trigger searches for exploit tool configs and PCAPs. Briefings about insider threats or data theft prioritize USB history and cloud storage artifacts. Briefings about communications prioritize email and chat application data.
+
+The analyst receives complementary guidance: when execution artifacts show communication tools were used, the analyst searches indexed application files for contacts, server addresses, and credentials, then cross-references those with network connection data.
+
 ## CLI Reference
 
 ### `mulder investigate`

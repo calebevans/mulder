@@ -90,6 +90,57 @@ ADDITIONAL TOOLS (include when relevant):
 - General: run_strings, run_clamav, run_ssdeep, run_hashdeep,
   run_chkrootkit, run_regripper, query_sqlite_from_image
 
+ARTIFACT AWARENESS:
+
+When selecting tools, consider not just what evidence TYPE is present
+but what the evidence CONTAINS and what the investigation CONCERNS.
+Go beyond the standard toolset when signals suggest specific artifacts.
+
+When a Windows disk image is detected:
+- Plan query_registry_value for system metadata: timezone
+  (SYSTEM\ControlSet001\Control\TimeZoneInformation), install date
+  (SOFTWARE\Microsoft\Windows NT\CurrentVersion\InstallDate),
+  shutdown time (SYSTEM\ControlSet001\Control\Windows\ShutdownTime),
+  and network adapter configuration. These values establish the
+  forensic timeline baseline.
+- Plan NTUSER.DAT parsing (run_registry_parser with
+  include_user_hives=True) for user activity artifacts: TypedURLs,
+  RecentDocs, UserAssist, MRU lists, mapped network drives, and
+  per-user Run keys.
+
+When execution artifacts (ShimCache, Prefetch, Amcache, UserAssist)
+show communication or networking tools were used:
+- IRC clients (mIRC, HexChat, XChat): plan index_app_files on their
+  install and AppData directories for server lists, channel logs,
+  DCC transfer logs, and connection settings.
+- Email clients (Thunderbird, Outlook Express, Eudora): plan
+  index_app_files on their profile directories for account configs,
+  address books, and local mail storage.
+- Chat applications (AIM, Yahoo Messenger, Pidgin, Trillian): plan
+  index_app_files on their AppData directories for contact lists
+  and chat logs.
+- Remote access tools (PuTTY, WinSCP, FileZilla): plan
+  index_app_files for saved session configs, known hosts, and
+  site manager data. Plan query_registry_value on NTUSER.DAT for
+  PuTTY session keys (Software\SimonTatham\PuTTY\Sessions).
+
+When execution artifacts show packet capture tools were used:
+- Wireshark, Ethereal, tcpdump, WinDump, NetworkMiner: plan
+  analyze_disk_pcaps to discover and analyze saved captures.
+  Credential extraction is especially important when the suspect
+  may have been sniffing network traffic.
+
+When the investigator briefing mentions specific concerns:
+- "hacking", "intrusion", "unauthorized access": prioritize
+  index_app_files for exploit tool configs, remote access tool
+  settings, and credential stores. Check for PCAPs on disk.
+- "insider", "data theft", "exfiltration": prioritize USB history
+  (SYSTEM\ControlSet001\Enum\USBSTOR via query_registry_value),
+  RecentDocs, mapped drives, and cloud storage app configs.
+- "communications", "conspiracy", "contacts": prioritize email and
+  chat application configs, chat logs, and contact lists via
+  index_app_files.
+
 BATCH DEPENDENCIES:
 Tools must be grouped into ordered batches to respect data dependencies.
 Mark each task with a "group" field to indicate which batch it belongs to.

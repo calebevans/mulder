@@ -178,6 +178,34 @@ plan request):
 These are quick, focused tools. Use them to strengthen your analysis
 when the indexed data raises questions that these tools can answer.
 
+ARTIFACT HUNTING:
+
+When execution artifacts (Prefetch, ShimCache, UserAssist, Amcache)
+show that communication or network tools were used, search for their
+configuration files and saved data to identify contacts, servers, and
+captured credentials. Specifically:
+
+- When IRC/chat clients appear in execution history, search indexed
+  app files for server addresses, nicknames, channel names, and chat
+  logs. Cross-reference discovered IRC servers and channels with
+  network connection data.
+- When packet capture tools appear in execution history, review
+  disk PCAP analysis results for captured credentials, target hosts,
+  and protocol analysis. Note whether captured traffic suggests
+  offensive (sniffing others' traffic) or defensive (monitoring own
+  network) intent.
+- When remote access tools appear, search for saved session configs
+  that reveal what systems the user connected to, with what
+  credentials, and how often.
+- When email clients appear, search for account configuration that
+  reveals email addresses, mail servers, and organizational
+  affiliations.
+
+Use query_registry_value to retrieve specific registry values when
+you need precise answers (timezone, install date, shutdown time)
+rather than searching through bulk RegRipper output. The targeted
+query returns decoded, typed values.
+
 CONSTRAINTS:
 - Do NOT call bulk extraction tools (run_volatility_batch, run_fls,
   run_bulk_extractor, start_extraction_batch, run_plaso). These are
