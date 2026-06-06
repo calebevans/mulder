@@ -20,7 +20,7 @@ Four autonomous investigations against real forensic datasets, unmodified from t
 | [SRL-2018](examples/srl-2018/) | 11 | ~120 GB | 457 | 1,508 | 55 (11 crit, 19 high) | 336 min | 698K | [HTML](https://calebevans.github.io/mulder/examples/srl-2018/SRL-2018.report.html) |
 | [NIST Data Leakage](examples/ndlc/) | 4 | ~8 GB | 88 | 723 | 33 (15 high) | 102 min | 330K | [HTML](https://calebevans.github.io/mulder/examples/ndlc/ndlc.report.html) |
 
-The Szechuan case has a [detailed accuracy report](examples/szechuan/ACCURACY-REPORT.md) validated against [published ground truth](https://dfirmadness.com/the-stolen-szechuan-sauce/): 71% full match, 86% detection rate, 0% false positive rate. The Alternative Narrative phase caught and corrected two would-be false positives (a Skeleton Key misclassification and CoinMiner/Webshell YARA over-matching in Windows Defender memory) before they reached the final report.
+The NIST Data Leakage case has a [detailed accuracy report](examples/ndlc/ACCURACY-REPORT.md) validated against [published NIST ground truth](https://cfreds-archive.nist.gov/data_leakage_case/leakage-answers.pdf): 75% full match, 95% detection rate, 0% false positive rate. The Alternative Narrative phase verified all findings through counter-analysis before report generation.
 
 ## How It Works
 
@@ -40,7 +40,7 @@ Each gate validates structural criteria (minimum sources indexed, findings submi
 
 **Anti-hallucination at the API boundary.** Every finding must cite `evidence_refs` that are real `tool_call_id` values from the append-only audit log. The MCP server validates these references at submission time and rejects findings that cite nonexistent tool calls. Timestamps are validated as ISO-8601 and auto-nullified when they appear fabricated. This is enforced architecturally, not by prompting.
 
-**Adversarial self-review.** Phase 4 explicitly challenges the primary narrative before report generation. It formulates counter-hypotheses, searches for disconfirming evidence, and runs coverage audits to identify which tools were applicable but never invoked and which evidence sources were indexed but never cited. In the Szechuan case, this phase ran 28 structured challenge tasks in 10 minutes.
+**Adversarial self-review.** Phase 4 explicitly challenges the primary narrative before report generation. It formulates counter-hypotheses, searches for disconfirming evidence, and runs coverage audits to identify which tools were applicable but never invoked and which evidence sources were indexed but never cited.
 
 **Token efficiency.** The SRL-2018 investigation (11 systems, 120 GB, 1,508 tool calls across 336 minutes) consumed 698K tokens. For cost optimization, the three pipeline roles (planner, executor, analyst) can be assigned to different models - routing mechanical tool-calling to a cheaper model while preserving reasoning quality for analysis.
 
@@ -65,6 +65,22 @@ mulder investigate /evidence my-case-id
 ```
 
 For Vertex AI, Amazon Bedrock, non-Anthropic models via LiteLLM, and full CLI options, see the [Usage Guide](docs/usage-guide.md).
+
+### Case Briefing (Optional)
+
+Drop a `MULDER.md` file in your evidence directory to provide case context:
+
+```markdown
+## What We Know
+- The network was breached on March 15
+- Suspect account: jsmith
+
+## What We're Looking For
+- How did the attacker gain initial access?
+- Was data exfiltrated?
+```
+
+The briefing is injected into every investigation phase, guiding tool selection, analysis focus, and report framing. See the [Usage Guide](docs/usage-guide.md#case-briefing) for details.
 
 ## Forensic Tools
 
