@@ -27,6 +27,7 @@ dependencies = [
     "psutil>=5.9",
     "httpx>=0.27",
     "oletools>=0.60",
+    "python-registry>=1.4",
 ]
 
 [project.optional-dependencies]
@@ -73,6 +74,8 @@ module = [
     "yaml",
     "oletools",
     "oletools.*",
+    "Registry",
+    "Registry.*",
     "stix2",
     "stix2.*",
     "weasyprint",

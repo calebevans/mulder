@@ -153,6 +153,9 @@ TARGETED FOLLOW-UP TOOLS:
 When your analysis reveals something that warrants deeper investigation,
 you may call these targeted tools directly (no need for a follow-up
 plan request):
+- query_registry_value: retrieve specific registry values by key path.
+  Use when you need timezone, install date, shutdown time, USB history,
+  or other targeted data rather than searching bulk RegRipper output.
 - triage_binary: analyze a suspicious executable (imports, entropy,
   packing, timestamps). Use when you see an unusual process or binary.
 - run_capa: identify capabilities of a binary (C2, crypto, anti-debug).

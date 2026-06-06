@@ -7,6 +7,7 @@ from mulder.server.tools.extract import (  # noqa: F401
     pcap,
     plaso,
     registry,
+    registry_query,
     tsk,
     volatility,
 )
