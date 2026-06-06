@@ -156,6 +156,11 @@ plan request):
 - query_registry_value: retrieve specific registry values by key path.
   Use when you need timezone, install date, shutdown time, USB history,
   or other targeted data rather than searching bulk RegRipper output.
+- User hives (NTUSER.DAT) are automatically parsed by run_registry_parser.
+  Search `registry.ntuser.<username>` sources for user-level artifacts
+  including TypedURLs, RecentDocs, UserAssist, MRU lists, mapped drives,
+  per-user Run keys, and environment variables. UsrClass.dat data is
+  indexed under `registry.usrclass.<username>` (Shellbags).
 - triage_binary: analyze a suspicious executable (imports, entropy,
   packing, timestamps). Use when you see an unusual process or binary.
 - run_capa: identify capabilities of a binary (C2, crypto, anti-debug).

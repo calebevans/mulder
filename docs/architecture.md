@@ -466,6 +466,12 @@ For single-partition tools that need a sector offset, `_parse_partition_offset` 
 
 Resolved partition offsets are stored in the database `kv_store` table under the key prefix `tsk_partition_offset:<image_path>`. This allows tools invoked later in the pipeline (e.g., `extract_file_by_inode`, `index_evtx_file`) to retrieve the correct offset without re-running `mmls`. The kv_store pattern is also used for EVTX extraction directory paths that must survive server restarts and context compaction.
 
+### Registry Hive Parsing
+
+The `run_registry_parser` tool extracts and parses both system hives (SYSTEM, SOFTWARE, SAM, SECURITY) and per-user hives (NTUSER.DAT, UsrClass.dat). System hives are located in `Windows\System32\config`. Per-user hives are discovered from user profile directories in both XP-era (`Documents and Settings\*`) and modern (`Users\*`) layouts.
+
+User hives are parsed with targeted RegRipper plugins (userassist, recentdocs, typedurls, mru, etc.) and indexed as `registry.ntuser.<username>` and `registry.usrclass.<username>`. Each user's hive is parsed independently with isolated error handling so that a corrupted hive for one user does not prevent parsing of others.
+
 ## Docker Deployment Architecture
 
 ```mermaid

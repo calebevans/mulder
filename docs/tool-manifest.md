@@ -423,8 +423,13 @@ Parse Windows registry hives from a disk image using RECmd or RegRipper.
 | image_path | str | yes | Path to the disk image |
 | hive | str \| None | no | Specific hive to parse (e.g. "SYSTEM") |
 | force | bool | no | Re-run extraction even if sources already exist |
+| include_user_hives | bool | no | Discover and parse per-user NTUSER.DAT and UsrClass.dat hives (default True) |
 
 **Returns:** `hives_parsed`, `total_windows_indexed`, `per_hive[]`
+
+**Indexing:** System hives as `registry.<hive>` (e.g. `registry.system`). Per-user hives as `registry.ntuser.<username>` and `registry.usrclass.<username>`.
+
+**User hive artifacts:** TypedURLs, RecentDocs, UserAssist execution counts, MRU lists, shell folders, environment variables, per-user Run keys, mapped drives (MountPoints2), WordWheelQuery, Shellbags (UsrClass.dat).
 
 **Roles:** `EXTRACT_EXECUTOR`
 
