@@ -81,6 +81,9 @@ ADDITIONAL TOOLS (include when relevant):
 - Timeline: run_plaso (super-timeline generation)
 - Mobile (direct): parse_android_artifacts, parse_ios_artifacts,
   parse_plist
+- Application data: index_app_files (extract and index text/config
+  files from application directories discovered via Prefetch,
+  ShimCache, or UserAssist)
 - General: run_strings, run_clamav, run_ssdeep, run_hashdeep,
   run_chkrootkit, run_regripper, query_sqlite_from_image
 

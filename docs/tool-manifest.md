@@ -1123,6 +1123,28 @@ Return the filesystem timeline (mactime) within a time range.
 
 **Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR` `CROSS_ANALYST`
 
+### index_app_files
+
+Index text and config files from application directories on a disk image.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| case_id | str | yes | Active case identifier |
+| image_path | str | yes | Path to the disk image |
+| directory_pattern | str | yes | Path pattern to match directories (supports wildcards) |
+| extensions | list[str] \| None | no | File extensions to include (defaults to .ini, .cfg, .conf, .txt, .log, .xml, .json, .yaml, .yml, .properties, .csv, .bat, .cmd, .ps1, .reg, .inf, .manifest) |
+| max_file_size_kb | int | no | Skip files larger than this (default 512 KB) |
+| max_files | int | no | Maximum files to extract per call (default 200) |
+
+**Returns:** `files_discovered`, `files_extracted`, `files_indexed`, `source_prefix`, `sample_files[]`
+
+**Roles:** `EXTRACT_EXECUTOR`
+
+**Example patterns:**
+- `Program Files/mIRC` - index all text/config files in a specific app directory
+- `Documents and Settings/*/Application Data/Thunderbird` - index across all user profiles
+- `Program Files/*` - broad sweep of all program directories
+
 ---
 
 ## 12. Composite Analysis

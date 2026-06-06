@@ -140,6 +140,8 @@ The `CapacityLimiter` bounds concurrent tool execution to the `--workers` count 
 
 The orchestrator (`mulder investigate`) runs five investigation phases sequentially. Most phases use a plan-and-execute pipeline (planner/executor/analyst) while catalog and report use single-agent sessions. The orchestrator uses the [Claude Agent SDK](https://docs.anthropic.com/en/docs/agents/claude-code-sdk) (`claude-agent-sdk`) for managing agent sessions.
 
+If a `MULDER.md` file exists in the evidence directory, its contents are loaded at startup and injected as an "INVESTIGATOR BRIEFING" preamble into the planner, analyst, and report prompts across all phases. This allows investigators to provide case background, known facts, and specific questions that guide the investigation without modifying any code.
+
 ```mermaid
 flowchart TD
     start["mulder investigate /evidence &lt;case_id&gt;"] --> catalog
