@@ -568,6 +568,22 @@ Replay PCAP against Suricata IDS rules to detect known threats.
 
 **Roles:** `EXTRACT_EXECUTOR`
 
+### analyze_disk_pcaps
+
+Discover and analyze packet captures stored on a disk image.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| case_id | str | yes | Active case identifier |
+| image_path | str | yes | Path to the disk image containing PCAP files |
+| max_pcap_size_mb | int | no | Skip PCAPs larger than this (default 100 MB) |
+| run_ids | bool | no | Run Suricata IDS analysis (default True) |
+| extract_credentials | bool | no | Extract cleartext credentials (default True) |
+
+**Returns:** `pcaps_discovered`, `pcaps_analyzed`, `analyses[]`, `credentials[]`, `pcaps_skipped_oversize[]`
+
+**Roles:** `EXTRACT_EXECUTOR`
+
 ### run_tcpflow
 
 Reconstruct TCP streams from a PCAP file using tcpflow.

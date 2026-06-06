@@ -84,6 +84,9 @@ ADDITIONAL TOOLS (include when relevant):
 - Application data: index_app_files (extract and index text/config
   files from application directories discovered via Prefetch,
   ShimCache, or UserAssist)
+- Disk PCAPs: analyze_disk_pcaps (discover and analyze packet
+  captures stored on disk images; use when execution artifacts show
+  Wireshark, Ethereal, tcpdump, or other capture tools were run)
 - General: run_strings, run_clamav, run_ssdeep, run_hashdeep,
   run_chkrootkit, run_regripper, query_sqlite_from_image
 

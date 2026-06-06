@@ -64,10 +64,11 @@ flowchart LR
         runPlaso["run_plaso"]
         runEvtx["run_evtx_parser\nindex_evtx_file"]
         runRegistry["run_registry_parser\nrun_regripper"]
-        runPcap["run_pcap_analysis\nrun_zeek_analysis\nrun_suricata"]
+        runPcap["run_pcap_analysis\nrun_zeek_analysis\nrun_suricata\nanalyze_disk_pcaps"]
         runBulk["run_bulk_extractor"]
         runYara["yara_scan_files\nyara_scan_memory"]
         runCarving["run_foremost\nrun_scalpel\nrun_photorec"]
+        runAppFiles["index_app_files"]
         runMisc["run_clamav / run_exiftool\nrun_strings / run_radare2"]
     end
 
