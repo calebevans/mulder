@@ -18,8 +18,8 @@ against forensic evidence datasets.
 |------|---------|-----------------|------------|----------|---------|--------|-------|--------|
 | [Rocba](rocba/) | 1 | 67 | 292 | 7 (1 high) | 66 min | 313.1K | opus-4-6 | [HTML](https://calebevans.github.io/mulder/examples/rocba/Rocba.report.html) |
 | [SRL-2015](srl-2015/) | 4 | 159 | 610 | 29 (4 critical, 9 high) | 126 min | 299.8K | opus-4-6 | [HTML](https://calebevans.github.io/mulder/examples/srl-2015/SRL-2015.report.html) |
-| [SRL-2018](srl-2018/) | 11 | 355 | 1023 | 51 (6 critical, 23 high) | 264 min | 685.1K | opus-4-6 | [HTML](https://calebevans.github.io/mulder/examples/srl-2018/SRL-2018.report.html) |
-| [Szechuan](szechuan/) | 2 | 89 | 430 | 17 (4 critical, 9 high) | 53 min | 199.4K | opus-4-6 | [HTML](https://calebevans.github.io/mulder/examples/szechuan/szechuan.report.html) |
+| [SRL-2018](srl-2018/) | 11 | 457 | 1508 | 55 (11 critical, 19 high) | 336 min | 698.4K | opus-4-6 | [HTML](https://calebevans.github.io/mulder/examples/srl-2018/SRL-2018.report.html) |
+| [Szechuan](szechuan/) | 2 | 118 | 516 | 26 (8 critical, 8 high) | 60 min | 204.2K | opus-4-6 | [HTML](https://calebevans.github.io/mulder/examples/szechuan/szechuan.report.html) |
 
 ## Case Descriptions
 
@@ -38,14 +38,14 @@ against forensic evidence datasets.
 ### SRL-2018
 
 - **Scenario:** Network intrusion and industrial espionage targeting Stark Research Labs' rare-earth element research, spanning 11 systems across internal network and DMZ over a thirteen-month campaign
-- **Key findings:** Codoso/APT19 backdoor components and htran proxy tool detected via YARA; WMI-to-PowerShell attack chain across 5+ systems; NTDS.dit credential theft attempt via ntdsutil IFM; Kerberoasting attacks against domain accounts; data exfiltration via SendSpace file uploads; 13-month keylogger operation; Puppet configuration management abused for malware deployment
+- **Key findings:** PowerView/PowerSploit recon from DC; WMI→PowerShell→Rundll32 attack chain across 8+ systems; msadvapi2 backdoor on multiple systems; complete 10-day attack timeline with 6+ compromised systems; environment-wide C2 proxy tunneling via 172.16.4.10:8080; dual intrusion campaigns (msadvapi2 persistent backdoor pre-August, Metasploit PowerShell operations August-September)
 - **Files:** [SRL-2018.report.md](srl-2018/SRL-2018.report.md), [SRL-2018.report.html](https://calebevans.github.io/mulder/examples/srl-2018/SRL-2018.report.html), `SRL-2018.audit.jsonl`, `orchestrator.log`, `mulder.log`
 
 ### Szechuan (with Accuracy Report)
 
 - **Scenario:** APT compromise of the C137.LOCAL domain with NTLM brute-force initial access from Kali Linux, Meterpreter deployment, and lateral movement between domain controller and workstation
-- **Key findings:** Successful brute-force against DC01 Administrator; coreupdater.exe deployed to both systems with C2 to 203.78.103.109:443; Meterpreter reflective DLL injection in Print Spooler service on both systems; cross-system credential theft chain via NTLM hash dump
-- **Accuracy:** Has a detailed [accuracy report](szechuan/ACCURACY-REPORT.md) comparing findings against published ground truth (64% full match, 79% detection rate, 0% false positives)
+- **Key findings:** Nmap RDP reconnaissance probe followed by ~100 brute-force attempts in 21 seconds (Zeek); coreupdater.exe deployed to both systems with C2 to 203.78.103.109:443; Meterpreter reflective DLL injection in Print Spooler service on both systems; DC→Desktop lateral movement confirmed via Zeek RDP logs; DRSGetNCChanges (DCSync) absence confirmed in PCAP
+- **Accuracy:** Has a detailed [accuracy report](szechuan/ACCURACY-REPORT.md) comparing findings against published ground truth (71% full match, 86% detection rate, 0% false positives)
 - **Validation:** Used as the validation case for hackathon submission against [DFIR Madness Case 001](https://dfirmadness.com/the-stolen-szechuan-sauce/)
 - **Files:** [szechuan.report.md](szechuan/szechuan.report.md), [szechuan.report.html](https://calebevans.github.io/mulder/examples/szechuan/szechuan.report.html), `szechuan.audit.jsonl`, `orchestrator.log`, `mulder.log`, [README.md](szechuan/README.md)
 

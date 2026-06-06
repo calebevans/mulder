@@ -17,10 +17,10 @@ Four autonomous investigations against real forensic datasets, unmodified from t
 |------|---------|----------|---------|------------|----------|---------|--------|--------|
 | [Rocba](examples/rocba/) | 1 | ~8 GB | 67 | 292 | 7 (1 high) | 66 min | 313K | [HTML](https://calebevans.github.io/mulder/examples/rocba/Rocba.report.html) |
 | [SRL-2015](examples/srl-2015/) | 4 | ~30 GB | 159 | 610 | 29 (4 crit, 9 high) | 126 min | 300K | [HTML](https://calebevans.github.io/mulder/examples/srl-2015/SRL-2015.report.html) |
-| [SRL-2018](examples/srl-2018/) | 11 | ~120 GB | 355 | 1,023 | 51 (6 crit, 23 high) | 264 min | 685K | [HTML](https://calebevans.github.io/mulder/examples/srl-2018/SRL-2018.report.html) |
-| [Szechuan](examples/szechuan/) | 2 | ~13 GB | 89 | 430 | 17 (4 crit, 9 high) | 53 min | 199K | [HTML](https://calebevans.github.io/mulder/examples/szechuan/szechuan.report.html) |
+| [SRL-2018](examples/srl-2018/) | 11 | ~120 GB | 457 | 1,508 | 55 (11 crit, 19 high) | 336 min | 698K | [HTML](https://calebevans.github.io/mulder/examples/srl-2018/SRL-2018.report.html) |
+| [Szechuan](examples/szechuan/) | 2 | ~13 GB | 118 | 516 | 26 (8 crit, 8 high) | 60 min | 204K | [HTML](https://calebevans.github.io/mulder/examples/szechuan/szechuan.report.html) |
 
-The Szechuan case has a [detailed accuracy report](examples/szechuan/ACCURACY-REPORT.md) validated against [published ground truth](https://dfirmadness.com/the-stolen-szechuan-sauce/): 64% full match, 79% detection rate, 0% false positive rate. The Alternative Narrative phase caught and corrected two would-be false positives (a Skeleton Key misclassification and CoinMiner/Webshell YARA over-matching in Windows Defender memory) before they reached the final report.
+The Szechuan case has a [detailed accuracy report](examples/szechuan/ACCURACY-REPORT.md) validated against [published ground truth](https://dfirmadness.com/the-stolen-szechuan-sauce/): 71% full match, 86% detection rate, 0% false positive rate. The Alternative Narrative phase caught and corrected two would-be false positives (a Skeleton Key misclassification and CoinMiner/Webshell YARA over-matching in Windows Defender memory) before they reached the final report.
 
 ## How It Works
 
@@ -42,7 +42,7 @@ Each gate validates structural criteria (minimum sources indexed, findings submi
 
 **Adversarial self-review.** Phase 4 explicitly challenges the primary narrative before report generation. It formulates counter-hypotheses, searches for disconfirming evidence, and runs coverage audits to identify which tools were applicable but never invoked and which evidence sources were indexed but never cited. In the Szechuan case, this phase ran 28 structured challenge tasks in 10 minutes.
 
-**Token efficiency.** The SRL-2018 investigation (11 systems, 120 GB, 1,023 tool calls across 264 minutes) consumed 685K tokens. For cost optimization, the three pipeline roles (planner, executor, analyst) can be assigned to different models - routing mechanical tool-calling to a cheaper model while preserving reasoning quality for analysis.
+**Token efficiency.** The SRL-2018 investigation (11 systems, 120 GB, 1,508 tool calls across 336 minutes) consumed 698K tokens. For cost optimization, the three pipeline roles (planner, executor, analyst) can be assigned to different models - routing mechanical tool-calling to a cheaper model while preserving reasoning quality for analysis.
 
 ## Quick Start
 
