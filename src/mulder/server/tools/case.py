@@ -539,7 +539,7 @@ def extract_archive(
             or (ext in (".gz", ".bz2") and ".tar" not in name_lower)
         ):
             files = _extract_tar(archive, dest)
-        elif ext in (".7z", ".rar"):
+        elif ext in (".7z", ".rar") or ".7z." in name_lower:
             if not shutil.which("7z"):
                 return error_response(
                     tc_id,

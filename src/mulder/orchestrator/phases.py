@@ -170,7 +170,7 @@ CROSS_SYSTEM: PhaseConfig = PhaseConfig(
     mode="split",
     planner_system_prompt=CROSS_SYSTEM_PLANNER_PROMPT,
     planner_prompt_template=(
-        "Review all findings and sources. Plan cross-system correlation queries."
+        "{case_briefing}Review all findings and sources. Plan cross-system correlation queries."
     ),
     planner_allowed_tools=get_tools_for_role(Role.CROSS_PLANNER),
     planner_max_turns=10,
@@ -195,7 +195,7 @@ ALTERNATIVE_NARRATIVE: PhaseConfig = PhaseConfig(
     mode="split",
     planner_system_prompt=NARRATIVE_PLANNER_PROMPT,
     planner_prompt_template=(
-        "Review current findings and plan counter-analysis.\n\n{consistency_report}"
+        "{case_briefing}Review current findings and plan counter-analysis.\n\n{consistency_report}"
     ),
     planner_allowed_tools=get_tools_for_role(Role.NARRATIVE_PLANNER),
     planner_max_turns=10,
@@ -220,7 +220,9 @@ REPORT: PhaseConfig = PhaseConfig(
     mode="single",
     single_role="analyst",
     single_system_prompt=REPORT_PROMPT,
-    single_prompt_template=("Write the investigation narrative and finalize the report."),
+    single_prompt_template=(
+        "{case_briefing}Write the investigation narrative and finalize the report."
+    ),
     single_allowed_tools=get_tools_for_role(Role.REPORT),
     single_max_turns=25,
     single_max_budget_usd=12.0,

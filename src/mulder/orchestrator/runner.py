@@ -331,6 +331,7 @@ class Orchestrator:
         from mulder.orchestrator.gates import reset_gate_failure_counters
 
         reset_gate_failure_counters()
+        self._case_briefing = self._load_case_briefing()
 
         # Phase 1: Catalog evidence (single-mode)
         catalog_result = await self._run_single_phase(
@@ -377,13 +378,19 @@ class Orchestrator:
         await self._run_extraction_pool(groups, result)
 
         # Phase 3: Cross-system analysis (split-mode)
-        cross_result = await self._run_split_phase(CROSS_SYSTEM)
+        cross_result = await self._run_split_phase(
+            CROSS_SYSTEM,
+            prompt_vars={"case_briefing": self._case_briefing},
+        )
         result.phases.append(cross_result)
         self._accumulate(result, cross_result)
 
         # Phase 4: Alternative narrative + audit (split-mode, with consistency preamble)
         consistency_report = await self._build_consistency_report()
-        narrative_vars = {"consistency_report": consistency_report or ""}
+        narrative_vars = {
+            "consistency_report": consistency_report or "",
+            "case_briefing": self._case_briefing,
+        }
         alt_result = await self._run_split_phase(ALTERNATIVE_NARRATIVE, prompt_vars=narrative_vars)
         result.phases.append(alt_result)
         self._accumulate(result, alt_result)
@@ -393,7 +400,10 @@ class Orchestrator:
         self._write_model_usage()
 
         # Phase 5: Report (single-mode)
-        report_result = await self._run_single_phase(REPORT)
+        report_result = await self._run_single_phase(
+            REPORT,
+            prompt_vars={"case_briefing": self._case_briefing},
+        )
         result.phases.append(report_result)
         self._accumulate(result, report_result)
 
@@ -401,6 +411,28 @@ class Orchestrator:
         # Re-write with final totals (includes report phase overhead).
         self._write_model_usage()
         return result
+
+    # ------------------------------------------------------------------
+    # Case briefing loader
+    # ------------------------------------------------------------------
+
+    def _load_case_briefing(self) -> str:
+        """Load optional MULDER.md case briefing from the evidence directory.
+
+        If a MULDER.md file exists in the evidence root, its contents are
+        returned wrapped with an INVESTIGATOR BRIEFING header. This context
+        is injected into planner, analyst, and report prompts to guide the
+        investigation toward user-specified questions and known facts.
+
+        Returns:
+            Formatted briefing string, or empty string if no file exists.
+        """
+        briefing_path = Path(self.evidence_path) / "MULDER.md"
+        if briefing_path.is_file():
+            content = briefing_path.read_text(encoding="utf-8", errors="replace").strip()
+            if content:
+                return f"INVESTIGATOR BRIEFING:\n{content}\n"
+        return ""
 
     # ------------------------------------------------------------------
     # Evidence context builder
@@ -540,6 +572,8 @@ class Orchestrator:
                     self.dashboard.set_extraction_counts(total, done_count, active_count)
                 try:
                     evidence_context = self._build_evidence_context(group[0])
+                    if self._case_briefing:
+                        evidence_context = self._case_briefing + "\n" + evidence_context
                     phase_result = await self._run_split_phase(
                         EXTRACTION,
                         prompt_vars={
