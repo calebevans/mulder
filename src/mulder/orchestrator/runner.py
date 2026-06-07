@@ -170,6 +170,7 @@ class Orchestrator:
         self._parallel_extractions = max(1, parallel_extractions)
         self._phase_counter = 0
         self._total_phases = 0
+        self._case_briefing: str = ""
         self._proxy_config = proxy_config
         self._proxy: ProxyManager | None = None
         self._using_proxy = False
