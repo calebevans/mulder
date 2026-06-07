@@ -4,32 +4,39 @@ Try-it-out instructions for running Mulder, the forensic investigation platform.
 
 ## Table of Contents
 
-- [Prerequisites](#prerequisites)
-- [Pulling the Container Image](#pulling-the-container-image)
-- [Running a Container](#running-a-container)
-  - [Volume Mounts](#volume-mounts)
-  - [Privileged Access](#privileged-access)
-  - [Using an Anthropic API Key](#using-an-anthropic-api-key)
-  - [Using Google Cloud Vertex AI](#using-google-cloud-vertex-ai)
-  - [Using Amazon Bedrock](#using-amazon-bedrock)
-- [Starting an Investigation](#starting-an-investigation)
-- [Using Non-Anthropic Models via LiteLLM](#using-non-anthropic-models-via-litellm)
-  - [Provider Prefixes](#provider-prefixes)
-  - [Mixing Providers Across Roles](#mixing-providers-across-roles)
-  - [Local Models with Ollama](#local-models-with-ollama)
-  - [Custom LiteLLM Configuration](#custom-litellm-configuration)
-- [CLI Reference](#cli-reference)
-  - [mulder investigate](#mulder-investigate)
-  - [mulder serve](#mulder-serve)
-  - [mulder report](#mulder-report)
-  - [mulder export-iocs](#mulder-export-iocs)
-  - [mulder export-navigator](#mulder-export-navigator)
-- [Understanding the Output](#understanding-the-output)
-  - [Case Artifacts](#case-artifacts)
-  - [Reports](#reports)
-  - [IOC Exports](#ioc-exports)
-  - [Logs](#logs)
-- [Building the Image from Source](#building-the-image-from-source)
+- [Usage Guide](#usage-guide)
+  - [Table of Contents](#table-of-contents)
+  - [Prerequisites](#prerequisites)
+  - [Pulling the Container Image](#pulling-the-container-image)
+  - [Running a Container](#running-a-container)
+    - [Volume Mounts](#volume-mounts)
+    - [Privileged Access](#privileged-access)
+    - [Using an Anthropic API Key](#using-an-anthropic-api-key)
+    - [Using Google Cloud Vertex AI](#using-google-cloud-vertex-ai)
+    - [Using Amazon Bedrock](#using-amazon-bedrock)
+  - [Starting an Investigation](#starting-an-investigation)
+  - [Using Non-Anthropic Models via LiteLLM](#using-non-anthropic-models-via-litellm)
+    - [Provider Prefixes](#provider-prefixes)
+    - [Mixing Providers Across Roles](#mixing-providers-across-roles)
+    - [Local Models with Ollama](#local-models-with-ollama)
+    - [Custom LiteLLM Configuration](#custom-litellm-configuration)
+  - [Case Briefing](#case-briefing)
+    - [What to Include](#what-to-include)
+    - [How It Works](#how-it-works)
+    - [Example](#example)
+  - [Artifact Awareness](#artifact-awareness)
+  - [CLI Reference](#cli-reference)
+    - [`mulder investigate`](#mulder-investigate)
+    - [`mulder serve`](#mulder-serve)
+    - [`mulder report`](#mulder-report)
+    - [`mulder export-iocs`](#mulder-export-iocs)
+    - [`mulder export-navigator`](#mulder-export-navigator)
+  - [Understanding the Output](#understanding-the-output)
+    - [Case Artifacts](#case-artifacts)
+    - [Reports](#reports)
+    - [IOC Exports](#ioc-exports)
+    - [Logs](#logs)
+  - [Building the Image from Source](#building-the-image-from-source)
 
 ## Prerequisites
 
@@ -47,7 +54,7 @@ Try-it-out instructions for running Mulder, the forensic investigation platform.
 The pre-built container image includes all forensic tools, dependencies, and the Mulder server:
 
 ```bash
-docker pull ghcr.io/calebevans/mulder:1.2
+docker pull ghcr.io/calebevans/mulder:1.3
 ```
 
 ## Running a Container
@@ -88,7 +95,7 @@ docker run -it --privileged \
   -v /path/to/evidence:/evidence:ro \
   -v ~/mulder-cases:/home/mulder/.mulder/cases \
   -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
-  ghcr.io/calebevans/mulder:1.2
+  ghcr.io/calebevans/mulder:1.3
 ```
 
 ### Using Google Cloud Vertex AI
@@ -104,7 +111,7 @@ docker run -it --privileged \
   -e ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project-id \
   -e GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcloud-creds.json \
   -v ~/.config/gcloud/application_default_credentials.json:/tmp/gcloud-creds.json:ro \
-  ghcr.io/calebevans/mulder:1.2
+  ghcr.io/calebevans/mulder:1.3
 ```
 
 | Variable | Description |
@@ -128,7 +135,7 @@ docker run -it --privileged \
   -e AWS_REGION=us-east-1 \
   -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
   -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
-  ghcr.io/calebevans/mulder:1.2
+  ghcr.io/calebevans/mulder:1.3
 ```
 
 | Variable | Description |
