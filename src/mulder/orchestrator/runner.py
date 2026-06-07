@@ -377,13 +377,36 @@ class Orchestrator:
 
         await self._run_extraction_pool(groups, result)
 
-        # Phase 3: Cross-system analysis (split-mode)
-        cross_result = await self._run_split_phase(
-            CROSS_SYSTEM,
-            prompt_vars={"case_briefing": self._case_briefing},
-        )
-        result.phases.append(cross_result)
-        self._accumulate(result, cross_result)
+        # Phase 3: Cross-system analysis (split-mode) — skip for single-host cases
+        if len(systems) > 1:
+            cross_result = await self._run_split_phase(
+                CROSS_SYSTEM,
+                prompt_vars={"case_briefing": self._case_briefing},
+            )
+            result.phases.append(cross_result)
+            self._accumulate(result, cross_result)
+        else:
+            logger.info(
+                "Skipping cross-system phase: only %d system(s) in catalog "
+                "(cross-host correlation requires 2+ systems)",
+                len(systems),
+            )
+            self._phase_counter += 1
+            self.dashboard.set_phase(
+                label="cross_system (skipped: single system)",
+                phase_num=self._phase_counter,
+                total_phases=self._total_phases,
+                model="\u2014",
+                max_turns=0,
+            )
+            self.dashboard.log_info(
+                "Skipping cross-system phase (single system; nothing to correlate)"
+            )
+            skipped_result = PhaseResult(
+                phase_name="cross_system",
+                success=True,
+            )
+            result.phases.append(skipped_result)
 
         # Phase 4: Alternative narrative + audit (split-mode, with consistency preamble)
         consistency_report = await self._build_consistency_report()
