@@ -47,7 +47,7 @@ _MMLS_ROW_RE = re.compile(
 _NTFS_INDICATORS = ("ntfs", "exfat", "0x07", "win95 fat", "0x0b", "0x0c")
 _LINUX_INDICATORS = ("linux", "0x83", "ext", "0x8e")
 
-_cached_image_info: dict[str, tuple[str, int, str | None]] = {}
+_cached_image_info: dict[tuple[str, str | None], tuple[str, int, str | None]] = {}
 _image_info_lock = threading.Lock()
 
 
@@ -147,33 +147,68 @@ def _detect_filesystem_type(image_path: str, offset: int) -> str | None:
     return None
 
 
-def _resolve_image_and_offset() -> tuple[str, int, str | None]:
+def _resolve_image_and_offset(
+    image_path: str | None = None,
+) -> tuple[str, int, str | None]:
     """Resolve the disk image path, partition offset, and filesystem type.
 
     Reads the ``tsk.partitions`` source metadata and window text to
     determine the image path (from ``source_path``) and the partition
     offset used during ingest.  Also runs ``fsstat`` to detect the
     filesystem type for use with ``-f`` flag in icat/istat.
-    Result is cached per case_id so switching cases invalidates stale data.
+
+    Args:
+        image_path: When provided, only the ``tsk.partitions`` source whose
+            ``source_path`` matches this value is considered. Required for
+            multi-image cases where several disk images have been ingested
+            into the same case. When omitted, falls back to the first
+            matching source (backward compatible for single-image cases).
+
+    Result is cached per ``(case_id, image_path)`` so switching cases or
+    querying different images within a case invalidates stale data.
+
+    Raises:
+        ValueError: If *image_path* is specified but no ``tsk.partitions``
+            source with a matching ``source_path`` exists.
     """
     ctx = get_ctx()
-    cache_key = ctx.case_id
+    cache_key = (ctx.case_id, image_path)
     with _image_info_lock:
         if cache_key in _cached_image_info:
             return _cached_image_info[cache_key]
 
     sources = ctx.db.get_sources()
-    tsk_source = next((s for s in sources if s.source_name == _SRC_PARTITIONS), None)
+
+    if image_path is not None:
+        tsk_source = next(
+            (
+                s
+                for s in sources
+                if s.source_name == _SRC_PARTITIONS and s.source_path == image_path
+            ),
+            None,
+        )
+        if tsk_source is None:
+            raise ValueError(
+                f"No tsk.partitions source found for image_path={image_path!r}. "
+                f"Available tsk.partitions sources: "
+                f"{[s.source_path for s in sources if s.source_name == _SRC_PARTITIONS]}"
+            )
+    else:
+        tsk_source = next((s for s in sources if s.source_name == _SRC_PARTITIONS), None)
 
     if tsk_source is None:
-        image_path = _find_tsk_source_path()
-        fs_type = _detect_filesystem_type(image_path, 0)
-        result = (image_path, 0, fs_type)
+        resolved_path = image_path or _find_tsk_source_path()
+        fs_type = _detect_filesystem_type(resolved_path, 0)
+        result = (resolved_path, 0, fs_type)
         with _image_info_lock:
             _cached_image_info[cache_key] = result
         return result
 
-    windows = ctx.db.get_windows_by_source(_SRC_PARTITIONS)
+    # Filter windows to only those belonging to the matched source.
+    all_windows = ctx.db.get_windows_by_source(_SRC_PARTITIONS)
+    windows = [w for w in all_windows if w.source_id == tsk_source.source_id]
+
     mmls_text = "\n".join(w.raw_text for w in windows)
     offset = _parse_offset_from_windows(mmls_text)
     fs_type = _detect_filesystem_type(tsk_source.source_path, offset)
@@ -362,7 +397,11 @@ def _build_tsk_cmd(
 
 @mcp.tool()
 @tool_access(Role.EXTRACT_EXECUTOR)
-def extract_file_by_inode(inode: int, filesystem_type: str | None = None) -> dict[str, object]:
+def extract_file_by_inode(
+    inode: int,
+    filesystem_type: str | None = None,
+    image_path: str | None = None,
+) -> dict[str, object]:
     """Extract a file from the disk image by inode number using TSK icat.
 
     For text files the content is returned directly (capped at 1 MB).
@@ -374,6 +413,10 @@ def extract_file_by_inode(inode: int, filesystem_type: str | None = None) -> dic
         filesystem_type: Optional TSK filesystem type (e.g. "ntfs", "ext",
             "fat", "hfs").  Auto-detected via ``fsstat`` when omitted.
             Specify manually if auto-detection fails on raw DD images.
+        image_path: Path to the specific disk image containing this inode.
+            Required when multiple disk images have been ingested into the
+            same case (e.g. NDLC with 4 images). When omitted, the first
+            ingested image is used (safe for single-image cases).
     """
     ctx = get_ctx()
     tc_id = make_tool_call_id()
@@ -398,9 +441,9 @@ def extract_file_by_inode(inode: int, filesystem_type: str | None = None) -> dic
             "result_count": 0,
         }
 
-    image_path, offset, detected_fs = _resolve_image_and_offset()
+    image_path_resolved, offset, detected_fs = _resolve_image_and_offset(image_path)
     fs_type = filesystem_type or detected_fs
-    cmd = _build_tsk_cmd("icat", image_path, offset, fs_type)
+    cmd = _build_tsk_cmd("icat", image_path_resolved, offset, fs_type)
     cmd.append(str(inode))
 
     try:
@@ -463,7 +506,7 @@ def extract_file_by_inode(inode: int, filesystem_type: str | None = None) -> dic
         source_name = f"tsk.extracted.{inode}"
         index_summary: dict[str, object] = {}
         if text.strip():
-            index_summary = extract_and_index(text, source_name, image_path, "icat")
+            index_summary = extract_and_index(text, source_name, image_path_resolved, "icat")
         results = {
             "type": "text",
             "inode": inode,
@@ -492,7 +535,11 @@ def extract_file_by_inode(inode: int, filesystem_type: str | None = None) -> dic
 
 @mcp.tool()
 @tool_access(Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR)
-def get_file_metadata(inode: int, filesystem_type: str | None = None) -> dict[str, object]:
+def get_file_metadata(
+    inode: int,
+    filesystem_type: str | None = None,
+    image_path: str | None = None,
+) -> dict[str, object]:
     """Return file metadata (MAC times, size, blocks) for an inode using TSK istat.
 
     Shells out to ``istat`` at query time.  Requires ``istat`` on PATH.
@@ -502,6 +549,10 @@ def get_file_metadata(inode: int, filesystem_type: str | None = None) -> dict[st
         inode: The inode number of the file.
         filesystem_type: Optional TSK filesystem type (e.g. "ntfs", "ext",
             "fat", "hfs").  Auto-detected via ``fsstat`` when omitted.
+        image_path: Path to the specific disk image containing this inode.
+            Required when multiple disk images have been ingested into the
+            same case. When omitted, the first ingested image is used
+            (safe for single-image cases).
     """
     ctx = get_ctx()
     tc_id = make_tool_call_id()
@@ -526,9 +577,9 @@ def get_file_metadata(inode: int, filesystem_type: str | None = None) -> dict[st
             "result_count": 0,
         }
 
-    image_path, offset, detected_fs = _resolve_image_and_offset()
+    image_path_resolved, offset, detected_fs = _resolve_image_and_offset(image_path)
     fs_type = filesystem_type or detected_fs
-    cmd = _build_tsk_cmd("istat", image_path, offset, fs_type)
+    cmd = _build_tsk_cmd("istat", image_path_resolved, offset, fs_type)
     cmd.append(str(inode))
 
     try:
@@ -583,7 +634,7 @@ def get_file_metadata(inode: int, filesystem_type: str | None = None) -> dict[st
 
     index_summary: dict[str, object] = {}
     if output_text:
-        index_summary = extract_and_index(output_text, source_name, image_path, "istat")
+        index_summary = extract_and_index(output_text, source_name, image_path_resolved, "istat")
 
     results: dict[str, object] = {
         "inode": inode,
