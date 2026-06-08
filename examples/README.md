@@ -27,7 +27,7 @@ against forensic evidence datasets.
 
 - **Scenario:** Sustained RDP brute-force campaign targeting a Windows 10 corporate workstation (SRL-FORGE) at Stark Research Labs over a seventeen-day period from multiple external IPs across five countries
 - **Key findings:** No successful breach achieved despite coordinated attacks from 4 IPs in two distinct waves; attacker enumerated default/disabled accounts but never guessed valid credentials for active accounts
-- **Files:** [rocba.report.md](rocba/rocba.report.md), [Rocba.report.html](https://calebevans.github.io/mulder/examples/rocba/Rocba.report.html)
+- **Files:** [Rocba.report.md](rocba/Rocba.report.md), [Rocba.report.html](https://calebevans.github.io/mulder/examples/rocba/Rocba.report.html)
 
 ### SRL-2015
 

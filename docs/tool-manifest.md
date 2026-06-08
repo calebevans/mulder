@@ -446,6 +446,23 @@ Analyze a Windows registry hive using RegRipper.
 
 **Roles:** `EXTRACT_EXECUTOR`
 
+### query_registry_value
+
+Query a specific registry key or value from a Windows hive file. Extracts the target hive from a disk image using TSK and reads the requested key or value using python-registry. Returns decoded, typed values including automatic conversion of FILETIME timestamps, Unix epochs, REG_BINARY, and REG_MULTI_SZ data.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| case_id | str | yes | Active case identifier |
+| image_path | str | yes | Path to the disk image containing the registry hive |
+| hive | Literal['system', 'software', 'sam', 'security', 'ntuser', 'usrclass'] | yes | Target hive name |
+| key_path | str | yes | Registry key path relative to the hive root |
+| value_name | str \| None | no | Specific value to retrieve; returns all values and subkeys if omitted |
+| username | str \| None | no | Required when hive is "ntuser" or "usrclass" |
+
+**Returns:** `value`, `value_type`, `key_metadata`, `last_written_timestamp`
+
+**Roles:** `EXTRACT_ANALYST`
+
 ### run_prefetch_parser
 
 Parse Windows Prefetch files from a disk image using PECmd (EZ Tools).
@@ -1080,6 +1097,7 @@ Extract a file from the disk image by inode number using TSK icat.
 |-----------|------|----------|-------------|
 | inode | int | yes | Inode number of the file to extract |
 | filesystem_type | str \| None | no | TSK filesystem type (auto-detected if omitted) |
+| image_path | str \| None | no | Path to the specific disk image (required for multi-image cases) |
 
 **Returns:** text files: `source_name`, `windows_indexed`; binary files: `sha256`, `size_bytes`
 
@@ -1093,6 +1111,7 @@ Return file metadata (MAC times, size, blocks) for an inode using TSK istat.
 |-----------|------|----------|-------------|
 | inode | int | yes | Inode number of the file |
 | filesystem_type | str \| None | no | TSK filesystem type (auto-detected if omitted) |
+| image_path | str \| None | no | Path to the specific disk image (required for multi-image cases) |
 
 **Returns:** `source_name`, `windows_indexed`
 
@@ -1918,7 +1937,7 @@ Enrich IOCs against public threat intelligence APIs (VirusTotal, AbuseIPDB, OTX,
 
 **Returns:** list of enrichment dicts with `ioc`, `ioc_type`, `sources[]`, `aggregate_score`
 
-**Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR`
+**Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR` `CROSS_ANALYST`
 
 ### lookup_attack_technique
 

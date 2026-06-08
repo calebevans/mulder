@@ -1,6 +1,6 @@
 # Architecture
 
-Mulder is a forensic investigation platform consisting of two core components: an MCP server that exposes 145+ typed forensic tools with no shell access, and an agentic orchestrator that runs multi-phase investigations with quality gates.
+Mulder is a forensic investigation platform consisting of two core components: an MCP server that exposes 140+ typed forensic tools with no shell access, and an agentic orchestrator that runs multi-phase investigations with quality gates.
 
 ## System Overview
 
@@ -10,7 +10,7 @@ flowchart TB
         CLI["mulder CLI"]
         Orchestrator["Orchestrator\n(multi-phase pipeline)"]
         AgentSDK["Agent SDK\n(Session Runtime)"]
-        MCPServer["MCP Server\n(FastMCP, 145+ tools)"]
+        MCPServer["MCP Server\n(FastMCP, 140+ tools)"]
         DB["SQLite + FTS5\n(per-case database)"]
         AuditLog["Audit Log\n(append-only JSONL)"]
         Extractors["Extractors\n(forensic binaries)"]
@@ -45,7 +45,7 @@ flowchart TB
 
 ## MCP Server Architecture
 
-The MCP server (`mulder serve`) uses [FastMCP](https://github.com/jlowin/fastmcp) to expose forensic tools over the Model Context Protocol. It supports both `stdio` and `streamable-http` transports.
+The MCP server (`mulder serve`) uses [FastMCP](https://github.com/modelcontextprotocol/python-sdk) (from the official MCP Python SDK) to expose forensic tools over the Model Context Protocol. It supports both `stdio` and `streamable-http` transports.
 
 ### Tool Categories
 
@@ -81,7 +81,7 @@ flowchart LR
     end
 
     subgraph logTools [Log and SIEM Analysis]
-        runLogs["run_chainsaw\nrun_zircolite\nparse_journal"]
+        runLogs["run_chainsaw\nrun_zircolite"]
     end
 
     subgraph mobileTools [Mobile Forensics]
@@ -89,7 +89,7 @@ flowchart LR
     end
 
     subgraph enrichTools [Enrichment and Quality]
-        runEnrich["enrich_iocs\nget_evidence_gaps\ndeduplicate_findings"]
+        runEnrich["enrich_iocs\naudit_evidence_coverage\naudit_tool_coverage\ndeduplicate_findings"]
     end
 
     subgraph compositeTools [Composite Analysis]
@@ -139,7 +139,7 @@ The `CapacityLimiter` bounds concurrent tool execution to the `--workers` count 
 
 ## Orchestration Pipeline
 
-The orchestrator (`mulder investigate`) runs five investigation phases sequentially. Most phases use a plan-and-execute pipeline (planner/executor/analyst) while catalog and report use single-agent sessions. The orchestrator uses the [Claude Agent SDK](https://docs.anthropic.com/en/docs/agents/claude-code-sdk) (`claude-agent-sdk`) for managing agent sessions.
+The orchestrator (`mulder investigate`) runs five investigation phases sequentially. Most phases use a plan-and-execute pipeline (planner/executor/analyst) while catalog and report use single-agent sessions. The orchestrator uses the [Claude Agent SDK](https://platform.claude.com/docs/en/agents-and-tools/claude-code-sdk) (`claude-agent-sdk`) for managing agent sessions.
 
 If a `MULDER.md` file exists in the evidence directory, its contents are loaded at startup and injected as an "INVESTIGATOR BRIEFING" preamble into the planner, analyst, and report prompts across all phases. This allows investigators to provide case background, known facts, and specific questions that guide the investigation without modifying any code.
 
@@ -201,7 +201,7 @@ The Alternative Narrative phase (Phase 4) combines counter-analysis with audit r
 Each phase is defined by a `PhaseConfig` dataclass specifying:
 
 - **Pipeline mode**: Either `split` (planner/executor/analyst) or `single` (one agent session)
-- **Dynamic tool allowlists**: Built at import time from `@tool_access` declarations on each tool (see [Tool Access Control](#tool-access-control) below). Executors see only plan-relevant tools rather than the full 145+ surface.
+- **Dynamic tool allowlists**: Built at import time from `@tool_access` declarations on each tool (see [Tool Access Control](#tool-access-control) below). Executors see only plan-relevant tools rather than the full 140+ surface.
 - **Model assignment**: Each role resolves its model via `ModelConfig.resolve(phase, role)` with support for per-phase overrides via config file
 - **Turn limit**: Maximum tool-use round trips per role session
 - **Follow-up limit**: Maximum planner/executor cycles the analyst can request before being capped
@@ -403,7 +403,7 @@ The orchestrator displays a real-time terminal dashboard using Rich's Live displ
 | Tools: 47          Findings: 5          Tokens: 1.2M          20.1K/min                   |
 | CPU: 45%           MEM: 6.2/16 GB (39%)   12:34                                          |
 |   sonnet-4-6       890K in / 312K out     1.2M                                            |
-|   haiku-4          15K in / 3K out        18K                                             |
+|   haiku-4-5        15K in / 3K out        18K                                             |
 +-------------------------------------------------------------------------------------------+
 | ==========================================================                                |
 |   [3/7] Phase 2: Deep Extraction: HOST01                                                  |
@@ -527,7 +527,7 @@ Before the alternative narrative phase, the orchestrator builds a dedup index fr
 Several enrichment tools are available for agents to call during relevant phases. These are exposed through tool access control and referenced in phase prompts, but do not run automatically at phase boundaries:
 
 - **TI enrichment** (cross-system phase): The `enrich_iocs` tool queries public threat intelligence sources for context on extracted indicators (IPs, domains, file hashes), annotating findings with reputation data and known campaign associations.
-- **Evidence gap detection** (narrative phase): The `get_evidence_gaps` tool identifies artifact types that were present but not examined, coverage blind spots, and systems with incomplete extraction. Gap reports are surfaced to the narrative planner and extraction analyst for remediation.
+- **Evidence gap detection** (narrative phase): The `audit_evidence_coverage` and `audit_tool_coverage` tools identify artifact types that were present but not examined, coverage blind spots, and systems with incomplete extraction. Gap reports are surfaced to the narrative planner and extraction analyst for remediation.
 - **Finding deduplication** (narrative phase): The `deduplicate_findings` tool merges duplicate findings that describe the same artifact observed on multiple hosts, consolidating evidence references while preserving source attribution.
 
 ## Security Model

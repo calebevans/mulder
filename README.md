@@ -3,7 +3,7 @@
 # mulder
 
 **MCP server and agentic orchestrator for digital forensics.**
-**145+ typed forensic tools. No shell access. Fully autonomous investigations.**
+**140+ typed forensic tools. No shell access. Fully autonomous investigations.**
 
 </div>
 
@@ -36,7 +36,7 @@ Each gate validates structural criteria (minimum sources indexed, findings submi
 
 ## Key Design Decisions
 
-**No shell access.** All 145+ tool invocations go through typed MCP interfaces with validated parameters. The agent never gets a shell. Every action is auditable and every parameter is constrained to its declared type.
+**No shell access.** All 140+ tool invocations go through typed MCP interfaces with validated parameters. The agent never gets a shell. Every action is auditable and every parameter is constrained to its declared type.
 
 **Anti-hallucination at the API boundary.** Every finding must cite `evidence_refs` that are real `tool_call_id` values from the append-only audit log. The MCP server validates these references at submission time and rejects findings that cite nonexistent tool calls. Timestamps are validated as ISO-8601 and auto-nullified when they appear fabricated. This is enforced architecturally, not by prompting.
 
@@ -84,7 +84,7 @@ The briefing is injected into every investigation phase, guiding tool selection,
 
 ## Forensic Tools
 
-Mulder integrates 35+ open-source forensic tools exposed as 145+ typed MCP operations:
+Mulder integrates 35+ open-source forensic tools exposed as 140+ typed MCP operations:
 
 | Category | Tools |
 |----------|-------|
@@ -115,7 +115,7 @@ Each investigation produces:
 |----------|-------------|
 | [Usage Guide](docs/usage-guide.md) | Installation, providers, CLI reference, Docker configuration |
 | [Architecture](docs/architecture.md) | System design, pipeline phases, quality gates, data flow |
-| [Tool Manifest](docs/tool-manifest.md) | API reference for all 146 MCP tools |
+| [Tool Manifest](docs/tool-manifest.md) | API reference for all MCP tools |
 | [Adding Tools](docs/adding-tools.md) | Contributor guide for adding new forensic tools |
 | [Glossary](docs/glossary.md) | Terminology and definitions |
 

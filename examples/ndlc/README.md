@@ -1,6 +1,6 @@
 # NDLC: NIST Data Leakage Case (CFReDS 2015)
 
-Mulder's autonomous investigation of the [NIST CFReDS Data Leakage Case](https://cfreds.nist.gov/all/NIST/DataLeakageCase), an insider threat scenario involving premeditated exfiltration of proprietary research documents via USB, cloud storage, and optical media, with systematic anti-forensics countermeasures.
+Mulder's autonomous investigation of the [NIST CFReDS Data Leakage Case](https://cfreds-archive.nist.gov/data_leakage_case/data-leakage-case.html), an insider threat scenario involving premeditated exfiltration of proprietary research documents via USB, cloud storage, and optical media, with systematic anti-forensics countermeasures.
 
 > **Evidence:** PC disk image + 3 removable media (USB x2, CD-ROM). No memory dumps, no network capture.
 
@@ -38,7 +38,7 @@ An employee ("Iaman Informant") at a technology company planned and executed the
 
 | Field | Value |
 |-------|-------|
-| **Source** | [NIST CFReDS Data Leakage Case](https://cfreds.nist.gov/all/NIST/DataLeakageCase) |
+| **Source** | [NIST CFReDS Data Leakage Case](https://cfreds-archive.nist.gov/data_leakage_case/data-leakage-case.html) |
 | **Answer Key** | [leakage-answers.pdf (55 pages)](https://cfreds-archive.nist.gov/data_leakage_case/leakage-answers.pdf) |
 | **Accuracy Report** | [ACCURACY-REPORT.md](ACCURACY-REPORT.md) |
 

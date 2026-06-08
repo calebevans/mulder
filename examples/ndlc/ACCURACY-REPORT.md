@@ -1,6 +1,6 @@
 # Accuracy Report: NDLC (NIST CFReDS Data Leakage Case 2015)
 
-Mulder's autonomous findings evaluated against the [published answer key](https://cfreds-archive.nist.gov/data_leakage_case/leakage-answers.pdf) for the [NIST CFReDS Data Leakage Case](https://cfreds.nist.gov/all/NIST/DataLeakageCase).
+Mulder's autonomous findings evaluated against the [published answer key](https://cfreds-archive.nist.gov/data_leakage_case/leakage-answers.pdf) for the [NIST CFReDS Data Leakage Case](https://cfreds-archive.nist.gov/data_leakage_case/data-leakage-case.html).
 
 ---
 
