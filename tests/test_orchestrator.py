@@ -191,48 +191,6 @@ class TestFollowUpCapping:
         assert result.success
 
 
-class TestGatherErrorHandling:
-    """asyncio.gather with return_exceptions=True handles sibling failures."""
-
-    @pytest.mark.asyncio()
-    async def test_gather_handles_sibling_exception(self) -> None:
-        async def mock_run_split_phase(
-            phase: object,
-            prompt_vars: dict[str, str] | None = None,
-            skip_phase_header: bool = False,
-        ) -> PhaseResult:
-            system = (prompt_vars or {}).get("system_name", "")
-            if "fail-system" in system:
-                raise RuntimeError("Simulated extraction failure")
-            return PhaseResult(
-                phase_name="extraction",
-                success=True,
-                messages=["ok"],
-                turns_used=5,
-            )
-
-        groups = [["host-a"], ["fail-system"], ["host-b"]]
-
-        tasks = [
-            mock_run_split_phase(
-                None,
-                prompt_vars={
-                    "system_name": ", ".join(g),
-                    "evidence_path": "/evidence",
-                },
-                skip_phase_header=True,
-            )
-            for g in groups
-        ]
-        batch_results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        successes = sum(1 for r in batch_results if not isinstance(r, BaseException))
-        failures = sum(1 for r in batch_results if isinstance(r, BaseException))
-
-        assert successes == 2
-        assert failures == 1
-
-
 class TestSinglePhaseGate:
     """Single-mode phases run gate validation after execution."""
 

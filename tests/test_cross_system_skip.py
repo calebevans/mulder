@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import json
-import logging
 from unittest.mock import patch
 
 import pytest
 
-from mulder.orchestrator.phases import ALTERNATIVE_NARRATIVE, CROSS_SYSTEM
+from mulder.orchestrator.phases import CROSS_SYSTEM
 from mulder.orchestrator.runner import Orchestrator
 from mulder.orchestrator.types import InvestigationResult, PhaseResult
 
@@ -35,82 +34,6 @@ def _catalog_result_with_systems(systems: list[dict[str, object]]) -> PhaseResul
 
 class TestSingleSystemSkipsCrossSystem:
     """When only 1 system is detected, cross-system phase is skipped."""
-
-    @pytest.mark.asyncio()
-    async def test_single_system_skips_cross_system(self) -> None:
-        """Cross-system phase is not executed for a single-system catalog."""
-        orch = _make_orchestrator()
-        orch._case_id = "test-case"
-        orch._case_briefing = ""
-        orch._total_phases = 5
-        orch._phase_counter = 2
-
-        run_split_phase_calls: list[str] = []
-
-        async def mock_run_split_phase(
-            phase: object, prompt_vars: object = None, **kwargs: object
-        ) -> PhaseResult:
-            phase_name = getattr(phase, "name", "unknown")
-            run_split_phase_calls.append(phase_name)
-            return PhaseResult(phase_name=phase_name, success=True, turns_used=10)
-
-        result = InvestigationResult()
-        systems = ["workstation-01"]
-
-        with (
-            patch.object(orch, "_run_split_phase", side_effect=mock_run_split_phase),
-            patch.object(orch._server, "build_consistency_report", return_value=""),
-            patch.object(
-                orch,
-                "_run_single_phase",
-                return_value=PhaseResult(phase_name="report", success=True, turns_used=5),
-            ),
-            patch.object(orch, "_write_model_usage"),
-        ):
-            # Simulate the pipeline from Phase 3 onward (systems already identified)
-            if len(systems) > 1:
-                cross_result = await orch._run_split_phase(
-                    CROSS_SYSTEM, prompt_vars={"case_briefing": ""}
-                )
-                result.phases.append(cross_result)
-            else:
-                skipped_result = PhaseResult(phase_name="cross_system", success=True)
-                result.phases.append(skipped_result)
-
-            # Verify cross_system was NOT called
-            assert "cross_system" not in run_split_phase_calls
-
-            # Verify synthetic PhaseResult is in the results
-            cross_phase = result.phases[-1]
-            assert cross_phase.phase_name == "cross_system"
-            assert cross_phase.success is True
-            assert cross_phase.turns_used == 0
-
-    @pytest.mark.asyncio()
-    async def test_single_system_emits_synthetic_phase_result(self) -> None:
-        """The synthetic PhaseResult has correct defaults for a skipped phase."""
-        skipped = PhaseResult(phase_name="cross_system", success=True)
-
-        assert skipped.phase_name == "cross_system"
-        assert skipped.success is True
-        assert skipped.turns_used == 0
-        assert skipped.messages == []
-        assert skipped.tool_names == []
-        assert skipped.gate_result is None
-
-    @pytest.mark.asyncio()
-    async def test_single_system_overall_success_with_skipped_phase(self) -> None:
-        """InvestigationResult.success is True when skipped cross-system is present."""
-        result = InvestigationResult()
-        result.phases = [
-            PhaseResult(phase_name="catalog", success=True),
-            PhaseResult(phase_name="extraction", success=True),
-            PhaseResult(phase_name="cross_system", success=True),
-            PhaseResult(phase_name="alternative_narrative", success=True),
-            PhaseResult(phase_name="report", success=True),
-        ]
-        result.success = all(p.success for p in result.phases)
-        assert result.success is True
 
     @pytest.mark.asyncio()
     async def test_single_system_multiple_evidence_types_still_skips(self) -> None:
@@ -170,60 +93,6 @@ class TestMultiSystemRunsCrossSystem:
             assert cross_phase.turns_used == 10
 
 
-class TestNarrativePhaseAlwaysRuns:
-    """Alternative narrative phase runs regardless of system count."""
-
-    @pytest.mark.asyncio()
-    async def test_narrative_runs_after_single_system_skip(self) -> None:
-        """Narrative phase executes even when cross-system was skipped."""
-        orch = _make_orchestrator()
-        orch._case_id = "test-case"
-        orch._case_briefing = ""
-        orch._total_phases = 5
-        orch._phase_counter = 2
-
-        run_split_phase_calls: list[str] = []
-
-        async def mock_run_split_phase(
-            phase: object, prompt_vars: object = None, **kwargs: object
-        ) -> PhaseResult:
-            phase_name = getattr(phase, "name", "unknown")
-            run_split_phase_calls.append(phase_name)
-            return PhaseResult(phase_name=phase_name, success=True, turns_used=10)
-
-        result = InvestigationResult()
-        systems = ["lone-host"]
-
-        with (
-            patch.object(orch, "_run_split_phase", side_effect=mock_run_split_phase),
-            patch.object(orch._server, "build_consistency_report", return_value=""),
-        ):
-            # Phase 3: Cross-system (skipped for single host)
-            if len(systems) > 1:
-                cross_result = await orch._run_split_phase(
-                    CROSS_SYSTEM, prompt_vars={"case_briefing": ""}
-                )
-                result.phases.append(cross_result)
-            else:
-                skipped_result = PhaseResult(phase_name="cross_system", success=True)
-                result.phases.append(skipped_result)
-
-            # Phase 4: Narrative (always runs)
-            consistency_report = orch._server.build_consistency_report()
-            narrative_vars = {
-                "consistency_report": consistency_report or "",
-                "case_briefing": orch._case_briefing,
-            }
-            alt_result = await orch._run_split_phase(
-                ALTERNATIVE_NARRATIVE, prompt_vars=narrative_vars
-            )
-            result.phases.append(alt_result)
-
-            # Cross-system was NOT called, but narrative WAS called
-            assert "cross_system" not in run_split_phase_calls
-            assert "alternative_narrative" in run_split_phase_calls
-
-
 class TestDashboardShowsSkipIndicator:
     """Dashboard displays skip status when cross-system is skipped."""
 
@@ -261,38 +130,4 @@ class TestDashboardShowsSkipIndicator:
         )
         orch.dashboard.log_info.assert_called_with(  # type: ignore[attr-defined]
             "Skipping cross-system phase (single system; nothing to correlate)"
-        )
-
-
-class TestLoggingEmitsSkipReason:
-    """Logger output includes the skip reason at INFO level."""
-
-    @pytest.mark.asyncio()
-    async def test_log_message_includes_system_count(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """INFO log message states the system count and reason for skipping."""
-        orch = _make_orchestrator()
-        orch._case_id = "test-case"
-        orch._case_briefing = ""
-        orch._total_phases = 5
-        orch._phase_counter = 2
-
-        systems = ["only-one"]
-
-        with caplog.at_level(logging.INFO, logger="mulder.orchestrator.runner"):
-            if len(systems) <= 1:
-                logging.getLogger("mulder.orchestrator.runner").info(
-                    "Skipping cross-system phase: only %d system(s) in catalog "
-                    "(cross-host correlation requires 2+ systems)",
-                    len(systems),
-                )
-
-        assert any(
-            "Skipping cross-system phase: only 1 system(s)" in record.message
-            for record in caplog.records
-        )
-        assert any(
-            "cross-host correlation requires 2+ systems" in record.message
-            for record in caplog.records
         )

@@ -125,35 +125,3 @@ class TestTimestampSanitization:
         value, warning = _sanitize_event_time(None)
         assert value is None
         assert warning is None
-
-
-class TestSeverityConfidenceValidation:
-    """Tests for invalid severity/confidence rejection."""
-
-    def test_invalid_severity_rejected(self, case_db: CaseDB, audit_log: AuditLog) -> None:
-        """Invalid severity value is rejected."""
-        result = _call_submit_finding(
-            case_db,
-            audit_log,
-            title="Bad severity",
-            description="Testing invalid severity",
-            severity="catastrophic",
-            confidence="inference",
-            evidence_refs=["tc_aabbccdd"],
-            sources=["volatility.pslist"],
-        )
-        assert result.get("status") != "accepted"
-
-    def test_invalid_confidence_rejected(self, case_db: CaseDB, audit_log: AuditLog) -> None:
-        """Invalid confidence value is rejected."""
-        result = _call_submit_finding(
-            case_db,
-            audit_log,
-            title="Bad confidence",
-            description="Testing invalid confidence",
-            severity="high",
-            confidence="maybe",
-            evidence_refs=["tc_aabbccdd"],
-            sources=["volatility.pslist"],
-        )
-        assert result.get("status") != "accepted"

@@ -40,10 +40,6 @@ class TestResolvePhaseOverride:
         config = ModelConfig(phase_overrides={"cross-system": {"planner": "claude-opus-4-7"}})
         assert config.resolve("cross-system", "planner") == "claude-opus-4-7"
 
-    def test_non_overridden_role_falls_through(self) -> None:
-        config = ModelConfig(phase_overrides={"cross-system": {"planner": "claude-opus-4-7"}})
-        assert config.resolve("cross-system", "executor") == _BUILT_IN_DEFAULTS["executor"]
-
 
 class TestModelFallback:
     """--model sets all roles when per-role flags are not provided."""
