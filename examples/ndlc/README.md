@@ -6,16 +6,16 @@ Mulder's autonomous investigation of the [NIST CFReDS Data Leakage Case](https:/
 
 ## Scenario
 
-An employee ("Iaman Informant") at a technology company planned and executed the theft of proprietary research documents. The suspect researched data leakage methods and anti-forensics techniques, exfiltrated documents to multiple removable media devices with deliberate file masquerading, deployed cloud sync for a secondary exfiltration channel, and systematically destroyed forensic artifacts using CCleaner and Eraser before burning a final copy to CD-ROM.
+An employee ("Iaman Informant") at a technology company planned and executed the theft of proprietary research documents. The suspect researched data leakage methods and anti-forensics techniques, exfiltrated documents to multiple removable media devices with deliberate file masquerading, deployed cloud sync for a secondary exfiltration channel, and deployed anti-forensics tools (Eraser for secure deletion, CCleaner downloaded but not effectively used) before burning a final copy to CD-ROM.
 
 ## Key Findings
 
-- **Proprietary documents exfiltrated:** 5 "Secret Project" documents (~74 MB) copied to USB media on Feb 15, 2015 in a 42-second window
-- **File masquerading:** Documents renamed with false extensions (.gif, .amr, .png, .zip) on RM2 FAT32 partition to evade casual inspection
-- **Multi-vector exfiltration:** USB (confirmed), Google Drive cloud sync (likely, sync databases deleted), CD-ROM (confirmed, burned Mar 26)
-- **Premeditated anti-forensics:** Search history reveals deliberate research into "anti-forensic tools" (85 hits), "windows system artifacts" (79 hits), "investigation on windows machine" (64 hits)
-- **Systematic artifact destruction:** CCleaner destroyed browser history, Jump Lists, LNK files, and Shellbags; Eraser used for secure file deletion
-- **Timeline reconstructed:** Oct 2014 (planning) through Mar 26, 2015 (final CD-ROM exfiltration)
+- **Proprietary documents exfiltrated:** 5 "Secret Project" documents (~74 MB) copied to USB media in a 42-second window (answer key documents 22 total renamed documents across all media)
+- **File masquerading:** Documents renamed with false extensions (.gif, .amr, .png, .zip) on RM2 FAT32 partition to evade casual inspection (4 of 22 mappings identified)
+- **Multi-vector exfiltration:** USB (confirmed), Google Drive cloud sync (likely, sync databases deleted), CD-ROM (confirmed, burned Mar 24)
+- **Premeditated anti-forensics:** Search history reveals deliberate research into "anti-forensic tools," "windows system artifacts," "investigation on windows machine," and related topics
+- **Anti-forensics tools deployed:** Eraser used for secure file deletion of temp directory; CCleaner installed and launched but closed without performing cleaning action per answer key
+- **Timeline reconstructed:** Oct 2014 (planning) through Mar 25, 2015 (final anti-forensics and attempted exfiltration at security checkpoint)
 - **Attribution confirmed:** "Iaman Informant" (iaman.informant@nist.gov) via 6 independent evidence sources
 
 ## Investigation Stats
@@ -28,7 +28,7 @@ An employee ("Iaman Informant") at a technology company planned and executed the
 | Total tool calls | 723 |
 | Findings | 33 (0 critical, 15 high, 7 medium, 0 low, 11 info) |
 | Confirmed / Inference | 29 / 4 |
-| False positives | 0 |
+| False positives | 1 |
 | MITRE ATT&CK techniques | 12 |
 | Runtime | 1.7 hours |
 | Model | claude-opus-4-6 |
@@ -39,7 +39,7 @@ An employee ("Iaman Informant") at a technology company planned and executed the
 | Field | Value |
 |-------|-------|
 | **Source** | [NIST CFReDS Data Leakage Case](https://cfreds-archive.nist.gov/data_leakage_case/data-leakage-case.html) |
-| **Answer Key** | [leakage-answers.pdf (55 pages)](https://cfreds-archive.nist.gov/data_leakage_case/leakage-answers.pdf) |
+| **Answer Key** | [Published NIST ground truth (55 pages)](https://cfreds-archive.nist.gov/data_leakage_case/leakage-answers.pdf) |
 | **Accuracy Report** | [ACCURACY-REPORT.md](ACCURACY-REPORT.md) |
 
 ### Evidence Files

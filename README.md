@@ -20,7 +20,7 @@ Four autonomous investigations against real forensic datasets, unmodified from t
 | [SRL-2018](examples/srl-2018/) | 11 | ~120 GB | 457 | 1,508 | 55 (11 crit, 19 high) | 336 min | 698K | [HTML](https://calebevans.github.io/mulder/examples/srl-2018/SRL-2018.report.html) |
 | [NIST Data Leakage](examples/ndlc/) | 4 | ~8 GB | 88 | 723 | 33 (15 high) | 102 min | 330K | [HTML](https://calebevans.github.io/mulder/examples/ndlc/ndlc.report.html) |
 
-The NIST Data Leakage case has a [detailed accuracy report](examples/ndlc/ACCURACY-REPORT.md) validated against [published NIST ground truth](https://cfreds-archive.nist.gov/data_leakage_case/leakage-answers.pdf): 75% full match, 95% detection rate, 0% false positive rate. The Alternative Narrative phase verified all findings through counter-analysis before report generation.
+The NIST Data Leakage case has a [detailed accuracy report](examples/ndlc/ACCURACY-REPORT.md) validated against [published NIST ground truth](https://cfreds-archive.nist.gov/data_leakage_case/leakage-answers.pdf): 60% full match, 90% detection rate, 5% false positive rate. The single false positive involved incorrect causal attribution (blaming CCleaner for artifact destruction when the answer key confirms it was launched and closed without action).
 
 ## How It Works
 

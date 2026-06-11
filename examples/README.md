@@ -43,9 +43,9 @@ against forensic evidence datasets.
 
 ### NIST Data Leakage Case (with Accuracy Report)
 
-- **Scenario:** Insider threat data leakage at a technology company. Employee researched exfiltration methods, copied proprietary research documents to USB media with deliberate file masquerading, deployed cloud sync for secondary exfiltration, burned a final copy to CD-ROM, then systematically destroyed forensic artifacts using CCleaner and Eraser
-- **Key findings:** Five "Secret Project" documents (~74 MB) exfiltrated to USB in a 42-second copy window; documents renamed with false extensions (.gif, .amr, .png, .zip) on FAT32 partition; Google Drive and iCloud deployed as secondary exfiltration channels; premeditated anti-forensics campaign (85 "anti-forensic tools" search hits); CCleaner destroyed browser history, Jump Lists, LNK files, Shellbags; complete 5-month timeline reconstructed from Oct 2014 through Mar 2015
-- **Accuracy:** Has a detailed [accuracy report](ndlc/ACCURACY-REPORT.md) comparing findings against published ground truth (75% full match, 95% detection rate, 0% false positives)
+- **Scenario:** Insider threat data leakage at a technology company. Employee researched exfiltration methods, copied proprietary research documents to USB media with deliberate file masquerading, deployed cloud sync for secondary exfiltration, burned a final copy to CD-ROM, then deployed anti-forensics tools (Eraser for secure deletion, CCleaner installed but not effectively used per answer key)
+- **Key findings:** Five "Secret Project" documents exfiltrated to USB in a 42-second copy window (22 total documents across all media per answer key); documents renamed with false extensions (.gif, .amr, .png, .zip) on FAT32 partition; Google Drive and iCloud deployed as secondary exfiltration channels; premeditated anti-forensics campaign with extensive search history; Eraser used for secure file wiping; complete timeline reconstructed from Oct 2014 through Mar 2015
+- **Accuracy:** Has a detailed [accuracy report](ndlc/ACCURACY-REPORT.md) comparing findings against published ground truth (60% full match, 90% detection rate, 5% false positive rate)
 - **Validation:** Scored against the [NIST CFReDS Data Leakage Case answer key](https://cfreds-archive.nist.gov/data_leakage_case/leakage-answers.pdf) (55-page official ground truth)
 - **Files:** [ndlc.report.md](ndlc/ndlc.report.md), [ndlc.report.html](https://calebevans.github.io/mulder/examples/ndlc/ndlc.report.html), `ndlc.audit.jsonl`, `orchestrator.log`, `mulder.log`, [README.md](ndlc/README.md)
 
