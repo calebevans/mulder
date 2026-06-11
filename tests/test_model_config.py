@@ -207,9 +207,9 @@ class TestBedrockAutoMapping:
 
     def test_defaults_mapped(self) -> None:
         config = ModelConfig.from_args()
-        assert config.planner == _BEDROCK_MODEL_MAP["claude-sonnet-4-6"]
+        assert config.planner == _BEDROCK_MODEL_MAP["claude-opus-4-6"]
         assert config.executor == _BEDROCK_MODEL_MAP["claude-haiku-4-5"]
-        assert config.analyst == _BEDROCK_MODEL_MAP["claude-sonnet-4-6"]
+        assert config.analyst == _BEDROCK_MODEL_MAP["claude-opus-4-6"]
 
     def test_explicit_bedrock_id_untouched(self) -> None:
         explicit = "us.anthropic.claude-sonnet-4-6"
@@ -250,9 +250,9 @@ class TestVertexAutoMapping:
 
     def test_defaults_mapped(self) -> None:
         config = ModelConfig.from_args()
-        assert config.planner == _VERTEX_MODEL_MAP["claude-sonnet-4-6"]
+        assert config.planner == _VERTEX_MODEL_MAP["claude-opus-4-6"]
         assert config.executor == _VERTEX_MODEL_MAP["claude-haiku-4-5"]
-        assert config.analyst == _VERTEX_MODEL_MAP["claude-sonnet-4-6"]
+        assert config.analyst == _VERTEX_MODEL_MAP["claude-opus-4-6"]
 
     def test_explicit_vertex_id_untouched(self) -> None:
         explicit = "claude-sonnet-4-6@20250514"

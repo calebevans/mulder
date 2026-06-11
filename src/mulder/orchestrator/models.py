@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 _BEDROCK_MODEL_MAP: dict[str, str] = {
     "claude-sonnet-4-6": "us.anthropic.claude-sonnet-4-6",
     "claude-sonnet-4-5": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "claude-opus-4-6": "us.anthropic.claude-opus-4-6",
     "claude-opus-4-7": "us.anthropic.claude-opus-4-7",
     "claude-opus-4-8": "us.anthropic.claude-opus-4-8",
     "claude-haiku-4-5": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
@@ -31,16 +32,17 @@ _BEDROCK_MODEL_MAP: dict[str, str] = {
 
 _VERTEX_MODEL_MAP: dict[str, str] = {
     "claude-sonnet-4-6": "claude-sonnet-4-6@20250514",
-    "claude-sonnet-4-5": "claude-sonnet-4-5@20250514",
+    "claude-sonnet-4-5": "claude-sonnet-4-5@20250929",
+    "claude-opus-4-6": "claude-opus-4-6@20250514",
     "claude-opus-4-7": "claude-opus-4-7@20250415",
     "claude-opus-4-8": "claude-opus-4-8@20250514",
     "claude-haiku-4-5": "claude-haiku-4-5@20250414",
 }
 
 _BUILT_IN_DEFAULTS: dict[str, str] = {
-    "planner": "claude-sonnet-4-6",
+    "planner": "claude-opus-4-6",
     "executor": "claude-haiku-4-5",
-    "analyst": "claude-sonnet-4-6",
+    "analyst": "claude-opus-4-6",
 }
 
 _KNOWN_CONFIG_KEYS: frozenset[str] = frozenset(

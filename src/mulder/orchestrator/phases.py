@@ -124,6 +124,11 @@ CATALOG: PhaseConfig = PhaseConfig(
     single_max_budget_usd=8.0,
 )
 
+_EXECUTOR_CASE_ID_PREFIX: str = (
+    "The case_id is '{case_id}'. Call open_case(case_id='{case_id}') "
+    "as your FIRST action before executing any other tools.\n\n"
+)
+
 _EXTRACTION_BLOCKED_TOOLS: list[str] = [
     "Bash",
     "Shell",
@@ -142,20 +147,24 @@ EXTRACTION: PhaseConfig = PhaseConfig(
     disallowed_tools=_EXTRACTION_BLOCKED_TOOLS,
     planner_system_prompt=EXTRACT_PLANNER_PROMPT,
     planner_prompt_template=(
+        "Case ID: {case_id}\n"
         "System: {system_name}\n"
         "Evidence path: {evidence_path}\n\n"
+        "Call open_case(case_id='{case_id}') as your FIRST action.\n\n"
         "EVIDENCE CONTEXT:\n{evidence_context}"
     ),
     planner_allowed_tools=get_tools_for_role(Role.EXTRACT_PLANNER),
     planner_max_turns=15,
     planner_max_budget_usd=2.0,
     executor_system_prompt=EXTRACT_EXECUTOR_PROMPT,
-    executor_prompt_template="{plan}",
+    executor_prompt_template=_EXECUTOR_CASE_ID_PREFIX + "{plan}",
     executor_allowed_tools=get_tools_for_role(Role.EXTRACT_EXECUTOR),
     executor_max_turns=80,
     executor_max_budget_usd=5.0,
     analyst_system_prompt=EXTRACT_ANALYST_PROMPT,
     analyst_prompt_template=(
+        "Case ID: {case_id}\n"
+        "Call open_case(case_id='{case_id}') as your FIRST action.\n\n"
         "System: {system_name}\n\n"
         "Execution results:\n{execution_results}\n\n"
         "Investigation questions:\n{investigation_questions}"
@@ -170,18 +179,22 @@ CROSS_SYSTEM: PhaseConfig = PhaseConfig(
     mode="split",
     planner_system_prompt=CROSS_SYSTEM_PLANNER_PROMPT,
     planner_prompt_template=(
+        "Case ID: {case_id}\n"
+        "Call open_case(case_id='{case_id}') as your FIRST action.\n\n"
         "{case_briefing}Review all findings and sources. Plan cross-system correlation queries."
     ),
     planner_allowed_tools=get_tools_for_role(Role.CROSS_PLANNER),
     planner_max_turns=10,
     planner_max_budget_usd=3.0,
     executor_system_prompt=CROSS_SYSTEM_EXECUTOR_PROMPT,
-    executor_prompt_template="{plan}",
+    executor_prompt_template=_EXECUTOR_CASE_ID_PREFIX + "{plan}",
     executor_allowed_tools=get_tools_for_role(Role.CROSS_EXECUTOR),
     executor_max_turns=50,
     executor_max_budget_usd=7.0,
     analyst_system_prompt=CROSS_SYSTEM_ANALYST_PROMPT,
     analyst_prompt_template=(
+        "Case ID: {case_id}\n"
+        "Call open_case(case_id='{case_id}') as your FIRST action.\n\n"
         "Execution results:\n{execution_results}\n\n"
         "Investigation questions:\n{investigation_questions}"
     ),
@@ -195,18 +208,22 @@ ALTERNATIVE_NARRATIVE: PhaseConfig = PhaseConfig(
     mode="split",
     planner_system_prompt=NARRATIVE_PLANNER_PROMPT,
     planner_prompt_template=(
+        "Case ID: {case_id}\n"
+        "Call open_case(case_id='{case_id}') as your FIRST action.\n\n"
         "{case_briefing}Review current findings and plan counter-analysis.\n\n{consistency_report}"
     ),
     planner_allowed_tools=get_tools_for_role(Role.NARRATIVE_PLANNER),
     planner_max_turns=10,
     planner_max_budget_usd=3.0,
     executor_system_prompt=NARRATIVE_EXECUTOR_PROMPT,
-    executor_prompt_template="{plan}",
+    executor_prompt_template=_EXECUTOR_CASE_ID_PREFIX + "{plan}",
     executor_allowed_tools=get_tools_for_role(Role.NARRATIVE_EXECUTOR),
     executor_max_turns=35,
     executor_max_budget_usd=5.0,
     analyst_system_prompt=NARRATIVE_ANALYST_PROMPT,
     analyst_prompt_template=(
+        "Case ID: {case_id}\n"
+        "Call open_case(case_id='{case_id}') as your FIRST action.\n\n"
         "Execution results:\n{execution_results}\n\n"
         "Investigation questions:\n{investigation_questions}"
     ),

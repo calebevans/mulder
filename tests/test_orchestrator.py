@@ -34,7 +34,7 @@ class TestOrchestratorInit:
     def test_default_model_config(self) -> None:
         orch = _make_orchestrator()
         assert isinstance(orch.model_config, ModelConfig)
-        assert orch.model_config.planner == "claude-sonnet-4-6"
+        assert orch.model_config.planner == "claude-opus-4-6"
 
     def test_custom_model_config(self) -> None:
         mc = ModelConfig(

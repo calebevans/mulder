@@ -270,7 +270,10 @@ class Orchestrator:
         if len(systems) > 1:
             cross_result = await self._run_split_phase(
                 CROSS_SYSTEM,
-                prompt_vars={"case_briefing": self._case_briefing},
+                prompt_vars={
+                    "case_briefing": self._case_briefing,
+                    "case_id": self._case_id,
+                },
             )
             result.phases.append(cross_result)
             self._accumulate(result, cross_result)
@@ -302,6 +305,7 @@ class Orchestrator:
         narrative_vars = {
             "consistency_report": consistency_report or "",
             "case_briefing": self._case_briefing,
+            "case_id": self._case_id,
         }
         alt_result = await self._run_split_phase(ALTERNATIVE_NARRATIVE, prompt_vars=narrative_vars)
         result.phases.append(alt_result)
@@ -367,6 +371,7 @@ class Orchestrator:
                             "system_name": ", ".join(group),
                             "evidence_path": self.evidence_path,
                             "evidence_context": evidence_context,
+                            "case_id": self._case_id,
                         },
                         skip_phase_header=True,
                     )

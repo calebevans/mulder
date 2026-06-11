@@ -206,7 +206,7 @@ class RoleRunner:
         plan_text = json.dumps({"tasks": plan.tasks}, indent=2)
 
         try:
-            prompt = phase.executor_prompt_template.format(plan=plan_text)
+            prompt = phase.executor_prompt_template.format(plan=plan_text, case_id=self._case_id)
         except KeyError:
             prompt = plan_text
 
