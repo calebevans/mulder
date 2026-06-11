@@ -59,7 +59,7 @@ class TestSingleSystemSkipsCrossSystem:
 
         with (
             patch.object(orch, "_run_split_phase", side_effect=mock_run_split_phase),
-            patch.object(orch, "_build_consistency_report", return_value=""),
+            patch.object(orch._server, "build_consistency_report", return_value=""),
             patch.object(
                 orch,
                 "_run_single_phase",
@@ -196,7 +196,7 @@ class TestNarrativePhaseAlwaysRuns:
 
         with (
             patch.object(orch, "_run_split_phase", side_effect=mock_run_split_phase),
-            patch.object(orch, "_build_consistency_report", return_value=""),
+            patch.object(orch._server, "build_consistency_report", return_value=""),
         ):
             # Phase 3: Cross-system (skipped for single host)
             if len(systems) > 1:
@@ -209,7 +209,7 @@ class TestNarrativePhaseAlwaysRuns:
                 result.phases.append(skipped_result)
 
             # Phase 4: Narrative (always runs)
-            consistency_report = await orch._build_consistency_report()
+            consistency_report = orch._server.build_consistency_report()
             narrative_vars = {
                 "consistency_report": consistency_report or "",
                 "case_briefing": orch._case_briefing,

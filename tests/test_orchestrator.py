@@ -72,8 +72,8 @@ class TestSplitPhaseHappyPath:
 
         from mulder.orchestrator.phases import EXTRACTION
 
-        with patch.object(orch, "_execute_query", side_effect=mock_execute_query):
-            plan = await orch._run_planner(
+        with patch.object(orch._session, "execute", side_effect=mock_execute_query):
+            plan = await orch._roles.run_planner(
                 EXTRACTION,
                 prompt_vars={
                     "system_name": "host-a",
@@ -102,8 +102,8 @@ class TestSplitPhaseHappyPath:
 
         from mulder.orchestrator.phases import EXTRACTION
 
-        with patch.object(orch, "_execute_query", side_effect=mock_execute_query):
-            plan = await orch._run_planner(
+        with patch.object(orch._session, "execute", side_effect=mock_execute_query):
+            plan = await orch._roles.run_planner(
                 EXTRACTION,
                 prompt_vars={
                     "system_name": "host-a",
@@ -179,9 +179,9 @@ class TestFollowUpCapping:
             )
 
         with (
-            patch.object(orch, "_run_planner", side_effect=mock_planner),
-            patch.object(orch, "_run_executor", side_effect=mock_executor),
-            patch.object(orch, "_run_analyst", side_effect=mock_analyst),
+            patch.object(orch._roles, "run_planner", side_effect=mock_planner),
+            patch.object(orch._roles, "run_executor", side_effect=mock_executor),
+            patch.object(orch._roles, "run_analyst", side_effect=mock_analyst),
             patch.object(orch, "_validate_phase", return_value=None),
         ):
             result = await orch._run_split_phase(CROSS_SYSTEM)
@@ -254,7 +254,7 @@ class TestSinglePhaseGate:
         from mulder.orchestrator.phases import CATALOG
 
         with (
-            patch.object(orch, "_execute_query", side_effect=mock_execute_query),
+            patch.object(orch._session, "execute", side_effect=mock_execute_query),
             patch.object(orch, "_validate_phase", return_value=gate),
         ):
             result = await orch._run_single_phase(
@@ -286,7 +286,7 @@ class TestSinglePhaseGate:
         from mulder.orchestrator.phases import CATALOG
 
         with (
-            patch.object(orch, "_execute_query", side_effect=mock_execute_query),
+            patch.object(orch._session, "execute", side_effect=mock_execute_query),
             patch.object(orch, "_validate_phase", return_value=fail_gate),
         ):
             result = await orch._run_single_phase(
@@ -491,9 +491,9 @@ class TestGateAfterAnalyst:
             return GateResult(passed=True, phase_name="extraction")
 
         with (
-            patch.object(orch, "_run_planner", side_effect=mock_planner),
-            patch.object(orch, "_run_executor", side_effect=mock_executor),
-            patch.object(orch, "_run_analyst", side_effect=mock_analyst),
+            patch.object(orch._roles, "run_planner", side_effect=mock_planner),
+            patch.object(orch._roles, "run_executor", side_effect=mock_executor),
+            patch.object(orch._roles, "run_analyst", side_effect=mock_analyst),
             patch.object(orch, "_validate_phase", side_effect=mock_validate),
         ):
             result = await orch._run_split_phase(
@@ -645,7 +645,7 @@ class TestRollingExtractionPool:
 
 
 class TestBuildEvidenceContext:
-    """Tests for _build_evidence_context evidence path scanner."""
+    """Tests for evidence path scanner (EvidenceContext.build_evidence_context)."""
 
     def test_finds_disk_images(self, tmp_path: Path) -> None:
         """Disk images matching the system name are listed."""
@@ -656,7 +656,7 @@ class TestBuildEvidenceContext:
         (evidence / "unrelated.txt").write_text("other")
 
         orch = _make_orchestrator(evidence_path=str(evidence))
-        ctx = orch._build_evidence_context("host-a")
+        ctx = orch._evidence.build_evidence_context("host-a")
 
         assert "host-a-cdrive.E01" in ctx
         assert "Disk images:" in ctx
@@ -680,7 +680,7 @@ class TestBuildEvidenceContext:
             mem_dir.mkdir()
             (mem_dir / "host-a-memory.img").write_text("memory")
 
-            ctx = orch._build_evidence_context("host-a")
+            ctx = orch._evidence.build_evidence_context("host-a")
 
         assert "Extracted memory dumps (ready for Volatility):" in ctx
         assert "host-a-memory.img" in ctx
@@ -692,7 +692,7 @@ class TestBuildEvidenceContext:
 
         orch = _make_orchestrator(evidence_path=str(evidence))
         with patch("pathlib.Path.home", return_value=tmp_path / "fakehome"):
-            ctx = orch._build_evidence_context("nonexistent-host")
+            ctx = orch._evidence.build_evidence_context("nonexistent-host")
 
         assert "No pre-populated paths available" in ctx
         assert "list_directory" in ctx
@@ -704,7 +704,7 @@ class TestBuildEvidenceContext:
         (evidence / "HostA-disk.vmdk").write_text("disk")
 
         orch = _make_orchestrator(evidence_path=str(evidence))
-        ctx = orch._build_evidence_context("hosta")
+        ctx = orch._evidence.build_evidence_context("hosta")
 
         assert "HostA-disk.vmdk" in ctx
 
