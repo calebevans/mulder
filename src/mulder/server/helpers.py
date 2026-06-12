@@ -190,6 +190,14 @@ _DEFAULT_WINDOW_CAP = 20
 _DEFAULT_TEXT_CAP = 300
 
 
+def truncate_raw_text(d: dict[str, Any], cap: int = _DEFAULT_TEXT_CAP) -> None:
+    """Truncate ``raw_text`` in a window dict in-place if it exceeds *cap*."""
+    raw = d.get("raw_text", "")
+    if cap and len(raw) > cap:
+        d["raw_text"] = raw[:cap] + "..."
+        d["full_text_available"] = True
+
+
 def serialize_windows(
     windows: Sequence[Any],
     cap: int = _DEFAULT_WINDOW_CAP,
@@ -207,10 +215,7 @@ def serialize_windows(
     result: list[dict[str, Any]] = []
     for w in capped:
         d: dict[str, Any] = w.model_dump() if hasattr(w, "model_dump") else dict(w)
-        raw = d.get("raw_text", "")
-        if text_cap and len(raw) > text_cap:
-            d["raw_text"] = raw[:text_cap] + "..."
-            d["full_text_available"] = True
+        truncate_raw_text(d, text_cap)
         result.append(d)
     return result
 

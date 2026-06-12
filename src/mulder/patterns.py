@@ -152,13 +152,11 @@ class IOCSet:
     emails: list[str] = field(default_factory=list)
 
 
-_PRIVATE_IP_PREFIXES: tuple[str, ...] = ("10.", "192.168.", "127.")
-
-
 def extract_iocs_from_text(text: str) -> IOCSet:
     """Extract all IOC types from a text block.
 
-    Filters out private/loopback IP addresses. All other IOC types are
+    Filters out private/loopback IP addresses using ``classify_ip()`` for
+    correct handling of all RFC 1918 ranges. All other IOC types are
     returned as-is from their respective regex matches.
 
     Args:
@@ -168,7 +166,7 @@ def extract_iocs_from_text(text: str) -> IOCSet:
         An IOCSet populated with deduplicated matches.
     """
     return IOCSet(
-        ips=[ip for ip in IP_RE.findall(text) if not ip.startswith(_PRIVATE_IP_PREFIXES)],
+        ips=[ip for ip in IP_RE.findall(text) if classify_ip(ip) == "public"],
         domains=DOMAIN_RE.findall(text),
         hashes=HASH_RE.findall(text),
         paths=WIN_PATH_RE.findall(text) + UNIX_PATH_RE.findall(text),

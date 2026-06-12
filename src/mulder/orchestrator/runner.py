@@ -16,13 +16,6 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from claude_agent_sdk import ClaudeAgentOptions, query
-from claude_agent_sdk.types import (
-    AssistantMessage,
-    ResultMessage,
-    TextBlock,
-)
-
 from mulder.orchestrator.display import InvestigationDashboard
 from mulder.orchestrator.errors import AuthenticationError, ModelNotAvailableError
 from mulder.orchestrator.evidence import EvidenceContext, ServerBridge
@@ -51,7 +44,6 @@ from mulder.orchestrator.types import (
     InvestigationResult,
     PhaseResult,
     extract_catalog_result,
-    extract_json_from_text,
 )
 from mulder.patterns import DEFAULT_DB_DIR
 
@@ -757,87 +749,6 @@ class Orchestrator:
             return validate_report(phase_result.tool_names)
 
         return None
-
-    # ------------------------------------------------------------------
-    # MCP-delegated utility query (wait_all only)
-    # ------------------------------------------------------------------
-
-    async def _run_utility_query(
-        self,
-        prompt: str,
-        allowed_tools: list[str],
-        label: str,
-        max_turns: int = 5,
-        budget: float = 1.50,
-    ) -> dict[str, Any] | None:
-        """Run a lightweight utility query against the MCP server.
-
-        Used only for operations that require the MCP server's in-process
-        state (e.g., ``wait_all`` which polls the ``JobStore``). All other
-        utility queries use direct tool invocations instead.
-
-        Args:
-            prompt: The prompt to send.
-            allowed_tools: Tool names auto-approved for this query.
-            label: Human-readable label for logging.
-            max_turns: Maximum tool-use turns.
-            budget: Spending cap in USD.
-
-        Returns:
-            Parsed JSON dictionary, or None if the query failed.
-        """
-        utility_model = self.model_config.resolve("utility", "planner")
-
-        options = ClaudeAgentOptions(
-            model=utility_model,
-            max_turns=max_turns,
-            max_budget_usd=budget,
-            allowed_tools=allowed_tools,
-            permission_mode="bypassPermissions",
-            cwd=self.cwd,
-            effort="low",
-            env=self.env,
-            stderr=self.dashboard.suppress_stderr,
-        )
-
-        from mulder.orchestrator.session import (
-            _auth_suggestion,
-            _classify_fatal_error,
-            _extract_alternative_model,
-        )
-
-        collected_text: list[str] = []
-        try:
-            async for message in query(prompt=prompt, options=options):
-                if isinstance(message, AssistantMessage):
-                    for block in message.content:
-                        if isinstance(block, TextBlock):
-                            collected_text.append(block.text)
-                elif isinstance(message, ResultMessage):
-                    self._session._track_utility_tokens(message, label)
-        except (AuthenticationError, ModelNotAvailableError):
-            raise
-        except Exception as exc:
-            exc_msg = str(exc)
-            category, _ = _classify_fatal_error(exc_msg)
-            if category == "auth":
-                raise AuthenticationError(
-                    message=exc_msg,
-                    suggestion=_auth_suggestion(),
-                ) from exc
-            if category == "model":
-                alt = _extract_alternative_model(exc_msg)
-                raise ModelNotAvailableError(
-                    message=exc_msg,
-                    model="",
-                    alternative=alt,
-                ) from exc
-            logger.warning("Utility query '%s' failed: %s", label, exc)
-            return None
-
-        full_text = "\n".join(collected_text)
-        parsed = extract_json_from_text(full_text)
-        return parsed if parsed else None
 
     # ------------------------------------------------------------------
     # Compaction prompt builder

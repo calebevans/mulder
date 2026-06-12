@@ -244,11 +244,3 @@ REPORT: PhaseConfig = PhaseConfig(
     single_max_turns=25,
     single_max_budget_usd=12.0,
 )
-
-PHASE_SEQUENCE: list[PhaseConfig] = [
-    CATALOG,
-    EXTRACTION,
-    CROSS_SYSTEM,
-    ALTERNATIVE_NARRATIVE,
-    REPORT,
-]

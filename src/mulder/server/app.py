@@ -99,9 +99,6 @@ _RESOURCE_CHECK_INTERVAL = 5  # seconds between rechecks when throttled
 _RESOURCE_MAX_WAIT = 300  # max total wait before proceeding anyway
 
 
-_psutil_seeded = False
-
-
 def _get_resource_usage() -> tuple[float, float]:
     """Return (memory_percent, cpu_percent) as system-wide 0-100 values.
 
@@ -112,13 +109,9 @@ def _get_resource_usage() -> tuple[float, float]:
 
     Returns ``(-1, -1)`` if neither psutil nor ``/proc`` is available.
     """
-    global _psutil_seeded  # noqa: PLW0603
     try:
         import psutil
 
-        if not _psutil_seeded:
-            psutil.cpu_percent(interval=None)
-            _psutil_seeded = True
         mem = psutil.virtual_memory().percent
         cpu = psutil.cpu_percent(interval=None)
         return mem, cpu
@@ -312,12 +305,10 @@ def init_server(
 
 def _seed_psutil() -> None:
     """Prime psutil's CPU counter so the first real check returns valid data."""
-    global _psutil_seeded  # noqa: PLW0603
     try:
         import psutil
 
         psutil.cpu_percent(interval=None)
-        _psutil_seeded = True
     except (ImportError, AttributeError):
         pass
 
@@ -366,12 +357,10 @@ def _build_context(case_id: str, db: CaseDB) -> ServerContext:
 def load_case(case_id: str) -> ServerContext:
     """Open (or re-open) a case and set it as the active context.
 
-    Swaps the context atomically so background threads never see
-    ``_ctx = None``.  The old database is closed *after* the new
-    context is installed.
+    Delegates context construction to ``_build_context``, which sets
+    the global ``_ctx`` atomically under ``_ctx_lock``.  The old
+    database is closed *after* the new context is installed.
     """
-    global _ctx  # noqa: PLW0603
-
     cfg = get_cfg()
     logger.info("Opening case database for '%s' ...", case_id)
 
@@ -387,17 +376,7 @@ def load_case(case_id: str) -> ServerContext:
         old_ctx = _ctx
 
     new_db = CaseDB.open(case_id, cfg.db_dir)
-    correlator = Correlator(db=new_db)
-    audit = AuditLog(cfg.db_dir / f"{case_id}.audit.jsonl")
-    new_ctx = ServerContext(
-        case_id=case_id,
-        db=new_db,
-        correlator=correlator,
-        audit=audit,
-    )
-
-    with _ctx_lock:
-        _ctx = new_ctx
+    new_ctx = _build_context(case_id, new_db)
 
     if old_ctx is not None and old_ctx.db is not None:
         try:
@@ -405,7 +384,6 @@ def load_case(case_id: str) -> ServerContext:
         except Exception:
             logger.warning("Error closing previous case DB", exc_info=True)
 
-    logger.info("Server context ready for case '%s'", case_id)
     return new_ctx
 
 

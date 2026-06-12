@@ -32,6 +32,7 @@ from mulder.server.helpers import (
     hash_output,
     make_tool_call_id,
     serialize_windows,
+    truncate_raw_text,
     windowed_response,
 )
 from mulder.server.tool_access import PLANNERS, Role, tool_access
@@ -55,24 +56,9 @@ _CORRELATE_WINDOW_CAP = 20
 
 def _truncated_window(w: Any, cap: int = _RAW_TEXT_SEARCH_CAP) -> dict[str, object]:
     """Serialize a window with raw_text truncated for compact output."""
-    d = w.model_dump() if hasattr(w, "model_dump") else dict(w)
-    full = d.get("raw_text", "")
-    if len(full) > cap:
-        d["raw_text"] = full[:cap] + "..."
-        d["full_text_available"] = True
+    d: dict[str, Any] = w.model_dump() if hasattr(w, "model_dump") else dict(w)
+    truncate_raw_text(d, cap)
     return d
-
-
-def _serialize_scored(scored: list[Any]) -> list[dict[str, object]]:
-    """Convert ScoredWindow objects to serializable dicts."""
-    return [
-        {
-            "window": s.window.model_dump(),
-            "score": s.score,
-            "source_name": s.source_name,
-        }
-        for s in scored
-    ]
 
 
 @mcp.tool()

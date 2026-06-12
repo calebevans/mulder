@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -289,99 +289,8 @@ class TestNarrativeGateNonVacuous:
         assert result.passed
 
 
-class TestUtilityQueryNoneReturn:
-    """Utility queries should return None on failure."""
-
-    @pytest.mark.asyncio()
-    async def test_run_utility_query_returns_none_on_exception(self) -> None:
-        orch = _make_orchestrator()
-
-        async def failing_query(prompt: str, options: object) -> object:
-            raise RuntimeError("Connection refused")
-            yield  # make it an async generator  # noqa: RUF027
-
-        with patch("mulder.orchestrator.runner.query", failing_query):
-            result = await orch._run_utility_query(
-                prompt="test",
-                allowed_tools=["mcp__mulder__test"],
-                label="test_query",
-            )
-
-        assert result is None
-
-    @pytest.mark.asyncio()
-    async def test_run_utility_query_returns_none_on_unparseable(self) -> None:
-        orch = _make_orchestrator()
-
-        mock_assistant = MagicMock()
-        mock_text_block = MagicMock()
-        mock_text_block.text = "I couldn't find any data."
-        mock_assistant.content = [mock_text_block]
-        mock_assistant.message_id = "m1"
-        mock_assistant.usage = {}
-
-        mock_result = MagicMock()
-        mock_result.usage = {"input_tokens": 5, "output_tokens": 3}
-        mock_result.model_usage = None
-
-        async def mock_query(prompt: str, options: object) -> object:
-            yield mock_assistant
-            yield mock_result
-
-        with (
-            patch("mulder.orchestrator.runner.query", mock_query),
-            patch(
-                "mulder.orchestrator.runner.AssistantMessage",
-                type(mock_assistant),
-            ),
-            patch("mulder.orchestrator.runner.ResultMessage", type(mock_result)),
-            patch("mulder.orchestrator.runner.TextBlock", type(mock_text_block)),
-        ):
-            result = await orch._run_utility_query(
-                prompt="test",
-                allowed_tools=["mcp__mulder__test"],
-                label="test_query",
-            )
-
-        assert result is None
-
-    @pytest.mark.asyncio()
-    async def test_run_utility_query_returns_dict_on_success(self) -> None:
-        orch = _make_orchestrator()
-
-        mock_assistant = MagicMock()
-        mock_text_block = MagicMock()
-        mock_text_block.text = '{"case_id": "test-123", "sources_indexed": 5}'
-        mock_assistant.content = [mock_text_block]
-        mock_assistant.message_id = "m1"
-        mock_assistant.usage = {}
-
-        mock_result = MagicMock()
-        mock_result.usage = {"input_tokens": 5, "output_tokens": 3}
-        mock_result.model_usage = None
-
-        async def mock_query(prompt: str, options: object) -> object:
-            yield mock_assistant
-            yield mock_result
-
-        with (
-            patch("mulder.orchestrator.runner.query", mock_query),
-            patch(
-                "mulder.orchestrator.runner.AssistantMessage",
-                type(mock_assistant),
-            ),
-            patch("mulder.orchestrator.runner.ResultMessage", type(mock_result)),
-            patch("mulder.orchestrator.runner.TextBlock", type(mock_text_block)),
-        ):
-            result = await orch._run_utility_query(
-                prompt="test",
-                allowed_tools=["mcp__mulder__test"],
-                label="test_query",
-            )
-
-        assert result is not None
-        assert result["case_id"] == "test-123"
-        assert result["sources_indexed"] == 5
+class TestGateEdgeCases:
+    """Edge cases for gate validation with missing data."""
 
     def test_extraction_gate_handles_none_summary(self) -> None:
         result = validate_extraction(None)
