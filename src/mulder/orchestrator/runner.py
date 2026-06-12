@@ -24,6 +24,7 @@ from claude_agent_sdk.types import (
 )
 
 from mulder.orchestrator.display import InvestigationDashboard
+from mulder.orchestrator.errors import AuthenticationError, ModelNotAvailableError
 from mulder.orchestrator.evidence import EvidenceContext, ServerBridge
 from mulder.orchestrator.gates import (
     GateResult,
@@ -391,6 +392,9 @@ class Orchestrator:
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         for i, res in enumerate(results):
+            if isinstance(res, AuthenticationError | ModelNotAvailableError):
+                self.dashboard.log_gate_fail(str(res))
+                raise res
             if isinstance(res, BaseException):
                 system_label = ", ".join(groups[i])
                 logger.error("Extraction failed for [%s]: %s", system_label, res)
@@ -478,15 +482,19 @@ class Orchestrator:
                 )
                 self.dashboard.log_info(f"Retry {attempt}/{phase.max_retries}")
 
-            phase_result = await self._session.execute(
-                system_prompt=phase.single_system_prompt,
-                prompt=prompt,
-                model=model,
-                allowed_tools=phase.single_allowed_tools,
-                disallowed_tools=phase.disallowed_tools,
-                max_turns=phase.single_max_turns,
-                max_budget=budget,
-            )
+            try:
+                phase_result = await self._session.execute(
+                    system_prompt=phase.single_system_prompt,
+                    prompt=prompt,
+                    model=model,
+                    allowed_tools=phase.single_allowed_tools,
+                    disallowed_tools=phase.disallowed_tools,
+                    max_turns=phase.single_max_turns,
+                    max_budget=budget,
+                )
+            except (AuthenticationError, ModelNotAvailableError) as exc:
+                self.dashboard.log_gate_fail(str(exc))
+                raise
             accumulated_turns += phase_result.turns_used
 
             # Auto-compaction for context exhaustion
@@ -594,38 +602,41 @@ class Orchestrator:
             follow_up_history: list[dict[str, Any]] = []
 
             while True:
-                # Step 1: Planner
-                self._update_dashboard_sub_step(phase, "Planning", log_prefix)
-                plan = await self._roles.run_planner(
-                    phase, prompt_vars, follow_up_context, log_prefix
-                )
+                try:
+                    # Step 1: Planner
+                    self._update_dashboard_sub_step(phase, "Planning", log_prefix)
+                    plan = await self._roles.run_planner(
+                        phase, prompt_vars, follow_up_context, log_prefix
+                    )
 
-                if plan is None:
-                    combined_result.success = False
-                    return combined_result
+                    if plan is None:
+                        combined_result.success = False
+                        return combined_result
 
-                combined_result.plans_executed += 1
+                    combined_result.plans_executed += 1
 
-                # Step 2: Executor
-                self._update_dashboard_sub_step(phase, "Executing", log_prefix)
-                task_sys = (prompt_vars or {}).get("system_name", "") or phase.name
-                exec_results = await self._roles.run_executor(
-                    phase, plan, log_prefix, task_system=task_sys
-                )
+                    # Step 2: Executor
+                    self._update_dashboard_sub_step(phase, "Executing", log_prefix)
+                    task_sys = (prompt_vars or {}).get("system_name", "") or phase.name
+                    exec_results = await self._roles.run_executor(
+                        phase, plan, log_prefix, task_system=task_sys
+                    )
 
-                # Step 2.5: Wait for all background batches to finish
-                await self._roles.ensure_batches_complete(exec_results, log_prefix)
+                    # Step 2.5: Wait for all background batches to finish
+                    await self._roles.ensure_batches_complete(exec_results, log_prefix)
 
-                # Step 3: Analyst
-                self._update_dashboard_sub_step(phase, "Analyzing", log_prefix)
-                analyst_out = await self._roles.run_analyst(
-                    phase,
-                    plan,
-                    exec_results,
-                    prompt_vars,
-                    log_prefix,
-                    task_system=task_sys,
-                )
+                    # Step 3: Analyst
+                    self._update_dashboard_sub_step(phase, "Analyzing", log_prefix)
+                    analyst_out = await self._roles.run_analyst(
+                        phase,
+                        plan,
+                        exec_results,
+                        prompt_vars,
+                        log_prefix,
+                        task_system=task_sys,
+                    )
+                except (AuthenticationError, ModelNotAvailableError):
+                    raise
 
                 combined_result.turns_used += (
                     plan.turns_used + exec_results.turns_used + analyst_out.turns_used
@@ -789,6 +800,12 @@ class Orchestrator:
             stderr=self.dashboard.suppress_stderr,
         )
 
+        from mulder.orchestrator.session import (
+            _auth_suggestion,
+            _classify_fatal_error,
+            _extract_alternative_model,
+        )
+
         collected_text: list[str] = []
         try:
             async for message in query(prompt=prompt, options=options):
@@ -798,7 +815,23 @@ class Orchestrator:
                             collected_text.append(block.text)
                 elif isinstance(message, ResultMessage):
                     self._session._track_utility_tokens(message, label)
+        except (AuthenticationError, ModelNotAvailableError):
+            raise
         except Exception as exc:
+            exc_msg = str(exc)
+            category, _ = _classify_fatal_error(exc_msg)
+            if category == "auth":
+                raise AuthenticationError(
+                    message=exc_msg,
+                    suggestion=_auth_suggestion(),
+                ) from exc
+            if category == "model":
+                alt = _extract_alternative_model(exc_msg)
+                raise ModelNotAvailableError(
+                    message=exc_msg,
+                    model="",
+                    alternative=alt,
+                ) from exc
             logger.warning("Utility query '%s' failed: %s", label, exc)
             return None
 

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import re
 from typing import Any
 
 from claude_agent_sdk import ClaudeAgentOptions, query
@@ -20,10 +22,93 @@ from claude_agent_sdk.types import (
 )
 
 from mulder.orchestrator.display import InvestigationDashboard
+from mulder.orchestrator.errors import AuthenticationError, ModelNotAvailableError
 from mulder.orchestrator.models import ModelConfig
 from mulder.orchestrator.types import PhaseResult, extract_json_from_text
 
 logger = logging.getLogger(__name__)
+
+_AUTH_PATTERNS: tuple[str, ...] = (
+    "not logged in",
+    "please run /login",
+    "invalid api key",
+    "invalid x-api-key",
+    "authentication_error",
+    "could not authenticate",
+    "permission denied",
+    "accessdeniedexception",
+)
+
+_MODEL_PATTERNS: tuple[str, ...] = (
+    "is not available on your",
+    "model is not available",
+    "is not available in your",
+    "model not found",
+    "you could try using",
+)
+
+
+def _classify_fatal_error(text: str) -> tuple[str, str]:
+    """Classify text as an auth error, model error, or neither.
+
+    Args:
+        text: Error message or streamed text content.
+
+    Returns:
+        Tuple of (category, matched_text) where category is
+        "auth", "model", or "" (empty string for no match).
+    """
+    lower = text.lower()
+    for pattern in _AUTH_PATTERNS:
+        if pattern in lower:
+            return "auth", text
+    for pattern in _MODEL_PATTERNS:
+        if pattern in lower:
+            return "model", text
+    return "", ""
+
+
+def _auth_suggestion() -> str:
+    """Build an actionable suggestion for auth failures.
+
+    Returns:
+        Multi-line string with provider-specific guidance.
+    """
+    lines = ["Authentication failed. To fix this:"]
+    if os.environ.get("CLAUDE_CODE_USE_VERTEX") == "1":
+        lines.append(
+            "  - Vertex AI: run `gcloud auth application-default login` "
+            "and verify GOOGLE_CLOUD_PROJECT is set"
+        )
+    elif os.environ.get("CLAUDE_CODE_USE_BEDROCK") == "1":
+        lines.append(
+            "  - Bedrock: verify AWS credentials "
+            "(AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION)"
+        )
+    else:
+        lines.append("  - Set ANTHROPIC_API_KEY in your environment")
+        lines.append("  - Or run `claude /login` to authenticate interactively")
+    return "\n".join(lines)
+
+
+def _extract_alternative_model(text: str) -> str:
+    """Extract an alternative model name from an SDK error message.
+
+    Looks for patterns like "You could try using <model> instead".
+
+    Args:
+        text: The full error message text.
+
+    Returns:
+        Alternative model identifier, or empty string if none found.
+    """
+    match = re.search(
+        r"(?:try using|try|use)\s+([\w.@:/-]+)\s+instead",
+        text,
+        re.IGNORECASE,
+    )
+    return match.group(1) if match else ""
+
 
 _TASK_PANEL_SKIP: frozenset[str] = frozenset(
     {
@@ -196,13 +281,25 @@ class SessionExecutor:
             raise
         except SystemExit:
             raise
+        except (AuthenticationError, ModelNotAvailableError):
+            raise
         except Exception as exc:
             exc_msg = str(exc)
             exc_lower = exc_msg.lower()
 
-            if "auth" in exc_lower or "unauthorized" in exc_lower:
-                logger.error("Authentication failure: %s", exc_msg)
-                raise
+            category, _ = _classify_fatal_error(exc_msg)
+            if category == "auth":
+                raise AuthenticationError(
+                    message=exc_msg,
+                    suggestion=_auth_suggestion(),
+                ) from exc
+            if category == "model":
+                alt = _extract_alternative_model(exc_msg)
+                raise ModelNotAvailableError(
+                    message=exc_msg,
+                    model=model,
+                    alternative=alt,
+                ) from exc
 
             if "maximum" in exc_lower or "prompt is too long" in exc_lower:
                 self._dashboard.log_info(f"Context exhausted: {exc_msg}")
@@ -281,6 +378,21 @@ class SessionExecutor:
         for block in message.content:
             if isinstance(block, TextBlock):
                 messages.append(block.text)
+
+                category, _ = _classify_fatal_error(block.text)
+                if category == "auth":
+                    raise AuthenticationError(
+                        message=block.text,
+                        suggestion=_auth_suggestion(),
+                    )
+                if category == "model":
+                    alt = _extract_alternative_model(block.text)
+                    raise ModelNotAvailableError(
+                        message=block.text,
+                        model="",
+                        alternative=alt,
+                    )
+
                 if "prompt is too long" in block.text.lower():
                     hit_context = True
                     self._dashboard.log_info(f"{pfx}Context exhausted (detected in response)")
@@ -502,9 +614,38 @@ class SessionExecutor:
                     for block in message.content:
                         if isinstance(block, TextBlock):
                             collected_text.append(block.text)
+                            category, _ = _classify_fatal_error(block.text)
+                            if category == "auth":
+                                raise AuthenticationError(
+                                    message=block.text,
+                                    suggestion=_auth_suggestion(),
+                                )
+                            if category == "model":
+                                alt = _extract_alternative_model(block.text)
+                                raise ModelNotAvailableError(
+                                    message=block.text,
+                                    model="",
+                                    alternative=alt,
+                                )
                 elif isinstance(message, ResultMessage):
                     self._track_utility_tokens(message, label)
+        except (AuthenticationError, ModelNotAvailableError):
+            raise
         except Exception as exc:
+            exc_msg = str(exc)
+            category, _ = _classify_fatal_error(exc_msg)
+            if category == "auth":
+                raise AuthenticationError(
+                    message=exc_msg,
+                    suggestion=_auth_suggestion(),
+                ) from exc
+            if category == "model":
+                alt = _extract_alternative_model(exc_msg)
+                raise ModelNotAvailableError(
+                    message=exc_msg,
+                    model="",
+                    alternative=alt,
+                ) from exc
             logger.warning("Utility query '%s' failed: %s", label, exc)
             return None
 
