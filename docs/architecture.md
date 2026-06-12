@@ -399,15 +399,15 @@ The orchestrator displays a real-time terminal dashboard using Rich's Live displ
 ```
 +----------------------------------------- Mulder ------------------------------------------+
 | [3/7] Phase 2: Deep Extraction: HOST01                                                    |
-| claude-sonnet-4-6 | max turns: 75                                                        |
+| claude-opus-4-6 | max turns: 75                                                          |
 | Tools: 47          Findings: 5          Tokens: 1.2M          20.1K/min                   |
 | CPU: 45%           MEM: 6.2/16 GB (39%)   12:34                                          |
-|   sonnet-4-6       890K in / 312K out     1.2M                                            |
+|   opus-4-6         890K in / 312K out     1.2M                                            |
 |   haiku-4-5        15K in / 3K out        18K                                             |
 +-------------------------------------------------------------------------------------------+
 | ==========================================================                                |
 |   [3/7] Phase 2: Deep Extraction: HOST01                                                  |
-|   Model: claude-sonnet-4-6 | Max turns: 75                                               |
+|   Model: claude-opus-4-6 | Max turns: 75                                                 |
 |   > run_volatility_batch                                                                  |
 |   > run_evtx_parser                                                                       |
 |   [HIGH] Persistence Mechanism Detected                                                   |
@@ -562,14 +562,14 @@ The orchestrator uses a planner/executor/analyst role system for model assignmen
 
 | CLI Flag | Role | Default Model | Responsibility |
 |----------|------|--------------|----------------|
-| `--planner-model` | Planner | `claude-sonnet-4-6` | Decides what tools to run, produces execution plans |
+| `--planner-model` | Planner | `claude-opus-4-6` | Decides what tools to run, produces execution plans |
 | `--executor-model` | Executor | `claude-haiku-4-5` | Calls tools mechanically, manages waits and retries |
-| `--analyst-model` | Analyst | `claude-sonnet-4-6` | Queries indexed data, reasons about evidence, submits findings |
+| `--analyst-model` | Analyst | `claude-opus-4-6` | Queries indexed data, reasons about evidence, submits findings |
 | `--model` | Fallback | None | Sets all roles when per-role flags are not specified |
 
 Single-mode phases map to roles: catalog uses the planner model, report uses the analyst model. Per-phase overrides can be specified in a YAML config file via `--config`.
 
-All roles inherit from `--model` if not specified individually, enabling single-model deployments (e.g., Bedrock or Vertex with one model identifier).
+All roles inherit from `--model` if not specified individually. Model IDs are passed through to the SDK exactly as specified, with no automatic translation between provider formats. Vertex users must include the `@version` suffix (e.g. `claude-opus-4-6@20250514`) and Bedrock users must include the `us.anthropic.` prefix (e.g. `us.anthropic.claude-opus-4-6`).
 
 ## Audit and Provenance
 

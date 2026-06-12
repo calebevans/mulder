@@ -114,7 +114,7 @@ docker run -it --privileged \
   ghcr.io/calebevans/mulder:1.3
 ```
 
-Model IDs are passed through to the SDK without transformation. If you omit `--model`, the SDK resolves built-in defaults automatically. To specify a model explicitly, use the Vertex format (e.g. `--model claude-opus-4-6@20250514`).
+Model IDs are passed through to the SDK exactly as specified, with no automatic translation or mapping. When using Vertex, you must provide the full Vertex model ID including the `@version` suffix (e.g. `--model claude-opus-4-6@20250514`). If you omit `--model`, the built-in defaults (`claude-opus-4-6` for planner/analyst, `claude-haiku-4-5` for executor) are used.
 
 | Variable | Description |
 |----------|-------------|
@@ -140,7 +140,7 @@ docker run -it --privileged \
   ghcr.io/calebevans/mulder:1.3
 ```
 
-Model IDs are passed through to the SDK without transformation. If you omit `--model`, the SDK resolves built-in defaults automatically. To specify a model explicitly, use the Bedrock format (e.g. `--model us.anthropic.claude-opus-4-6`).
+Model IDs are passed through to the SDK exactly as specified, with no automatic translation or mapping. When using Bedrock, you must provide the full Bedrock model ID with the `us.anthropic.` prefix (e.g. `--model us.anthropic.claude-opus-4-6`). If you omit `--model`, the built-in defaults (`claude-opus-4-6` for planner/analyst, `claude-haiku-4-5` for executor) are used.
 
 | Variable | Description |
 |----------|-------------|
@@ -198,8 +198,8 @@ Mulder uses three agent roles (planner, executor, analyst), and each can use a d
 ```bash
 mulder investigate /evidence my-case \
   --executor-model bedrock/meta.llama3-1-70b-instruct-v1:0 \
-  --planner-model claude-sonnet-4-6 \
-  --analyst-model claude-sonnet-4-6
+  --planner-model claude-opus-4-6 \
+  --analyst-model claude-opus-4-6
 ```
 
 ### Local Models with Ollama

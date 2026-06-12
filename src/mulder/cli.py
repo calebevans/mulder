@@ -285,9 +285,9 @@ def investigate(
 
     \b
       mulder investigate /evidence Rocba \\
-        --planner-model claude-sonnet-4-6 \\
+        --planner-model claude-opus-4-6 \\
         --executor-model claude-haiku-4-5 \\
-        --analyst-model claude-sonnet-4-6
+        --analyst-model claude-opus-4-6
 
     Non-Claude models are supported via LiteLLM proxy (auto-started when
     a model ID uses a provider prefix like bedrock/ or openai/).
