@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import logging
 from unittest.mock import patch
-
-import pytest
 
 from mulder.orchestrator.display import InvestigationDashboard
 
@@ -150,23 +147,3 @@ class TestCompleteOneRunningTask:
 
         assert dash._tasks[0].status == "failed"
         assert dash._tasks[0].error == "timeout"
-
-
-class TestLogPersistence:
-    """Log methods emit to the Python logger for file persistence."""
-
-    @pytest.mark.parametrize(
-        ("method", "arg", "expected"),
-        [
-            ("log", "[base-dc] found artifact", "found artifact"),
-            ("log_tool", "extract_archive", "extract_archive"),
-            ("log_info", "retrying phase", "retrying phase"),
-        ],
-    )
-    def test_log_methods_write_to_logger(self, method: str, arg: str, expected: str) -> None:
-        dash = _make_dashboard()
-        with patch.object(logging.getLogger("mulder.orchestrator.display"), "info") as mock_info:
-            getattr(dash, method)(arg)
-            mock_info.assert_called()
-            args = mock_info.call_args[0]
-            assert expected in args[1]

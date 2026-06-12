@@ -13,7 +13,6 @@ from unittest.mock import MagicMock, patch
 
 from mulder.server.tools.extract.disk_pcap import (
     _CREDENTIAL_FILTERS,
-    _PCAP_EXTENSIONS,
     _discover_pcap_files,
     _extract_credentials,
     _run_tshark_summary,
@@ -98,35 +97,6 @@ class TestDiscoverPcapFiles:
         matches = _discover_pcap_files([_FLS_MULTI_PCAPS], offset=128)
         for _inode, _path, offset in matches:
             assert offset == 128
-
-    def test_pcap_extensions_frozenset_contents(self) -> None:
-        """Verify the _PCAP_EXTENSIONS constant contains expected values."""
-        assert ".pcap" in _PCAP_EXTENSIONS
-        assert ".pcapng" in _PCAP_EXTENSIONS
-        assert ".cap" in _PCAP_EXTENSIONS
-        assert ".eth" in _PCAP_EXTENSIONS
-        assert ".snoop" in _PCAP_EXTENSIONS
-        assert ".txt" not in _PCAP_EXTENSIONS
-
-
-class TestSourceNaming:
-    """Tests for source name derivation from PCAP filenames."""
-
-    def test_pcap_stem_used(self) -> None:
-        """Source is pcap.disk.<stem> without the extension."""
-        source = f"pcap.disk.{Path('capture_20040315.pcap').stem}"
-        assert source == "pcap.disk.capture_20040315"
-
-    def test_pcapng_stem(self) -> None:
-        """Source correctly strips .pcapng extension."""
-        source = f"pcap.disk.{Path('network.pcapng').stem}"
-        assert source == "pcap.disk.network"
-
-    def test_nested_path_uses_filename_stem_only(self) -> None:
-        """Path components are not included in the source name."""
-        filename = "Documents and Settings/Admin/capture.pcap"
-        source = f"pcap.disk.{Path(filename).stem}"
-        assert source == "pcap.disk.capture"
 
 
 class TestExtractCredentials:

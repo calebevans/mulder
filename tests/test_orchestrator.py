@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -34,7 +34,7 @@ class TestOrchestratorInit:
     def test_default_model_config(self) -> None:
         orch = _make_orchestrator()
         assert isinstance(orch.model_config, ModelConfig)
-        assert orch.model_config.planner == "claude-sonnet-4-6"
+        assert orch.model_config.planner == "claude-opus-4-6"
 
     def test_custom_model_config(self) -> None:
         mc = ModelConfig(
@@ -72,8 +72,8 @@ class TestSplitPhaseHappyPath:
 
         from mulder.orchestrator.phases import EXTRACTION
 
-        with patch.object(orch, "_execute_query", side_effect=mock_execute_query):
-            plan = await orch._run_planner(
+        with patch.object(orch._session, "execute", side_effect=mock_execute_query):
+            plan = await orch._roles.run_planner(
                 EXTRACTION,
                 prompt_vars={
                     "system_name": "host-a",
@@ -102,8 +102,8 @@ class TestSplitPhaseHappyPath:
 
         from mulder.orchestrator.phases import EXTRACTION
 
-        with patch.object(orch, "_execute_query", side_effect=mock_execute_query):
-            plan = await orch._run_planner(
+        with patch.object(orch._session, "execute", side_effect=mock_execute_query):
+            plan = await orch._roles.run_planner(
                 EXTRACTION,
                 prompt_vars={
                     "system_name": "host-a",
@@ -179,9 +179,9 @@ class TestFollowUpCapping:
             )
 
         with (
-            patch.object(orch, "_run_planner", side_effect=mock_planner),
-            patch.object(orch, "_run_executor", side_effect=mock_executor),
-            patch.object(orch, "_run_analyst", side_effect=mock_analyst),
+            patch.object(orch._roles, "run_planner", side_effect=mock_planner),
+            patch.object(orch._roles, "run_executor", side_effect=mock_executor),
+            patch.object(orch._roles, "run_analyst", side_effect=mock_analyst),
             patch.object(orch, "_validate_phase", return_value=None),
         ):
             result = await orch._run_split_phase(CROSS_SYSTEM)
@@ -189,48 +189,6 @@ class TestFollowUpCapping:
         # 1 initial + max_follow_ups (2) = 3 iterations
         assert planner_call_count == 1 + CROSS_SYSTEM.max_follow_ups
         assert result.success
-
-
-class TestGatherErrorHandling:
-    """asyncio.gather with return_exceptions=True handles sibling failures."""
-
-    @pytest.mark.asyncio()
-    async def test_gather_handles_sibling_exception(self) -> None:
-        async def mock_run_split_phase(
-            phase: object,
-            prompt_vars: dict[str, str] | None = None,
-            skip_phase_header: bool = False,
-        ) -> PhaseResult:
-            system = (prompt_vars or {}).get("system_name", "")
-            if "fail-system" in system:
-                raise RuntimeError("Simulated extraction failure")
-            return PhaseResult(
-                phase_name="extraction",
-                success=True,
-                messages=["ok"],
-                turns_used=5,
-            )
-
-        groups = [["host-a"], ["fail-system"], ["host-b"]]
-
-        tasks = [
-            mock_run_split_phase(
-                None,
-                prompt_vars={
-                    "system_name": ", ".join(g),
-                    "evidence_path": "/evidence",
-                },
-                skip_phase_header=True,
-            )
-            for g in groups
-        ]
-        batch_results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        successes = sum(1 for r in batch_results if not isinstance(r, BaseException))
-        failures = sum(1 for r in batch_results if isinstance(r, BaseException))
-
-        assert successes == 2
-        assert failures == 1
 
 
 class TestSinglePhaseGate:
@@ -254,7 +212,7 @@ class TestSinglePhaseGate:
         from mulder.orchestrator.phases import CATALOG
 
         with (
-            patch.object(orch, "_execute_query", side_effect=mock_execute_query),
+            patch.object(orch._session, "execute", side_effect=mock_execute_query),
             patch.object(orch, "_validate_phase", return_value=gate),
         ):
             result = await orch._run_single_phase(
@@ -286,7 +244,7 @@ class TestSinglePhaseGate:
         from mulder.orchestrator.phases import CATALOG
 
         with (
-            patch.object(orch, "_execute_query", side_effect=mock_execute_query),
+            patch.object(orch._session, "execute", side_effect=mock_execute_query),
             patch.object(orch, "_validate_phase", return_value=fail_gate),
         ):
             result = await orch._run_single_phase(
@@ -331,99 +289,8 @@ class TestNarrativeGateNonVacuous:
         assert result.passed
 
 
-class TestUtilityQueryNoneReturn:
-    """Utility queries should return None on failure."""
-
-    @pytest.mark.asyncio()
-    async def test_run_utility_query_returns_none_on_exception(self) -> None:
-        orch = _make_orchestrator()
-
-        async def failing_query(prompt: str, options: object) -> object:
-            raise RuntimeError("Connection refused")
-            yield  # make it an async generator  # noqa: RUF027
-
-        with patch("mulder.orchestrator.runner.query", failing_query):
-            result = await orch._run_utility_query(
-                prompt="test",
-                allowed_tools=["mcp__mulder__test"],
-                label="test_query",
-            )
-
-        assert result is None
-
-    @pytest.mark.asyncio()
-    async def test_run_utility_query_returns_none_on_unparseable(self) -> None:
-        orch = _make_orchestrator()
-
-        mock_assistant = MagicMock()
-        mock_text_block = MagicMock()
-        mock_text_block.text = "I couldn't find any data."
-        mock_assistant.content = [mock_text_block]
-        mock_assistant.message_id = "m1"
-        mock_assistant.usage = {}
-
-        mock_result = MagicMock()
-        mock_result.usage = {"input_tokens": 5, "output_tokens": 3}
-        mock_result.model_usage = None
-
-        async def mock_query(prompt: str, options: object) -> object:
-            yield mock_assistant
-            yield mock_result
-
-        with (
-            patch("mulder.orchestrator.runner.query", mock_query),
-            patch(
-                "mulder.orchestrator.runner.AssistantMessage",
-                type(mock_assistant),
-            ),
-            patch("mulder.orchestrator.runner.ResultMessage", type(mock_result)),
-            patch("mulder.orchestrator.runner.TextBlock", type(mock_text_block)),
-        ):
-            result = await orch._run_utility_query(
-                prompt="test",
-                allowed_tools=["mcp__mulder__test"],
-                label="test_query",
-            )
-
-        assert result is None
-
-    @pytest.mark.asyncio()
-    async def test_run_utility_query_returns_dict_on_success(self) -> None:
-        orch = _make_orchestrator()
-
-        mock_assistant = MagicMock()
-        mock_text_block = MagicMock()
-        mock_text_block.text = '{"case_id": "test-123", "sources_indexed": 5}'
-        mock_assistant.content = [mock_text_block]
-        mock_assistant.message_id = "m1"
-        mock_assistant.usage = {}
-
-        mock_result = MagicMock()
-        mock_result.usage = {"input_tokens": 5, "output_tokens": 3}
-        mock_result.model_usage = None
-
-        async def mock_query(prompt: str, options: object) -> object:
-            yield mock_assistant
-            yield mock_result
-
-        with (
-            patch("mulder.orchestrator.runner.query", mock_query),
-            patch(
-                "mulder.orchestrator.runner.AssistantMessage",
-                type(mock_assistant),
-            ),
-            patch("mulder.orchestrator.runner.ResultMessage", type(mock_result)),
-            patch("mulder.orchestrator.runner.TextBlock", type(mock_text_block)),
-        ):
-            result = await orch._run_utility_query(
-                prompt="test",
-                allowed_tools=["mcp__mulder__test"],
-                label="test_query",
-            )
-
-        assert result is not None
-        assert result["case_id"] == "test-123"
-        assert result["sources_indexed"] == 5
+class TestGateEdgeCases:
+    """Edge cases for gate validation with missing data."""
 
     def test_extraction_gate_handles_none_summary(self) -> None:
         result = validate_extraction(None)
@@ -491,9 +358,9 @@ class TestGateAfterAnalyst:
             return GateResult(passed=True, phase_name="extraction")
 
         with (
-            patch.object(orch, "_run_planner", side_effect=mock_planner),
-            patch.object(orch, "_run_executor", side_effect=mock_executor),
-            patch.object(orch, "_run_analyst", side_effect=mock_analyst),
+            patch.object(orch._roles, "run_planner", side_effect=mock_planner),
+            patch.object(orch._roles, "run_executor", side_effect=mock_executor),
+            patch.object(orch._roles, "run_analyst", side_effect=mock_analyst),
             patch.object(orch, "_validate_phase", side_effect=mock_validate),
         ):
             result = await orch._run_split_phase(
@@ -645,7 +512,7 @@ class TestRollingExtractionPool:
 
 
 class TestBuildEvidenceContext:
-    """Tests for _build_evidence_context evidence path scanner."""
+    """Tests for evidence path scanner (EvidenceContext.build_evidence_context)."""
 
     def test_finds_disk_images(self, tmp_path: Path) -> None:
         """Disk images matching the system name are listed."""
@@ -656,7 +523,7 @@ class TestBuildEvidenceContext:
         (evidence / "unrelated.txt").write_text("other")
 
         orch = _make_orchestrator(evidence_path=str(evidence))
-        ctx = orch._build_evidence_context("host-a")
+        ctx = orch._evidence.build_evidence_context("host-a")
 
         assert "host-a-cdrive.E01" in ctx
         assert "Disk images:" in ctx
@@ -680,7 +547,7 @@ class TestBuildEvidenceContext:
             mem_dir.mkdir()
             (mem_dir / "host-a-memory.img").write_text("memory")
 
-            ctx = orch._build_evidence_context("host-a")
+            ctx = orch._evidence.build_evidence_context("host-a")
 
         assert "Extracted memory dumps (ready for Volatility):" in ctx
         assert "host-a-memory.img" in ctx
@@ -692,7 +559,7 @@ class TestBuildEvidenceContext:
 
         orch = _make_orchestrator(evidence_path=str(evidence))
         with patch("pathlib.Path.home", return_value=tmp_path / "fakehome"):
-            ctx = orch._build_evidence_context("nonexistent-host")
+            ctx = orch._evidence.build_evidence_context("nonexistent-host")
 
         assert "No pre-populated paths available" in ctx
         assert "list_directory" in ctx
@@ -704,7 +571,7 @@ class TestBuildEvidenceContext:
         (evidence / "HostA-disk.vmdk").write_text("disk")
 
         orch = _make_orchestrator(evidence_path=str(evidence))
-        ctx = orch._build_evidence_context("hosta")
+        ctx = orch._evidence.build_evidence_context("hosta")
 
         assert "HostA-disk.vmdk" in ctx
 

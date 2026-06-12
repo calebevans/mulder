@@ -24,6 +24,8 @@ The NIST Data Leakage case has a [detailed accuracy report](examples/ndlc/ACCURA
 
 ## How It Works
 
+![Mulder Architecture and Security Boundaries](docs/images/diagram.png)
+
 Each investigation runs through five phases with quality gates between them. Phases 2-4 use a plan-and-execute pipeline with three specialized roles (planner, executor, analyst) that can optionally be assigned to different models for cost optimization.
 
 1. **Catalog** - scan evidence directory, classify file types, identify distinct systems

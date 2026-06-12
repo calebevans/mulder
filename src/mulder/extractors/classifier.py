@@ -176,7 +176,13 @@ class EvidenceClassifier:
         seen_log_dirs: set[Path] = set()
         excluded_dirs: set[Path] = set()
 
-        for item in sorted(evidence_root.rglob("*")):
+        try:
+            all_items = sorted(evidence_root.rglob("*"))
+        except PermissionError as exc:
+            logger.warning("Permission denied during evidence walk: %s", exc)
+            all_items = []
+
+        for item in all_items:
             if _is_hidden(item):
                 continue
             if self._is_excluded(item, evidence_root):
@@ -187,7 +193,11 @@ class EvidenceClassifier:
                 logger.debug("Auto-excluding directory: %s", item)
                 excluded_dirs.add(item)
                 continue
-            self._process_item(item, results, seen_log_dirs)
+            try:
+                self._process_item(item, results, seen_log_dirs)
+            except (PermissionError, OSError) as exc:
+                logger.warning("Skipping inaccessible file %s: %s", item, exc)
+                continue
 
         return results
 

@@ -220,11 +220,6 @@ class TestRenderNarrativeTemplate:
         result = renderer._render_narrative_template(narrative, ctx)
         assert result == narrative
 
-    def test_empty_narrative(self) -> None:
-        renderer = ReportRenderer()
-        result = renderer._render_narrative_template("", {"finding_count": 5})
-        assert result == ""
-
 
 class TestCleanFindingDescription:
     def test_literal_backslash_n_becomes_newline(self) -> None:

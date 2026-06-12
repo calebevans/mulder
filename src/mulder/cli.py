@@ -3,12 +3,22 @@
 from __future__ import annotations
 
 import logging
+import sys
 from pathlib import Path
 
 import click
 
 from mulder import __version__
 from mulder.patterns import DEFAULT_DB_DIR
+
+
+def _is_interactive() -> bool:
+    """Check if stderr is connected to an interactive terminal.
+
+    Returns:
+        True if stderr is a TTY (interactive session), False if piped or in CI.
+    """
+    return hasattr(sys.stderr, "isatty") and sys.stderr.isatty()
 
 
 @click.group()
@@ -275,9 +285,9 @@ def investigate(
 
     \b
       mulder investigate /evidence Rocba \\
-        --planner-model claude-sonnet-4-6 \\
+        --planner-model claude-opus-4-6 \\
         --executor-model claude-haiku-4-5 \\
-        --analyst-model claude-sonnet-4-6
+        --analyst-model claude-opus-4-6
 
     Non-Claude models are supported via LiteLLM proxy (auto-started when
     a model ID uses a provider prefix like bedrock/ or openai/).
@@ -334,7 +344,43 @@ def investigate(
         case_id=case_id,
     )
 
-    result = asyncio.run(orchestrator.run())
+    from mulder.orchestrator.errors import (
+        AuthenticationError,
+        ModelNotAvailableError,
+    )
+
+    try:
+        result = asyncio.run(orchestrator.run())
+    except AuthenticationError as exc:
+        orchestrator.dashboard.stop()
+        click.echo(f"\nError: {exc}", err=True)
+        if exc.suggestion:
+            click.echo(f"\n{exc.suggestion}", err=True)
+        raise SystemExit(2) from None
+    except ModelNotAvailableError as exc:
+        orchestrator.dashboard.stop()
+        click.echo(f"\nError: {exc}", err=True)
+        if exc.alternative:
+            if _is_interactive():
+                if click.confirm(
+                    f"Would you like to try {exc.alternative} instead?",
+                    default=True,
+                ):
+                    click.echo(
+                        f"\nRe-run with: mulder investigate ... --model {exc.alternative}",
+                        err=True,
+                    )
+            else:
+                click.echo(
+                    f"\nTry: mulder investigate ... --model {exc.alternative}",
+                    err=True,
+                )
+        else:
+            click.echo(
+                "\nSpecify a different model with --model <model-id>",
+                err=True,
+            )
+        raise SystemExit(2) from None
 
     orchestrator.dashboard.print_summary(result)
 

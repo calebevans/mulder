@@ -114,6 +114,8 @@ docker run -it --privileged \
   ghcr.io/calebevans/mulder:1.3
 ```
 
+Model IDs are passed through to the SDK exactly as specified, with no automatic translation or mapping. When using Vertex, you must provide the full Vertex model ID including the `@version` suffix (e.g. `--model claude-opus-4-6@20250514`). If you omit `--model`, the built-in defaults (`claude-opus-4-6` for planner/analyst, `claude-haiku-4-5` for executor) are used.
+
 | Variable | Description |
 |----------|-------------|
 | `CLAUDE_CODE_USE_VERTEX` | Set to `1` to enable Vertex AI |
@@ -137,6 +139,8 @@ docker run -it --privileged \
   -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
   ghcr.io/calebevans/mulder:1.3
 ```
+
+Model IDs are passed through to the SDK exactly as specified, with no automatic translation or mapping. When using Bedrock, you must provide the full Bedrock model ID with the `us.anthropic.` prefix (e.g. `--model us.anthropic.claude-opus-4-6`). If you omit `--model`, the built-in defaults (`claude-opus-4-6` for planner/analyst, `claude-haiku-4-5` for executor) are used.
 
 | Variable | Description |
 |----------|-------------|
@@ -194,8 +198,8 @@ Mulder uses three agent roles (planner, executor, analyst), and each can use a d
 ```bash
 mulder investigate /evidence my-case \
   --executor-model bedrock/meta.llama3-1-70b-instruct-v1:0 \
-  --planner-model claude-sonnet-4-6 \
-  --analyst-model claude-sonnet-4-6
+  --planner-model claude-opus-4-6 \
+  --analyst-model claude-opus-4-6
 ```
 
 ### Local Models with Ollama
@@ -288,9 +292,9 @@ Runs a full multi-phase forensic investigation.
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--model` | None | Fallback model for all roles |
-| `--planner-model` | `claude-sonnet-4-6` | Model for planner agents |
+| `--planner-model` | `claude-opus-4-6` | Model for planner agents |
 | `--executor-model` | `claude-haiku-4-5` | Model for executor agents |
-| `--analyst-model` | `claude-sonnet-4-6` | Model for analyst agents |
+| `--analyst-model` | `claude-opus-4-6` | Model for analyst agents |
 | `--config` | None | YAML config file for models and settings |
 | `--effort` | `max` | Effort level (`max`, `xhigh`, `high`) |
 | `--workers` | `3` | Max concurrent extraction sessions |

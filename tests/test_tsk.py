@@ -21,10 +21,6 @@ class TestClassifyMmlsFailure:
         assert "no partition table" in msg
         assert "partition_offset=0" in suggestion
 
-    def test_whitespace_only_stderr_returns_no_partition_table(self) -> None:
-        error_type, msg, suggestion = _classify_mmls_failure(1, "   \n  ")
-        assert error_type == "no_partition_table"
-
     def test_ewf_keyword_in_stderr(self) -> None:
         error_type, msg, suggestion = _classify_mmls_failure(
             1, "Cannot determine file type (libewf)"

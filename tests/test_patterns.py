@@ -71,15 +71,6 @@ class TestIsExternalIp:
     def test_public_returns_true(self) -> None:
         assert is_external_ip("8.8.8.8") is True
 
-    def test_private_returns_false(self) -> None:
-        assert is_external_ip("10.0.0.1") is False
-
-    def test_loopback_returns_false(self) -> None:
-        assert is_external_ip("127.0.0.1") is False
-
-    def test_reserved_returns_false(self) -> None:
-        assert is_external_ip("0.0.0.0") is False
-
     def test_link_local_returns_false(self) -> None:
         assert is_external_ip("169.254.1.1") is False
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from unittest.mock import patch
 
+from mulder.orchestrator.evidence import EvidenceContext
 from mulder.orchestrator.runner import (
     Orchestrator,
 )
@@ -144,7 +145,7 @@ class TestIdentifySystemsFromCatalog:
 
 
 class TestGroupSystems:
-    """Tests for Orchestrator._group_systems (structured catalog data)."""
+    """Tests for EvidenceContext.group_systems (structured catalog data)."""
 
     def test_disk_system_gets_own_group(self) -> None:
         """System with disk_image evidence is placed alone."""
@@ -154,7 +155,7 @@ class TestGroupSystems:
                 {"name": "host-b", "evidence": ["memory_dump"]},
             ],
         }
-        groups = Orchestrator._group_systems(["host-a", "host-b"], catalog_data)
+        groups = EvidenceContext.group_systems(["host-a", "host-b"], catalog_data)
         host_a_groups = [g for g in groups if "host-a" in g]
         assert len(host_a_groups) == 1
         assert host_a_groups[0] == ["host-a"]
@@ -171,7 +172,7 @@ class TestGroupSystems:
             ],
         }
         systems = ["host-a", "host-b", "host-c", "host-d", "host-e"]
-        groups = Orchestrator._group_systems(systems, catalog_data)
+        groups = EvidenceContext.group_systems(systems, catalog_data)
         flat = [s for g in groups for s in g]
         assert sorted(flat) == sorted(systems)
         batched = [g for g in groups if len(g) > 1]
@@ -185,12 +186,12 @@ class TestGroupSystems:
                 {"name": "host-b", "evidence": ["disk_image"]},
             ],
         }
-        groups = Orchestrator._group_systems(["host-a", "host-b"], catalog_data)
+        groups = EvidenceContext.group_systems(["host-a", "host-b"], catalog_data)
         assert groups == [["host-a"], ["host-b"]]
 
     def test_empty_systems_fallback(self) -> None:
         """Edge case: empty list still returns one group."""
-        groups = Orchestrator._group_systems([], {"systems": []})
+        groups = EvidenceContext.group_systems([], {"systems": []})
         assert len(groups) == 1
 
     def test_missing_evidence_field_treated_as_rich(self) -> None:
@@ -200,7 +201,7 @@ class TestGroupSystems:
                 {"name": "host-x"},
             ],
         }
-        groups = Orchestrator._group_systems(["host-x"], catalog_data)
+        groups = EvidenceContext.group_systems(["host-x"], catalog_data)
         assert groups == [["host-x"]]
 
 

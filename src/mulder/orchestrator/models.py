@@ -9,7 +9,6 @@ built-in default.
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -21,26 +20,10 @@ from mulder.orchestrator.proxy import is_proxy_model
 
 logger = logging.getLogger(__name__)
 
-_BEDROCK_MODEL_MAP: dict[str, str] = {
-    "claude-sonnet-4-6": "us.anthropic.claude-sonnet-4-6",
-    "claude-sonnet-4-5": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-    "claude-opus-4-7": "us.anthropic.claude-opus-4-7",
-    "claude-opus-4-8": "us.anthropic.claude-opus-4-8",
-    "claude-haiku-4-5": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-}
-
-_VERTEX_MODEL_MAP: dict[str, str] = {
-    "claude-sonnet-4-6": "claude-sonnet-4-6@20250514",
-    "claude-sonnet-4-5": "claude-sonnet-4-5@20250514",
-    "claude-opus-4-7": "claude-opus-4-7@20250415",
-    "claude-opus-4-8": "claude-opus-4-8@20250514",
-    "claude-haiku-4-5": "claude-haiku-4-5@20250414",
-}
-
 _BUILT_IN_DEFAULTS: dict[str, str] = {
-    "planner": "claude-sonnet-4-6",
+    "planner": "claude-opus-4-6",
     "executor": "claude-haiku-4-5",
-    "analyst": "claude-sonnet-4-6",
+    "analyst": "claude-opus-4-6",
 }
 
 _KNOWN_CONFIG_KEYS: frozenset[str] = frozenset(
@@ -170,118 +153,12 @@ class ModelConfig:
             or _BUILT_IN_DEFAULTS["analyst"]
         )
 
-        planner, executor, analyst = _apply_provider_mapping(planner, executor, analyst)
-        phase_overrides = _apply_provider_mapping_to_overrides(phase_overrides)
-
         return cls(
             planner=planner,
             executor=executor,
             analyst=analyst,
             phase_overrides=phase_overrides,
         )
-
-
-def _is_explicit_provider_id(model: str) -> bool:
-    """Return True if the model ID already targets a specific provider.
-
-    Identifiers containing dots (e.g. ``us.anthropic.claude-sonnet-4-6``) or
-    colons (e.g. versioned Bedrock ARNs) are assumed to be explicit and should
-    not be re-mapped.
-
-    Args:
-        model: Model identifier to inspect.
-
-    Returns:
-        True when the identifier looks provider-specific.
-    """
-    return "." in model or ":" in model
-
-
-def _apply_provider_mapping(
-    planner: str,
-    executor: str,
-    analyst: str,
-) -> tuple[str, str, str]:
-    """Re-map Anthropic API model IDs to provider-specific inference profile IDs.
-
-    Checks ``CLAUDE_CODE_USE_BEDROCK`` and ``CLAUDE_CODE_USE_VERTEX``
-    environment variables (in that order). When one is set to ``"1"``, any
-    model that appears in the corresponding mapping dict and does not already
-    look like a provider ID is replaced.
-
-    Args:
-        planner: Resolved planner model identifier.
-        executor: Resolved executor model identifier.
-        analyst: Resolved analyst model identifier.
-
-    Returns:
-        Tuple of (planner, executor, analyst) after mapping.
-    """
-    mapping: dict[str, str] | None = None
-    provider: str = ""
-
-    if os.environ.get("CLAUDE_CODE_USE_BEDROCK") == "1":
-        mapping = _BEDROCK_MODEL_MAP
-        provider = "Bedrock"
-    elif os.environ.get("CLAUDE_CODE_USE_VERTEX") == "1":
-        mapping = _VERTEX_MODEL_MAP
-        provider = "Vertex"
-
-    if mapping is None:
-        return planner, executor, analyst
-
-    def _map(model: str) -> str:
-        if _is_explicit_provider_id(model):
-            return model
-        mapped = mapping.get(model)
-        if mapped is not None:
-            logger.info("%s detected: mapping %s -> %s", provider, model, mapped)
-            return mapped
-        return model
-
-    return _map(planner), _map(executor), _map(analyst)
-
-
-def _apply_provider_mapping_to_overrides(
-    phase_overrides: dict[str, dict[str, str]],
-) -> dict[str, dict[str, str]]:
-    """Re-map model IDs inside per-phase override dicts.
-
-    Applies the same Bedrock/Vertex mapping logic used for role defaults to
-    every value in ``phase_overrides``.
-
-    Args:
-        phase_overrides: Phase override dict to process.
-
-    Returns:
-        New dict with mapped model identifiers.
-    """
-    mapping: dict[str, str] | None = None
-    provider: str = ""
-
-    if os.environ.get("CLAUDE_CODE_USE_BEDROCK") == "1":
-        mapping = _BEDROCK_MODEL_MAP
-        provider = "Bedrock"
-    elif os.environ.get("CLAUDE_CODE_USE_VERTEX") == "1":
-        mapping = _VERTEX_MODEL_MAP
-        provider = "Vertex"
-
-    if mapping is None:
-        return phase_overrides
-
-    result: dict[str, dict[str, str]] = {}
-    for phase, roles in phase_overrides.items():
-        mapped_roles: dict[str, str] = {}
-        for role, model in roles.items():
-            if _is_explicit_provider_id(model):
-                mapped_roles[role] = model
-            elif model in mapping:
-                logger.info("%s detected: mapping %s -> %s", provider, model, mapping[model])
-                mapped_roles[role] = mapping[model]
-            else:
-                mapped_roles[role] = model
-        result[phase] = mapped_roles
-    return result
 
 
 def _load_config_file(config_path: str) -> dict[str, Any]:
