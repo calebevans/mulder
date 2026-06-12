@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 import yaml
 
 from mulder.orchestrator.models import (
-    _BEDROCK_MODEL_MAP,
     _BUILT_IN_DEFAULTS,
-    _VERTEX_MODEL_MAP,
     ModelConfig,
 )
 
@@ -138,7 +135,6 @@ class TestUnknownKeysWarning:
     def test_unknown_keys_logged(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         config_file = tmp_path / "config.yaml"
         config_file.write_text(yaml.dump({"models": {}, "banana": True}))
-        import logging
 
         with caplog.at_level(logging.WARNING, logger="mulder.orchestrator.models"):
             config = ModelConfig.from_args(config_path=str(config_file))
@@ -185,93 +181,3 @@ class TestRequiresProxy:
         )
         config = ModelConfig.from_args(config_path=str(config_file))
         assert config.requires_proxy is True
-
-
-@pytest.fixture()
-def _bedrock_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Set CLAUDE_CODE_USE_BEDROCK=1 for the duration of the test."""
-    monkeypatch.setenv("CLAUDE_CODE_USE_BEDROCK", "1")
-    yield
-
-
-@pytest.fixture()
-def _vertex_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Set CLAUDE_CODE_USE_VERTEX=1 for the duration of the test."""
-    monkeypatch.setenv("CLAUDE_CODE_USE_VERTEX", "1")
-    yield
-
-
-@pytest.mark.usefixtures("_bedrock_env")
-class TestBedrockAutoMapping:
-    """Bedrock env var triggers automatic model ID mapping."""
-
-    def test_defaults_mapped(self) -> None:
-        config = ModelConfig.from_args()
-        assert config.planner == _BEDROCK_MODEL_MAP["claude-opus-4-6"]
-        assert config.executor == _BEDROCK_MODEL_MAP["claude-haiku-4-5"]
-        assert config.analyst == _BEDROCK_MODEL_MAP["claude-opus-4-6"]
-
-    def test_explicit_bedrock_id_untouched(self) -> None:
-        explicit = "us.anthropic.claude-sonnet-4-6"
-        config = ModelConfig.from_args(planner_model=explicit)
-        assert config.planner == explicit
-
-    def test_unknown_model_untouched(self) -> None:
-        config = ModelConfig.from_args(planner_model="my-custom-model")
-        assert config.planner == "my-custom-model"
-
-    def test_phase_overrides_mapped(self, tmp_path: Path) -> None:
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text(
-            yaml.dump({"phases": {"extraction": {"executor": "claude-opus-4-7"}}})
-        )
-        config = ModelConfig.from_args(config_path=str(config_file))
-        assert (
-            config.phase_overrides["extraction"]["executor"]
-            == (_BEDROCK_MODEL_MAP["claude-opus-4-7"])
-        )
-
-    def test_phase_override_explicit_id_untouched(self, tmp_path: Path) -> None:
-        explicit = "us.anthropic.claude-opus-4-7"
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text(yaml.dump({"phases": {"extraction": {"executor": explicit}}}))
-        config = ModelConfig.from_args(config_path=str(config_file))
-        assert config.phase_overrides["extraction"]["executor"] == explicit
-
-    def test_mapping_logged(self, caplog: pytest.LogCaptureFixture) -> None:
-        with caplog.at_level(logging.INFO, logger="mulder.orchestrator.models"):
-            ModelConfig.from_args()
-        assert "Bedrock detected" in caplog.text
-
-
-@pytest.mark.usefixtures("_vertex_env")
-class TestVertexAutoMapping:
-    """Vertex env var triggers automatic model ID mapping."""
-
-    def test_defaults_mapped(self) -> None:
-        config = ModelConfig.from_args()
-        assert config.planner == _VERTEX_MODEL_MAP["claude-opus-4-6"]
-        assert config.executor == _VERTEX_MODEL_MAP["claude-haiku-4-5"]
-        assert config.analyst == _VERTEX_MODEL_MAP["claude-opus-4-6"]
-
-    def test_explicit_vertex_id_untouched(self) -> None:
-        explicit = "claude-sonnet-4-6@20250514"
-        config = ModelConfig.from_args(planner_model=explicit)
-        assert config.planner == explicit
-
-    def test_mapping_logged(self, caplog: pytest.LogCaptureFixture) -> None:
-        with caplog.at_level(logging.INFO, logger="mulder.orchestrator.models"):
-            ModelConfig.from_args()
-        assert "Vertex detected" in caplog.text
-
-
-class TestNoProviderMapping:
-    """Without provider env vars, models remain unchanged."""
-
-    def test_defaults_unchanged(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("CLAUDE_CODE_USE_BEDROCK", raising=False)
-        monkeypatch.delenv("CLAUDE_CODE_USE_VERTEX", raising=False)
-        config = ModelConfig.from_args()
-        assert config.planner == _BUILT_IN_DEFAULTS["planner"]
-        assert config.executor == _BUILT_IN_DEFAULTS["executor"]
-        assert config.analyst == _BUILT_IN_DEFAULTS["analyst"]

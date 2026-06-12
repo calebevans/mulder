@@ -114,6 +114,8 @@ docker run -it --privileged \
   ghcr.io/calebevans/mulder:1.3
 ```
 
+Model IDs are passed through to the SDK without transformation. If you omit `--model`, the SDK resolves built-in defaults automatically. To specify a model explicitly, use the Vertex format (e.g. `--model claude-opus-4-6@20250514`).
+
 | Variable | Description |
 |----------|-------------|
 | `CLAUDE_CODE_USE_VERTEX` | Set to `1` to enable Vertex AI |
@@ -137,6 +139,8 @@ docker run -it --privileged \
   -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
   ghcr.io/calebevans/mulder:1.3
 ```
+
+Model IDs are passed through to the SDK without transformation. If you omit `--model`, the SDK resolves built-in defaults automatically. To specify a model explicitly, use the Bedrock format (e.g. `--model us.anthropic.claude-opus-4-6`).
 
 | Variable | Description |
 |----------|-------------|
@@ -288,9 +292,9 @@ Runs a full multi-phase forensic investigation.
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--model` | None | Fallback model for all roles |
-| `--planner-model` | `claude-sonnet-4-6` | Model for planner agents |
+| `--planner-model` | `claude-opus-4-6` | Model for planner agents |
 | `--executor-model` | `claude-haiku-4-5` | Model for executor agents |
-| `--analyst-model` | `claude-sonnet-4-6` | Model for analyst agents |
+| `--analyst-model` | `claude-opus-4-6` | Model for analyst agents |
 | `--config` | None | YAML config file for models and settings |
 | `--effort` | `max` | Effort level (`max`, `xhigh`, `high`) |
 | `--workers` | `3` | Max concurrent extraction sessions |
