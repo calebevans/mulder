@@ -4,44 +4,7 @@ Mulder is a forensic investigation platform consisting of two core components: a
 
 ## System Overview
 
-```mermaid
-flowchart TB
-    subgraph container [Docker Container]
-        CLI["mulder CLI"]
-        Orchestrator["Orchestrator\n(multi-phase pipeline)"]
-        AgentSDK["Agent SDK\n(Session Runtime)"]
-        MCPServer["MCP Server\n(FastMCP, 140+ tools)"]
-        DB["SQLite + FTS5\n(per-case database)"]
-        AuditLog["Audit Log\n(append-only JSONL)"]
-        Extractors["Extractors\n(forensic binaries)"]
-        Reports["Report Renderer\n(HTML + Markdown)"]
-    end
-
-    subgraph binaries [Forensic Toolchain]
-        Vol3["Volatility 3"]
-        TSK["Sleuthkit"]
-        Plaso["Plaso"]
-        Hayabusa["Hayabusa"]
-        YARA["YARA"]
-        BulkExt["bulk_extractor"]
-        EZTools["EZ Tools"]
-        Others["60+ more tools"]
-    end
-
-    Evidence["/evidence\n(read-only mount)"]
-
-    CLI --> Orchestrator
-    Orchestrator --> AgentSDK
-    AgentSDK -->|"MCP (stdio)"| MCPServer
-    MCPServer --> Extractors
-    Extractors --> binaries
-    Extractors -->|"read"| Evidence
-    MCPServer -->|"read/write"| DB
-    MCPServer -->|"append"| AuditLog
-    MCPServer --> Reports
-    Reports -->|"reads"| DB
-    Reports -->|"reads"| AuditLog
-```
+![Mulder Architecture and Security Boundaries](images/diagram.png)
 
 ## MCP Server Architecture
 
