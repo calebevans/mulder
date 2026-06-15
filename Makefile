@@ -35,7 +35,7 @@ container-build:
 container-run:
 	$(CONTAINER_ENGINE) run -it --privileged \
 		-v $(EVIDENCE_DIR):/evidence:ro \
-		-v $(CASE_DIR):/root/.mulder/cases \
+		-v $(CASE_DIR):/home/mulder/.mulder/cases \
 		$(IMAGE_NAME):$(IMAGE_TAG)
 
 clean:
