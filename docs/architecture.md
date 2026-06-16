@@ -4,7 +4,9 @@ Mulder is a forensic investigation platform consisting of two core components: a
 
 ## System Overview
 
-![Mulder Architecture and Security Boundaries](images/diagram.png)
+<p align="center">
+<img src="images/diagram.png" alt="Mulder Architecture and Security Boundaries" width="420">
+</p>
 
 ## MCP Server Architecture
 
