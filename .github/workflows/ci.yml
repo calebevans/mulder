@@ -44,10 +44,10 @@ jobs:
         uses: astral-sh/setup-uv@v7
 
       - name: Install dependencies
-        run: uv pip install --system -e ".[dev]"
+        run: uv sync --locked --extra dev
 
       - name: Run pre-commit
-        run: pre-commit run --all-files
+        run: uv run --locked --extra dev pre-commit run --all-files
 
   test:
     name: Unit tests
@@ -66,10 +66,10 @@ jobs:
         uses: astral-sh/setup-uv@v7
 
       - name: Install dependencies
-        run: uv pip install --system -e ".[dev]"
+        run: uv sync --locked --extra dev
 
       - name: Run tests
-        run: pytest tests/ -v
+        run: uv run --locked --extra dev pytest tests/ -v
 
   container:
     name: Container build
