@@ -48,7 +48,7 @@ Each gate validates structural criteria (minimum sources indexed, findings submi
 ## Quick Start
 
 ```bash
-docker pull ghcr.io/calebevans/mulder:1.3
+docker pull ghcr.io/calebevans/mulder:1.3.2
 ```
 
 ```bash
@@ -58,7 +58,7 @@ docker run -it --privileged \
   -v /path/to/evidence:/evidence:ro \
   -v ~/mulder-cases:/home/mulder/.mulder/cases \
   -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
-  ghcr.io/calebevans/mulder:1.3
+  ghcr.io/calebevans/mulder:1.3.2
 ```
 
 ```bash
