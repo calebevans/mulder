@@ -864,6 +864,7 @@ _ZEEK_BINARY = "/opt/zeek/bin/zeek"
 
 
 def _run_zeek(
+    binary: str,
     pcap_path: Path,
     output_dir: Path,
     generate_files: bool = True,
@@ -871,6 +872,7 @@ def _run_zeek(
     """Execute Zeek against a PCAP file.
 
     Args:
+        binary: Resolved zeek executable.
         pcap_path: Path to the input PCAP.
         output_dir: Directory for Zeek log output.
         generate_files: Whether to enable file extraction.
@@ -882,7 +884,7 @@ def _run_zeek(
         subprocess.TimeoutExpired: If Zeek exceeds the timeout.
     """
     cmd = [
-        _ZEEK_BINARY,
+        binary,
         "-C",
         "-r",
         str(pcap_path),
@@ -1108,17 +1110,19 @@ def run_zeek_analysis(
         "generate_files": generate_files,
     }
 
-    if not require_binary(_ZEEK_BINARY):
-        zeek_alt = require_binary("zeek")
-        if not zeek_alt:
-            return error_response(
-                tc_id,
-                "run_zeek_analysis",
-                params,
-                "zeek not found on PATH",
-                error_type="binary_missing",
-                suggestion="Install Zeek: apt-get install zeek",
-            )
+    # Keep the answer: the container's /opt prefix and a distro /usr/bin/zeek
+    # are both legitimate, and exec'ing a different one than the gate accepted
+    # surfaces as an opaque "[Errno 2]" instead of "zeek is not installed".
+    zeek_bin = require_binary(_ZEEK_BINARY) or require_binary("zeek")
+    if not zeek_bin:
+        return error_response(
+            tc_id,
+            "run_zeek_analysis",
+            params,
+            "zeek not found on PATH",
+            error_type="binary_missing",
+            suggestion="Install Zeek: sudo apt install zeek",
+        )
 
     if not Path(pcap_path).exists():
         return error_response(
@@ -1132,7 +1136,7 @@ def run_zeek_analysis(
     with tempfile.TemporaryDirectory(prefix="mulder_zeek_") as tmpdir:
         output_dir = Path(tmpdir)
         try:
-            _run_zeek(Path(pcap_path), output_dir, generate_files)
+            _run_zeek(zeek_bin, Path(pcap_path), output_dir, generate_files)
         except subprocess.TimeoutExpired:
             log_files = list(output_dir.glob("*.log"))
             if log_files:
@@ -1197,10 +1201,24 @@ _SURICATA_CONFIG = "/etc/suricata/suricata.yaml"
 _ET_RULES_DIR = "/etc/suricata/rules"
 
 
-def _run_suricata_process(pcap_path: Path, output_dir: Path) -> Path:
+def _suricata_binary() -> str | None:
+    """Resolve the suricata executable, PATH first.
+
+    A source install lands in /usr/local/bin and several distros ship it in
+    /usr/sbin, so the PATH hit -- not the hardcoded literal -- is what has to
+    reach subprocess.run.  The literal stays as the last-resort fallback for
+    the image, which symlinks the arm64 source build to /usr/bin/suricata.
+    """
+    return require_binary("suricata") or (
+        _SURICATA_BINARY if Path(_SURICATA_BINARY).exists() else None
+    )
+
+
+def _run_suricata_process(binary: str, pcap_path: Path, output_dir: Path) -> Path:
     """Execute Suricata in offline PCAP replay mode.
 
     Args:
+        binary: Resolved suricata executable.
         pcap_path: Path to the input PCAP.
         output_dir: Directory for EVE JSON output.
 
@@ -1213,7 +1231,7 @@ def _run_suricata_process(pcap_path: Path, output_dir: Path) -> Path:
     eve_path = output_dir / "eve.json"
 
     cmd = [
-        _SURICATA_BINARY,
+        binary,
         "-r",
         str(pcap_path),
         "-l",
@@ -1377,7 +1395,8 @@ def run_suricata(
         "alert_severity_threshold": alert_severity_threshold,
     }
 
-    if not require_binary("suricata"):
+    suricata_bin = _suricata_binary()
+    if suricata_bin is None:
         return error_response(
             tc_id,
             "run_suricata",
@@ -1385,8 +1404,8 @@ def run_suricata(
             "suricata not found on PATH",
             error_type="binary_missing",
             suggestion=(
-                "Install Suricata: add-apt-repository ppa:oisf/suricata-stable"
-                " && apt-get install suricata"
+                "Install Suricata: sudo add-apt-repository ppa:oisf/suricata-stable"
+                " && sudo apt install suricata && sudo suricata-update"
             ),
         )
 
@@ -1402,7 +1421,7 @@ def run_suricata(
     with tempfile.TemporaryDirectory(prefix="mulder_suricata_") as tmpdir:
         output_dir = Path(tmpdir)
         try:
-            eve_path = _run_suricata_process(Path(pcap_path), output_dir)
+            eve_path = _run_suricata_process(suricata_bin, Path(pcap_path), output_dir)
         except subprocess.TimeoutExpired:
             eve_path = output_dir / "eve.json"
             if eve_path.exists():

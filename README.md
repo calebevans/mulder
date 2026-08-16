@@ -50,7 +50,9 @@ Each gate validates structural criteria (minimum sources indexed, findings submi
 ### Install with pipx (native - SIFT Workstation, Debian/Ubuntu)
 
 ```bash
+sudo apt install yara         # SIFT ships the python3-yara module, not the binary
 pipx install "mulder-dfir[forensics]"
+mulder setup
 mulder investigate /path/to/evidence my-case-id
 ```
 
@@ -58,7 +60,7 @@ mulder investigate /path/to/evidence my-case-id
 
 On first run mulder creates a working directory at `~/.mulder/workspace` (override with `--cwd` or `MULDER_CWD`) and writes a default `.mcp.json` into it. Case databases and reports go to `~/.mulder/cases` (override with `--db-dir`).
 
-A native install expects the SIFT forensic toolchain to already be present, plus Node.js (for the Claude Code CLI) and the Volatility 3 symbol packs - see the [Usage Guide](https://github.com/calebevans/mulder/blob/main/docs/usage-guide.md#native-install) for the full prerequisite list and for which tools must be installed manually. If you want everything preinstalled, use the container below.
+`mulder setup` downloads everything mulder owns - rule sets, signatures, and helper binaries - in one run (~2.2 GB, no `sudo`, refuses to run as root). It pins the same versions the container image uses. The rest of the forensic toolchain (Sleuth Kit, plaso, Zeek, `dotnet`) is your OS's job; SIFT already provides all of it except the `yara` binary above. See the [Usage Guide](https://github.com/calebevans/mulder/blob/main/docs/usage-guide.md#native-install) for the full picture. The container remains available if you would rather not install anything at all.
 
 ### Run with Docker (everything preinstalled)
 
@@ -127,10 +129,12 @@ Mulder integrates 35+ open-source forensic tools exposed as 140+ typed MCP opera
 | Windows artifacts | EZ Tools (Prefetch, Amcache, ShimCache, MFT, USN Journal, Jump Lists, Shellbags, SRUM), RegRipper, Hayabusa (3,700+ Sigma rules), Chainsaw |
 | Event logs | python-evtx, Zircolite |
 | Network | tshark, Zeek, Suricata, tcpflow, tcpxtract |
-| Malware | YARA, CAPA, FLOSS, Detect-It-Easy, ClamAV, radare2 |
+| Malware | YARA, CAPA, FLOSS, ClamAV, radare2, Detect-It-Easy&nbsp;\* |
 | Documents | oletools, PDF tools, pst-utils |
 | Mobile | ALEAPP, iLEAPP, MVT |
 | Other | bulk_extractor, binwalk, ExifTool, ssdeep, hashdeep, steghide, Hindsight |
+
+\* Detect-It-Easy is supported but not bundled: its `.deb` pulls in ten `libqt5*` packages for a CLI that draws nothing. `run_detect_it_easy` uses it if `diec` is on `$PATH`, and reports it as missing otherwise. Packing is still flagged without it — `triage_binary` checks section entropy, RWX permissions, known packer section names and import-table shape.
 
 Full API reference: [Tool Manifest](https://github.com/calebevans/mulder/blob/main/docs/tool-manifest.md)
 

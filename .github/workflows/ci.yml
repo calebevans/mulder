@@ -105,8 +105,11 @@ jobs:
         run: |
           tar tzf dist/*.tar.gz | grep -q 'mulder/data/mcp.json'
           tar tzf dist/*.tar.gz | grep -q 'mulder/py.typed'
+          tar tzf dist/*.tar.gz | grep -q 'mulder/assets/assets.lock'
           python3 -m zipfile -l dist/*.whl | grep -q 'mulder/data/mcp.json'
           python3 -m zipfile -l dist/*.whl | grep -q 'mulder/py.typed'
+          # Without the lock, `mulder setup` refuses every digest-pinned asset.
+          python3 -m zipfile -l dist/*.whl | grep -q 'mulder/assets/assets.lock'
 
   container:
     name: Container build
@@ -152,10 +155,35 @@ jobs:
           file: Dockerfile
           platforms: linux/amd64
           push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          load: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=min' || '' }}
+
+      # The image ships every asset already provisioned under /opt, so
+      # `setup --verify` must find all of them and exit 0. --user mulder,
+      # because entrypoint.sh ends `exec gosu mulder "$@"`: as root this would
+      # test a configuration no user ever gets.
+      - name: Smoke-test 'mulder setup --verify' inside the image
+        run: |
+          set -euo pipefail
+          tag=$(echo "${{ steps.meta.outputs.tags }}" | head -n1)
+          docker run --rm --user mulder --entrypoint mulder "$tag" \
+            setup --verify --json > verify.json
+          python3 - <<'PY'
+          import json
+          report = json.load(open("verify.json"))
+          assert report["root"] == "/opt", report["root"]
+          bad = [
+              a for a in report["assets"]
+              if a["selected"] and a["status"] not in ("up-to-date", "up-to-date (unmanaged)")
+          ]
+          assert not bad, bad
+          shadowed = [a for a in report["assets"] if a["shadowed_by"]]
+          assert not shadowed, shadowed
+          assert report["exit"] == 0, report["exit"]
+          PY
 
       - name: Generate artifact attestation
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from mulder.assets.paths import asset_path, asset_search_summary
 from mulder.server.app import mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
@@ -37,8 +38,18 @@ _OLEVBA_TIMEOUT = 120
 _PDFID_TIMEOUT = 60
 _PDF_PARSER_TIMEOUT = 120
 
-_PDFID_SCRIPT = "/opt/didier-stevens/pdfid.py"
-_PDF_PARSER_SCRIPT = "/opt/didier-stevens/pdf-parser.py"
+_DIDIER_STEVENS_DIRNAME = "didier-stevens"
+
+
+def _pdfid_script() -> Path | None:
+    """Didier Stevens' ``pdfid.py``, or None if the suite is not installed."""
+    return asset_path(_DIDIER_STEVENS_DIRNAME, "pdfid.py")
+
+
+def _pdf_parser_script() -> Path | None:
+    """Didier Stevens' ``pdf-parser.py``, or None if the suite is not installed."""
+    return asset_path(_DIDIER_STEVENS_DIRNAME, "pdf-parser.py")
+
 
 _OFFICE_EXTENSIONS = {
     ".doc",
@@ -370,8 +381,9 @@ def _run_pdfid(file_path: Path) -> list[dict[str, object]]:
         subprocess.TimeoutExpired: If pdfid exceeds the timeout.
         OSError: If pdfid cannot be executed.
     """
-    if Path(_PDFID_SCRIPT).exists():
-        cmd = [sys.executable, _PDFID_SCRIPT, "--force", str(file_path)]
+    script = _pdfid_script()
+    if script is not None:
+        cmd = [sys.executable, str(script), "--force", str(file_path)]
     else:
         pdfid_bin = require_binary("pdfid") or "pdfid"
         cmd = [pdfid_bin, "--force", str(file_path)]
@@ -433,10 +445,11 @@ def _extract_pdf_javascript(file_path: Path) -> list[dict[str, object]]:
     Returns:
         List of JavaScript extractions with analysis.
     """
-    if Path(_PDF_PARSER_SCRIPT).exists():
+    script = _pdf_parser_script()
+    if script is not None:
         cmd = [
             sys.executable,
-            _PDF_PARSER_SCRIPT,
+            str(script),
             "--type",
             "/JS",
             "--filter",
@@ -760,15 +773,16 @@ def analyze_pdf(
         "extract_embedded": extract_embedded,
     }
 
-    has_pdfid = Path(_PDFID_SCRIPT).exists() or require_binary("pdfid") is not None
+    has_pdfid = _pdfid_script() is not None or require_binary("pdfid") is not None
     if not has_pdfid:
         return error_response(
             tc_id,
             "analyze_pdf",
             params,
-            "pdfid not found (expected at /opt/didier-stevens/ or on PATH)",
+            "pdfid not found on PATH or under "
+            f"{asset_search_summary(_DIDIER_STEVENS_DIRNAME, 'pdfid.py')}",
             error_type="binary_missing",
-            suggestion="Install: pip install pdfid",
+            suggestion="Run 'mulder setup --minimal' (installs the Didier Stevens suite).",
         )
 
     target = Path(file_path)

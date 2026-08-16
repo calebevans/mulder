@@ -10,6 +10,9 @@ Try-it-out instructions for running Mulder, the forensic investigation platform.
     - [Common](#common)
     - [Container Install](#container-install)
     - [Native Install](#native-install)
+      - [What `mulder setup` installs](#what-mulder-setup-installs)
+      - [ALEAPP and iLEAPP dependencies](#aleapp-and-ileapp-dependencies)
+      - [What `mulder setup` will not do](#what-mulder-setup-will-not-do)
   - [Installing with pipx](#installing-with-pipx)
   - [Pulling the Container Image](#pulling-the-container-image)
   - [Running a Container](#running-a-container)
@@ -31,6 +34,7 @@ Try-it-out instructions for running Mulder, the forensic investigation platform.
   - [Artifact Awareness](#artifact-awareness)
   - [CLI Reference](#cli-reference)
     - [`mulder investigate`](#mulder-investigate)
+    - [`mulder setup`](#mulder-setup)
     - [`mulder serve`](#mulder-serve)
     - [`mulder report`](#mulder-report)
     - [`mulder export-iocs`](#mulder-export-iocs)
@@ -44,7 +48,7 @@ Try-it-out instructions for running Mulder, the forensic investigation platform.
 
 ## Prerequisites
 
-Mulder runs two ways: as a **container** with every forensic tool preinstalled, or as a **native install** from PyPI onto a machine that already has the forensic toolchain (a SANS SIFT Workstation, typically). Pick one; the requirements differ.
+Mulder runs two ways: as a **container** with every forensic tool preinstalled, or as a **native install** from PyPI plus one `mulder setup` run. Pick one; the container is a portability choice, not an escape hatch.
 
 ### Common
 
@@ -61,49 +65,88 @@ Mulder runs two ways: as a **container** with every forensic tool preinstalled, 
 - **Docker or Podman** installed and running. All commands below use `docker`, but `podman` works as a drop-in replacement.
 - A host directory to mount for case output, since the container writes to `/home/mulder/.mulder/cases`.
 
-Nothing else. The image ships every tool listed under [Native Install](#native-install) below.
+Nothing else. The image ships every tool and data set a native install obtains through
+`mulder setup`, already provisioned under `/opt` and pinned there by `MULDER_ASSET_ROOT=/opt`.
+Running `mulder setup` *inside* the container therefore exits 1 by design: `/opt` is root-owned
+and the process runs as the unprivileged `mulder` user, and there is nothing for it to do.
+`mulder setup --verify` works normally there, since it only reads.
 
 ### Native Install
 
-A native install gives you the orchestrator and the MCP server. It does **not** install the forensic tools themselves - `pip` cannot ship Sleuth Kit, Zeek, or the .NET EZ Tools. Everything in this section is your responsibility.
+```bash
+sudo apt install yara            # SIFT ships the python3-yara module, not the binary
+pipx install "mulder-dfir[forensics]"
+mulder setup                     # everything mulder owns - no sudo
+```
 
 - **Python 3.10 or newer**, plus [`pipx`](https://pipx.pypa.io/) (or `uv`).
-- **Node.js 18 or newer.** `claude-agent-sdk` drives the Claude Code CLI, which is a Node program. The container gets this from NodeSource Node 22. Without Node, mulder installs cleanly and then cannot start an investigation.
-- **Volatility 3 symbol packs.** The container pre-seeds these; a native install must fetch them, and on an air-gapped workstation the on-demand download volatility3 would otherwise attempt will fail:
+- **`git`.** `mulder setup` clones six of its assets, and the YARA signature-base needs a real
+  `.git` so mulder can keep the rules current.
+- **An Anthropic credential** - `ANTHROPIC_API_KEY`, `claude /login`, or the Bedrock / Vertex
+  environment variables.
+- **The SIFT forensic toolchain** on `$PATH`. SIFT already provides Sleuth Kit, plaso, Zeek,
+  Suricata, radare2, bulk_extractor and the .NET runtime; the `yara` binary above is the one
+  fatal gap.
+- **Node.js is usually _not_ required**: `claude-agent-sdk`'s platform wheels bundle the Claude
+  Code CLI. Node 18+ matters only if you install from an sdist or run where no wheel exists.
 
-  ```bash
-  mkdir -p ~/.cache/volatility3/symbols
-  wget https://downloads.volatilityfoundation.org/volatility3/symbols/windows.zip \
-      -O ~/.cache/volatility3/symbols/windows.zip
-  wget https://downloads.volatilityfoundation.org/volatility3/symbols/linux.zip \
-      -O ~/.cache/volatility3/symbols/linux.zip
-  ```
+#### What `mulder setup` installs
 
-  Without them, Windows and Linux memory analysis silently degrades.
-- **The SIFT forensic toolchain**, on `$PATH`: Sleuth Kit (`fls`, `icat`, `istat`, `fsstat`, `mmls`), Plaso (`log2timeline.py`, `psort.py`), `zeek`, `suricata`, `bulk_extractor`, `tshark`, `exiftool`, `readpst`, `7z`, `binwalk`, `ssdeep`, `hashdeep`, `clamscan`, `radare2`, `yara`, `chainsaw`, `hayabusa`, `capa`, `floss`, `diec`, `guestmount`, `ewfmount`, the steganography tools (`steghide`, `stegdetect`, `stegbreak`, `outguess`, `zsteg`, `jpseek`), and `dotnet` with the EZ Tools DLLs under `/opt/zimmermantools`. SIFT provides most of these already.
-- **The `/opt` clones and data files that pip does not install**, at these exact paths:
+Everything mulder owns, in one run: MITRE ATT&CK data, Sigma rules, the YARA signature-base,
+the Didier Stevens suite, Chainsaw 2.16.0, Hayabusa 3.8.1, Zircolite 2.20.0, capa 9.4.0,
+FLOSS 3.1.0, the six EZ Tools mulder invokes, ALEAPP, iLEAPP, and the Volatility 3 symbol packs.
+About **2.2 GB on disk**; it prints the total and asks before downloading more than 1 GB.
 
-  | Path | Contents |
-  |------|----------|
-  | `/opt/zircolite` | Zircolite clone, plus its Linux Sigma rules at `/opt/zircolite/rules/linux` |
-  | `/opt/aleapp` | ALEAPP clone |
-  | `/opt/ileapp` | iLEAPP clone |
-  | `/opt/didier-stevens` | Didier Stevens suite (`pdfid.py`, `pdf-parser.py`) |
-  | `/opt/sigma-rules/rules/windows` | Sigma rules for Chainsaw |
-  | `/opt/signature-base` | YARA signature base |
-  | `/opt/attack/enterprise-attack.json`, `/opt/attack/ics-attack.json` | MITRE ATT&CK data |
-  | `/opt/zimmermantools` | EZ Tools DLLs |
+Versions are pinned to match the container image exactly, and a test fails the build if the two
+drift apart. Release binaries are verified against a SHA-256 recorded in the mulder package;
+git clones and unversioned vendor URLs cannot be pinned by digest, so those are validated
+structurally (a clone that resolves, an archive that extracts, JSON that parses, a rules tree
+that contains rules) and rely on TLS in transit.
 
-- **ALEAPP's and iLEAPP's Python dependencies are not covered by any mulder extra.** Their upstream `requirements.txt` files contain a `git+https://` URL, local `whl_files/*.whl` paths, `pyinstaller`, and `packaging` / `numpy` / `protobuf` pins that conflict with each other - none of which can be expressed as PyPI package metadata. This is a property of those projects, not a mulder packaging bug. Install them into mulder's environment yourself:
+Assets go to the first of these that applies:
 
-  ```bash
-  pipx inject mulder-dfir --requirements /opt/aleapp/requirements.txt
-  pipx inject mulder-dfir --requirements /opt/ileapp/requirements.txt
-  ```
+1. `$MULDER_ASSET_ROOT`, if set. This wins outright - nothing else is searched.
+2. `/opt`, if it exists and is writable (this is what the container uses).
+3. `~/.local/share/mulder/assets` otherwise.
 
-  Mulder probes for a Python interpreter that can actually import them, so installing them into the system interpreter instead also works.
+Mulder *reads* `/opt` first and only then its own directory, so an existing SIFT layout keeps
+working untouched and a single-user install needs no `sudo`. If you previously hand-made
+`/opt/attack` or `/opt/sigma-rules`, mulder keeps reading those; `mulder setup --verify` reports
+each asset as `up-to-date (unmanaged)` or `shadowed by /opt/...` rather than claiming success
+while reading something else.
 
-If assembling all of that is more than you want to do, use the container.
+`mulder setup` refuses to run as root: a root-owned `/opt/signature-base` makes git's
+dubious-ownership check fail for every later non-root run, which would stop YARA rule updates
+permanently and silently.
+
+Re-running is safe - assets already present at the pinned version are skipped, and a version
+bump in the manifest is what triggers a re-fetch. `mulder setup --verify` checks an existing
+install without touching the network.
+
+The Volatility symbol packs go to `~/.cache/volatility3/symbols` (honouring `XDG_CACHE_HOME`),
+where Volatility 3 looks for them - **not** under the mulder asset root, so the platform `vol`
+on your `$PATH` finds them.
+
+#### ALEAPP and iLEAPP dependencies
+
+Their Python dependencies are not covered by any mulder extra: the upstream `requirements.txt`
+files contain a `git+https://` URL, local `whl_files/*.whl` paths, `pyinstaller`, and mutually
+conflicting `packaging` / `numpy` / `protobuf` pins, none of which can be expressed as PyPI
+metadata. `mulder setup` clones both; to install their dependencies:
+
+```bash
+pipx inject mulder-dfir --requirements ~/.local/share/mulder/assets/aleapp/requirements.txt
+pipx inject mulder-dfir --requirements ~/.local/share/mulder/assets/ileapp/requirements.txt
+```
+
+The two requirement sets conflict with each other, so installing both can leave the venv in a
+state `pip check` considers inconsistent. Mulder probes for any interpreter that can import
+them, so installing into the system interpreter instead also works.
+
+#### What `mulder setup` will not do
+
+It never runs a package manager and never asks for `sudo`. Sleuth Kit, `yara`, `git`, `dotnet`,
+Zeek, Suricata, plaso and radare2 are your OS's job - on SIFT, all but `yara` are already there.
 
 ## Installing with pipx
 
@@ -420,6 +463,31 @@ Runs a full multi-phase forensic investigation.
 | `--db-dir` | `~/.mulder/cases` | Case database directory |
 | `--cwd` | `~/.mulder/workspace` | Working directory for agent sessions. Also settable via `MULDER_CWD`; the container sets it to `/mulder-investigation`. Created on first use, along with a default `.mcp.json` |
 | `--proxy-config` | None | LiteLLM config YAML for custom model routing |
+
+### `mulder setup`
+
+```
+mulder setup [OPTIONS]
+```
+
+Downloads everything mulder owns that pip cannot ship. Never installs OS packages, never invokes
+a package manager, and refuses to run as root.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--asset-root DIR` | resolved | Override the asset root (env: `MULDER_ASSET_ROOT`). Exclusive: setting it disables the `/opt` search |
+| `--dry-run` | off | Print the plan and exit 0. Issues no network requests at all |
+| `--verify` | off | Validate what is installed; fetch nothing. **Exits 4** if anything is missing, invalid, or shadowed by a copy mulder does not manage |
+| `--json` | off | Emit the result document on stdout (human progress always goes to stderr) |
+| `--yes` | off | Skip the confirmation prompt for plans over 1 GB |
+
+Exit codes: `0` everything present, `1` fatal precondition (no `git`, unusable asset root,
+missing digest), `2` usage error (running as root), `3` at least one asset failed, `4`
+`--verify` found something missing, invalid, or shadowed.
+
+Downloads land in a staging directory on the destination filesystem and are moved into place
+only after they validate, so a truncated file is never left where mulder would parse it. An
+interrupted download is simply redone on the next run.
 
 ### `mulder serve`
 

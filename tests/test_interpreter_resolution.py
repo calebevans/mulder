@@ -26,7 +26,7 @@ from mulder.server.helpers import interpreter_candidates
 from mulder.server.tools.documents import _analyze_macros_olevba
 from mulder.server.tools.extract.plaso import _find_plaso_cmd
 from mulder.server.tools.hindsight import _find_hindsight_cmd
-from mulder.server.tools.phone import _ALEAPP_SCRIPT, _ILEAPP_SCRIPT
+from mulder.server.tools.phone import _aleapp_script, _ileapp_script
 from mulder.server.tools.zircolite import (
     _ZIRCOLITE_MODULES,
     _run_zircolite_process,
@@ -336,9 +336,11 @@ class TestZircolite:
     """Zircolite runs on mulder's own interpreter; its deps ship in an extra."""
 
     def test_uses_sys_executable(self, tmp_path: Path) -> None:
+        script = str(tmp_path / "zircolite.py")
         with patch("mulder.server.tools.zircolite.subprocess.run") as mock_run:
-            _run_zircolite_process(tmp_path / "events.log", "auditd", tmp_path, tmp_path)
+            _run_zircolite_process(script, tmp_path / "events.log", "auditd", tmp_path, tmp_path)
         assert mock_run.call_args[0][0][0] == sys.executable
+        assert mock_run.call_args[0][0][1] == script
 
     def test_module_list_matches_upstream(self) -> None:
         """Pinned against Zircolite 2.20.0's requirements.txt and import block.
@@ -385,7 +387,8 @@ class TestZircolite:
         ):
             result = run_zircolite.__wrapped__("/fake/audit.log")  # type: ignore[attr-defined]
 
-        # It still fails (no /opt/zircolite here), but never on a PATH python3.
+        # It still fails (the hermetic asset root is empty), but never on a
+        # PATH python3.
         assert "python3" not in str(result.get("error_message", ""))
 
 
@@ -400,11 +403,11 @@ class TestLeappCmdResolution:
     @pytest.fixture(autouse=True)
     def _clear_probe_cache(self) -> Any:
         """The probe is memoized per process; each test needs a cold cache."""
-        from mulder.server.tools.phone import _find_leapp_cmd
+        from mulder.assets.paths import reset_asset_caches
 
-        _find_leapp_cmd.cache_clear()
+        reset_asset_caches()
         yield
-        _find_leapp_cmd.cache_clear()
+        reset_asset_caches()
 
     def test_probes_sys_executable_first(self) -> None:
         from mulder.server.tools.phone import _find_leapp_cmd
@@ -417,9 +420,9 @@ class TestLeappCmdResolution:
                 return_value=_completed(),
             ) as mock_run,
         ):
-            cmd = _find_leapp_cmd(_ALEAPP_SCRIPT, "aleapp")
+            cmd = _find_leapp_cmd(_aleapp_script(), "aleapp")
 
-        assert cmd == [sys.executable, _ALEAPP_SCRIPT]
+        assert cmd == [sys.executable, _aleapp_script()]
         assert mock_run.call_args[0][0][0] == sys.executable
 
     def test_falls_through_to_path_python(self) -> None:
@@ -436,9 +439,9 @@ class TestLeappCmdResolution:
             patch("mulder.server.helpers.shutil.which", return_value=_FAKE_PY),
             patch("mulder.server.tools.phone.subprocess.run", side_effect=_run),
         ):
-            cmd = _find_leapp_cmd(_ALEAPP_SCRIPT, "aleapp")
+            cmd = _find_leapp_cmd(_aleapp_script(), "aleapp")
 
-        assert cmd == [_FAKE_PY, _ALEAPP_SCRIPT]
+        assert cmd == [_FAKE_PY, _aleapp_script()]
 
     def test_falls_back_to_console_script(self) -> None:
         """Regression guard: the script path was used unconditionally before."""
@@ -451,10 +454,10 @@ class TestLeappCmdResolution:
                 return_value="/usr/bin/aleapp",
             ),
         ):
-            cmd = _find_leapp_cmd(_ALEAPP_SCRIPT, "aleapp")
+            cmd = _find_leapp_cmd(_aleapp_script(), "aleapp")
 
         assert cmd == ["/usr/bin/aleapp"]
-        assert _ALEAPP_SCRIPT not in (cmd or [])
+        assert _aleapp_script() not in (cmd or [])
 
     def test_returns_none_when_nothing_runnable(self) -> None:
         from mulder.server.tools.phone import _find_leapp_cmd
@@ -463,7 +466,7 @@ class TestLeappCmdResolution:
             patch("mulder.server.tools.phone.Path.exists", return_value=False),
             patch("mulder.server.tools.phone.require_binary", return_value=None),
         ):
-            assert _find_leapp_cmd(_ILEAPP_SCRIPT, "ileapp") is None
+            assert _find_leapp_cmd(_ileapp_script(), "ileapp") is None
 
     def test_probe_is_memoized(self) -> None:
         """A failing probe costs up to 3 x _LEAPP_PROBE_TIMEOUT; pay it once."""
@@ -477,8 +480,8 @@ class TestLeappCmdResolution:
                 return_value=_completed(),
             ) as mock_run,
         ):
-            first = _find_leapp_cmd(_ALEAPP_SCRIPT, "aleapp")
-            second = _find_leapp_cmd(_ALEAPP_SCRIPT, "aleapp")
+            first = _find_leapp_cmd(_aleapp_script(), "aleapp")
+            second = _find_leapp_cmd(_aleapp_script(), "aleapp")
 
         assert first == second
         assert mock_run.call_count == 1

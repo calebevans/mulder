@@ -1134,7 +1134,13 @@ def run_detect_it_easy(
             params,
             "diec not found on PATH",
             error_type="binary_missing",
-            suggestion="Install DIE from https://github.com/horsicq/DIE-engine",
+            suggestion=(
+                "Detect-It-Easy is not bundled (its .deb needs ten libqt5* packages). "
+                "Install it with: sudo apt install ./die_<version>_Ubuntu_<rel>_amd64.deb "
+                "from https://github.com/horsicq/DIE-engine/releases -- `apt install` "
+                "rather than `dpkg -i`, which cannot resolve those dependencies. "
+                "Without it, triage_binary still flags packing by entropy and section shape."
+            ),
         )
     diec_bin = diec_bin or _DIEC_BINARY
 

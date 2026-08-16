@@ -9,7 +9,7 @@ CONTAINER_ENGINE ?= $(shell \
 IMAGE_NAME ?= mulder
 IMAGE_TAG  ?= dev
 
-.PHONY: all install lint format typecheck test precommit build dist-check container-build container-run clean
+.PHONY: all install lint format typecheck test precommit build dist-check assets-lock container-build container-run clean
 
 install:
 	uv pip install -e ".[dev]"
@@ -28,6 +28,12 @@ test:
 
 precommit:
 	pre-commit run --all-files
+
+# Maintainer chore, never CI: downloads every digest-pinnable asset and
+# rewrites src/mulder/assets/assets.lock. Re-run it in the same PR as any
+# Dockerfile version bump -- tests/test_manifest_parity.py fails otherwise.
+assets-lock:
+	uv run python -m mulder.assets.lockgen
 
 build:
 	uv build

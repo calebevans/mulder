@@ -237,23 +237,6 @@ RUN mkdir -p /opt/floss \
         && rm /tmp/floss.zip; \
     fi
 
-# Detect-It-Easy: fetch .deb for amd64 only (arm64 source build is fragile)
-FROM ubuntu:22.04 AS die-fetch
-
-ENV DEBIAN_FRONTEND=noninteractive
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl \
-    && rm -rf /var/lib/apt/lists/*
-
-ARG TARGETARCH
-ARG DIE_VERSION=3.09
-RUN mkdir -p /opt/die \
-    && if [ "$TARGETARCH" = "amd64" ]; then \
-        curl -fsSL "https://github.com/horsicq/DIE-engine/releases/download/${DIE_VERSION}/die_${DIE_VERSION}_Ubuntu_22.04_amd64.deb" \
-            -o /opt/die/die.deb; \
-    fi
-
 # Chainsaw: download pre-built binary (multi-arch), Sigma rules, and mappings
 FROM ubuntu:22.04 AS chainsaw-fetch
 
@@ -401,9 +384,13 @@ COPY --from=attack-fetch /opt/attack/enterprise-attack.json /opt/attack/enterpri
 COPY --from=attack-fetch /opt/attack/ics-attack.json /opt/attack/ics-attack.json
 COPY --from=hayabusa-fetch /opt/hayabusa /opt/hayabusa
 COPY --from=radare2-fetch /tmp/radare2.deb /tmp/radare2.deb
-COPY --from=capa-fetch /opt/capa/capa /usr/local/bin/capa
+# Keep capa where the asset manifest says it lives, then link it onto PATH --
+# same shape as chainsaw below. Copying only the binary to /usr/local/bin
+# left /opt/capa absent, so `mulder setup --verify` called capa missing on
+# an image where capa works fine.
+COPY --from=capa-fetch /opt/capa/ /opt/capa/
+RUN ln -sf /opt/capa/capa /usr/local/bin/capa
 COPY --from=floss-fetch /opt/floss/ /opt/floss/
-COPY --from=die-fetch /opt/die/ /opt/die/
 COPY --from=chainsaw-fetch /opt/chainsaw/ /opt/chainsaw/
 RUN ln -sf /opt/chainsaw/chainsaw /usr/local/bin/chainsaw
 COPY --from=chainsaw-fetch /opt/sigma-rules/ /opt/sigma-rules/
@@ -414,12 +401,6 @@ RUN dpkg -i /tmp/radare2.deb || apt-get install -yf --no-install-recommends \
     && rm /tmp/radare2.deb
 
 ARG TARGETARCH
-
-# Detect-It-Easy: install .deb on amd64 (skipped on arm64)
-RUN if [ -f /opt/die/die.deb ]; then \
-        dpkg -i /opt/die/die.deb || apt-get install -yf --no-install-recommends \
-        && rm /opt/die/die.deb; \
-    fi
 
 # FLOSS: symlink pre-built binary on amd64 (arm64 uses pip entry point)
 RUN if [ -x /opt/floss/floss ]; then ln -sf /opt/floss/floss /usr/local/bin/floss; fi
@@ -542,6 +523,14 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 # directory this image already creates, populates and git-inits above so
 # container behaviour is unchanged.
 ENV MULDER_CWD=/mulder-investigation
+
+# The image is already provisioned, so pin the resolver to /opt outright. It is
+# exclusive: without it a bind-mounted host $HOME carrying
+# ~/.local/share/mulder/assets would silently supplement (and could shadow) the
+# image's curated, version-matched tree. `mulder setup` inside the container
+# consequently exits 1 -- /opt is root:root 0755 and the process runs as
+# `mulder` -- which is correct; there is nothing for it to do here.
+ENV MULDER_ASSET_ROOT=/opt
 
 WORKDIR /mulder-investigation
 ENTRYPOINT ["entrypoint.sh"]

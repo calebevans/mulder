@@ -395,7 +395,7 @@ The `EvidenceClassifier` scans evidence directories and categorizes files by typ
 | Disk image | `.e01`, `.dd`, `.vmdk`, `.vhd`, `.img` | Sleuthkit, Plaso, bulk_extractor |
 | Windows event log | `.evtx` | python-evtx, Hayabusa, Chainsaw |
 | Network capture | `.pcap`, `.pcapng` | tshark, tcpflow, Zeek, Suricata |
-| Binary / executable | `.exe`, `.dll`, `.elf`, `.so` | CAPA, FLOSS, Detect-It-Easy, radare2 |
+| Binary / executable | `.exe`, `.dll`, `.elf`, `.so` | CAPA, FLOSS, radare2, Detect-It-Easy (optional, not bundled) |
 | Office document | `.doc`, `.docx`, `.xls`, `.ppt` | oletools |
 | PDF document | `.pdf` | Didier Stevens PDF tools |
 | Email archive | `.pst`, `.ost` | pst-utils / libpst |

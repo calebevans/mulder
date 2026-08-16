@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 from typing import Any, Literal
 
+from mulder.assets.paths import asset_display_path, asset_path, asset_search_summary
 from mulder.server.app import mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
@@ -29,8 +30,18 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 _ZIRCOLITE_TIMEOUT = 600
-_ZIRCOLITE_SCRIPT = "/opt/zircolite/zircolite.py"
-_DEFAULT_LINUX_RULES = "/opt/zircolite/rules/linux/"
+_ZIRCOLITE_DIRNAME = "zircolite"
+
+
+def _zircolite_script() -> Path | None:
+    """The Zircolite entry point, or None if it is not installed."""
+    return asset_path(_ZIRCOLITE_DIRNAME, "zircolite.py")
+
+
+def _default_linux_rules() -> Path:
+    """The Linux Sigma rules ``mulder setup`` copies in beside Zircolite."""
+    return asset_display_path(_ZIRCOLITE_DIRNAME, "rules", "linux")
+
 
 # Zircolite 2.20.0's unguarded top-level third-party imports, i.e. the modules
 # without which zircolite.py cannot start at all.  Every other import in
@@ -58,6 +69,7 @@ def _missing_zircolite_modules() -> list[str]:
 
 
 def _run_zircolite_process(
+    script: str,
     events_path: Path,
     log_format: str,
     ruleset_path: Path,
@@ -66,6 +78,7 @@ def _run_zircolite_process(
     """Execute Zircolite against event logs.
 
     Args:
+        script: Resolved path to ``zircolite.py``.
         events_path: Path to input log file(s).
         log_format: Log format identifier.
         ruleset_path: Path to the Sigma ruleset directory.
@@ -82,7 +95,7 @@ def _run_zircolite_process(
 
     cmd = [
         sys.executable,
-        _ZIRCOLITE_SCRIPT,
+        script,
         "--events",
         str(events_path),
         "--ruleset",
@@ -258,8 +271,8 @@ def run_zircolite(
             JSON output, "json" for generic JSON event streams,
             "evtx" for Windows EVTX (fallback use case).
         ruleset_path: Path to a custom ruleset directory. If None,
-            uses the bundled Linux Sigma rules at
-            /opt/zircolite/rules/linux/.
+            uses the Linux Sigma rules installed alongside Zircolite by
+            'mulder setup'.
         sigma_level_filter: Minimum Sigma rule level to include in
             results. Rules below this level are excluded. Set None
             to include all levels.
@@ -305,17 +318,16 @@ def run_zircolite(
             ),
         )
 
-    if not Path(_ZIRCOLITE_SCRIPT).exists():
+    script = _zircolite_script()
+    if script is None:
         return error_response(
             tc_id,
             "run_zircolite",
             params,
-            f"Zircolite script not found: {_ZIRCOLITE_SCRIPT}",
+            "Zircolite script not found under any of: "
+            f"{asset_search_summary(_ZIRCOLITE_DIRNAME, 'zircolite.py')}",
             error_type="binary_missing",
-            suggestion=(
-                "Install Zircolite: git clone"
-                " https://github.com/wagga40/Zircolite.git /opt/zircolite"
-            ),
+            suggestion="Run 'mulder setup' (installs Zircolite 2.20.0 and its Linux Sigma rules).",
         )
 
     if not Path(events_path).exists():
@@ -327,7 +339,7 @@ def run_zircolite(
             error_type="file_not_found",
         )
 
-    effective_ruleset = Path(ruleset_path) if ruleset_path else Path(_DEFAULT_LINUX_RULES)
+    effective_ruleset = Path(ruleset_path) if ruleset_path else _default_linux_rules()
     if not effective_ruleset.exists():
         return error_response(
             tc_id,
@@ -350,6 +362,7 @@ def run_zircolite(
         output_dir = Path(tmpdir)
         try:
             results_path = _run_zircolite_process(
+                str(script),
                 Path(events_path),
                 log_format,
                 effective_ruleset,

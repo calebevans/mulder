@@ -21,6 +21,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
+from mulder.assets.paths import asset_display_path, register_cache_clear
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
@@ -879,8 +880,17 @@ def decrypt_app_data(
 
 _ALEAPP_TIMEOUT = 1800
 _ILEAPP_TIMEOUT = 1800
-_ALEAPP_SCRIPT = "/opt/aleapp/aleapp.py"
-_ILEAPP_SCRIPT = "/opt/ileapp/ileapp.py"
+
+
+def _aleapp_script() -> str:
+    """ALEAPP's entry point, or where ``mulder setup --full`` would clone it."""
+    return str(asset_display_path("aleapp", "aleapp.py"))
+
+
+def _ileapp_script() -> str:
+    """iLEAPP's entry point, or where ``mulder setup --full`` would clone it."""
+    return str(asset_display_path("ileapp", "ileapp.py"))
+
 
 _LEAPP_PROBE_TIMEOUT = 20
 
@@ -924,6 +934,9 @@ def _find_leapp_cmd(script: str, console_name: str) -> list[str] | None:
     if path:
         return [path]
     return None
+
+
+register_cache_clear(_find_leapp_cmd.cache_clear)
 
 
 _ARTIFACT_CATEGORIES: dict[str, str] = {
@@ -1093,16 +1106,15 @@ def run_aleapp(
         "artifact_filter": artifact_filter,
     }
 
-    if not Path(_ALEAPP_SCRIPT).exists() and not require_binary("aleapp"):
+    aleapp_script = _aleapp_script()
+    if not Path(aleapp_script).exists() and not require_binary("aleapp"):
         return error_response(
             tc_id,
             "run_aleapp",
             params,
-            f"ALEAPP not found: {_ALEAPP_SCRIPT}",
+            f"ALEAPP not found: {aleapp_script}",
             error_type="binary_missing",
-            suggestion=(
-                "Install ALEAPP: git clone https://github.com/abrignoni/ALEAPP.git /opt/aleapp"
-            ),
+            suggestion="Run 'mulder setup --full' (clones ALEAPP).",
         )
 
     if not Path(extraction_path).exists():
@@ -1123,21 +1135,22 @@ def run_aleapp(
             error_type="invalid_argument",
         )
 
-    aleapp_cmd = _find_leapp_cmd(_ALEAPP_SCRIPT, "aleapp")
+    aleapp_cmd = _find_leapp_cmd(aleapp_script, "aleapp")
     if aleapp_cmd is None:
         return error_response(
             tc_id,
             "run_aleapp",
             params,
             (
-                f"ALEAPP is not runnable: {_ALEAPP_SCRIPT} is missing, or its "
+                f"ALEAPP is not runnable: {aleapp_script} is missing, or its "
                 "dependencies are not importable from any available Python interpreter"
             ),
             error_type="binary_missing",
             suggestion=(
-                "git clone https://github.com/abrignoni/ALEAPP.git /opt/aleapp, then "
-                "install its requirements into mulder's environment: "
-                "pipx inject mulder-dfir --requirements /opt/aleapp/requirements.txt. "
+                "Run 'mulder setup --full' to clone ALEAPP, then "
+                "'mulder setup --full --inject-deps' to install its requirements "
+                f"(equivalently: pipx inject mulder-dfir --requirements "
+                f"{Path(aleapp_script).parent / 'requirements.txt'}). "
                 "ALEAPP's dependencies are NOT covered by the mulder-dfir[forensics] extra."
             ),
         )
@@ -1251,16 +1264,15 @@ def run_ileapp(
         "artifact_filter": artifact_filter,
     }
 
-    if not Path(_ILEAPP_SCRIPT).exists() and not require_binary("ileapp"):
+    ileapp_script = _ileapp_script()
+    if not Path(ileapp_script).exists() and not require_binary("ileapp"):
         return error_response(
             tc_id,
             "run_ileapp",
             params,
-            f"iLEAPP not found: {_ILEAPP_SCRIPT}",
+            f"iLEAPP not found: {ileapp_script}",
             error_type="binary_missing",
-            suggestion=(
-                "Install iLEAPP: git clone https://github.com/abrignoni/iLEAPP.git /opt/ileapp"
-            ),
+            suggestion="Run 'mulder setup --full' (clones iLEAPP).",
         )
 
     if not Path(extraction_path).exists():
@@ -1281,21 +1293,22 @@ def run_ileapp(
             error_type="invalid_argument",
         )
 
-    ileapp_cmd = _find_leapp_cmd(_ILEAPP_SCRIPT, "ileapp")
+    ileapp_cmd = _find_leapp_cmd(ileapp_script, "ileapp")
     if ileapp_cmd is None:
         return error_response(
             tc_id,
             "run_ileapp",
             params,
             (
-                f"iLEAPP is not runnable: {_ILEAPP_SCRIPT} is missing, or its "
+                f"iLEAPP is not runnable: {ileapp_script} is missing, or its "
                 "dependencies are not importable from any available Python interpreter"
             ),
             error_type="binary_missing",
             suggestion=(
-                "git clone https://github.com/abrignoni/iLEAPP.git /opt/ileapp, then "
-                "install its requirements into mulder's environment: "
-                "pipx inject mulder-dfir --requirements /opt/ileapp/requirements.txt. "
+                "Run 'mulder setup --full' to clone iLEAPP, then "
+                "'mulder setup --full --inject-deps' to install its requirements "
+                f"(equivalently: pipx inject mulder-dfir --requirements "
+                f"{Path(ileapp_script).parent / 'requirements.txt'}). "
                 "iLEAPP's dependencies are NOT covered by the mulder-dfir[forensics] extra."
             ),
         )

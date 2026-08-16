@@ -5,11 +5,18 @@ from __future__ import annotations
 import logging
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
 
 from mulder import __version__
 from mulder.patterns import DEFAULT_DB_DIR, DEFAULT_WORKSPACE_DIR
+
+if TYPE_CHECKING:  # heavy imports stay inside the command bodies
+    from rich.console import Console
+
+    from mulder.assets.fetch import Fetcher
+    from mulder.assets.install import Plan, Result, SetupOptions
 
 #: The default ``.mcp.json`` shipped as package data, copied into a fresh
 #: workspace on first run so a ``pipx``/``uv tool`` install works out of the box.
@@ -408,6 +415,241 @@ def investigate(
 
     if not result.success:
         raise SystemExit(1)
+
+
+@cli.command()
+@click.option(
+    "--asset-root",
+    default=None,
+    type=click.Path(),
+    help="Override the asset root (env: MULDER_ASSET_ROOT). Exclusive: setting it "
+    "disables the /opt search entirely.",
+)
+@click.option("--dry-run", is_flag=True, help="Print the plan and exit. Issues no requests.")
+@click.option(
+    "--verify",
+    is_flag=True,
+    help="Validate what is installed; fetch nothing. Exits 4 if anything is missing, "
+    "invalid, or shadowed by a copy mulder does not manage.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit the result document on stdout.")
+@click.option("--yes", is_flag=True, help="Skip the confirmation prompt for large plans.")
+def setup(
+    asset_root: str | None,
+    dry_run: bool,
+    verify: bool,
+    as_json: bool,
+    yes: bool,
+) -> None:
+    """Download the forensic data, rule sets and helper tools pip cannot ship.
+
+    Installs everything mulder owns.  Never installs OS packages, and never
+    needs sudo -- it refuses to run as root, because root-owned clones make git
+    refuse to update the YARA rules afterwards.
+
+    \b
+      mulder setup                 # install everything (~2.2 GB)
+      mulder setup --dry-run       # print the plan, download nothing
+      mulder setup --verify        # check an existing install, touch no network
+
+    Assets are written to $MULDER_ASSET_ROOT if set, else /opt when it is
+    writable, else ~/.local/share/mulder/assets.  Mulder *reads* /opt first, so
+    an existing SIFT layout keeps working untouched.
+    """
+    import os
+
+    from rich.console import Console
+
+    from mulder.assets import install as install_mod
+    from mulder.assets.fetch import HttpFetcher, OfflineFetcher
+    from mulder.assets.paths import asset_write_root, reset_asset_caches
+    from mulder.assets.paths import bin_dir as resolve_bin_dir
+
+    console = Console(stderr=True, no_color=bool(os.environ.get("NO_COLOR")))
+
+    if asset_root:
+        # Set the variable rather than threading a second value around, so the
+        # flag and the environment can never disagree.
+        os.environ["MULDER_ASSET_ROOT"] = str(Path(asset_root).expanduser())
+        reset_asset_caches()
+
+    options = install_mod.SetupOptions(verify=verify, dry_run=dry_run)
+
+    write_root = asset_write_root()
+    try:
+        plan = install_mod.build_plan(options, write_root, resolve_bin_dir())
+        install_mod.preflight(plan, options)
+    except install_mod.PlanError as exc:
+        console.print(f"[red]{exc}[/red]", highlight=False)
+        raise SystemExit(exc.exit_code) from None
+
+    console.print(
+        f"Asset root: {write_root}  |  shims: {plan.bin_dir}  |  arch: {plan.arch}",
+        highlight=False,
+    )
+
+    fetcher = OfflineFetcher() if verify else HttpFetcher(timeout=120.0)
+
+    if verify:
+        console.print(f"Verifying {len(plan.selected)} assets; no network.", highlight=False)
+    elif dry_run:
+        # Manifest estimates only: --dry-run issues no requests of any kind.
+        console.print(
+            f"Plan: {len(plan.selected)} assets, about "
+            f"{_human_bytes(plan.total_bytes)} to download.",
+            highlight=False,
+        )
+    else:
+        _confirm_size(console, plan, fetcher, yes)
+
+    def _on_event(_key: str, message: str) -> None:
+        console.print(f"  {message}", highlight=False)
+
+    try:
+        result = install_mod.provision(plan, options, fetch=fetcher, on_event=_on_event)
+    except install_mod.PlanError as exc:
+        console.print(f"[red]{exc}[/red]", highlight=False)
+        raise SystemExit(exc.exit_code) from None
+    except KeyboardInterrupt:
+        console.print("[yellow]Interrupted; nothing was left half-written.[/yellow]")
+        raise SystemExit(3) from None
+
+    _print_summary(console, result, plan, options)
+
+    if as_json:
+        click.echo(_setup_json(result, plan))
+
+    raise SystemExit(result.exit_code)
+
+
+def _confirm_size(console: Console, plan: Plan, fetcher: Fetcher, yes: bool) -> None:
+    """Refine the plan total from Content-Length, then prompt above 1 GB."""
+    total = plan.total_bytes
+    head = getattr(fetcher, "head", None)
+    if head is not None:
+        refined = 0
+        for asset in plan.selected:
+            if asset.kind not in ("file", "archive"):
+                refined += asset.size_estimate
+                continue
+            measured = head(asset.url_for(plan.arch))
+            refined += measured if measured else asset.size_estimate
+        total = refined
+
+    console.print(
+        f"Plan: {len(plan.selected)} assets, about {_human_bytes(total)} to download.",
+        highlight=False,
+    )
+    if total <= 1024**3 or yes:
+        return
+    if not _is_interactive():
+        console.print(
+            "[red]This plan downloads more than 1 GB and stdin is not a terminal. "
+            "Re-run with --yes to proceed.[/red]"
+        )
+        raise SystemExit(2)
+    if not click.confirm(f"Download about {_human_bytes(total)}?", default=True):
+        raise SystemExit(2)
+
+
+def _print_summary(console: Console, result: Result, plan: Plan, options: SetupOptions) -> None:
+    """One row per manifest asset, selected or not.
+
+    Nothing is ever omitted, so a silent partial install is not expressible.
+    """
+    from rich.table import Table
+
+    from mulder.assets.install import capability_gaps
+
+    table = Table(title="Summary", title_justify="left")
+    table.add_column("asset")
+    table.add_column("status")
+    table.add_column("detail")
+    installed = shadowed = failed = missing = 0
+    for outcome in result.outcomes:
+        status = outcome.status
+        colour = "green"
+        if outcome.shadowed_by:
+            status = f"{status}, shadowed by {outcome.shadowed_by}"
+            colour = "yellow"
+            shadowed += 1
+        elif outcome.failed:
+            colour = "red"
+            failed += 1
+        elif not outcome.selected:
+            colour = "dim"
+        elif outcome.status in ("missing", "invalid"):
+            colour = "yellow"
+            missing += 1
+        else:
+            installed += 1
+        table.add_row(outcome.key, f"[{colour}]{status}[/{colour}]", outcome.detail)
+    console.print(table)
+
+    gaps = [] if options.dry_run else capability_gaps(result.outcomes)
+    if gaps:
+        console.print("\n[bold]Consequences[/bold]")
+        for gap in gaps:
+            console.print(f"  {gap}", highlight=False)
+
+    for remedy in result.remedies:
+        console.print(f"\n[yellow]{remedy}[/yellow]", highlight=False)
+
+    selected = len(plan.selected)
+    if options.dry_run:
+        console.print(
+            f"\nDry run: {selected} assets would be provisioned; nothing was downloaded."
+        )
+    elif failed:
+        console.print(
+            f"\n{installed} installed, {failed} failed - re-run 'mulder setup' to retry; "
+            "see the errors above."
+        )
+    elif missing:
+        # Never fall through to "All ... present" here: the table two lines up
+        # says otherwise, and the last line is the one a human actually reads.
+        console.print(
+            f"\n{installed} present, {missing} missing - run 'mulder setup' to install them."
+        )
+    elif shadowed:
+        console.print(
+            f"\n{installed} installed, {shadowed} shadowed - mulder is still reading "
+            "the older copies."
+        )
+    else:
+        console.print(f"\nAll {selected} selected assets present.")
+
+
+def _setup_json(result: Result, plan: Plan) -> str:
+    import json
+
+    return json.dumps(
+        {
+            "schema": 1,
+            "root": str(plan.write_root),
+            "arch": plan.arch,
+            "assets": [
+                {
+                    "key": outcome.key,
+                    "status": outcome.status,
+                    "selected": outcome.selected,
+                    "detail": outcome.detail,
+                    "bytes": outcome.size,
+                    "shadowed_by": outcome.shadowed_by,
+                }
+                for outcome in result.outcomes
+            ],
+            "exit": result.exit_code,
+        },
+        indent=2,
+    )
+
+
+def _human_bytes(count: int) -> str:
+    """Render a byte count the way the docs quote sizes."""
+    if count >= 1024**3:
+        return f"{count / 1024**3:.1f} GB"
+    return f"{count / 1024**2:.0f} MB"
 
 
 @cli.command("export-iocs")

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Extract a compact technique-to-tactic mapping from MITRE ATT&CK STIX bundles.
 
-Reads the Enterprise and ICS ATT&CK STIX bundles (shipped in the container
-at ``/opt/attack/``) and writes a single JSON lookup file suitable for
-shipping as Python package data.
+Reads the Enterprise and ICS ATT&CK STIX bundles (provisioned by
+``mulder setup`` under the mulder asset root, and baked into the container
+image) and writes a single JSON lookup file suitable for shipping as Python
+package data.
 
 Usage::
 
@@ -28,8 +29,17 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-_DEFAULT_STIX_PATH = Path("/opt/attack/enterprise-attack.json")
-_DEFAULT_ICS_STIX_PATH = Path("/opt/attack/ics-attack.json")
+try:
+    from mulder.assets.paths import asset_display_path
+except ImportError:  # run standalone, outside mulder's environment
+
+    def asset_display_path(*parts: str) -> Path:
+        """Fall back to the container layout when mulder is not importable."""
+        return Path("/opt").joinpath(*parts)
+
+
+_DEFAULT_STIX_PATH = asset_display_path("attack", "enterprise-attack.json")
+_DEFAULT_ICS_STIX_PATH = asset_display_path("attack", "ics-attack.json")
 _STIX_URL = (
     "https://raw.githubusercontent.com/mitre-attack/attack-stix-data"
     "/master/enterprise-attack/enterprise-attack.json"

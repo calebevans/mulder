@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 import tempfile
 import time
 from pathlib import Path
 from typing import Any, Literal
 
+from mulder.assets.paths import asset_display_path, asset_path, asset_search_summary
 from mulder.patterns import DISK_IMAGE_EXTS
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
@@ -30,8 +32,29 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 _CHAINSAW_TIMEOUT = 600
-_CHAINSAW_BINARY = "/usr/local/bin/chainsaw"
-_DEFAULT_SIGMA_RULES = "/opt/sigma-rules/rules/windows/"
+
+
+def _chainsaw_binary() -> str | None:
+    """Resolve the chainsaw executable: PATH first, asset root second.
+
+    PATH wins so a SIFT/apt/cargo install keeps being used.  The resolved value
+    is also what gets exec'd -- gating on ``which`` and then exec'ing a
+    hardcoded ``/usr/local/bin/chainsaw`` is what made a ``~/.local/bin``
+    install report ``os_error`` instead of ``binary_missing`` and silently
+    never run.
+    """
+    found = require_binary("chainsaw")
+    if found:
+        return found
+    candidate = asset_path("chainsaw", "chainsaw")
+    if candidate is not None and os.access(candidate, os.X_OK):
+        return str(candidate)
+    return None
+
+
+def _default_sigma_rules() -> Path:
+    """The Sigma rules directory ``mulder setup`` provisions for hunt mode."""
+    return asset_display_path("sigma-rules", "rules", "windows")
 
 
 def _resolve_evtx_evidence(evidence_path: str) -> str:
@@ -82,6 +105,7 @@ def _resolve_evtx_evidence(evidence_path: str) -> str:
 
 
 def _run_chainsaw_hunt(
+    binary: str,
     evidence_path: Path,
     sigma_rules_path: Path,
     output_dir: Path,
@@ -92,6 +116,7 @@ def _run_chainsaw_hunt(
     """Execute Chainsaw in hunt mode against EVTX files.
 
     Args:
+        binary: Resolved Chainsaw executable.
         evidence_path: Directory containing .evtx files.
         sigma_rules_path: Path to Sigma rules directory.
         output_dir: Output directory for results.
@@ -107,7 +132,7 @@ def _run_chainsaw_hunt(
     """
     output_file = output_dir / "chainsaw_hunt.json"
     cmd = [
-        _CHAINSAW_BINARY,
+        binary,
         "hunt",
         str(evidence_path),
         "-s",
@@ -132,6 +157,7 @@ def _run_chainsaw_hunt(
 
 
 def _run_chainsaw_search(
+    binary: str,
     evidence_path: Path,
     search_term: str,
     output_dir: Path,
@@ -142,6 +168,7 @@ def _run_chainsaw_search(
     """Execute Chainsaw in search mode against EVTX files.
 
     Args:
+        binary: Resolved Chainsaw executable.
         evidence_path: Directory containing .evtx files.
         search_term: Keyword or regex to search for.
         output_dir: Output directory for results.
@@ -157,7 +184,7 @@ def _run_chainsaw_search(
     """
     output_file = output_dir / "chainsaw_search.json"
     cmd = [
-        _CHAINSAW_BINARY,
+        binary,
         "search",
         search_term,
         str(evidence_path),
@@ -181,11 +208,12 @@ def _run_chainsaw_search(
 
 
 def _run_chainsaw_srum(
-    srum_path: Path, output_dir: Path, timeout: int = _CHAINSAW_TIMEOUT
+    binary: str, srum_path: Path, output_dir: Path, timeout: int = _CHAINSAW_TIMEOUT
 ) -> Path:
     """Execute Chainsaw SRUM parsing mode.
 
     Args:
+        binary: Resolved Chainsaw executable.
         srum_path: Path to the SRUDB.dat file.
         output_dir: Output directory for results.
         timeout: Subprocess timeout in seconds.
@@ -198,7 +226,7 @@ def _run_chainsaw_srum(
     """
     output_file = output_dir / "chainsaw_srum.json"
     cmd = [
-        _CHAINSAW_BINARY,
+        binary,
         "analyse",
         "srum",
         str(srum_path),
@@ -217,6 +245,7 @@ def _run_chainsaw_srum(
 
 
 def _run_chainsaw_timeline(
+    binary: str,
     evidence_path: Path,
     output_dir: Path,
     time_start: str | None = None,
@@ -226,6 +255,7 @@ def _run_chainsaw_timeline(
     """Execute Chainsaw in dump/timeline mode against EVTX files.
 
     Args:
+        binary: Resolved Chainsaw executable.
         evidence_path: Directory containing .evtx files.
         output_dir: Output directory for results.
         time_start: Optional time range start.
@@ -240,7 +270,7 @@ def _run_chainsaw_timeline(
     """
     output_file = output_dir / "chainsaw_timeline.json"
     cmd = [
-        _CHAINSAW_BINARY,
+        binary,
         "dump",
         str(evidence_path),
         "--json",
@@ -388,7 +418,7 @@ def _parse_chainsaw_timeline_results(results_path: Path) -> dict[str, Any]:
 def run_chainsaw(
     evidence_path: str,
     mode: Literal["hunt", "search", "srum", "timeline"] = "hunt",
-    sigma_rules_path: str = _DEFAULT_SIGMA_RULES,
+    sigma_rules_path: str = "",
     search_term: str | None = None,
     time_range_start: str | None = None,
     time_range_end: str | None = None,
@@ -408,7 +438,8 @@ def run_chainsaw(
             "search" finds specific strings/patterns in EVTX, "srum"
             parses the SRUM database for process resource usage,
             "timeline" dumps all events chronologically.
-        sigma_rules_path: Path to the Sigma rules directory.
+        sigma_rules_path: Path to the Sigma rules directory. Empty
+            resolves to the rules installed by 'mulder setup'.
         search_term: Required when mode="search". The keyword or
             regex pattern to search for in EVTX records.
         time_range_start: Optional ISO 8601 timestamp to filter results
@@ -445,14 +476,18 @@ def run_chainsaw(
                 0.0,
             )
 
-    if not require_binary("chainsaw") and not Path(_CHAINSAW_BINARY).exists():
+    binary = _chainsaw_binary()
+    if binary is None:
         return error_response(
             tc_id,
             "run_chainsaw",
             params,
-            "chainsaw not found on PATH",
+            f"chainsaw not found on PATH or under {asset_search_summary('chainsaw', 'chainsaw')}",
             error_type="binary_missing",
-            suggestion="Install Chainsaw from https://github.com/WithSecureLabs/chainsaw",
+            suggestion=(
+                "Run 'mulder setup' (installs Chainsaw 2.16.0), or install it "
+                "from https://github.com/WithSecureLabs/chainsaw"
+            ),
         )
 
     if mode in ("hunt", "search", "timeline"):
@@ -476,14 +511,17 @@ def run_chainsaw(
             error_type="invalid_argument",
         )
 
+    rules = Path(sigma_rules_path) if sigma_rules_path else _default_sigma_rules()
+
     timeout = adaptive_timeout(evidence_path, base=_CHAINSAW_TIMEOUT)
     with tempfile.TemporaryDirectory(prefix="mulder_chainsaw_") as tmpdir:
         output_dir = Path(tmpdir)
         try:
             if mode == "hunt":
                 results_path = _run_chainsaw_hunt(
+                    binary,
                     Path(evidence_path),
-                    Path(sigma_rules_path),
+                    rules,
                     output_dir,
                     time_range_start,
                     time_range_end,
@@ -494,6 +532,7 @@ def run_chainsaw(
             elif mode == "search":
                 assert search_term is not None
                 results_path = _run_chainsaw_search(
+                    binary,
                     Path(evidence_path),
                     search_term,
                     output_dir,
@@ -504,11 +543,14 @@ def run_chainsaw(
                 result = _parse_chainsaw_hunt_results(results_path)
                 source_name = "chainsaw.search"
             elif mode == "srum":
-                results_path = _run_chainsaw_srum(Path(evidence_path), output_dir, timeout=timeout)
+                results_path = _run_chainsaw_srum(
+                    binary, Path(evidence_path), output_dir, timeout=timeout
+                )
                 result = _parse_chainsaw_srum_results(results_path)
                 source_name = "chainsaw.srum"
             else:
                 results_path = _run_chainsaw_timeline(
+                    binary,
                     Path(evidence_path),
                     output_dir,
                     time_range_start,

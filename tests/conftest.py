@@ -37,6 +37,61 @@ def _install_sdk_stub() -> None:
 _install_sdk_stub()
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _hermetic_asset_root(tmp_path_factory: pytest.TempPathFactory) -> Generator[None]:
+    """Point every asset lookup at an empty tmp dir for the whole session.
+
+    ``MULDER_ASSET_ROOT`` is exclusive (SPEC/setup/01-spec.md §1.2), so this
+    makes the suite independent of the developer's ``/opt`` *and* of whatever
+    their own ``mulder setup`` installed.  Session-scoped, so it cannot use the
+    function-scoped ``monkeypatch`` fixture without a ``ScopeMismatch``.
+    """
+    from mulder.assets.paths import reset_asset_caches
+
+    mp = pytest.MonkeyPatch()
+    mp.setenv("MULDER_ASSET_ROOT", str(tmp_path_factory.mktemp("empty-assets")))
+    reset_asset_caches()
+    yield
+    mp.undo()
+    reset_asset_caches()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_network(_hermetic_asset_root: None) -> Generator[None]:
+    """Fail loudly on any real socket connect or httpx request.
+
+    ``mulder setup``'s fetcher is injectable so tests can substitute a local
+    one; this is the belt-and-braces layer that catches a regression which
+    bypasses the injection and would otherwise download gigabytes in CI.
+    """
+    import socket
+
+    import httpx
+
+    def _blocked(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("test attempted network I/O")
+
+    mp = pytest.MonkeyPatch()
+    mp.setattr(socket.socket, "connect", _blocked)
+    mp.setattr(httpx.Client, "send", _blocked)
+    mp.setattr(httpx.AsyncClient, "send", _blocked)
+    yield
+    mp.undo()
+
+
+@pytest.fixture()
+def asset_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[Path]:
+    """Pin ``MULDER_ASSET_ROOT`` to a tmp dir and flush every dependent cache."""
+    from mulder.assets.paths import reset_asset_caches
+
+    root = tmp_path / "assets"
+    root.mkdir()
+    monkeypatch.setenv("MULDER_ASSET_ROOT", str(root))
+    reset_asset_caches()
+    yield root
+    reset_asset_caches()
+
+
 @pytest.fixture(autouse=True)
 def _reset_gate_counters() -> None:
     """Reset module-level gate failure counters between tests."""

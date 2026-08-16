@@ -75,7 +75,7 @@ stix = ["stix2>=3.0"]
 # NOT covered by this extra: ALEAPP and iLEAPP. Their upstream requirements.txt
 # files carry a git URL, local wheel paths and mutually conflicting pins, so they
 # cannot be expressed as a PyPI extra; install them with
-# `pipx inject mulder-dfir --requirements /opt/aleapp/requirements.txt`.
+# `mulder setup --full --inject-deps`.
 forensics = [
     "orjson>=3.9.15",
     "xxhash>=3.0",
@@ -90,6 +90,9 @@ dev = [
     "mypy",
     "ruff",
     "pre-commit",
+    # `make dist-check` / the release workflow validate the built metadata
+    # before anything is uploaded.
+    "twine",
 ]
 
 [project.urls]
@@ -160,6 +163,22 @@ ignore_missing_imports = true
 module = "tests.*"
 disallow_untyped_decorators = false
 ignore_missing_imports = true
+
+# Tests monkeypatch through the module under test --
+# `monkeypatch.setattr(probes.shutil, "which", ...)` is the standard pytest
+# idiom, and patching `install.ASSETS` is deliberately *not* the same as
+# patching `manifest.ASSETS`. `no_implicit_reexport` (implied by --strict)
+# rejects every such access, and the option is read from the module being
+# imported *from*, so it has to be declared here rather than under `tests.*`.
+# Scoped to the three modules the suite actually reaches into, so the rest of
+# the package keeps the explicit-re-export guarantee.
+[[tool.mypy.overrides]]
+module = [
+    "mulder.assets.install",
+    "mulder.assets.paths",
+    "mulder.doctor.probes",
+]
+implicit_reexport = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
