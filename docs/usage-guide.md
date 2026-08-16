@@ -41,6 +41,8 @@ Try-it-out instructions for running Mulder, the forensic investigation platform.
 ## Prerequisites
 
 - **Docker or Podman** installed and running. All commands below use `docker`, but `podman` works as a drop-in replacement.
+
+  If you are on a SANS SIFT Workstation, there is a second option: `sudo ./install.sh` installs Mulder natively into an isolated virtualenv at `/opt/mulder` and reuses the forensic tools SIFT already provides, so there is no container to pull. See the [SIFT Install Guide](sift-install.md). Everything below still applies, minus the `docker run` wrapper: set the same environment variables in your shell and run `mulder investigate` directly.
 - **Evidence to analyze.** A directory containing disk images, memory dumps, event logs, or other forensic artifacts.
 - **An LLM provider account.** One of the following:
   - An Anthropic API key

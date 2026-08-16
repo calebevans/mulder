@@ -49,6 +49,74 @@ jobs:
       - name: Run pre-commit
         run: uv run --locked --extra dev pre-commit run --all-files
 
+  shellcheck:
+    name: Shellcheck
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+
+      - name: Run shellcheck
+        run: shellcheck -S warning install.sh uninstall.sh scripts/entrypoint.sh
+
+  installer-smoke:
+    # A stock Ubuntu container has none of SIFT's tools, so this proves the
+    # venv bootstrap, the wrapper, non-root usability, idempotence and the
+    # uninstall path. It does NOT prove SIFT compatibility.
+    name: Installer smoke (stock Ubuntu container, not SIFT)
+    runs-on: ubuntu-latest
+    container: ubuntu:24.04
+
+    steps:
+      - name: Install container prerequisites
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update -qq
+          # python3 and python3-virtualenv mirror what a real SIFT box already
+          # has; a minimised ubuntu:24.04 image ships neither.
+          apt-get install -y -qq --no-install-recommends \
+            sudo curl git ca-certificates python3 python3-virtualenv
+
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Install (minimal tier)
+        run: ./install.sh --minimal --yes
+
+      - name: Assert the installed version matches pyproject.toml
+        run: |
+          expected="$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml | head -n1)"
+          got="$(mulder --version)"
+          echo "pyproject=$expected  mulder --version -> $got"
+          case "$got" in
+            *"$expected"*) echo "version matches" ;;
+            *) echo "version mismatch"; exit 1 ;;
+          esac
+
+      - name: Assert the venv is usable by a non-root user
+        # This is the check that catches a venv whose interpreter or prefix is
+        # unreadable by the actual runtime user (sansforensics on SIFT).
+        run: sudo -u nobody /opt/mulder/venv/bin/mulder --version
+
+      - name: Verify (REQUIRED probes only; no --strict)
+        run: ./install.sh --verify
+
+      - name: Re-run must be idempotent
+        run: ./install.sh --minimal --yes
+
+      - name: Uninstall
+        run: |
+          ./uninstall.sh --yes
+          test ! -d /opt/mulder
+          test ! -e /usr/local/bin/mulder
+
   test:
     name: Unit tests
     runs-on: ubuntu-latest

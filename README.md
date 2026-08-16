@@ -47,6 +47,10 @@ Each gate validates structural criteria (minimum sources indexed, findings submi
 
 ## Quick Start
 
+### Docker
+
+The container image ships every forensic tool at a known version and is the portable path. It runs anywhere Docker or Podman does.
+
 ```bash
 docker pull ghcr.io/calebevans/mulder:1.3.2
 ```
@@ -66,6 +70,23 @@ mulder investigate /evidence my-case-id
 ```
 
 For Vertex AI, Amazon Bedrock, non-Anthropic models via LiteLLM, and full CLI options, see the [Usage Guide](docs/usage-guide.md).
+
+### Install on SIFT
+
+On a SANS SIFT Workstation the underlying forensic toolchain is already installed, so `install.sh` reuses it and fills in only the gaps (chainsaw, Hayabusa, Zircolite, Sigma rules, ATT&CK, PECmd, the `yara` binary). Mulder itself goes into an isolated virtualenv at `/opt/mulder`; nothing SIFT owns is modified.
+
+```bash
+git clone https://github.com/calebevans/mulder.git
+cd mulder
+sudo ./install.sh
+```
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+mulder investigate /path/to/evidence my-case-id
+```
+
+`--minimal` skips the gap tools and installs only Mulder, its Python environment and the missing apt packages; `--full` adds signature-base, Volatility symbols, ALEAPP/iLEAPP, FLOSS, Detect-It-Easy and LiteLLM. `./install.sh --verify` checks an existing install and `sudo mulder-uninstall` reverses it. See the [SIFT Install Guide](docs/sift-install.md) for the tier matrix, what gets reused from SIFT, and troubleshooting.
 
 ### Case Briefing (Optional)
 
@@ -115,6 +136,7 @@ Each investigation produces:
 | Document | Description |
 |----------|-------------|
 | [Usage Guide](docs/usage-guide.md) | Installation, providers, CLI reference, Docker configuration |
+| [SIFT Install Guide](docs/sift-install.md) | Native install on the SANS SIFT Workstation, tiers, verification |
 | [Architecture](docs/architecture.md) | System design, pipeline phases, quality gates, data flow |
 | [Tool Manifest](docs/tool-manifest.md) | API reference for all MCP tools |
 | [Adding Tools](docs/adding-tools.md) | Contributor guide for adding new forensic tools |
