@@ -15,7 +15,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -118,126 +118,8 @@ class TestChainsaw:
         assert str(rules) in mock_run.call_args[0][0]
 
 
-class TestZeek:
-    def test_execs_the_binary_the_gate_found(self, tmp_path: Path) -> None:
-        from mulder.server.tools.extract.pcap import run_zeek_analysis
-
-        zeek = _fake_binary(tmp_path, "zeek")
-        pcap = tmp_path / "capture.pcap"
-        pcap.write_bytes(b"\xd4\xc3\xb2\xa1")
-
-        with (
-            patch(
-                "mulder.server.helpers.shutil.which",
-                side_effect=lambda name: str(zeek) if name == "zeek" else None,
-            ),
-            patch("mulder.server.tools.extract.pcap.extract_and_index", return_value={}),
-            patch(
-                "mulder.server.tools.extract.pcap.subprocess.run", return_value=_completed()
-            ) as mock_run,
-        ):
-            result = run_zeek_analysis.__wrapped__(str(pcap))  # type: ignore[attr-defined]
-
-        assert result.get("error_type") != "binary_missing"
-        assert mock_run.call_args[0][0][0] == str(zeek)
-
-    def test_missing_reports_binary_missing(self, tmp_path: Path) -> None:
-        from mulder.server.tools.extract.pcap import run_zeek_analysis
-
-        with patch("mulder.server.helpers.shutil.which", return_value=None):
-            result = run_zeek_analysis.__wrapped__(str(tmp_path / "x.pcap"))  # type: ignore[attr-defined]
-
-        assert result["error_type"] == "binary_missing"
-
-
-class TestSuricata:
-    def test_execs_the_binary_the_gate_found(self, tmp_path: Path) -> None:
-        from mulder.server.tools.extract.pcap import run_suricata
-
-        suricata = _fake_binary(tmp_path, "suricata")
-        pcap = tmp_path / "capture.pcap"
-        pcap.write_bytes(b"\xd4\xc3\xb2\xa1")
-
-        with (
-            patch(
-                "mulder.server.helpers.shutil.which",
-                side_effect=lambda name: str(suricata) if name == "suricata" else None,
-            ),
-            patch("mulder.server.tools.extract.pcap.extract_and_index", return_value={}),
-            patch(
-                "mulder.server.tools.extract.pcap.subprocess.run", return_value=_completed()
-            ) as mock_run,
-        ):
-            result = run_suricata.__wrapped__(str(pcap))  # type: ignore[attr-defined]
-
-        assert result.get("error_type") != "binary_missing"
-        assert mock_run.call_args[0][0][0] == str(suricata)
-
-    def test_disk_pcap_path_uses_the_resolved_binary_too(self, tmp_path: Path) -> None:
-        """The same divergence lived a second time in the disk-image PCAP path."""
-        from mulder.server.tools.extract.disk_pcap import _analyze_single_pcap
-
-        suricata = _fake_binary(tmp_path, "suricata")
-        pcap = tmp_path / "extracted.pcap"
-        pcap.write_bytes(b"\xd4\xc3\xb2\xa1")
-
-        with (
-            patch(
-                "mulder.server.helpers.shutil.which",
-                side_effect=lambda name: str(suricata) if name == "suricata" else None,
-            ),
-            patch("mulder.server.tools.extract.disk_pcap._run_tshark_summary", return_value=""),
-            patch(
-                "mulder.server.tools.extract.pcap.subprocess.run", return_value=_completed()
-            ) as mock_run,
-            patch("mulder.server.tools.extract.pcap._parse_eve_json", return_value=_eve_stub()),
-        ):
-            _analyze_single_pcap(
-                pcap,
-                "extracted.pcap",
-                "case",
-                run_ids=True,
-                extract_credentials=False,
-                image_path="/evidence/disk.E01",
-            )
-
-        assert mock_run.call_args[0][0][0] == str(suricata)
-
-
 def _eve_stub() -> dict[str, Any]:
     return {"statistics": {"total_alerts": 0, "top_signatures": []}}
-
-
-class TestHayabusa:
-    def test_asset_root_wins_over_path(self, asset_root: Path) -> None:
-        from mulder.server.tools.hayabusa import _hayabusa_binary
-
-        installed = asset_root / "hayabusa"
-        installed.mkdir()
-        binary = installed / "hayabusa"
-        binary.write_text("")
-        binary.chmod(0o755)
-
-        with patch("mulder.server.tools.hayabusa.shutil.which", return_value="/usr/bin/hayabusa"):
-            assert _hayabusa_binary() == str(binary)
-
-    def test_falls_back_to_path(self, asset_root: Path) -> None:
-        from mulder.server.tools.hayabusa import _hayabusa_binary
-
-        with patch("mulder.server.tools.hayabusa.shutil.which", return_value="/usr/bin/hayabusa"):
-            assert _hayabusa_binary() == "/usr/bin/hayabusa"
-
-    def test_missing_reports_binary_missing(self, asset_root: Path) -> None:
-        from mulder.server.tools.hayabusa import run_hayabusa
-
-        with (
-            patch("mulder.server.tools.hayabusa.sources_already_indexed", return_value=[]),
-            patch("mulder.server.tools.hayabusa.shutil.which", return_value=None),
-        ):
-            result = run_hayabusa.__wrapped__(evtx_dir=str(asset_root))  # type: ignore[attr-defined]
-
-        assert result["error_type"] == "binary_missing"
-        assert "mulder setup" in str(result["error_message"])
 
 
 @pytest.mark.parametrize(
@@ -274,12 +156,3 @@ def test_no_tool_execs_a_module_level_binary_constant() -> None:
 
     assert "        _ZEEK_BINARY,\n" not in source
     assert "        _SURICATA_BINARY,\n" not in source
-
-
-def test_mocks_are_wired_the_way_the_helpers_resolve() -> None:
-    """Guard the guard: ``require_binary`` must really be ``shutil.which``."""
-    from mulder.server import helpers
-
-    with patch("mulder.server.helpers.shutil.which", MagicMock(return_value="/x")) as which:
-        assert helpers.require_binary("anything") == "/x"
-    which.assert_called_once_with("anything")

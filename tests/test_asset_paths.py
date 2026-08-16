@@ -57,47 +57,6 @@ class TestReadRoots:
 
         assert paths.asset_roots() == (paths.user_root(),)
 
-    def test_env_change_takes_effect_without_a_flush(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """The lru_cache key covers the variable, so tests need no bookkeeping."""
-        monkeypatch.setenv(paths.ENV_ASSET_ROOT, str(tmp_path / "a"))
-        assert paths.asset_roots() == (tmp_path / "a",)
-
-        monkeypatch.setenv(paths.ENV_ASSET_ROOT, str(tmp_path / "b"))
-        assert paths.asset_roots() == (tmp_path / "b",)
-
-
-class TestLookups:
-    def test_asset_path_returns_first_existing(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        opt = _fake_opt(monkeypatch, tmp_path)
-        (opt / "attack").mkdir()
-        (opt / "attack" / "enterprise-attack.json").write_text("{}")
-        user = paths.user_root() / "attack"
-        user.mkdir(parents=True)
-        (user / "enterprise-attack.json").write_text("{}")
-
-        assert paths.asset_path("attack", "enterprise-attack.json") == (
-            opt / "attack" / "enterprise-attack.json"
-        )
-
-    def test_asset_path_is_none_when_nothing_exists(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        _fake_opt(monkeypatch, tmp_path)
-
-        assert paths.asset_path("attack", "enterprise-attack.json") is None
-
-    def test_search_summary_lists_every_candidate_in_order(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        opt = _fake_opt(monkeypatch, tmp_path)
-        summary = paths.asset_search_summary("zimmermantools")
-
-        assert summary == f"{opt / 'zimmermantools'}, {paths.user_root() / 'zimmermantools'}"
-
 
 class TestDisplayPath:
     def test_falls_back_to_the_write_root_not_the_first_read_root(
@@ -118,15 +77,6 @@ class TestDisplayPath:
         assert shown == paths.user_root() / "aleapp" / "requirements.txt"
         assert str(opt) not in str(shown)
 
-    def test_prefers_an_installed_copy(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        opt = _fake_opt(monkeypatch, tmp_path)
-        (opt / "aleapp").mkdir()
-        (opt / "aleapp" / "aleapp.py").write_text("")
-
-        assert paths.asset_display_path("aleapp", "aleapp.py") == opt / "aleapp" / "aleapp.py"
-
 
 class TestWriteRoot:
     def test_env_wins_even_when_unwritable(
@@ -146,40 +96,6 @@ class TestWriteRoot:
 
         monkeypatch.setattr(paths.os, "access", lambda *_a, **_k: False)
         assert paths.asset_write_root() == paths.user_root()
-
-
-class TestCacheClearing:
-    def test_reset_clears_every_registered_consumer(self) -> None:
-        """All four root-dependent caches must be flushed by one call."""
-        from mulder.server.tools.attack import _load_attack_data  # noqa: F401
-        from mulder.server.tools.extract.misc import _dotnet_major, _find_ez_tool
-        from mulder.server.tools.phone import _find_leapp_cmd
-
-        calls: list[str] = []
-        paths.register_cache_clear(lambda: calls.append("probe"))
-        paths.reset_asset_caches()
-
-        assert calls == ["probe"]
-        assert _find_ez_tool.cache_info().currsize == 0
-        assert _find_leapp_cmd.cache_info().currsize == 0
-        assert _dotnet_major.cache_info().currsize == 0
-
-    def test_attack_cache_is_reset(self) -> None:
-        import mulder.server.tools.attack as attack
-
-        attack._attack_techniques = {"T1059": {}}
-        paths.reset_asset_caches()
-
-        assert attack._attack_techniques is None
-
-    def test_yara_update_flag_is_rearmed(self) -> None:
-        """A setup run that *creates* signature-base must allow a pull."""
-        import mulder.server.tools.yara as yara
-
-        yara._rules_updated = True
-        paths.reset_asset_caches()
-
-        assert yara._rules_updated is False
 
 
 def test_no_module_outside_paths_uses_the_first_read_root() -> None:

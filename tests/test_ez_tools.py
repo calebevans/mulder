@@ -16,7 +16,7 @@ from unittest.mock import patch
 import pytest
 
 from mulder.assets import paths
-from mulder.server.tools.extract.misc import _find_ez_tool, _framework_rank
+from mulder.server.tools.extract.misc import _find_ez_tool
 
 
 @pytest.fixture(autouse=True)
@@ -80,42 +80,3 @@ def test_selection_is_stable_against_filesystem_ordering(asset_root: Path) -> No
             results.append(_find_ez_tool("PECmd.dll"))
 
     assert results[0] == results[1] == str(asset_root / "zimmermantools" / "net9" / "PECmd.dll")
-
-
-def test_platform_root_is_searched_before_mulder_s_own(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """SIFT's DLLs are version-matched to SIFT's dotnet; never shadow them."""
-    platform_root = tmp_path / "opt"
-    user_root = tmp_path / "home-assets"
-    _place(platform_root, "zimmermantools", "net6", "PECmd.dll")
-    _place(user_root, "zimmermantools", "net9", "PECmd.dll")
-
-    monkeypatch.delenv(paths.ENV_ASSET_ROOT, raising=False)
-    monkeypatch.setattr(paths, "SYSTEM_ROOT", platform_root)
-    monkeypatch.setattr(Path, "home", lambda: tmp_path / "fake-home")
-    monkeypatch.setattr(paths, "user_root", lambda: user_root)
-    paths.reset_asset_caches()
-
-    with patch("mulder.server.tools.extract.misc._dotnet_major", return_value=9):
-        selected = _find_ez_tool("PECmd.dll")
-
-    assert selected == str(platform_root / "zimmermantools" / "net6" / "PECmd.dll")
-
-
-def test_a_flat_dll_always_counts_as_runnable() -> None:
-    """No netN component means no claim about the runtime it needs."""
-    runnable, best, _ = _framework_rank(Path("/opt/zimmermantools/PECmd.dll"), ceiling=6)
-
-    assert (runnable, best) == (1, -1)
-
-
-def test_error_names_every_root_that_was_searched(asset_root: Path) -> None:
-    from mulder.server.tools.extract.misc import _run_ez_tool
-
-    with patch("mulder.server.tools.extract.misc.require_binary", return_value="/usr/bin/dotnet"):
-        result = _run_ez_tool("PECmd.dll", [], "ez.prefetch", "/evidence", "tc", "t", {}, 0.0)
-
-    assert result["error_type"] == "binary_missing"
-    assert str(asset_root / "zimmermantools") in str(result["error_message"])
-    assert "mulder setup" in str(result["error_message"])

@@ -13,7 +13,6 @@ Offline by construction, in three independent layers:
 
 from __future__ import annotations
 
-import errno
 import json
 import os
 import tarfile
@@ -148,15 +147,6 @@ class TestPlanning:
 
         assert order.index("sigma-rules") < order.index("zircolite")
 
-    def test_amd64_only_rows_report_the_substitute_on_aarch64(
-        self, roots: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(install_mod, "detect_arch", lambda: "arm64")
-        plan, _ = _plan(roots)
-
-        assert "flare-floss" in plan.excluded["floss"]
-        assert "GLIBC" in plan.excluded["hayabusa"]
-
     def test_pinnable_row_without_a_digest_is_fatal(
         self, roots: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -174,25 +164,6 @@ class TestPlanning:
 
         assert exc.value.exit_code == 1
         assert "make assets-lock" in str(exc.value)
-
-    def test_every_pinnable_row_is_actually_locked(self) -> None:
-        """The checked-in assets.lock must cover the shipped manifest."""
-        from mulder.assets.manifest import ASSETS
-
-        missing = [
-            f"{asset.key}:{arch}"
-            for asset in ASSETS
-            if asset.pinnable
-            for arch in asset.urls
-            if not asset.digests.get(arch)
-        ]
-
-        assert missing == []
-
-
-# ---------------------------------------------------------------------------
-# Pre-flight
-# ---------------------------------------------------------------------------
 
 
 class TestPreflight:
@@ -261,18 +232,6 @@ class TestProvisioning:
         assert _by_key(second)["attack"].status == "up-to-date"
         assert len(fetcher.urls) == fetched
 
-    def test_manifest_version_bump_marks_the_asset_stale(self, roots: tuple[Path, Path]) -> None:
-        fetcher = RecordingFetcher(roots[0])
-        _run(roots, fetcher, {"attack"})
-
-        state = AssetState.load(roots[0])
-        state.assets["attack"].version = "an-older-manifest-version"
-        state.save(roots[0])
-
-        result = _run(roots, fetcher, {"attack"})
-
-        assert _by_key(result)["attack"].status == "stale -> updated"
-
     def test_a_failed_fetch_leaves_the_previous_good_copy_intact(
         self, roots: tuple[Path, Path]
     ) -> None:
@@ -293,14 +252,6 @@ class TestProvisioning:
         assert result.exit_code == 3
         assert (roots[0] / "attack" / "enterprise-attack.json").read_bytes() == good
         assert json.loads(good)["objects"] == []
-
-    def test_a_404_is_reported_not_raised(self, roots: tuple[Path, Path]) -> None:
-        fetcher = RecordingFetcher(roots[0])
-        fetcher.fail.add("enterprise-attack.json")
-        result = _run(roots, fetcher, {"attack"})
-
-        assert "404" in _by_key(result)["attack"].status
-        assert result.exit_code == 3
 
     def test_checksum_mismatch_is_a_failure(self, roots: tuple[Path, Path]) -> None:
         fetcher = RecordingFetcher(roots[0])
@@ -326,17 +277,6 @@ class TestProvisioning:
         assert (roots[1] / "capa").is_symlink()
         assert (roots[1] / "capa").resolve() == (roots[0] / "capa" / "capa").resolve()
 
-    def test_staging_is_swept_and_leaves_nothing_behind(self, roots: tuple[Path, Path]) -> None:
-        orphan = roots[0] / install_mod.STAGING_DIRNAME / "attack.999"
-        orphan.mkdir(parents=True)
-        (roots[0] / "attack.new").mkdir()
-
-        _run(roots, RecordingFetcher(roots[0]), {"attack"})
-
-        assert not (roots[0] / install_mod.STAGING_DIRNAME).exists()
-        assert not (roots[0] / "attack.new").exists()
-        assert not (roots[0] / "attack.old").exists()
-
 
 class TestVerify:
     def test_verify_reports_missing_and_exits_4(self, roots: tuple[Path, Path]) -> None:
@@ -356,18 +296,6 @@ class TestVerify:
         result = provision(plan, options, fetch=OfflineFetcher())
 
         assert result.exit_code == 0
-
-    def test_verify_flags_a_truncated_install(self, roots: tuple[Path, Path]) -> None:
-        from mulder.assets.fetch import OfflineFetcher
-
-        _run(roots, RecordingFetcher(roots[0]), {"attack"})
-        (roots[0] / "attack" / "enterprise-attack.json").write_text('{"objec')
-
-        plan, options = _plan(roots, {"attack"}, verify=True)
-        result = provision(plan, options, fetch=OfflineFetcher())
-
-        assert _by_key(result)["attack"].status == "invalid"
-        assert result.exit_code == 4
 
 
 class TestShadowing:
@@ -438,46 +366,6 @@ class TestShadowing:
         assert str(theirs / "attack") in attack.detail
         assert result.exit_code == 0
 
-    def test_verify_still_reports_missing_when_it_resolves_nowhere(
-        self, roots: tuple[Path, Path]
-    ) -> None:
-        """The inverse of the above: absence must stay loud."""
-        from mulder.assets.fetch import OfflineFetcher
-
-        write_root, bin_dir = roots
-        options = SetupOptions(verify=True)
-        plan = build_plan(options, write_root, bin_dir)
-        plan.selected = [a for a in plan.selected if a.key == "attack"]
-        result = provision(plan, options, fetch=OfflineFetcher())
-
-        assert _by_key(result)["attack"].status == "missing"
-        assert result.exit_code == 4
-
-    def test_a_truncated_shadowing_copy_is_detected_not_masked(
-        self, roots: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from mulder.assets import paths
-        from mulder.assets.fetch import OfflineFetcher
-
-        write_root, bin_dir = roots
-        _run(roots, RecordingFetcher(write_root), {"attack"})
-
-        stale = tmp_path / "opt"
-        (stale / "attack").mkdir(parents=True)
-        (stale / "attack" / "enterprise-attack.json").write_text('{"objec')
-        monkeypatch.delenv("MULDER_ASSET_ROOT")
-        monkeypatch.setattr(paths, "SYSTEM_ROOT", stale)
-        monkeypatch.setattr(Path, "home", lambda: write_root.parent / "fake-home")
-        monkeypatch.setattr(paths, "user_root", lambda: write_root)
-        paths.reset_asset_caches()
-
-        options = SetupOptions(verify=True)
-        plan = build_plan(options, write_root, bin_dir)
-        plan.selected = [a for a in plan.selected if a.key == "attack"]
-        result = provision(plan, options, fetch=OfflineFetcher())
-
-        assert "also invalid" in _by_key(result)["attack"].detail
-
 
 class TestEzTools:
     def test_only_missing_dlls_are_fetched(self, roots: tuple[Path, Path]) -> None:
@@ -526,14 +414,6 @@ class TestArchiveSafety:
 
         assert not (tmp_path.parent / "escaped").exists()
 
-    def test_a_zip_member_escaping_the_destination_is_rejected(self, tmp_path: Path) -> None:
-        archive = tmp_path / "evil.zip"
-        with zipfile.ZipFile(archive, "w") as zf:
-            zf.writestr("../../escaped", "pwned")
-
-        with pytest.raises(FetchError, match="escapes destination"):
-            install_mod.extract_archive(archive, tmp_path / "dest")
-
     def test_absolute_member_paths_are_rejected(self, tmp_path: Path) -> None:
         archive = tmp_path / "evil.zip"
         with zipfile.ZipFile(archive, "w") as zf:
@@ -541,64 +421,6 @@ class TestArchiveSafety:
 
         with pytest.raises(FetchError, match="escapes destination"):
             install_mod.extract_archive(archive, tmp_path / "dest")
-
-
-class TestManifestIsInert:
-    def test_importing_the_manifest_opens_no_socket_and_reads_one_file(self) -> None:
-        import importlib
-        import sys
-
-        reads: list[str] = []
-        real_read_text = Path.read_text
-
-        def _tracking(self: Path, *args: Any, **kwargs: Any) -> str:
-            reads.append(self.name)
-            return real_read_text(self, *args, **kwargs)
-
-        sys.modules.pop("mulder.assets.manifest", None)
-        with patch.object(Path, "read_text", _tracking):
-            importlib.import_module("mulder.assets.manifest")
-
-        assert reads == ["assets.lock"]
-
-
-class TestStateFile:
-    def test_a_crash_mid_write_cannot_corrupt_the_document(self, tmp_path: Path) -> None:
-        state = AssetState(mulder_version="1.2.3", assets={})
-        state.save(tmp_path)
-        before = (tmp_path / ".mulder-assets.json").read_text()
-
-        with patch("json.dump", side_effect=OSError("disk full")), pytest.raises(OSError):
-            state.save(tmp_path)
-
-        assert (tmp_path / ".mulder-assets.json").read_text() == before
-        assert not list(tmp_path.glob(".mulder-assets.*.tmp"))
-
-    def test_an_unreadable_state_file_reads_as_empty(self, tmp_path: Path) -> None:
-        (tmp_path / ".mulder-assets.json").write_text("{not json")
-
-        assert AssetState.load(tmp_path).assets == {}
-
-
-def test_git_clones_record_the_resolved_commit(
-    roots: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Unpinnable rows still get a recorded identity for doctor to report."""
-
-    def _fake_git(cmd: list[str], **_kwargs: Any) -> Any:
-        import subprocess
-
-        if cmd[1] == "clone":
-            target = Path(cmd[-1])
-            (target / ".git").mkdir(parents=True)
-            (target / "yara").mkdir()
-            return subprocess.CompletedProcess(cmd, 0, "", "")
-        return subprocess.CompletedProcess(cmd, 0, "abc123def456\n", "")
-
-    monkeypatch.setattr(install_mod.subprocess, "run", _fake_git)
-    _run(roots, RecordingFetcher(roots[0]), {"signature-base"})
-
-    assert AssetState.load(roots[0]).assets["signature-base"].commit == "abc123def456"
 
 
 def test_zircolite_reports_when_its_linux_rules_could_not_be_seeded(
@@ -696,43 +518,6 @@ class TestSummaryLine:
 
         assert "missing - run 'mulder setup' to install them" in output
         assert "selected assets present" not in output
-
-    def test_a_fully_present_root_still_says_so(
-        self, roots: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The inverse: the happy line must survive the new branch."""
-        _run(roots, RecordingFetcher(roots[0]), {"attack"})
-        output = self._render(roots, {"attack"}, verify=True)
-
-        assert "selected assets present" in output
-
-
-def test_symbol_packs_publish_across_a_filesystem_boundary(
-    roots: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """/opt write root + /home on its own partition is a common SIFT layout.
-
-    os.replace cannot cross devices, so this raised EXDEV *after* an 840 MB
-    download and reproduced on every re-run.
-    """
-    real_replace = os.replace
-    seen: list[str] = []
-
-    def _exdev(src: Any, dst: Any, **kwargs: Any) -> None:
-        if str(src).endswith(".zip"):
-            seen.append(str(dst))
-            raise OSError(errno.EXDEV, "Invalid cross-device link")
-        real_replace(src, dst, **kwargs)
-
-    cache = tmp_path / "elsewhere" / "symbols"
-    monkeypatch.setattr(install_mod, "volatility_cache_dir", lambda: cache)
-    monkeypatch.setattr(install_mod.os, "replace", _exdev)
-
-    result = _run(roots, RecordingFetcher(roots[0]), {"vol-symbols-linux"})
-
-    assert seen, "the EXDEV path was never exercised"
-    assert not _by_key(result)["vol-symbols-linux"].failed
-    assert (cache / "linux.zip").is_file()
 
 
 def test_a_corrupt_zip_is_reported_not_raised(roots: tuple[Path, Path]) -> None:

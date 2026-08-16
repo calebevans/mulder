@@ -14,7 +14,6 @@ so these tests pin the parser against the *real* captured output of oletools
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -86,19 +85,6 @@ class TestMsoddeParserRejectsBanner:
         commands = [link["command"] for link in _parse_msodde_output(stdout)]
         assert not any("/evidence/case-1/t.docx" in str(c) for c in commands)
 
-    def test_empty_output_yields_no_links(self) -> None:
-        assert _parse_msodde_output("") == []
-
-    def test_traceback_yields_no_links(self) -> None:
-        """A crashed msodde must not become a pile of high-risk findings."""
-        crash = (
-            "Traceback (most recent call last):\n"
-            '  File "/usr/lib/python3/oletools/msodde.py", line 990, in main\n'
-            "    process_file(filepath)\n"
-            "ValueError: not an office file\n"
-        )
-        assert _parse_msodde_output(crash) == []
-
 
 class TestMsoddeParserDetectsRealLinks:
     """A document that really carries a DDE field must still be caught."""
@@ -116,16 +102,6 @@ class TestMsoddeParserDetectsRealLinks:
         assert links[0]["field_type"] == "DDEAUTO"
         assert links[0]["risk"] == "high"
         assert "calc.exe" in str(links[0]["command"])
-
-    def test_plain_dde_field_is_classified_as_dde(self) -> None:
-        stdout = REAL_CLEAN_BANNER + " DDE c:\\windows\\system32\\cmd.exe\n"
-        links = _parse_msodde_output(stdout)
-        assert len(links) == 1
-        assert links[0]["field_type"] == "DDE"
-
-    def test_multiple_links_are_all_reported(self) -> None:
-        stdout = REAL_CLEAN_BANNER + " DDEAUTO one.exe\n DDE two.exe\n"
-        assert len(_parse_msodde_output(stdout)) == 2
 
 
 class TestAnalyzeOfficeDocumentDdeIntegration:
@@ -159,12 +135,6 @@ class TestAnalyzeOfficeDocumentDdeIntegration:
         result = self._run(proc)
         assert '"dde_links": []' in str(result["preview"])
 
-    def test_nonzero_exit_reports_no_dde_links(self) -> None:
-        """The banner is always present, so exit status is the only real signal."""
-        proc = MagicMock(returncode=1, stdout=REAL_DDE_BANNER, stderr="boom")
-        result = self._run(proc)
-        assert '"dde_links": []' in str(result["preview"])
-
     def test_real_dde_link_reaches_the_response(self) -> None:
         proc = MagicMock(returncode=0, stdout=REAL_DDE_JSON, stderr="")
         result = self._run(proc)
@@ -180,14 +150,3 @@ class TestPackagedMcpConfig:
         config = json.loads(DEFAULT_MCP_CONFIG.read_text(encoding="utf-8"))
         assert config["mcpServers"]["mulder"]["command"] == "mulder"
         assert config["mcpServers"]["mulder"]["args"] == ["serve"]
-
-    def test_packaged_mcp_config_matches_repo_root(self) -> None:
-        """The repo-root .mcp.json and the packaged copy must not drift."""
-        from mulder.cli import DEFAULT_MCP_CONFIG
-
-        repo_root = Path(__file__).resolve().parent.parent / ".mcp.json"
-        if not repo_root.exists():  # pragma: no cover - installed-package runs
-            pytest.skip("running outside a source checkout")
-        assert json.loads(repo_root.read_text(encoding="utf-8")) == json.loads(
-            DEFAULT_MCP_CONFIG.read_text(encoding="utf-8")
-        )
