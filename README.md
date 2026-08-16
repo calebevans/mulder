@@ -47,16 +47,24 @@ Each gate validates structural criteria (minimum sources indexed, findings submi
 
 ## Quick Start
 
-### Install with pipx (native - SIFT Workstation, Debian/Ubuntu)
+### Install natively (SIFT Workstation, Debian/Ubuntu)
 
 ```bash
-sudo apt install yara         # SIFT ships the python3-yara module, not the binary
+curl -fsSL https://raw.githubusercontent.com/calebevans/mulder/main/install.sh | bash
+```
+
+One command. It prints what it will do, asks once, then installs the OS packages you are missing (via `apt`, asking for your sudo password), mulder itself (via `pipx`, no sudo), and the forensic data and helper tools (~2.1 GB, no sudo). On a stock SIFT Workstation the only OS package missing is `yara` — SIFT ships the `python3-yara` module but not the binary.
+
+Prefer to run the steps yourself:
+
+```bash
+sudo apt install git sleuthkit yara p7zip-full binutils
 pipx install "mulder-dfir[forensics]"
 mulder setup
 mulder investigate /path/to/evidence my-case-id
 ```
 
-`pipx` installs mulder into its own isolated virtualenv and puts the `mulder` command on your PATH. `uv tool install "mulder-dfir[forensics]"` works identically. The `forensics` extra pulls in Zircolite's runtime dependencies.
+`pipx` installs mulder into its own isolated virtualenv and puts the `mulder` command on your PATH; `uv tool install "mulder-dfir[forensics]"` works identically. The `forensics` extra pulls in Zircolite's runtime dependencies. If `mulder` is not found afterwards, open a new terminal — Ubuntu only adds `~/.local/bin` to `PATH` at login, and only if it already existed.
 
 On first run mulder creates a working directory at `~/.mulder/workspace` (override with `--cwd` or `MULDER_CWD`) and writes a default `.mcp.json` into it. Case databases and reports go to `~/.mulder/cases` (override with `--db-dir`).
 
