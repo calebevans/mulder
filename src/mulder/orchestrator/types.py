@@ -18,9 +18,17 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
+
+EffortLevel = Literal["low", "medium", "high", "xhigh", "max"]
+"""Effort levels accepted by ``ClaudeAgentOptions``.
+
+Mirrors the SDK's own literal union so the value survives the trip from
+``click.Choice`` through :class:`~mulder.orchestrator.runner.Orchestrator` into
+the SDK without a type error.
+"""
 
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*\n(.*?)\n\s*```", re.DOTALL)
 

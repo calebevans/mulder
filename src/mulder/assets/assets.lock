@@ -1,0 +1,47 @@
+{
+  "schema": 1,
+  "entries": {
+    "capa:amd64": {
+      "url": "https://github.com/mandiant/capa/releases/download/v9.4.0/capa-v9.4.0-linux.zip",
+      "sha256": "07800a1d20a21eb18fc98716e2ae81b668e0c9a04defd588c8aa17ea3d3281e4",
+      "bytes": 47477971,
+      "generated_at": "2026-08-16T17:15:28Z"
+    },
+    "capa:arm64": {
+      "url": "https://github.com/mandiant/capa/releases/download/v9.4.0/capa-v9.4.0-linux-arm64.zip",
+      "sha256": "165df126f05e86736afee0f4c28b19c6037315a99afc3a92a426432cdd30d2c5",
+      "bytes": 45751028,
+      "generated_at": "2026-08-16T17:15:28Z"
+    },
+    "chainsaw:amd64": {
+      "url": "https://github.com/WithSecureLabs/chainsaw/releases/download/v2.16.0/chainsaw_x86_64-unknown-linux-gnu.tar.gz",
+      "sha256": "5d46cd140838413aeb5711451a282b3922443d9ec6afaea3e6b6b220454fd807",
+      "bytes": 3494437,
+      "generated_at": "2026-08-16T17:15:28Z"
+    },
+    "chainsaw:arm64": {
+      "url": "https://github.com/WithSecureLabs/chainsaw/releases/download/v2.16.0/chainsaw_aarch64-unknown-linux-gnu.tar.gz",
+      "sha256": "e7aa1c9ef6a7ca34f285ed46faf95ba1f499612ef2d044fbd8ee4852f42dc4f9",
+      "bytes": 3282322,
+      "generated_at": "2026-08-16T17:15:28Z"
+    },
+    "die:amd64": {
+      "url": "https://github.com/horsicq/DIE-engine/releases/download/3.09/die_3.09_Ubuntu_22.04_amd64.deb",
+      "sha256": "4cb162f95222ded211f1ae24f3cf84c56021a67862ae405d6bbd7f1ae291387f",
+      "bytes": 8014924,
+      "generated_at": "2026-08-16T17:15:28Z"
+    },
+    "floss:amd64": {
+      "url": "https://github.com/mandiant/flare-floss/releases/download/v3.1.0/floss-v3.1.0-linux.zip",
+      "sha256": "8cdd05d78e3ffa59360425c6b846a2f22933fd1923bdd326fceff82f7549d40a",
+      "bytes": 40896816,
+      "generated_at": "2026-08-16T17:15:28Z"
+    },
+    "hayabusa:amd64": {
+      "url": "https://github.com/Yamato-Security/hayabusa/releases/download/v3.8.1/hayabusa-3.8.1-lin-x64-musl.zip",
+      "sha256": "93c7fc5820151d1b8308987a47f0231a7f286d726478bea226adf2bc6d05bcee",
+      "bytes": 45415511,
+      "generated_at": "2026-08-16T17:15:28Z"
+    }
+  }
+}

@@ -9,7 +9,7 @@ CONTAINER_ENGINE ?= $(shell \
 IMAGE_NAME ?= mulder
 IMAGE_TAG  ?= dev
 
-.PHONY: all install lint format typecheck test precommit container-build container-run clean
+.PHONY: all install lint format typecheck test precommit build dist-check assets-lock container-build container-run clean
 
 install:
 	uv pip install -e ".[dev]"
@@ -28,6 +28,20 @@ test:
 
 precommit:
 	pre-commit run --all-files
+
+# Maintainer chore, never CI: downloads every digest-pinnable asset and
+# rewrites src/mulder/assets/assets.lock. Re-run it in the same PR as any
+# Dockerfile version bump -- tests/test_manifest_parity.py fails otherwise.
+assets-lock:
+	uv run python -m mulder.assets.lockgen
+
+build:
+	uv build
+
+# There is deliberately no `publish` target: uploading to PyPI is irreversible
+# and happens only through the human-approved `pypi` environment in publish.yml.
+dist-check: build
+	uvx twine check --strict dist/*
 
 container-build:
 	$(CONTAINER_ENGINE) build -t $(IMAGE_NAME):$(IMAGE_TAG) .

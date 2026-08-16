@@ -10,6 +10,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import os
 import shutil
 import subprocess
 import tempfile
@@ -17,6 +18,7 @@ import time
 from collections import Counter
 from pathlib import Path
 
+from mulder.assets.paths import asset_path, asset_search_summary
 from mulder.patterns import DISK_IMAGE_EXTS
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
@@ -32,8 +34,22 @@ from mulder.server.tool_access import Role, tool_access
 
 logger = logging.getLogger(__name__)
 
-_HAYABUSA_BIN = "/opt/hayabusa/hayabusa"
+_HAYABUSA_DIRNAME = "hayabusa"
 _HAYABUSA_TIMEOUT = 300
+
+
+def _hayabusa_binary() -> str | None:
+    """Resolve the Hayabusa executable: asset root first, then PATH.
+
+    Asset root wins because the image and ``mulder setup`` both install a
+    version-matched binary there, while a stray PATH entry may be anything.
+    """
+    candidate = asset_path(_HAYABUSA_DIRNAME, "hayabusa")
+    if candidate is not None and os.access(candidate, os.X_OK):
+        return str(candidate)
+    return shutil.which("hayabusa")
+
+
 _VALID_SEVERITIES = ("informational", "low", "medium", "high", "critical")
 
 
@@ -204,13 +220,16 @@ def run_hayabusa(
             )
     tool_name = "run_hayabusa"
 
-    if not shutil.which("hayabusa") and not Path(_HAYABUSA_BIN).exists():
+    hayabusa_bin = _hayabusa_binary()
+    if hayabusa_bin is None:
         return error_response(
             tc_id,
             tool_name,
             params,
-            f"Hayabusa binary not found. Ensure it is installed at {_HAYABUSA_BIN} or on PATH.",
+            "Hayabusa binary not found on PATH or under "
+            f"{asset_search_summary(_HAYABUSA_DIRNAME, 'hayabusa')}. Run 'mulder setup'.",
             elapsed_ms=(time.monotonic() - t0) * 1000,
+            error_type="binary_missing",
         )
 
     resolved_dir = _resolve_evtx_dir(evtx_dir or None, image_path=image_path or None)
@@ -237,12 +256,6 @@ def run_hayabusa(
     severity = min_severity.lower()
     if severity not in _VALID_SEVERITIES:
         severity = "medium"
-
-    hayabusa_bin = (
-        _HAYABUSA_BIN
-        if Path(_HAYABUSA_BIN).exists()
-        else shutil.which("hayabusa") or _HAYABUSA_BIN
-    )
 
     with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
         out_path = tmp.name

@@ -7,14 +7,35 @@ fully-qualified Volatility 3 plugin class path).
 
 from __future__ import annotations
 
+import importlib.util
+import os
 import shutil
-import subprocess
+import sys
+from pathlib import Path
 
 
 def _find_vol_binary() -> list[str]:
-    """Locate the Volatility 3 CLI binary.
+    """Locate the Volatility 3 CLI.
 
-    Tries in order: ``vol``, ``vol3``, ``python3 -m volatility3``.
+    volatility3 ships no ``__main__``: ``python -m volatility3`` does not work.
+    Its CLI exists only as the ``vol`` console script.
+
+    Resolution order, and why:
+
+    1. ``vol`` / ``vol3`` on PATH.  A platform Volatility (SIFT's
+       ``/usr/local/bin/vol``, the container's) **must** win.  mulder never
+       passes ``-s``, so volatility3 resolves ISF symbol tables relative to its
+       own package directory; a platform install is the one with the platform's
+       Windows/Linux symbol packs installed against it.  Preferring a
+       venv-local copy would silently orphan those packs and degrade Windows
+       memory analysis to the "ISF symbols are missing" path.
+    2. The ``vol`` script sitting next to ``sys.executable``.  ``volatility3``
+       is a hard mulder dependency, so under ``pipx install`` / ``uv tool
+       install`` this always exists, but it is not linked onto PATH — it is the
+       last-resort fallback that makes a native install work at all.
+    3. An in-process entry point call, if the console script is somehow missing
+       but the library imports.
+
     Returns the command list to use with :func:`subprocess.run`.
     Raises :class:`RuntimeError` if none are found.
     """
@@ -22,16 +43,12 @@ def _find_vol_binary() -> list[str]:
         if shutil.which(name):
             return [name]
 
-    try:
-        subprocess.run(
-            ["python3", "-m", "volatility3", "--help"],
-            capture_output=True,
-            timeout=15,
-            check=False,
-        )
-        return ["python3", "-m", "volatility3"]
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
+    vol_local = Path(sys.executable).with_name("vol")
+    if os.access(vol_local, os.X_OK):
+        return [str(vol_local)]
+
+    if importlib.util.find_spec("volatility3") is not None:
+        return [sys.executable, "-c", "from volatility3.cli import main; main()"]
 
     raise RuntimeError(
         "Volatility 3 is not installed or not on $PATH. "

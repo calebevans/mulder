@@ -278,15 +278,20 @@ def _analyze_single_pcap(
     else:
         result["protocol_summary"] = {"status": "no_output"}
 
-    if run_ids and require_binary("suricata"):
-        from mulder.server.tools.extract.pcap import (
-            _parse_eve_json,
-            _run_suricata_process,
-        )
+    from mulder.server.tools.extract.pcap import (
+        _parse_eve_json,
+        _run_suricata_process,
+        _suricata_binary,
+    )
 
+    # Gate on the resolved value and exec that same value: gating on
+    # require_binary and then exec'ing /usr/bin/suricata reports
+    # "[Errno 2]" on any host that installs it anywhere else.
+    suricata_bin = _suricata_binary() if run_ids else None
+    if suricata_bin is not None:
         try:
             with tempfile.TemporaryDirectory(prefix="mulder_suri_disk_") as suri_dir:
-                eve_path = _run_suricata_process(pcap_path, Path(suri_dir))
+                eve_path = _run_suricata_process(suricata_bin, pcap_path, Path(suri_dir))
                 ids_result = _parse_eve_json(eve_path)
                 result["ids_alerts"] = {
                     "total_alerts": ids_result["statistics"]["total_alerts"],

@@ -1,8 +1,9 @@
-"""MCP tool for looking up MITRE ATT&CK techniques from bundled STIX data.
+"""MCP tool for looking up MITRE ATT&CK techniques from STIX data.
 
-The ATT&CK Enterprise STIX bundle is downloaded at Docker build time and
-stored at ``/opt/attack/enterprise-attack.json``.  It is loaded lazily on
-first use and parsed into an in-memory lookup structure.
+The ATT&CK Enterprise STIX bundle is provisioned by ``mulder setup`` (and
+baked into the container image) under the mulder asset root as
+``attack/enterprise-attack.json``.  It is loaded lazily on first use and
+parsed into an in-memory lookup structure.
 """
 
 from __future__ import annotations
@@ -15,19 +16,49 @@ import time
 from pathlib import Path
 from typing import Any
 
+from mulder.assets.paths import (
+    asset_display_path,
+    asset_path,
+    asset_search_summary,
+    register_cache_clear,
+)
 from mulder.server.app import mcp
 from mulder.server.helpers import error_response, make_tool_call_id, tool_response
 from mulder.server.tool_access import Role, tool_access
 
 logger = logging.getLogger(__name__)
 
-_STIX_PATH = Path("/opt/attack/enterprise-attack.json")
-_ICS_STIX_PATH = Path("/opt/attack/ics-attack.json")
+_ATTACK_DIRNAME = "attack"
+
+
+def _stix_path() -> Path:
+    """The Enterprise ATT&CK bundle, or where ``mulder setup`` would put it."""
+    return asset_display_path(_ATTACK_DIRNAME, "enterprise-attack.json")
+
+
+def _ics_stix_path() -> Path:
+    """The ICS ATT&CK bundle, or where ``mulder setup`` would put it."""
+    return asset_display_path(_ATTACK_DIRNAME, "ics-attack.json")
+
 
 _TECHNIQUE_ID_RE = re.compile(r"^T\d{4}(?:\.\d{3})?$")
 
 _attack_techniques: dict[str, dict[str, Any]] | None = None
 _attack_lock = threading.Lock()
+
+
+def _reset_attack_cache() -> None:
+    """Drop the parsed STIX cache after the asset root moves.
+
+    Taken without the lock: ``_attack_techniques`` is only ever assigned once
+    per successful parse, so the worst case of a racing read is a re-parse,
+    not a corruption.
+    """
+    global _attack_techniques  # noqa: PLW0603
+    _attack_techniques = None
+
+
+register_cache_clear(_reset_attack_cache)
 
 _MAX_FIELD_LEN = 500
 
@@ -83,7 +114,7 @@ def _load_attack_data() -> dict[str, dict[str, Any]]:
         if _attack_techniques is not None:
             return _attack_techniques
 
-        raw = json.loads(_STIX_PATH.read_text(encoding="utf-8"))
+        raw = json.loads(_stix_path().read_text(encoding="utf-8"))
         techniques: dict[str, dict[str, Any]] = {}
 
         for obj in raw.get("objects", []):
@@ -93,8 +124,9 @@ def _load_attack_data() -> dict[str, dict[str, Any]]:
             if parsed is not None:
                 techniques[parsed[0]] = parsed[1]
 
-        if _ICS_STIX_PATH.exists():
-            ics_raw = json.loads(_ICS_STIX_PATH.read_text(encoding="utf-8"))
+        ics_path = asset_path(_ATTACK_DIRNAME, "ics-attack.json")
+        if ics_path is not None:
+            ics_raw = json.loads(ics_path.read_text(encoding="utf-8"))
             ics_count = 0
             for obj in ics_raw.get("objects", []):
                 if obj.get("type") != "attack-pattern":
@@ -103,7 +135,7 @@ def _load_attack_data() -> dict[str, dict[str, Any]]:
                 if parsed is not None and parsed[0] not in techniques:
                     techniques[parsed[0]] = parsed[1]
                     ics_count += 1
-            logger.info("Loaded %d ICS ATT&CK techniques from %s", ics_count, _ICS_STIX_PATH)
+            logger.info("Loaded %d ICS ATT&CK techniques from %s", ics_count, ics_path)
 
         _attack_techniques = techniques
         logger.info("Loaded %d total ATT&CK techniques", len(techniques))
@@ -148,15 +180,18 @@ def lookup_attack_technique(
     t0 = time.monotonic()
     params: dict[str, object] = {"query": query, "max_results": max_results}
 
-    if not _STIX_PATH.exists():
+    if asset_path(_ATTACK_DIRNAME, "enterprise-attack.json") is None:
         return error_response(
             tc_id=tc_id,
             tool_name="lookup_attack_technique",
             params=params,
-            error=f"ATT&CK STIX data not found at {_STIX_PATH}",
+            error=(
+                "ATT&CK STIX data not found under any of: "
+                f"{asset_search_summary(_ATTACK_DIRNAME, 'enterprise-attack.json')}"
+            ),
             elapsed_ms=(time.monotonic() - t0) * 1000,
             error_type="file_not_found",
-            suggestion="This file is bundled in the Docker image; run inside the container.",
+            suggestion=f"Run 'mulder setup --minimal' to install it to {_stix_path()}.",
         )
 
     try:

@@ -16,6 +16,7 @@ from mulder.server.helpers import (
     _PREVIEW_CHAR_LIMIT,
     adaptive_timeout,
     error_response,
+    interpreter_candidates,
     make_tool_call_id,
     tool_response,
 )
@@ -34,7 +35,8 @@ def _find_plaso_cmd(tool: str) -> list[str] | None:
     """Locate a Plaso CLI tool, trying multiple install conventions.
 
     pip-installed plaso may use ``log2timeline.py``, ``log2timeline``,
-    or only be reachable via ``python3 -m plaso.cli.<tool>``.
+    or only be reachable via ``-m plaso.cli.<tool>`` on a probed Python
+    interpreter.
     """
     module_map = {
         "log2timeline": "plaso.cli.log2timeline",
@@ -48,8 +50,7 @@ def _find_plaso_cmd(tool: str) -> list[str] | None:
             return [path]
     mod = module_map.get(base)
     if mod:
-        py = shutil.which("python3") or shutil.which("python")
-        if py:
+        for py in interpreter_candidates():
             try:
                 subprocess.run(
                     [py, "-m", mod, "--version"],
@@ -59,7 +60,7 @@ def _find_plaso_cmd(tool: str) -> list[str] | None:
                 )
                 return [py, "-m", mod]
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
-                pass
+                continue
     return None
 
 
@@ -92,8 +93,8 @@ def run_plaso(
             "run_plaso",
             params,
             (
-                "log2timeline not found (tried log2timeline.py, log2timeline, "
-                "python3 -m plaso.cli.log2timeline)"
+                "log2timeline not found (tried log2timeline.py, log2timeline, and "
+                "-m plaso.cli.log2timeline on every probed Python interpreter)"
             ),
             error_type="binary_missing",
         )

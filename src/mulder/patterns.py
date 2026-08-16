@@ -45,6 +45,13 @@ DISK_IMAGE_EXTS: frozenset[str] = frozenset(
 
 DEFAULT_DB_DIR: str = "~/.mulder/cases"
 
+DEFAULT_WORKSPACE_DIR: str = "~/.mulder/workspace"
+"""Default working directory for agent sessions on a native install.
+
+Mirrors DEFAULT_DB_DIR's ``~/.mulder/…`` convention. The container overrides
+this with the MULDER_CWD environment variable (see Dockerfile).
+"""
+
 SUSPICIOUS_PATHS: tuple[str, ...] = (
     "\\temp\\",
     "\\tmp\\",

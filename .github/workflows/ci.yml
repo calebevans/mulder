@@ -3,7 +3,6 @@ name: CI
 on:
   pull_request:
     paths-ignore:
-      - "**.md"
       - "docs/**"
       - "examples/**"
       - "LICENSE"
@@ -16,7 +15,6 @@ on:
     branches:
       - main
     paths-ignore:
-      - "**.md"
       - "docs/**"
       - "examples/**"
       - "LICENSE"
@@ -50,26 +48,68 @@ jobs:
         run: uv run --locked --extra dev pre-commit run --all-files
 
   test:
-    name: Unit tests
+    name: Unit tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Must match the Programming Language :: Python :: 3.x classifiers and
+        # requires-python in pyproject.toml.
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
 
-      - name: Set up Python 3.12
+      - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
 
       - name: Install dependencies
-        run: uv sync --locked --extra dev
+        run: uv sync --locked --extra dev --python ${{ matrix.python-version }}
 
       - name: Run tests
-        run: uv run --locked --extra dev pytest tests/ -v
+        run: uv run --locked --extra dev --python ${{ matrix.python-version }} pytest tests/ -v
+
+  dists:
+    name: Build and check distributions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+
+      - name: Verify the lockfile is current
+        run: uv lock --check
+
+      - name: Build distributions
+        run: uv build
+
+      - name: Verify package metadata
+        run: uvx twine check --strict dist/*
+
+      # The sdist `include` list in pyproject.toml is an allow-list, so package
+      # data added outside /src silently vanishes. Extend this when more is added.
+      - name: Verify package data is present
+        run: |
+          tar tzf dist/*.tar.gz | grep -q 'mulder/data/mcp.json'
+          tar tzf dist/*.tar.gz | grep -q 'mulder/py.typed'
+          tar tzf dist/*.tar.gz | grep -q 'mulder/assets/assets.lock'
+          python3 -m zipfile -l dist/*.whl | grep -q 'mulder/data/mcp.json'
+          python3 -m zipfile -l dist/*.whl | grep -q 'mulder/py.typed'
+          # Without the lock, `mulder setup` refuses every digest-pinned asset.
+          python3 -m zipfile -l dist/*.whl | grep -q 'mulder/assets/assets.lock'
 
   container:
     name: Container build
@@ -115,10 +155,35 @@ jobs:
           file: Dockerfile
           platforms: linux/amd64
           push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          load: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=min' || '' }}
+
+      # The image ships every asset already provisioned under /opt, so
+      # `setup --verify` must find all of them and exit 0. --user mulder,
+      # because entrypoint.sh ends `exec gosu mulder "$@"`: as root this would
+      # test a configuration no user ever gets.
+      - name: Smoke-test 'mulder setup --verify' inside the image
+        run: |
+          set -euo pipefail
+          tag=$(echo "${{ steps.meta.outputs.tags }}" | head -n1)
+          docker run --rm --user mulder --entrypoint mulder "$tag" \
+            setup --verify --json > verify.json
+          python3 - <<'PY'
+          import json
+          report = json.load(open("verify.json"))
+          assert report["root"] == "/opt", report["root"]
+          bad = [
+              a for a in report["assets"]
+              if a["selected"] and a["status"] not in ("up-to-date", "up-to-date (unmanaged)")
+          ]
+          assert not bad, bad
+          shadowed = [a for a in report["assets"] if a["shadowed_by"]]
+          assert not shadowed, shadowed
+          assert report["exit"] == 0, report["exit"]
+          PY
 
       - name: Generate artifact attestation
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

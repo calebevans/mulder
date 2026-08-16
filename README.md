@@ -8,21 +8,21 @@ Mulder takes a directory of forensic evidence (disk images, memory dumps, PCAPs,
 
 ## Results
 
-Four autonomous investigations against real forensic datasets, unmodified from tool output. Each case has an interactive HTML report on [GitHub Pages](https://calebevans.github.io/mulder/examples/srl-2018/SRL-2018.report.html) (sidebar navigation, dark/light theme, audit trail). See the [examples index](examples/README.md) for all report links.
+Four autonomous investigations against real forensic datasets, unmodified from tool output. Each case has an interactive HTML report on [GitHub Pages](https://calebevans.github.io/mulder/examples/srl-2018/SRL-2018.report.html) (sidebar navigation, dark/light theme, audit trail). See the [examples index](https://github.com/calebevans/mulder/blob/main/examples/README.md) for all report links.
 
 | Case | Systems | Evidence | Sources | Tool Calls | Findings | Runtime | Tokens | Report |
 |------|---------|----------|---------|------------|----------|---------|--------|--------|
-| [Rocba](examples/rocba/) | 1 | ~8 GB | 67 | 292 | 7 (1 high) | 66 min | 313K | [HTML](https://calebevans.github.io/mulder/examples/rocba/Rocba.report.html) |
-| [SRL-2015](examples/srl-2015/) | 4 | ~30 GB | 159 | 610 | 29 (4 crit, 9 high) | 126 min | 300K | [HTML](https://calebevans.github.io/mulder/examples/srl-2015/SRL-2015.report.html) |
-| [SRL-2018](examples/srl-2018/) | 11 | ~120 GB | 457 | 1,508 | 55 (11 crit, 19 high) | 336 min | 698K | [HTML](https://calebevans.github.io/mulder/examples/srl-2018/SRL-2018.report.html) |
-| [NIST Data Leakage](examples/ndlc/) | 4 | ~8 GB | 88 | 723 | 33 (15 high) | 102 min | 330K | [HTML](https://calebevans.github.io/mulder/examples/ndlc/ndlc.report.html) |
+| [Rocba](https://github.com/calebevans/mulder/tree/main/examples/rocba/) | 1 | ~8 GB | 67 | 292 | 7 (1 high) | 66 min | 313K | [HTML](https://calebevans.github.io/mulder/examples/rocba/Rocba.report.html) |
+| [SRL-2015](https://github.com/calebevans/mulder/tree/main/examples/srl-2015/) | 4 | ~30 GB | 159 | 610 | 29 (4 crit, 9 high) | 126 min | 300K | [HTML](https://calebevans.github.io/mulder/examples/srl-2015/SRL-2015.report.html) |
+| [SRL-2018](https://github.com/calebevans/mulder/tree/main/examples/srl-2018/) | 11 | ~120 GB | 457 | 1,508 | 55 (11 crit, 19 high) | 336 min | 698K | [HTML](https://calebevans.github.io/mulder/examples/srl-2018/SRL-2018.report.html) |
+| [NIST Data Leakage](https://github.com/calebevans/mulder/tree/main/examples/ndlc/) | 4 | ~8 GB | 88 | 723 | 33 (15 high) | 102 min | 330K | [HTML](https://calebevans.github.io/mulder/examples/ndlc/ndlc.report.html) |
 
-The NIST Data Leakage case has a [detailed accuracy report](examples/ndlc/ACCURACY-REPORT.md) validated against [published NIST ground truth](https://cfreds-archive.nist.gov/data_leakage_case/leakage-answers.pdf): 60% full match, 90% detection rate, 5% false positive rate. The single false positive involved incorrect causal attribution (blaming CCleaner for artifact destruction when the answer key confirms it was launched and closed without action).
+The NIST Data Leakage case has a [detailed accuracy report](https://github.com/calebevans/mulder/blob/main/examples/ndlc/ACCURACY-REPORT.md) validated against [published NIST ground truth](https://cfreds-archive.nist.gov/data_leakage_case/leakage-answers.pdf): 60% full match, 90% detection rate, 5% false positive rate. The single false positive involved incorrect causal attribution (blaming CCleaner for artifact destruction when the answer key confirms it was launched and closed without action).
 
 ## How It Works
 
 <p align="center">
-<img src="docs/images/diagram.png" alt="Mulder Architecture and Security Boundaries" width="420">
+<img src="https://raw.githubusercontent.com/calebevans/mulder/main/docs/images/diagram.png" alt="Mulder Architecture and Security Boundaries" width="420">
 </p>
 
 Each investigation runs through five phases with quality gates between them. Phases 2-4 use a plan-and-execute pipeline with three specialized roles (planner, executor, analyst) that can optionally be assigned to different models for cost optimization.
@@ -33,7 +33,7 @@ Each investigation runs through five phases with quality gates between them. Pha
 4. **Alternative Narrative** - challenge the primary narrative with counter-evidence, test alternative hypotheses, audit for tool and evidence coverage gaps
 5. **Report** - write the investigation narrative, generate Markdown/HTML reports, export IOCs and ATT&CK Navigator layers
 
-Each gate validates structural criteria (minimum sources indexed, findings submitted, MITRE mappings present, audit tools invoked). Failed gates trigger retries with escalating turn budgets and gap-specific remediation instructions. See [Architecture](docs/architecture.md) for the full pipeline design.
+Each gate validates structural criteria (minimum sources indexed, findings submitted, MITRE mappings present, audit tools invoked). Failed gates trigger retries with escalating turn budgets and gap-specific remediation instructions. See [Architecture](https://github.com/calebevans/mulder/blob/main/docs/architecture.md) for the full pipeline design.
 
 ## Key Design Decisions
 
@@ -46,6 +46,31 @@ Each gate validates structural criteria (minimum sources indexed, findings submi
 **Token efficiency.** The SRL-2018 investigation (11 systems, 120 GB, 1,508 tool calls across 336 minutes) consumed 698K tokens. For cost optimization, the three pipeline roles (planner, executor, analyst) can be assigned to different models - routing mechanical tool-calling to a cheaper model while preserving reasoning quality for analysis.
 
 ## Quick Start
+
+### Install natively (SIFT Workstation, Debian/Ubuntu)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/calebevans/mulder/main/install.sh | bash
+```
+
+One command. It prints what it will do, asks once, then installs the OS packages you are missing (via `apt`, asking for your sudo password), mulder itself (via `pipx`, no sudo), and the forensic data and helper tools (~2.1 GB, no sudo). On a stock SIFT Workstation the only OS package missing is `yara` — SIFT ships the `python3-yara` module but not the binary.
+
+Prefer to run the steps yourself:
+
+```bash
+sudo apt install git sleuthkit yara p7zip-full binutils
+pipx install "mulder-dfir[forensics]"
+mulder setup
+mulder investigate /path/to/evidence my-case-id
+```
+
+`pipx` installs mulder into its own isolated virtualenv and puts the `mulder` command on your PATH; `uv tool install "mulder-dfir[forensics]"` works identically. The `forensics` extra pulls in Zircolite's runtime dependencies. If `mulder` is not found afterwards, open a new terminal — Ubuntu only adds `~/.local/bin` to `PATH` at login, and only if it already existed.
+
+On first run mulder creates a working directory at `~/.mulder/workspace` (override with `--cwd` or `MULDER_CWD`) and writes a default `.mcp.json` into it. Case databases and reports go to `~/.mulder/cases` (override with `--db-dir`).
+
+`mulder setup` downloads everything mulder owns - rule sets, signatures, and helper binaries - in one run (~2.2 GB, no `sudo`, refuses to run as root). It pins the same versions the container image uses. The rest of the forensic toolchain (Sleuth Kit, plaso, Zeek, `dotnet`) is your OS's job; SIFT already provides all of it except the `yara` binary above. See the [Usage Guide](https://github.com/calebevans/mulder/blob/main/docs/usage-guide.md#native-install) for the full picture. The container remains available if you would rather not install anything at all.
+
+### Run with Docker (everything preinstalled)
 
 ```bash
 docker pull ghcr.io/calebevans/mulder:1.3.2
@@ -65,7 +90,25 @@ docker run -it --privileged \
 mulder investigate /evidence my-case-id
 ```
 
-For Vertex AI, Amazon Bedrock, non-Anthropic models via LiteLLM, and full CLI options, see the [Usage Guide](docs/usage-guide.md).
+For Vertex AI, Amazon Bedrock, non-Anthropic models via LiteLLM, and full CLI options, see the [Usage Guide](https://github.com/calebevans/mulder/blob/main/docs/usage-guide.md).
+
+### Use as an MCP server
+
+Add to `claude_desktop_config.json` / `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "mulder": {
+      "type": "stdio",
+      "command": "mulder",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+Without installing first, `uvx mulder-dfir serve` works too.
 
 ### Case Briefing (Optional)
 
@@ -81,7 +124,7 @@ Drop a `MULDER.md` file in your evidence directory to provide case context:
 - Was data exfiltrated?
 ```
 
-The briefing is injected into every investigation phase, guiding tool selection, analysis focus, and report framing. See the [Usage Guide](docs/usage-guide.md#case-briefing) for details.
+The briefing is injected into every investigation phase, guiding tool selection, analysis focus, and report framing. See the [Usage Guide](https://github.com/calebevans/mulder/blob/main/docs/usage-guide.md#case-briefing) for details.
 
 ## Forensic Tools
 
@@ -94,12 +137,14 @@ Mulder integrates 35+ open-source forensic tools exposed as 140+ typed MCP opera
 | Windows artifacts | EZ Tools (Prefetch, Amcache, ShimCache, MFT, USN Journal, Jump Lists, Shellbags, SRUM), RegRipper, Hayabusa (3,700+ Sigma rules), Chainsaw |
 | Event logs | python-evtx, Zircolite |
 | Network | tshark, Zeek, Suricata, tcpflow, tcpxtract |
-| Malware | YARA, CAPA, FLOSS, Detect-It-Easy, ClamAV, radare2 |
+| Malware | YARA, CAPA, FLOSS, ClamAV, radare2, Detect-It-Easy&nbsp;\* |
 | Documents | oletools, PDF tools, pst-utils |
 | Mobile | ALEAPP, iLEAPP, MVT |
 | Other | bulk_extractor, binwalk, ExifTool, ssdeep, hashdeep, steghide, Hindsight |
 
-Full API reference: [Tool Manifest](docs/tool-manifest.md)
+\* Detect-It-Easy is supported but not bundled: its `.deb` pulls in ten `libqt5*` packages for a CLI that draws nothing. `run_detect_it_easy` uses it if `diec` is on `$PATH`, and reports it as missing otherwise. Packing is still flagged without it — `triage_binary` checks section entropy, RWX permissions, known packer section names and import-table shape.
+
+Full API reference: [Tool Manifest](https://github.com/calebevans/mulder/blob/main/docs/tool-manifest.md)
 
 ## Output
 
@@ -114,11 +159,11 @@ Each investigation produces:
 
 | Document | Description |
 |----------|-------------|
-| [Usage Guide](docs/usage-guide.md) | Installation, providers, CLI reference, Docker configuration |
-| [Architecture](docs/architecture.md) | System design, pipeline phases, quality gates, data flow |
-| [Tool Manifest](docs/tool-manifest.md) | API reference for all MCP tools |
-| [Adding Tools](docs/adding-tools.md) | Contributor guide for adding new forensic tools |
-| [Glossary](docs/glossary.md) | Terminology and definitions |
+| [Usage Guide](https://github.com/calebevans/mulder/blob/main/docs/usage-guide.md) | Installation, providers, CLI reference, Docker configuration |
+| [Architecture](https://github.com/calebevans/mulder/blob/main/docs/architecture.md) | System design, pipeline phases, quality gates, data flow |
+| [Tool Manifest](https://github.com/calebevans/mulder/blob/main/docs/tool-manifest.md) | API reference for all MCP tools |
+| [Adding Tools](https://github.com/calebevans/mulder/blob/main/docs/adding-tools.md) | Contributor guide for adding new forensic tools |
+| [Glossary](https://github.com/calebevans/mulder/blob/main/docs/glossary.md) | Terminology and definitions |
 
 ## License
 

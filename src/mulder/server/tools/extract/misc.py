@@ -6,6 +6,7 @@ import atexit
 import contextlib
 import functools
 import logging
+import re
 import shutil
 import subprocess
 import tempfile
@@ -14,6 +15,7 @@ import time
 from collections.abc import Mapping
 from pathlib import Path
 
+from mulder.assets.paths import asset_candidates, asset_search_summary, register_cache_clear
 from mulder.server.app import mcp
 from mulder.server.extract_helpers import extract_and_index, mount_disk_image
 from mulder.server.helpers import (
@@ -36,7 +38,7 @@ from mulder.server.tools.extract.tsk import (
 
 __all__ = [
     "_DOTNET",
-    "_EZ_TOOLS_DIR",
+    "_EZ_TOOL_DIRNAME",
     "_find_ez_tool",
     "_run_ez_tool",
     "run_amcache_parser",
@@ -82,15 +84,76 @@ def _cleanup_dislocker_mounts() -> None:
 
 atexit.register(_cleanup_dislocker_mounts)
 
-_EZ_TOOLS_DIR = Path("/opt/zimmermantools")
+_EZ_TOOL_DIRNAME = "zimmermantools"
 _DOTNET = "dotnet"
+_NET_DIR_RE = re.compile(r"^net(\d+)", re.IGNORECASE)
+_RUNTIME_RE = re.compile(r"^Microsoft\.NETCore\.App (\d+)\.")
+
+
+@functools.lru_cache(maxsize=1)
+def _dotnet_major() -> int | None:
+    """Highest ``Microsoft.NETCore.App`` major the host can run, or None.
+
+    One subprocess, memoized for the process lifetime.  None means "dotnet
+    absent or unparseable", in which case ranking degrades to highest-netN,
+    which is the best guess available.
+    """
+    exe = require_binary(_DOTNET)
+    if exe is None:
+        return None
+    try:
+        proc = subprocess.run(
+            [exe, "--list-runtimes"], capture_output=True, text=True, timeout=10, check=False
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    majors = [
+        int(m.group(1)) for line in proc.stdout.splitlines() if (m := _RUNTIME_RE.match(line))
+    ]
+    return max(majors) if majors else None
+
+
+def _framework_rank(path: Path, ceiling: int | None) -> tuple[int, int, str]:
+    """Sort key for a DLL candidate: runnable first, then highest netN, then path.
+
+    ``ceiling`` is the installed dotnet major.  .NET rolls *forward* -- a net6
+    DLL runs on a net9 runtime -- but never backward, so a DLL whose netN
+    exceeds the ceiling cannot run at all and must lose to any DLL that can.
+    A DLL with no ``netN`` path component (the container's flat layout) ranks
+    ``best = -1``: always runnable, always last among runnable candidates.
+    """
+    best = -1
+    for part in path.parts:
+        m = _NET_DIR_RE.match(part)
+        if m:
+            best = max(best, int(m.group(1)))
+    runnable = 1 if (ceiling is None or best <= ceiling) else 0
+    return (runnable, best, str(path))
 
 
 @functools.lru_cache(maxsize=32)
 def _find_ez_tool(dll_name: str) -> str | None:
-    """Find an EZ tool DLL under /opt/zimmermantools (cached)."""
-    candidates = list(_EZ_TOOLS_DIR.rglob(dll_name))
-    return str(candidates[0]) if candidates else None
+    """Locate an EZ Tool DLL: platform root first, mulder's assets second.
+
+    The platform root is searched first even when it is unwritable, because
+    SIFT's DLLs are version-matched to SIFT's ``dotnet`` and shadowing them
+    with mulder's downloads is a regression.  Within a root, ``sorted()``
+    plus the ceilinged rank replaces ``rglob``'s filesystem ordering, which
+    picked nondeterministically between ``net6/`` and ``net9/`` copies of the
+    same tool.
+    """
+    ceiling = _dotnet_major()
+    for root in asset_candidates(_EZ_TOOL_DIRNAME):
+        if not root.is_dir():
+            continue
+        hits = sorted(root.rglob(dll_name))
+        if hits:
+            return str(max(hits, key=lambda p: _framework_rank(p, ceiling)))
+    return None
+
+
+register_cache_clear(_find_ez_tool.cache_clear)
+register_cache_clear(_dotnet_major.cache_clear)
 
 
 def _run_ez_tool(
@@ -106,7 +169,16 @@ def _run_ez_tool(
     """Run an EZ tool, parse CSV output, index it, and return response."""
     if not require_binary(_DOTNET):
         return error_response(
-            tc_id, tool_name, params, "dotnet not found on PATH", (time.monotonic() - t0) * 1000
+            tc_id,
+            tool_name,
+            params,
+            "dotnet not found on PATH",
+            (time.monotonic() - t0) * 1000,
+            error_type="binary_missing",
+            suggestion=(
+                "Install the .NET runtime: curl -fsSL https://dot.net/v1/dotnet-install.sh"
+                " | bash -s -- --channel 9.0 --runtime dotnet"
+            ),
         )
 
     dll = _find_ez_tool(dll_name)
@@ -115,8 +187,10 @@ def _run_ez_tool(
             tc_id,
             tool_name,
             params,
-            f"{dll_name} not found under {_EZ_TOOLS_DIR}",
+            f"{dll_name} not found under any of: "
+            f"{asset_search_summary(_EZ_TOOL_DIRNAME)}. Run 'mulder setup'.",
             (time.monotonic() - t0) * 1000,
+            error_type="binary_missing",
         )
 
     with tempfile.TemporaryDirectory(prefix="mulder_ez_") as tmpdir:

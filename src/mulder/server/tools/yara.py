@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from mulder.assets.paths import asset_path, register_cache_clear
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
@@ -31,16 +32,38 @@ from mulder.server.tool_access import Role, tool_access
 
 logger = logging.getLogger(__name__)
 
-_SIGNATURE_BASE_DIR = Path("/opt/signature-base")
+_SIGNATURE_BASE_DIRNAME = "signature-base"
 
 _rules_updated = False
 _rules_lock = threading.Lock()
+
+
+def _signature_base_dir() -> Path | None:
+    """The Neo23x0/signature-base clone, or None if it is not installed."""
+    return asset_path(_SIGNATURE_BASE_DIRNAME)
+
+
+def _reset_rules_updated() -> None:
+    """Re-arm the one-shot rule update after the asset root moves.
+
+    A ``mulder setup`` run that *creates* signature-base must be allowed to
+    pull, even if a previous lookup in the same process already gave up.
+    """
+    global _rules_updated  # noqa: PLW0603
+    with _rules_lock:
+        _rules_updated = False
+
+
+register_cache_clear(_reset_rules_updated)
 
 _SRC_FILE_SCAN = "yara.file_scan"
 _SRC_MEMORY_SCAN = "yara.memory_scan"
 _SRC_VOL_SCAN = "yara.volatility_scan"
 
-_ERR_NO_RULES = "No YARA rules available (built-in rules missing and none provided)"
+_ERR_NO_RULES = (
+    "No YARA rules available (built-in rules missing and none provided). "
+    "Run 'mulder setup --minimal' to install the signature-base rule set."
+)
 
 _YARA_MATCH_RE = re.compile(r"^(\S+)\s+(.+)$")
 _YARA_STRING_RE = re.compile(r"^(0x[0-9a-fA-F]+):(\S+):\s*(.*)$")
@@ -53,30 +76,45 @@ def _update_community_rules() -> None:
         if _rules_updated:
             return
         _rules_updated = True
-    if not (_SIGNATURE_BASE_DIR / ".git").is_dir():
+    # Resolve once: four separate lookups could disagree if a concurrent
+    # ``mulder setup`` publishes the clone mid-function.
+    base = _signature_base_dir()
+    if base is None or not (base / ".git").is_dir():
         return
     try:
-        subprocess.run(
-            ["git", "-C", str(_SIGNATURE_BASE_DIR), "pull", "--ff-only", "-q"],
+        proc = subprocess.run(
+            ["git", "-C", str(base), "pull", "--ff-only", "-q"],
             capture_output=True,
+            text=True,
             timeout=30,
             check=False,
         )
-        logger.info("Updated YARA rules: %s", _SIGNATURE_BASE_DIR.name)
     except (subprocess.TimeoutExpired, OSError):
-        logger.debug(
-            "Could not update %s (no network?), using cached rules", _SIGNATURE_BASE_DIR.name
+        logger.debug("Could not update %s (no network?), using cached rules", base.name)
+        return
+    if proc.returncode == 0:
+        logger.info("Updated YARA rules: %s", base.name)
+    else:
+        # Notably git's "detected dubious ownership" refusal, which is what a
+        # root-owned clone plus a non-root server produces -- previously this
+        # logged success and the rules silently never updated again.
+        logger.warning(
+            "Could not update %s (git exit %d): %s",
+            base,
+            proc.returncode,
+            (proc.stderr or "").strip()[:200],
         )
 
 
 def _collect_signature_base() -> list[str]:
     """Return .yar paths from Neo23x0/signature-base."""
-    if not _SIGNATURE_BASE_DIR.is_dir():
+    base = _signature_base_dir()
+    if base is None or not base.is_dir():
         return []
-    yara_dir = _SIGNATURE_BASE_DIR / "yara"
+    yara_dir = base / "yara"
     if yara_dir.is_dir():
         return sorted(str(p) for p in yara_dir.rglob("*.yar"))
-    return sorted(str(p) for p in _SIGNATURE_BASE_DIR.rglob("*.yar"))
+    return sorted(str(p) for p in base.rglob("*.yar"))
 
 
 _VALID_RULESETS = ("builtin", "standard", "full")

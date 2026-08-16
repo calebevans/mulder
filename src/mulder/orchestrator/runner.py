@@ -41,11 +41,12 @@ from mulder.orchestrator.proxy import ProxyManager
 from mulder.orchestrator.roles import RoleRunner
 from mulder.orchestrator.session import SessionExecutor
 from mulder.orchestrator.types import (
+    EffortLevel,
     InvestigationResult,
     PhaseResult,
     extract_catalog_result,
 )
-from mulder.patterns import DEFAULT_DB_DIR
+from mulder.patterns import DEFAULT_DB_DIR, DEFAULT_WORKSPACE_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -66,9 +67,9 @@ class Orchestrator:
     def __init__(
         self,
         evidence_path: str,
-        cwd: str | Path = "/mulder-investigation",
+        cwd: str | Path = DEFAULT_WORKSPACE_DIR,
         model_config: ModelConfig | None = None,
-        effort: str = "max",
+        effort: EffortLevel = "max",
         env: dict[str, str] | None = None,
         parallel_extractions: int = 3,
         proxy_config: str | None = None,
