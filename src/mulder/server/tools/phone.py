@@ -1137,8 +1137,8 @@ def run_aleapp(
             suggestion=(
                 "git clone https://github.com/abrignoni/ALEAPP.git /opt/aleapp, then "
                 "install its requirements into mulder's environment: "
-                "pipx inject mulder-mcp --requirements /opt/aleapp/requirements.txt. "
-                "ALEAPP's dependencies are NOT covered by the mulder-mcp[forensics] extra."
+                "pipx inject mulder-dfir --requirements /opt/aleapp/requirements.txt. "
+                "ALEAPP's dependencies are NOT covered by the mulder-dfir[forensics] extra."
             ),
         )
 
@@ -1295,8 +1295,8 @@ def run_ileapp(
             suggestion=(
                 "git clone https://github.com/abrignoni/iLEAPP.git /opt/ileapp, then "
                 "install its requirements into mulder's environment: "
-                "pipx inject mulder-mcp --requirements /opt/ileapp/requirements.txt. "
-                "iLEAPP's dependencies are NOT covered by the mulder-mcp[forensics] extra."
+                "pipx inject mulder-dfir --requirements /opt/ileapp/requirements.txt. "
+                "iLEAPP's dependencies are NOT covered by the mulder-dfir[forensics] extra."
             ),
         )
 

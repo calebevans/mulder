@@ -7,6 +7,10 @@ Try-it-out instructions for running Mulder, the forensic investigation platform.
 - [Usage Guide](#usage-guide)
   - [Table of Contents](#table-of-contents)
   - [Prerequisites](#prerequisites)
+    - [Common](#common)
+    - [Container Install](#container-install)
+    - [Native Install](#native-install)
+  - [Installing with pipx](#installing-with-pipx)
   - [Pulling the Container Image](#pulling-the-container-image)
   - [Running a Container](#running-a-container)
     - [Volume Mounts](#volume-mounts)
@@ -40,14 +44,129 @@ Try-it-out instructions for running Mulder, the forensic investigation platform.
 
 ## Prerequisites
 
-- **Docker or Podman** installed and running. All commands below use `docker`, but `podman` works as a drop-in replacement.
+Mulder runs two ways: as a **container** with every forensic tool preinstalled, or as a **native install** from PyPI onto a machine that already has the forensic toolchain (a SANS SIFT Workstation, typically). Pick one; the requirements differ.
+
+### Common
+
 - **Evidence to analyze.** A directory containing disk images, memory dumps, event logs, or other forensic artifacts.
 - **An LLM provider account.** One of the following:
   - An Anthropic API key
   - A Google Cloud project with Vertex AI enabled and Claude model access
   - An AWS account with Amazon Bedrock Claude model access
   - Any LiteLLM-supported provider (OpenAI, Ollama, Azure, etc.)
-- **Disk space** for case output. Investigations produce databases, audit logs, and reports that are written to a host-mounted directory.
+- **Disk space** for case output. Investigations produce databases, audit logs, and reports.
+
+### Container Install
+
+- **Docker or Podman** installed and running. All commands below use `docker`, but `podman` works as a drop-in replacement.
+- A host directory to mount for case output, since the container writes to `/home/mulder/.mulder/cases`.
+
+Nothing else. The image ships every tool listed under [Native Install](#native-install) below.
+
+### Native Install
+
+A native install gives you the orchestrator and the MCP server. It does **not** install the forensic tools themselves - `pip` cannot ship Sleuth Kit, Zeek, or the .NET EZ Tools. Everything in this section is your responsibility.
+
+- **Python 3.10 or newer**, plus [`pipx`](https://pipx.pypa.io/) (or `uv`).
+- **Node.js 18 or newer.** `claude-agent-sdk` drives the Claude Code CLI, which is a Node program. The container gets this from NodeSource Node 22. Without Node, mulder installs cleanly and then cannot start an investigation.
+- **Volatility 3 symbol packs.** The container pre-seeds these; a native install must fetch them, and on an air-gapped workstation the on-demand download volatility3 would otherwise attempt will fail:
+
+  ```bash
+  mkdir -p ~/.cache/volatility3/symbols
+  wget https://downloads.volatilityfoundation.org/volatility3/symbols/windows.zip \
+      -O ~/.cache/volatility3/symbols/windows.zip
+  wget https://downloads.volatilityfoundation.org/volatility3/symbols/linux.zip \
+      -O ~/.cache/volatility3/symbols/linux.zip
+  ```
+
+  Without them, Windows and Linux memory analysis silently degrades.
+- **The SIFT forensic toolchain**, on `$PATH`: Sleuth Kit (`fls`, `icat`, `istat`, `fsstat`, `mmls`), Plaso (`log2timeline.py`, `psort.py`), `zeek`, `suricata`, `bulk_extractor`, `tshark`, `exiftool`, `readpst`, `7z`, `binwalk`, `ssdeep`, `hashdeep`, `clamscan`, `radare2`, `yara`, `chainsaw`, `hayabusa`, `capa`, `floss`, `diec`, `guestmount`, `ewfmount`, the steganography tools (`steghide`, `stegdetect`, `stegbreak`, `outguess`, `zsteg`, `jpseek`), and `dotnet` with the EZ Tools DLLs under `/opt/zimmermantools`. SIFT provides most of these already.
+- **The `/opt` clones and data files that pip does not install**, at these exact paths:
+
+  | Path | Contents |
+  |------|----------|
+  | `/opt/zircolite` | Zircolite clone, plus its Linux Sigma rules at `/opt/zircolite/rules/linux` |
+  | `/opt/aleapp` | ALEAPP clone |
+  | `/opt/ileapp` | iLEAPP clone |
+  | `/opt/didier-stevens` | Didier Stevens suite (`pdfid.py`, `pdf-parser.py`) |
+  | `/opt/sigma-rules/rules/windows` | Sigma rules for Chainsaw |
+  | `/opt/signature-base` | YARA signature base |
+  | `/opt/attack/enterprise-attack.json`, `/opt/attack/ics-attack.json` | MITRE ATT&CK data |
+  | `/opt/zimmermantools` | EZ Tools DLLs |
+
+- **ALEAPP's and iLEAPP's Python dependencies are not covered by any mulder extra.** Their upstream `requirements.txt` files contain a `git+https://` URL, local `whl_files/*.whl` paths, `pyinstaller`, and `packaging` / `numpy` / `protobuf` pins that conflict with each other - none of which can be expressed as PyPI package metadata. This is a property of those projects, not a mulder packaging bug. Install them into mulder's environment yourself:
+
+  ```bash
+  pipx inject mulder-dfir --requirements /opt/aleapp/requirements.txt
+  pipx inject mulder-dfir --requirements /opt/ileapp/requirements.txt
+  ```
+
+  Mulder probes for a Python interpreter that can actually import them, so installing them into the system interpreter instead also works.
+
+If assembling all of that is more than you want to do, use the container.
+
+## Installing with pipx
+
+```bash
+pipx install "mulder-dfir[forensics]"
+```
+
+`pipx` puts mulder in its own isolated virtualenv and links the `mulder` command onto your PATH. The equivalent with `uv` is:
+
+```bash
+uv tool install "mulder-dfir[forensics]"
+```
+
+Verify:
+
+```bash
+mulder --version
+```
+
+### Extras
+
+| Extra | Pulls in | When you need it |
+|-------|----------|------------------|
+| `forensics` | `orjson`, `xxhash`, `colorama`, `tqdm`, `evtx` | Zircolite's runtime dependencies. Recommended for everyone. |
+| `pdf` | `weasyprint` | PDF report rendering via `mulder report` |
+| `stix` | `stix2` | STIX 2.1 bundle export via `mulder export-iocs` |
+
+Combine them as `pipx install "mulder-dfir[forensics,pdf,stix]"`, or add one later without reinstalling:
+
+```bash
+pipx inject mulder-dfir weasyprint
+```
+
+`pipx inject` is also how you add any other Python dependency a forensic tool needs inside mulder's environment - see the ALEAPP/iLEAPP note above.
+
+### Directory Layout
+
+A native install uses two directories under `~/.mulder`, both overridable:
+
+| Directory | Default | Override | Contents |
+|-----------|---------|----------|----------|
+| Workspace | `~/.mulder/workspace` | `--cwd`, `MULDER_CWD` | Scratch working directory for agent sessions. Mulder writes a default `.mcp.json` here on first run. |
+| Cases | `~/.mulder/cases` | `--db-dir` | Case databases, audit logs, and reports |
+
+The container sets `MULDER_CWD=/mulder-investigation`, so its workspace is unchanged from earlier releases.
+
+### Using Mulder as an MCP Server
+
+To expose mulder's tools to Claude Desktop or any other MCP client, add:
+
+```json
+{
+  "mcpServers": {
+    "mulder": {
+      "type": "stdio",
+      "command": "mulder",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+`uvx mulder-dfir serve` works without installing first.
 
 ## Pulling the Container Image
 
@@ -299,7 +418,7 @@ Runs a full multi-phase forensic investigation.
 | `--effort` | `max` | Effort level (`max`, `xhigh`, `high`) |
 | `--workers` | `3` | Max concurrent extraction sessions |
 | `--db-dir` | `~/.mulder/cases` | Case database directory |
-| `--cwd` | `/mulder-investigation` | Working directory for agent sessions |
+| `--cwd` | `~/.mulder/workspace` | Working directory for agent sessions. Also settable via `MULDER_CWD`; the container sets it to `/mulder-investigation`. Created on first use, along with a default `.mcp.json` |
 | `--proxy-config` | None | LiteLLM config YAML for custom model routing |
 
 ### `mulder serve`

@@ -1,15 +1,46 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
-name = "mulder-mcp"
-version = "1.3.2"
-description = "Custom MCP server for SANS SIFT Workstation forensic investigations"
+name = "mulder-dfir"
+dynamic = ["version"]
+description = "Autonomous digital-forensics investigation orchestrator and MCP server for the SANS SIFT Workstation"
+readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
+license-files = ["LICENSE"]
 authors = [
     { name = "Caleb Evans" },
+]
+keywords = [
+    "forensics",
+    "dfir",
+    "incident-response",
+    "sift",
+    "volatility",
+    "mitre-attack",
+    "security",
+    "mcp",
+    "model-context-protocol",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Information Technology",
+    "Intended Audience :: System Administrators",
+    "Intended Audience :: Science/Research",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: System :: Systems Administration",
+    "Typing :: Typed",
 ]
 dependencies = [
     "mcp>=1.27",
@@ -33,6 +64,25 @@ dependencies = [
 [project.optional-dependencies]
 pdf = ["weasyprint>=60.0"]
 stix = ["stix2>=3.0"]
+# Zircolite's runtime dependencies. Verified against
+# https://github.com/wagga40/Zircolite/blob/2.20.0/requirements.txt (the four
+# required entries) plus `evtx`, which Zircolite imports optionally and which
+# mulder needs for the "evtx" input format exposed in zircolite.py:_FORMAT_FLAGS.
+# NOT included: aiohttp / urllib3 / requests / elasticsearch (remote forwarding),
+# lxml (XML input), pysigma* (rule compilation) - mulder uses none of those paths.
+# jinja2 and pyyaml, which Zircolite also imports optionally, are already
+# mulder dependencies above.
+# NOT covered by this extra: ALEAPP and iLEAPP. Their upstream requirements.txt
+# files carry a git URL, local wheel paths and mutually conflicting pins, so they
+# cannot be expressed as a PyPI extra; install them with
+# `pipx inject mulder-dfir --requirements /opt/aleapp/requirements.txt`.
+forensics = [
+    "orjson>=3.9.15",
+    "xxhash>=3.0",
+    "colorama>=0.4.4",
+    "tqdm>=4.58.0",
+    "evtx>=0.6.2",
+]
 dev = [
     "pytest",
     "pytest-asyncio",
@@ -42,11 +92,34 @@ dev = [
     "pre-commit",
 ]
 
+[project.urls]
+Homepage = "https://github.com/calebevans/mulder"
+Source = "https://github.com/calebevans/mulder"
+Documentation = "https://github.com/calebevans/mulder/blob/main/docs/usage-guide.md"
+Issues = "https://github.com/calebevans/mulder/issues"
+Changelog = "https://github.com/calebevans/mulder/releases"
+"Example report" = "https://calebevans.github.io/mulder/examples/srl-2018/SRL-2018.report.html"
+
 [project.scripts]
 mulder = "mulder.cli:cli"
+# `uvx <name>` runs the console script matching the *package* name, so the alias
+# makes `uvx mulder-dfir serve` work without `--from`.
+mulder-dfir = "mulder.cli:cli"
+
+[tool.hatch.version]
+path = "src/mulder/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mulder"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/tests",
+    "/README.md",
+    "/LICENSE",
+    "/pyproject.toml",
+]
 
 [tool.ruff]
 src = ["src"]

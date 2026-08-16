@@ -1285,7 +1285,7 @@ class ReportRenderer:
         except ImportError:
             logger.warning(
                 "weasyprint not installed; skipping PDF generation. "
-                "Install with: pip install 'mulder-mcp[pdf]'"
+                "Install with: pip install 'mulder-dfir[pdf]'"
             )
             return None
 

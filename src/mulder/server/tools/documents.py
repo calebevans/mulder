@@ -619,7 +619,7 @@ def analyze_office_document(
             error_type="binary_missing",
             suggestion=(
                 "oletools is a mulder dependency; reinstall mulder "
-                "(pipx install --force mulder-mcp) or pip install oletools"
+                "(pipx install --force mulder-dfir) or pip install oletools"
             ),
         )
 

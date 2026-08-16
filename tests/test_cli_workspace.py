@@ -1,6 +1,6 @@
 """Workspace bootstrap tests for ``mulder investigate``.
 
-A ``pipx install mulder-mcp`` box has no ``/mulder-investigation`` and never
+A ``pipx install mulder-dfir`` box has no ``/mulder-investigation`` and never
 will, so the working directory defaults to ``~/.mulder/workspace`` (overridable
 with ``--cwd`` / ``MULDER_CWD``) and mulder materialises the packaged
 ``.mcp.json`` into it on first run instead of hard-erroring.

@@ -9,7 +9,7 @@ CONTAINER_ENGINE ?= $(shell \
 IMAGE_NAME ?= mulder
 IMAGE_TAG  ?= dev
 
-.PHONY: all install lint format typecheck test precommit container-build container-run clean
+.PHONY: all install lint format typecheck test precommit build dist-check container-build container-run clean
 
 install:
 	uv pip install -e ".[dev]"
@@ -28,6 +28,14 @@ test:
 
 precommit:
 	pre-commit run --all-files
+
+build:
+	uv build
+
+# There is deliberately no `publish` target: uploading to PyPI is irreversible
+# and happens only through the human-approved `pypi` environment in publish.yml.
+dist-check: build
+	uvx twine check --strict dist/*
 
 container-build:
 	$(CONTAINER_ENGINE) build -t $(IMAGE_NAME):$(IMAGE_TAG) .

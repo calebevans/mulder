@@ -37,7 +37,7 @@ _DEFAULT_LINUX_RULES = "/opt/zircolite/rules/linux/"
 # Zircolite (aiohttp, evtx, lxml, requests, elasticsearch, pysigma, yaml,
 # jinja2) sits inside a try/except feeding its own ImportErrorHandler and is
 # optional.  Inside the container these come from the Dockerfile's pip install;
-# under ``pipx install mulder-mcp`` they come from the ``forensics`` extra.
+# under ``pipx install mulder-dfir`` they come from the ``forensics`` extra.
 # Keep this list short: a missing entry only weakens the preflight, an extra
 # entry blocks a working install.
 _ZIRCOLITE_MODULES = ("orjson", "xxhash", "colorama", "tqdm")
@@ -300,8 +300,8 @@ def run_zircolite(
             f"Zircolite dependencies not importable: {', '.join(missing)}",
             error_type="binary_missing",
             suggestion=(
-                "Install the forensics extra: pipx install 'mulder-mcp[forensics]' "
-                "(or: pipx inject mulder-mcp " + " ".join(missing) + ")"
+                "Install the forensics extra: pipx install 'mulder-dfir[forensics]' "
+                "(or: pipx inject mulder-dfir " + " ".join(missing) + ")"
             ),
         )
 
