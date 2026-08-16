@@ -13,6 +13,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 import time
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
@@ -64,6 +65,26 @@ def adaptive_timeout(
 def require_binary(name: str) -> str | None:
     """Return the absolute path to *name* if found on PATH, else None."""
     return shutil.which(name)
+
+
+def interpreter_candidates() -> list[str]:
+    """Python interpreters to probe, most-likely-correct first.
+
+    ``sys.executable`` is mulder's own interpreter: under ``pipx install`` /
+    ``uv tool install`` it is the only one that can see dependencies injected
+    into mulder's venv.  The PATH interpreters follow because several helper
+    tools (plaso, pyhindsight, ALEAPP, iLEAPP) are *not* mulder dependencies
+    and on SIFT live in the system interpreter or a separate venv.  Order
+    matters; duplicates are dropped so a probe never runs twice against the
+    same binary.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for cand in (sys.executable, shutil.which("python3"), shutil.which("python")):
+        if cand and cand not in seen:
+            seen.add(cand)
+            out.append(cand)
+    return out
 
 
 def run_subprocess(

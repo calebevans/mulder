@@ -24,7 +24,7 @@ from claude_agent_sdk.types import (
 from mulder.orchestrator.display import InvestigationDashboard
 from mulder.orchestrator.errors import AuthenticationError, ModelNotAvailableError
 from mulder.orchestrator.models import ModelConfig
-from mulder.orchestrator.types import PhaseResult, extract_json_from_text
+from mulder.orchestrator.types import EffortLevel, PhaseResult, extract_json_from_text
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +153,7 @@ class SessionExecutor:
         model_config: ModelConfig,
         cwd: str,
         env: dict[str, str],
-        effort: str,
+        effort: EffortLevel,
         using_proxy: bool = False,
     ) -> None:
         """Initialize the session executor.

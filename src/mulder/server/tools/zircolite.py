@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import logging
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -15,7 +17,6 @@ from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
     error_response,
     make_tool_call_id,
-    require_binary,
     sources_already_indexed,
     tool_response,
 )
@@ -31,6 +32,16 @@ _ZIRCOLITE_TIMEOUT = 600
 _ZIRCOLITE_SCRIPT = "/opt/zircolite/zircolite.py"
 _DEFAULT_LINUX_RULES = "/opt/zircolite/rules/linux/"
 
+# Zircolite 2.20.0's unguarded top-level third-party imports, i.e. the modules
+# without which zircolite.py cannot start at all.  Every other import in
+# Zircolite (aiohttp, evtx, lxml, requests, elasticsearch, pysigma, yaml,
+# jinja2) sits inside a try/except feeding its own ImportErrorHandler and is
+# optional.  Inside the container these come from the Dockerfile's pip install;
+# under ``pipx install mulder-mcp`` they come from the ``forensics`` extra.
+# Keep this list short: a missing entry only weakens the preflight, an extra
+# entry blocks a working install.
+_ZIRCOLITE_MODULES = ("orjson", "xxhash", "colorama", "tqdm")
+
 _FORMAT_FLAGS: dict[str, list[str]] = {
     "auditd": ["--auditd"],
     "sysmon_linux": ["--sysmon4linux"],
@@ -39,6 +50,11 @@ _FORMAT_FLAGS: dict[str, list[str]] = {
 }
 
 _LEVEL_ORDER = ["informational", "low", "medium", "high", "critical"]
+
+
+def _missing_zircolite_modules() -> list[str]:
+    """Return Zircolite dependencies not importable from mulder's interpreter."""
+    return [m for m in _ZIRCOLITE_MODULES if importlib.util.find_spec(m) is None]
 
 
 def _run_zircolite_process(
@@ -65,7 +81,7 @@ def _run_zircolite_process(
     format_flags = _FORMAT_FLAGS.get(log_format, [])
 
     cmd = [
-        "python3",
+        sys.executable,
         _ZIRCOLITE_SCRIPT,
         "--events",
         str(events_path),
@@ -275,13 +291,18 @@ def run_zircolite(
                 0.0,
             )
 
-    if not require_binary("python3"):
+    missing = _missing_zircolite_modules()
+    if missing:
         return error_response(
             tc_id,
             "run_zircolite",
             params,
-            "python3 not found on PATH",
+            f"Zircolite dependencies not importable: {', '.join(missing)}",
             error_type="binary_missing",
+            suggestion=(
+                "Install the forensics extra: pipx install 'mulder-mcp[forensics]' "
+                "(or: pipx inject mulder-mcp " + " ".join(missing) + ")"
+            ),
         )
 
     if not Path(_ZIRCOLITE_SCRIPT).exists():

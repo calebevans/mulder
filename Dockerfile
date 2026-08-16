@@ -538,6 +538,11 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 # The container runs as non-root user 'mulder'; the entrypoint handles
 # credential setup and permission fixups before dropping to that user.
 
+# --cwd defaults to ~/.mulder/workspace on a native install; pin it back to the
+# directory this image already creates, populates and git-inits above so
+# container behaviour is unchanged.
+ENV MULDER_CWD=/mulder-investigation
+
 WORKDIR /mulder-investigation
 ENTRYPOINT ["entrypoint.sh"]
 CMD ["mulder", "investigate"]

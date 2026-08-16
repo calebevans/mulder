@@ -8,6 +8,7 @@ evidence and index results into the case database.
 from __future__ import annotations
 
 import contextlib
+import functools
 import logging
 import mmap
 import re as _re
@@ -22,7 +23,13 @@ from typing import Any
 
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
-from mulder.server.helpers import error_response, make_tool_call_id, require_binary, tool_response
+from mulder.server.helpers import (
+    error_response,
+    interpreter_candidates,
+    make_tool_call_id,
+    require_binary,
+    tool_response,
+)
 from mulder.server.tool_access import Role, tool_access
 
 logger = logging.getLogger(__name__)
@@ -875,6 +882,8 @@ _ILEAPP_TIMEOUT = 1800
 _ALEAPP_SCRIPT = "/opt/aleapp/aleapp.py"
 _ILEAPP_SCRIPT = "/opt/ileapp/ileapp.py"
 
+_LEAPP_PROBE_TIMEOUT = 20
+
 _LEAPP_INPUT_TYPE_FLAGS: dict[str, str] = {
     "fs": "fs",
     "tar": "tar",
@@ -882,6 +891,40 @@ _LEAPP_INPUT_TYPE_FLAGS: dict[str, str] = {
     "gz": "gz",
     "itunes": "itunes",
 }
+
+
+@functools.cache
+def _find_leapp_cmd(script: str, console_name: str) -> list[str] | None:
+    """Locate a runnable LEAPP command, most-likely-correct interpreter first.
+
+    ALEAPP/iLEAPP dependencies are *not* mulder dependencies and cannot be
+    shipped as an extra (their requirements.txt files carry a git URL, local
+    wheel paths, and mutually conflicting pins).  They may therefore live in
+    mulder's own venv, in the system interpreter, or nowhere at all — so probe
+    instead of assuming, and fall back to a packaged console script.
+
+    Memoized: ALEAPP imports its whole plugin tree at module scope, so each
+    probe is expensive and a fully-failing resolution would otherwise cost
+    ``len(interpreter_candidates()) * _LEAPP_PROBE_TIMEOUT`` seconds on *every*
+    tool call.  Callers must not mutate the returned list.
+    """
+    if Path(script).exists():
+        for py in interpreter_candidates():
+            try:
+                subprocess.run(
+                    [py, script, "-h"],
+                    capture_output=True,
+                    timeout=_LEAPP_PROBE_TIMEOUT,
+                    check=True,
+                )
+                return [py, script]
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+                continue
+    path = require_binary(console_name)
+    if path:
+        return [path]
+    return None
+
 
 _ARTIFACT_CATEGORIES: dict[str, str] = {
     "whatsapp": "communications",
@@ -1080,11 +1123,29 @@ def run_aleapp(
             error_type="invalid_argument",
         )
 
+    aleapp_cmd = _find_leapp_cmd(_ALEAPP_SCRIPT, "aleapp")
+    if aleapp_cmd is None:
+        return error_response(
+            tc_id,
+            "run_aleapp",
+            params,
+            (
+                f"ALEAPP is not runnable: {_ALEAPP_SCRIPT} is missing, or its "
+                "dependencies are not importable from any available Python interpreter"
+            ),
+            error_type="binary_missing",
+            suggestion=(
+                "git clone https://github.com/abrignoni/ALEAPP.git /opt/aleapp, then "
+                "install its requirements into mulder's environment: "
+                "pipx inject mulder-mcp --requirements /opt/aleapp/requirements.txt. "
+                "ALEAPP's dependencies are NOT covered by the mulder-mcp[forensics] extra."
+            ),
+        )
+
     with tempfile.TemporaryDirectory(prefix="mulder_aleapp_") as tmpdir:
         output_dir = Path(tmpdir)
         cmd = [
-            "python3",
-            _ALEAPP_SCRIPT,
+            *aleapp_cmd,
             "-t",
             _LEAPP_INPUT_TYPE_FLAGS[input_type],
             "-i",
@@ -1220,11 +1281,29 @@ def run_ileapp(
             error_type="invalid_argument",
         )
 
+    ileapp_cmd = _find_leapp_cmd(_ILEAPP_SCRIPT, "ileapp")
+    if ileapp_cmd is None:
+        return error_response(
+            tc_id,
+            "run_ileapp",
+            params,
+            (
+                f"iLEAPP is not runnable: {_ILEAPP_SCRIPT} is missing, or its "
+                "dependencies are not importable from any available Python interpreter"
+            ),
+            error_type="binary_missing",
+            suggestion=(
+                "git clone https://github.com/abrignoni/iLEAPP.git /opt/ileapp, then "
+                "install its requirements into mulder's environment: "
+                "pipx inject mulder-mcp --requirements /opt/ileapp/requirements.txt. "
+                "iLEAPP's dependencies are NOT covered by the mulder-mcp[forensics] extra."
+            ),
+        )
+
     with tempfile.TemporaryDirectory(prefix="mulder_ileapp_") as tmpdir:
         output_dir = Path(tmpdir)
         cmd = [
-            "python3",
-            _ILEAPP_SCRIPT,
+            *ileapp_cmd,
             "-t",
             _LEAPP_INPUT_TYPE_FLAGS[input_type],
             "-i",

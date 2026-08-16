@@ -9,7 +9,11 @@ from pathlib import Path
 import click
 
 from mulder import __version__
-from mulder.patterns import DEFAULT_DB_DIR
+from mulder.patterns import DEFAULT_DB_DIR, DEFAULT_WORKSPACE_DIR
+
+#: The default ``.mcp.json`` shipped as package data, copied into a fresh
+#: workspace on first run so a ``pipx``/``uv tool`` install works out of the box.
+DEFAULT_MCP_CONFIG = Path(__file__).resolve().parent / "data" / "mcp.json"
 
 
 def _is_interactive() -> bool:
@@ -244,9 +248,10 @@ def report(case_id: str, db_dir: str) -> None:
 )
 @click.option(
     "--cwd",
-    default="/mulder-investigation",
+    default=DEFAULT_WORKSPACE_DIR,
+    envvar="MULDER_CWD",
     show_default=True,
-    help="Working directory for sessions.",
+    help="Working directory for agent sessions (env: MULDER_CWD).",
 )
 @click.option(
     "--workers",
@@ -293,16 +298,32 @@ def investigate(
     a model ID uses a provider prefix like bedrock/ or openai/).
     """
     import asyncio
+    from typing import cast
 
     from mulder.orchestrator.models import ModelConfig
     from mulder.orchestrator.runner import Orchestrator
+    from mulder.orchestrator.types import EffortLevel
 
-    mcp_config_file = Path(cwd) / ".mcp.json"
+    cwd_path = Path(cwd).expanduser()
+    try:
+        cwd_path.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise click.ClickException(f"Cannot create working directory {cwd_path}: {exc}") from exc
+    # The *expanded* path is what must reach Orchestrator(cwd=...) below, or the
+    # agent sessions are handed a literal "~/.mulder/workspace" string.
+    cwd = str(cwd_path)
+
+    mcp_config_file = cwd_path / ".mcp.json"
     if not mcp_config_file.exists():
-        raise click.ClickException(
-            f"MCP configuration not found at {mcp_config_file}. "
-            f"Ensure {cwd}/.mcp.json exists with the mulder MCP server config."
-        )
+        try:
+            mcp_config_file.write_text(
+                DEFAULT_MCP_CONFIG.read_text(encoding="utf-8"), encoding="utf-8"
+            )
+        except OSError as exc:
+            raise click.ClickException(
+                f"Cannot write MCP configuration to {mcp_config_file}: {exc}"
+            ) from exc
+        click.echo(f"Created default MCP configuration at {mcp_config_file}", err=True)
 
     log_dir = Path(db_dir).expanduser()
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -337,7 +358,8 @@ def investigate(
         evidence_path=evidence_path,
         cwd=cwd,
         model_config=model_config,
-        effort=effort,
+        # click.Choice above is the validation boundary for this value.
+        effort=cast("EffortLevel", effort),
         env={},
         parallel_extractions=workers,
         proxy_config=proxy_config,

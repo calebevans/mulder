@@ -16,7 +16,12 @@ from pathlib import Path
 
 from mulder.server.app import mcp
 from mulder.server.extract_helpers import extract_and_index
-from mulder.server.helpers import error_response, make_tool_call_id, tool_response
+from mulder.server.helpers import (
+    error_response,
+    interpreter_candidates,
+    make_tool_call_id,
+    tool_response,
+)
 from mulder.server.tool_access import Role, tool_access
 
 logger = logging.getLogger(__name__)
@@ -30,8 +35,7 @@ def _find_hindsight_cmd() -> list[str] | None:
     for name in ("hindsight.py", "hindsight"):
         if shutil.which(name):
             return [name]
-    py = shutil.which("python3") or shutil.which("python")
-    if py:
+    for py in interpreter_candidates():
         try:
             subprocess.run(
                 [py, "-m", "pyhindsight.hindsight", "--help"],
@@ -41,7 +45,7 @@ def _find_hindsight_cmd() -> list[str] | None:
             )
             return [py, "-m", "pyhindsight.hindsight"]
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
-            pass
+            continue
     return None
 
 

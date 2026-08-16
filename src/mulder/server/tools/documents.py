@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import logging
 import re
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -131,6 +133,69 @@ _SUSPICIOUS_JS_FUNCTIONS: list[str] = [
 # Office document helpers
 # ---------------------------------------------------------------------------
 
+#: Literal header msodde prints immediately before the DDE links it found.
+#: Everything above it is banner/log noise.
+_MSODDE_LINK_MARKER = "DDE Links:"
+
+
+def _parse_msodde_output(stdout: str) -> list[dict[str, object]]:
+    """Extract DDE links from msodde's output.
+
+    msodde unconditionally writes a four-line banner, an ``Opening file: <path>``
+    line and a ``DDE Links:`` header to **stdout**, so treating every non-blank
+    stdout line as a DDE link fabricates five ``risk: high`` findings for a
+    perfectly clean document — one of which discloses the absolute evidence path
+    as a "DDE command".
+
+    With ``--json`` msodde emits a JSON array whose entries carry a ``type`` key:
+    ``"dde-link"`` for a real link, ``"msg"`` for banner and log lines. That tag
+    is the authoritative signal, so it is preferred. If the JSON cannot be parsed
+    (a crashed msodde, or a future format change) fall back to the plain-text
+    layout, where a real link can only appear *after* the ``DDE Links:`` marker.
+
+    Args:
+        stdout: Captured stdout from ``python -m oletools.msodde``.
+
+    Returns:
+        List of DDE link records, empty when the document has no DDE links.
+    """
+    raw_links: list[str] = []
+    text = stdout.strip()
+
+    parsed: Any = None
+    if text:
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            parsed = None
+
+    if isinstance(parsed, list):
+        for entry in parsed:
+            if isinstance(entry, dict) and entry.get("type") == "dde-link":
+                msg = str(entry.get("msg", "")).strip()
+                if msg:
+                    raw_links.append(msg)
+    else:
+        # Plain-text fallback. Anything before the marker is banner noise, and
+        # if the marker never appears (e.g. a traceback) there are no links.
+        after_marker = False
+        for line in stdout.splitlines():
+            stripped = line.strip()
+            if not after_marker:
+                after_marker = stripped == _MSODDE_LINK_MARKER
+                continue
+            if stripped and not stripped.startswith("#"):
+                raw_links.append(stripped)
+
+    return [
+        {
+            "field_type": "DDEAUTO" if "DDEAUTO" in link.upper() else "DDE",
+            "command": link,
+            "risk": "high",
+        }
+        for link in raw_links
+    ]
+
 
 def _analyze_macros_olevba(
     file_path: Path,
@@ -145,10 +210,11 @@ def _analyze_macros_olevba(
 
     Raises:
         subprocess.TimeoutExpired: If olevba exceeds the timeout.
-        OSError: If olevba cannot be executed.
+        OSError: If olevba cannot be executed or exits non-zero with no output.
     """
-    olevba_bin = require_binary("olevba") or "olevba"
-    cmd = [olevba_bin, "--json", str(file_path)]
+    # oletools is a mulder dependency, so its console scripts live in mulder's
+    # own venv bin/ — which pipx does not link onto PATH.  Invoke the module.
+    cmd = [sys.executable, "-m", "oletools.olevba", "--json", str(file_path)]
 
     proc = subprocess.run(
         cmd,
@@ -159,6 +225,13 @@ def _analyze_macros_olevba(
     )
 
     output = proc.stdout.strip()
+    # Module invocation always execs successfully, so a broken oletools would
+    # otherwise be indistinguishable from "this document has no macros" — the
+    # worst possible false negative for a potentially malicious document.
+    if proc.returncode != 0 and not output:
+        raise OSError(
+            f"olevba failed (exit {proc.returncode}): {proc.stderr.strip()[:500] or 'no output'}"
+        )
     if not output:
         return [], [], False
 
@@ -298,7 +371,7 @@ def _run_pdfid(file_path: Path) -> list[dict[str, object]]:
         OSError: If pdfid cannot be executed.
     """
     if Path(_PDFID_SCRIPT).exists():
-        cmd = ["python3", _PDFID_SCRIPT, "--force", str(file_path)]
+        cmd = [sys.executable, _PDFID_SCRIPT, "--force", str(file_path)]
     else:
         pdfid_bin = require_binary("pdfid") or "pdfid"
         cmd = [pdfid_bin, "--force", str(file_path)]
@@ -362,7 +435,7 @@ def _extract_pdf_javascript(file_path: Path) -> list[dict[str, object]]:
     """
     if Path(_PDF_PARSER_SCRIPT).exists():
         cmd = [
-            "python3",
+            sys.executable,
             _PDF_PARSER_SCRIPT,
             "--type",
             "/JS",
@@ -537,14 +610,17 @@ def analyze_office_document(
         "analyze_dde": analyze_dde,
     }
 
-    if not require_binary("olevba"):
+    if importlib.util.find_spec("oletools") is None:
         return error_response(
             tc_id,
             "analyze_office_document",
             params,
-            "olevba not found on PATH",
+            "oletools is not importable from mulder's interpreter",
             error_type="binary_missing",
-            suggestion="Install oletools: pip install oletools",
+            suggestion=(
+                "oletools is a mulder dependency; reinstall mulder "
+                "(pipx install --force mulder-mcp) or pip install oletools"
+            ),
         )
 
     target = Path(file_path)
@@ -591,29 +667,28 @@ def analyze_office_document(
     # DDE analysis via msodde if requested and available
     dde_links: list[dict[str, object]] = []
     if analyze_dde:
-        msodde = require_binary("msodde")
-        if msodde:
-            try:
-                proc = subprocess.run(
-                    [msodde, str(target)],
-                    capture_output=True,
-                    text=True,
-                    timeout=_OLEVBA_TIMEOUT,
-                    check=False,
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-m", "oletools.msodde", "--json", str(target)],
+                capture_output=True,
+                text=True,
+                timeout=_OLEVBA_TIMEOUT,
+                check=False,
+            )
+            # DDE analysis is best-effort, but a broken msodde must not pass
+            # silently as "no DDE links found". msodde always prints its banner
+            # to stdout, so a stdout-emptiness test here would never fire.
+            if proc.returncode != 0:
+                logger.warning(
+                    "msodde failed for %s (exit %s): %s",
+                    file_path,
+                    proc.returncode,
+                    proc.stderr.strip()[:500] or proc.stdout.strip()[:500] or "no output",
                 )
-                for line in proc.stdout.splitlines():
-                    stripped = line.strip()
-                    if stripped and not stripped.startswith("#"):
-                        field_type = "DDEAUTO" if "DDEAUTO" in stripped.upper() else "DDE"
-                        dde_links.append(
-                            {
-                                "field_type": field_type,
-                                "command": stripped,
-                                "risk": "high",
-                            }
-                        )
-            except (subprocess.TimeoutExpired, OSError):
-                logger.debug("msodde analysis failed for %s", file_path)
+            else:
+                dde_links = _parse_msodde_output(proc.stdout)
+        except (subprocess.TimeoutExpired, OSError):
+            logger.debug("msodde analysis failed for %s", file_path)
 
     index_parts: list[str] = [
         f"File: {file_path}",
