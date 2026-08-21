@@ -1,4 +1,4 @@
-"""FastMCP server definition and initialization for Mulder."""
+"""MCP server definition and initialization for Mulder."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, ParamSpec, TypeVar
 
 import anyio
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from mulder.audit import AuditLog
 from mulder.db import CaseDB
@@ -25,7 +25,7 @@ from mulder.server.tool_access import EXECUTORS, tool_access
 
 logger = logging.getLogger(__name__)
 
-mcp = FastMCP("Mulder")
+mcp = MCPServer("Mulder")
 
 # ---------------------------------------------------------------------------
 # Concurrent tool execution: wrap every sync @mcp.tool() to run in a thread

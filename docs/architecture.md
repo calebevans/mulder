@@ -10,7 +10,7 @@ Mulder is a forensic investigation platform consisting of two core components: a
 
 ## MCP Server Architecture
 
-The MCP server (`mulder serve`) uses [FastMCP](https://github.com/modelcontextprotocol/python-sdk) (from the official MCP Python SDK) to expose forensic tools over the Model Context Protocol. It supports both `stdio` and `streamable-http` transports.
+The MCP server (`mulder serve`) uses [`MCPServer`](https://github.com/modelcontextprotocol/python-sdk) (from the official MCP Python SDK) to expose forensic tools over the Model Context Protocol. It supports both `stdio` and `streamable-http` transports.
 
 ### Tool Categories
 
@@ -235,7 +235,7 @@ The `@audited_tool` decorator (`src/mulder/server/helpers.py`) wraps MCP tool fu
 ### Adding a New Tool
 
 1. Define the function under `src/mulder/server/tools/`
-2. Apply `@mcp.tool()` (FastMCP registration)
+2. Apply `@mcp.tool()` (MCPServer registration)
 3. Apply `@tool_access(...)` with the appropriate role flags
 4. Apply `@audited_tool("tool_name")` for audit logging
 5. The tool automatically appears in the correct phase allowlists
@@ -457,7 +457,7 @@ flowchart TB
             mulderCLI["mulder CLI"]
             orchestrator2["Orchestrator"]
             agentSDK2["Agent SDK (Session Runtime)"]
-            mcpServer2["MCP Server (FastMCP)"]
+            mcpServer2["MCP Server (MCPServer)"]
         end
 
         subgraph tools [Forensic Tools Layer]

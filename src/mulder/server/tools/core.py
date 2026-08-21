@@ -1082,11 +1082,12 @@ def decode_payload(
                 inner = _detect_encoding(decoded)
                 if inner != "base64" and inner != "unknown":
                     inner_result = decode_payload(decoded, encoding=inner)
-                    if isinstance(inner_result.get("results"), dict):
-                        inner_layers = inner_result["results"].get("layers", [])
+                    inner_results = inner_result.get("results")
+                    if isinstance(inner_results, dict):
+                        inner_layers = inner_results.get("layers", [])
                         if inner_layers:
                             layers.extend(inner_layers)
-                            decoded = inner_result["results"].get("decoded", decoded)
+                            decoded = inner_results.get("decoded", decoded)
 
     else:
         decoded = f"[unknown encoding: {detected_encoding}]"

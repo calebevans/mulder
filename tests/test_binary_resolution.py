@@ -90,7 +90,7 @@ class TestChainsaw:
         assert mock_run.call_args[0][0][0] == str(binary)
 
     def test_empty_sigma_path_resolves_to_the_installed_rules(self, asset_root: Path) -> None:
-        """The tool schema must not freeze one machine's path (FastMCP reads the default)."""
+        """The tool schema must not freeze one machine's path (MCPServer reads the default)."""
         import inspect
 
         from mulder.server.tools.chainsaw import run_chainsaw

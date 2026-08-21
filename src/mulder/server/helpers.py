@@ -128,7 +128,7 @@ def audited_tool(
 
     The wrapped function must return a ``dict[str, object]``.  The decorator
     adds ``"tool_call_id"`` to it before returning.  The original function
-    signature is preserved so FastMCP introspection continues to work.
+    signature is preserved so MCPServer introspection continues to work.
 
     Args:
         tool_name: The tool name recorded in the audit log.
