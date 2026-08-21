@@ -28,7 +28,7 @@ def run_my_tool(target_path: str, force: bool = False) -> dict[str, object]:
     ...
 ```
 
-`@mcp.tool()` must come first (outermost) so FastMCP registers the function. `@tool_access(...)` must come second so it registers the unwrapped function name in the role registry before FastMCP wraps it.
+`@mcp.tool()` must come first (outermost) so MCPServer registers the function. `@tool_access(...)` must come second so it registers the unwrapped function name in the role registry before MCPServer wraps it.
 
 Optionally, add `@audited_tool("tool_name")` as a third decorator to handle `tool_call_id` generation, timing, and audit logging automatically:
 
@@ -44,7 +44,7 @@ When using `@audited_tool`, the wrapped function does not need to call `make_too
 
 ### Function Signature
 
-- Parameters should use plain types that FastMCP can serialize: `str`, `int`, `float`, `bool`, `list[str]`, `None`.
+- Parameters should use plain types that MCPServer can serialize: `str`, `int`, `float`, `bool`, `list[str]`, `None`.
 - The return type is always `dict[str, object]`.
 - Use `| None` for optional parameters with a default of `None`.
 
@@ -231,7 +231,7 @@ from mulder.server.tools.extract import (
 )
 ```
 
-The tool is automatically available to agents after import. No additional registration is needed since `@mcp.tool()` handles FastMCP registration and `@tool_access()` handles role registration at import time.
+The tool is automatically available to agents after import. No additional registration is needed since `@mcp.tool()` handles MCPServer registration and `@tool_access()` handles role registration at import time.
 
 ## 5. Add Skip Logic (Extraction Tools)
 

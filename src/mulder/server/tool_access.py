@@ -43,7 +43,7 @@ def tool_access(*roles: Role) -> Callable[[F], F]:
     """Declare which pipeline roles may call this tool.
 
     Place this decorator BELOW ``@mcp.tool()`` so it runs first
-    and registers the function before FastMCP wraps it.
+    and registers the function before MCPServer wraps it.
 
     Example::
 

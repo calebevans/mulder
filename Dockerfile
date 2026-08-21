@@ -500,7 +500,7 @@ COPY . /app
 RUN uv pip install --system --no-cache -e /app
 
 # LiteLLM proxy in isolated venv (hard dependency conflicts with mulder's
-# mcp>=1.27 and rich>=15.0; litellm pins older versions of both).
+# mcp>=2.0 and rich>=15.0; litellm pins older versions of both).
 RUN python3 -m venv /opt/litellm \
     && /opt/litellm/bin/pip install --no-cache-dir 'litellm[proxy]' pyyaml \
     && ln -s /opt/litellm/bin/litellm /usr/local/bin/litellm

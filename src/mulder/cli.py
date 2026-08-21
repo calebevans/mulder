@@ -118,7 +118,12 @@ def serve(
     )
 
     click.echo(f"Starting MCP server (transport={transport}) ...", err=True)
-    mcp_server.run(transport=transport)  # type: ignore[arg-type]
+    # ``MCPServer.run`` is overloaded per transport, so the literal has to
+    # reach it directly rather than through the click-supplied ``str``.
+    if transport == "streamable-http":
+        mcp_server.run(transport="streamable-http")
+    else:
+        mcp_server.run(transport="stdio")
 
 
 @cli.command()
