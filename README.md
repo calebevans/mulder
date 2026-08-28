@@ -4,6 +4,8 @@
 
 </div>
 
+## 🏆 1st Place - SANS Institute [Find Evil Hackathon 2026](https://www.sans.org/press/announcements/sans-names-the-five-winners-of-find-evil-2026)
+
 Mulder takes a directory of forensic evidence (disk images, memory dumps, PCAPs, event logs) and runs a five-phase autonomous investigation with hard quality gates between each phase. It produces structured incident reports with MITRE ATT&CK mappings, IOC exports, and a full audit trail. An adversarial "Alternative Narrative" phase challenges every finding before the report is generated. All tool invocations go through typed MCP interfaces - never through a shell - and an append-only audit log validates every evidence citation at the API boundary, making findings with fabricated evidence citations structurally impossible to submit.
 
 ## Results
