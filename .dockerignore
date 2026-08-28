@@ -13,3 +13,10 @@ examples/
 reports/
 rocba/
 cases/
+.github/
+tests/
+SPEC/
+Dockerfile
+docker-compose*.yml
+.gitignore
+.claude/

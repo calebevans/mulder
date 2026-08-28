@@ -85,7 +85,7 @@ RUN mkdir -p /opt/zimmermantools && cd /opt/zimmermantools \
     done
 
 # Volatility 3 symbol tables (data-only; pin to build platform to avoid QEMU)
-FROM ubuntu:22.04 AS symbols-fetch
+FROM --platform=$BUILDPLATFORM ubuntu:22.04 AS symbols-fetch
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -99,7 +99,7 @@ RUN mkdir -p /opt/vol-symbols \
         -O /opt/vol-symbols/linux.zip
 
 # YARA rule libraries (data-only; pin to build platform to avoid QEMU)
-FROM ubuntu:22.04 AS yara-fetch
+FROM --platform=$BUILDPLATFORM ubuntu:22.04 AS yara-fetch
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -107,8 +107,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates git \
     && rm -rf /var/lib/apt/lists/*
 
-RUN git clone --depth 1 https://github.com/Neo23x0/signature-base.git \
-        /opt/signature-base
+ARG SIGNATURE_BASE_SHA=e737ebd96c27a52ee99485d4d3e02e9c256d1d3a
+RUN git clone https://github.com/Neo23x0/signature-base.git /opt/signature-base \
+    && cd /opt/signature-base && git checkout $SIGNATURE_BASE_SHA \
+    && rm -rf .git
 
 # Hayabusa: Sigma rule engine for Windows EVTX logs.
 # amd64: pre-built musl binary (statically linked, no GLIBC dependency).
@@ -160,7 +162,7 @@ RUN ARCH="$(dpkg --print-architecture)" \
         -o /tmp/radare2.deb
 
 # MITRE ATT&CK Enterprise + ICS STIX data (data-only; pin to build platform to avoid QEMU)
-FROM ubuntu:22.04 AS attack-fetch
+FROM --platform=$BUILDPLATFORM ubuntu:22.04 AS attack-fetch
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -188,8 +190,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libjpeg-dev \
     && rm -rf /var/lib/apt/lists/*
 
-RUN git clone --depth 1 https://github.com/redNixon/stegdetect.git /tmp/stegdetect \
-    && cd /tmp/stegdetect \
+ARG STEGDETECT_SHA=28a4f074a71c682581314491224f9f41511c82e7
+RUN git clone https://github.com/redNixon/stegdetect.git /tmp/stegdetect \
+    && cd /tmp/stegdetect && git checkout $STEGDETECT_SHA \
     && autoreconf -ivf \
     && CFLAGS="-O2 -fcommon" ./configure --prefix=/opt/stegdetect \
     && make -j"$(nproc)" \
@@ -310,7 +313,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PATH="/usr/local/share/dotnet:${PATH}"
 
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.12.7 /uv /usr/local/bin/uv
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         software-properties-common \
@@ -363,11 +366,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && (freshclam --quiet || true) \
     && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1 \
     && update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1 \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -469,11 +467,14 @@ RUN uv pip install --system --no-cache \
 RUN git clone --depth 1 --branch 2.20.0 \
         https://github.com/wagga40/Zircolite.git /opt/zircolite \
     && chmod +x /opt/zircolite/zircolite.py \
-    && git clone --depth 1 https://github.com/abrignoni/ALEAPP.git /opt/aleapp \
-    && git clone --depth 1 https://github.com/abrignoni/iLEAPP.git /opt/ileapp \
-    && git clone --depth 1 \
-        https://github.com/DidierStevens/DidierStevensSuite.git \
+    && git clone --depth 1 --branch v2026.3.2 \
+        https://github.com/abrignoni/ALEAPP.git /opt/aleapp \
+    && git clone --depth 1 --branch v2026.3.2 \
+        https://github.com/abrignoni/iLEAPP.git /opt/ileapp \
+    && git clone https://github.com/DidierStevens/DidierStevensSuite.git \
         /opt/didier-stevens \
+    && cd /opt/didier-stevens && git checkout dea6816048fb2fd3a3597f2e131449fc87f60138 \
+    && rm -rf .git \
     && chmod +x /opt/didier-stevens/pdfid.py /opt/didier-stevens/pdf-parser.py
 
 # Install ALEAPP and iLEAPP Python dependencies; strip version pins and
@@ -531,6 +532,9 @@ ENV MULDER_CWD=/mulder-investigation
 # consequently exits 1 -- /opt is root:root 0755 and the process runs as
 # `mulder` -- which is correct; there is nothing for it to do here.
 ENV MULDER_ASSET_ROOT=/opt
+
+HEALTHCHECK --interval=60s --timeout=5s --start-period=10s --retries=3 \
+    CMD ["mulder", "--version"]
 
 WORKDIR /mulder-investigation
 ENTRYPOINT ["entrypoint.sh"]
