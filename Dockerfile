@@ -109,8 +109,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 ARG SIGNATURE_BASE_SHA=e737ebd96c27a52ee99485d4d3e02e9c256d1d3a
 RUN git clone https://github.com/Neo23x0/signature-base.git /opt/signature-base \
-    && cd /opt/signature-base && git checkout $SIGNATURE_BASE_SHA \
-    && rm -rf .git
+    && cd /opt/signature-base && git checkout $SIGNATURE_BASE_SHA
 
 # Hayabusa: Sigma rule engine for Windows EVTX logs.
 # amd64: pre-built musl binary (statically linked, no GLIBC dependency).
@@ -474,7 +473,6 @@ RUN git clone --depth 1 --branch 2.20.0 \
     && git clone https://github.com/DidierStevens/DidierStevensSuite.git \
         /opt/didier-stevens \
     && cd /opt/didier-stevens && git checkout dea6816048fb2fd3a3597f2e131449fc87f60138 \
-    && rm -rf .git \
     && chmod +x /opt/didier-stevens/pdfid.py /opt/didier-stevens/pdf-parser.py
 
 # Install ALEAPP and iLEAPP Python dependencies; strip version pins and
