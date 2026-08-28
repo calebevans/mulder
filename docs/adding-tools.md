@@ -24,8 +24,7 @@ Every tool needs two decorators, in this order:
 ```python
 @mcp.tool()
 @tool_access(Role.EXTRACT_EXECUTOR)
-def run_my_tool(target_path: str, force: bool = False) -> dict[str, object]:
-    ...
+def run_my_tool(target_path: str, force: bool = False) -> dict[str, object]: ...
 ```
 
 `@mcp.tool()` must come first (outermost) so MCPServer registers the function. `@tool_access(...)` must come second so it registers the unwrapped function name in the role registry before MCPServer wraps it.
@@ -36,8 +35,7 @@ Optionally, add `@audited_tool("tool_name")` as a third decorator to handle `too
 @mcp.tool()
 @tool_access(Role.EXTRACT_ANALYST | Role.CROSS_ANALYST)
 @audited_tool("my_query_tool")
-def my_query_tool(query: str) -> dict[str, object]:
-    ...
+def my_query_tool(query: str) -> dict[str, object]: ...
 ```
 
 When using `@audited_tool`, the wrapped function does not need to call `make_tool_call_id()`, measure elapsed time, or call `ctx.audit.log_tool_call()`. The decorator injects `tool_call_id` into the returned dict automatically.
@@ -162,8 +160,8 @@ return tool_response(
     tc_id,
     "run_my_tool",
     params,
-    summary,           # dict from extract_and_index or custom results
-    "mytool.output",   # source name (or None if not indexed)
+    summary,  # dict from extract_and_index or custom results
+    "mytool.output",  # source name (or None if not indexed)
     elapsed,
 )
 ```
@@ -246,8 +244,8 @@ from mulder.server.helpers import sources_already_indexed, tool_response
 
 if not force:
     existing = sources_already_indexed(
-        ["mytool."],               # source name prefixes this tool produces
-        evidence_path=target_path, # scope check to this evidence file
+        ["mytool."],  # source name prefixes this tool produces
+        evidence_path=target_path,  # scope check to this evidence file
     )
     if existing:
         return tool_response(
@@ -401,9 +399,7 @@ def run_custom_parser(
         timeout=600,
     )
     if isinstance(result, str):
-        return error_response(
-            tc_id, "run_custom_parser", params, result, error_type="timeout"
-        )
+        return error_response(tc_id, "run_custom_parser", params, result, error_type="timeout")
 
     # Index output into the case database
     summary = extract_and_index(
