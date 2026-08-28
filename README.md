@@ -50,14 +50,6 @@ Each gate validates structural criteria (minimum sources indexed, findings submi
 ### Install natively (SIFT Workstation, Debian/Ubuntu)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/calebevans/mulder/main/install.sh | bash
-```
-
-One command. It prints what it will do, asks once, then installs the OS packages you are missing (via `apt`, asking for your sudo password), mulder itself (via `pipx`, no sudo), and the forensic data and helper tools (~2.1 GB, no sudo). On a stock SIFT Workstation the only OS package missing is `yara` — SIFT ships the `python3-yara` module but not the binary.
-
-Prefer to run the steps yourself:
-
-```bash
 sudo apt install git sleuthkit yara p7zip-full binutils
 pipx install "mulder-dfir[forensics]"
 mulder setup
