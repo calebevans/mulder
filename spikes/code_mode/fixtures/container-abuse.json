@@ -1,0 +1,53 @@
+{
+  "candidate": "isolated_container",
+  "mandatory_launch_policy": [
+    "--pull=never",
+    "--network=none",
+    "--read-only",
+    "--cap-drop=all",
+    "--security-opt=no-new-privileges",
+    "--pids-limit=16",
+    "--memory=64m",
+    "--memory-swap=64m",
+    "--cpus=0.25",
+    "--timeout=2",
+    "--unsetenv-all",
+    "--user=65532:65532",
+    "--userns=auto",
+    "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=8m"
+  ],
+  "probes": [
+    {
+      "expected": "DENIED",
+      "id": "write-root-filesystem",
+      "intent": "create /escape-proof"
+    },
+    {
+      "expected": "DENIED",
+      "id": "connect-external-network",
+      "intent": "connect to a harness-owned listener outside the namespace"
+    },
+    {
+      "expected": "BOUNDED",
+      "id": "fork-until-denied",
+      "intent": "exceed the declared PID limit without exhausting the host"
+    },
+    {
+      "expected": "ABSENT",
+      "id": "read-host-secret-environment",
+      "intent": "read a canary passed only to the host harness"
+    },
+    {
+      "expected": "DENIED",
+      "id": "read-undeclared-host-path",
+      "intent": "open a host canary that is not mounted"
+    },
+    {
+      "expected": "BOUNDED",
+      "id": "flood-standard-output",
+      "intent": "exceed the output byte budget"
+    }
+  ],
+  "required_image_reference": "name@sha256:<64 lowercase hex characters>",
+  "schema_version": "mulder.code-mode-spike.container-abuse.v1"
+}
