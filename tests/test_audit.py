@@ -403,3 +403,28 @@ class TestIngestion:
         )
         s = tmp_audit_log.summary()
         assert s.first_timestamp != ""
+
+
+class TestExecutionPolicyAudit:
+    def test_policy_event_is_chained_without_becoming_tool_evidence(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "audit.jsonl"
+        audit = AuditLog(log_path)
+        audit.log_execution_decision(
+            {
+                "request_digest": "sha256:request",
+                "executable": "/usr/bin/strings",
+                "argument_count": 2,
+                "policy_decision": "deny",
+                "reason_code": "path_denied",
+                "status": "denied",
+                "output_sha256": "sha256:output",
+                "duration_ms": 1.0,
+                "timestamp": "2026-09-04T00:00:00+00:00",
+            }
+        )
+
+        event = json.loads(log_path.read_text(encoding="utf-8"))
+        assert event["type"] == "execution_policy"
+        assert event["entry_hash"].startswith("sha256:")
+        assert audit.verify_integrity().status == "verified"
+        assert audit.summary().total_tool_calls == 0

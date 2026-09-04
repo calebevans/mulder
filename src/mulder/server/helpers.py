@@ -22,6 +22,16 @@ from pathlib import Path
 from typing import Any, ParamSpec
 from uuid import uuid4
 
+from mulder.execution import (
+    CommandPolicy,
+    CommandRequest,
+    CommandRunner,
+    ExecutionAuditEvent,
+    ExecutionStatus,
+    NetworkClass,
+    PathAccess,
+    PathArgument,
+)
 from mulder.models import CoverageMetadata, ToolOutcome, ToolOutcomeStatus
 from mulder.server.app import get_ctx, has_ctx
 
@@ -93,19 +103,83 @@ def run_subprocess(
     *,
     timeout: int = TOOL_TIMEOUT,
     text: bool = True,
-) -> subprocess.CompletedProcess[str] | str:
-    """Run a subprocess with standardized timeout handling.
+    input_paths: tuple[Path, ...] = (),
+    output_paths: tuple[Path, ...] = (),
+    allowed_roots: tuple[Path, ...] = (),
+    environment: dict[str, str] | None = None,
+    network_class: NetworkClass = NetworkClass.NONE,
+    max_output_bytes: int = 16 * 1024 * 1024,
+) -> subprocess.CompletedProcess[Any] | str:
+    """Run a command through the centralized, no-network policy seam.
 
     Returns the CompletedProcess on success, or an error message string
     on timeout/OS failure. Callers check ``isinstance(result, str)`` to
     detect failures.
     """
-    try:
-        return subprocess.run(cmd, capture_output=True, text=text, timeout=timeout, check=False)
-    except subprocess.TimeoutExpired:
+    if not cmd:
+        return "Failed to run command: empty argv"
+    resolved = require_binary(cmd[0])
+    if resolved is None:
+        return f"Failed to run {cmd[0]}: executable not found"
+
+    def audit_sink(event: ExecutionAuditEvent) -> None:
+        if has_ctx():
+            get_ctx().audit.log_execution_decision(event.as_mapping())
+
+    bound_inputs: set[Path] = set()
+    bound_outputs: set[Path] = set()
+    arguments: list[str | PathArgument] = []
+    for argument in cmd[1:]:
+        argument_path = Path(argument)
+        matching_input = next((path for path in input_paths if path == argument_path), None)
+        matching_output = next((path for path in output_paths if path == argument_path), None)
+        if matching_input is not None and matching_output is not None:
+            arguments.append(PathArgument(matching_input, PathAccess.READ_WRITE))
+            bound_inputs.add(matching_input)
+            bound_outputs.add(matching_output)
+        elif matching_input is not None:
+            arguments.append(PathArgument(matching_input, PathAccess.READ))
+            bound_inputs.add(matching_input)
+        elif matching_output is not None:
+            arguments.append(PathArgument(matching_output, PathAccess.WRITE))
+            bound_outputs.add(matching_output)
+        else:
+            arguments.append(argument)
+    if bound_inputs != set(input_paths) or bound_outputs != set(output_paths):
+        return "Failed to run command: a declared path is not bound to argv"
+    request = CommandRequest(
+        executable=resolved,
+        arguments=tuple(arguments),
+        timeout_seconds=timeout,
+        environment=environment or {},
+        network_class=network_class,
+        max_output_bytes=max_output_bytes,
+    )
+    policy = CommandPolicy.for_executable(
+        resolved,
+        allowed_roots=allowed_roots,
+        max_timeout_seconds=timeout,
+        max_output_bytes=max_output_bytes,
+    )
+    result = CommandRunner(policy, audit_sink=audit_sink).run(request)
+    if result.status is ExecutionStatus.TIMED_OUT:
         return f"{cmd[0]} timed out after {timeout}s"
-    except OSError as exc:
-        return f"Failed to run {cmd[0]}: {exc}"
+    if result.status is ExecutionStatus.OUTPUT_LIMIT:
+        return result.error or f"{cmd[0]} exceeded its output limit"
+    if result.status in {ExecutionStatus.DENIED, ExecutionStatus.FAILED}:
+        return result.error or f"Failed to run {cmd[0]}"
+
+    stdout: str | bytes = result.stdout
+    stderr: str | bytes = result.stderr
+    if text:
+        stdout = result.stdout.decode("utf-8", errors="replace")
+        stderr = result.stderr.decode("utf-8", errors="replace")
+    return subprocess.CompletedProcess(
+        args=cmd,
+        returncode=result.returncode or 0,
+        stdout=stdout,
+        stderr=stderr,
+    )
 
 
 def make_tool_call_id() -> str:
@@ -601,7 +675,8 @@ def run_cli_tool(
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
-    if not require_binary(binary):
+    resolved_binary = require_binary(binary)
+    if resolved_binary is None:
         return error_response(
             tc_id,
             tool_name,
@@ -619,7 +694,14 @@ def run_cli_tool(
             error_type="file_not_found",
         )
 
-    result = run_subprocess(cmd, timeout=timeout)
+    declared_input = Path(check_exists or source_path)
+    pinned_cmd = [resolved_binary, *cmd[1:]]
+    result = run_subprocess(
+        pinned_cmd,
+        timeout=timeout,
+        input_paths=(declared_input,),
+        allowed_roots=(declared_input,),
+    )
     if isinstance(result, str):
         return error_response(tc_id, tool_name, params, result, error_type="timeout")
     proc = result

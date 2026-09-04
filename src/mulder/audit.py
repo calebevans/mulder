@@ -660,6 +660,11 @@ class AuditLog:
         }
         self._append(entry)
 
+    def log_execution_decision(self, event: Mapping[str, object]) -> None:
+        """Record one centralized command policy decision and terminal state."""
+        entry = {"type": "execution_policy", **dict(event)}
+        self._append(entry)
+
     def get_provenance_chain(self, finding_id: str, db: CaseDB) -> ProvenanceChain:
         """Trace a finding back through tool calls to original evidence files."""
         finding_entry = self._finding_entries.get(finding_id)
