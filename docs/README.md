@@ -7,3 +7,4 @@
 | [Tool Manifest](tool-manifest.md) | API reference for all MCP tools with parameters, types, and role access |
 | [Usage Guide](usage-guide.md) | Try-it-out instructions: pulling the image, configuring providers, running investigations |
 | [Glossary](glossary.md) | Project terminology, forensic artifact definitions, and architecture concepts |
+| [Verified-claim Graph](graph-projection.md) | Deterministic projection, bounded pivots, provenance selectors, and static views |

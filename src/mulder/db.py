@@ -57,6 +57,7 @@ from mulder.models import (
 
 if TYPE_CHECKING:
     from mulder.graph import EdgeProvenance, GraphBuildResult, GraphSnapshot
+    from mulder.graph_query import GraphQueryRequest, GraphQueryResult
 
 _T = TypeVar("_T")
 
@@ -1648,6 +1649,26 @@ class CaseDB:
 
         with self._engine.connect() as conn:
             return _read_edge_provenance(conn, self._get_case_id(), edge_id)
+
+    def query_entity_graph(self, request: GraphQueryRequest) -> GraphQueryResult:
+        """Run one typed, bounded graph operation for this case.
+
+        The projection is refreshed before reading so an analyst never sees a
+        stale edge after a claim is contradicted or withdrawn.  The request
+        type owns every supported selector and hard limit; callers cannot pass
+        SQL, Cypher, table names, or query fragments.
+        """
+        from mulder.graph import _rebuild_projection
+        from mulder.graph_query import _query_graph
+
+        case_id = self._get_case_id()
+
+        def _do_query() -> GraphQueryResult:
+            with self._engine.begin() as conn:
+                _rebuild_projection(conn, case_id)
+                return _query_graph(conn, case_id, request)
+
+        return self._wq.submit(_do_query)
 
     def update_finding(
         self,

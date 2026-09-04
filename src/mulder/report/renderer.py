@@ -18,6 +18,7 @@ import jinja2
 from jinja2.sandbox import SandboxedEnvironment
 from markupsafe import Markup
 
+from mulder.graph_query import GraphQueryResult, render_graph_visualization
 from mulder.models import AuditSummary, CaseMetadataRow, CoverageRecord, Finding, SourceRow
 from mulder.patterns import (
     EMAIL_RE,
@@ -1055,6 +1056,7 @@ class ReportRenderer:
         enrichment_windows: list[dict[str, Any]] | None = None,
         coverage_records: Sequence[CoverageRecord | dict[str, Any]] | None = None,
         proof_cards: Sequence[dict[str, object]] | None = None,
+        graph_results: Sequence[GraphQueryResult | dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Assemble template variables from case metadata, findings, audit trail, and sources.
 
@@ -1071,6 +1073,7 @@ class ReportRenderer:
                 DB source containing threat intel metadata for IOCs.
             coverage_records: Persistent analysis coverage and boundary rows.
             proof_cards: Provenance-rich claim, revision, coverage, and receipt cards.
+            graph_results: Bounded graph query results to render for static review.
 
         Returns:
             Dict of template variables ready for Jinja2 rendering.
@@ -1081,6 +1084,14 @@ class ReportRenderer:
         )
         normalized_coverage = [_normalize_coverage(record) for record in coverage_records or []]
         proof_card_data = [dict(card) for card in proof_cards or ()]
+        graph_visualizations = [
+            render_graph_visualization(
+                result
+                if isinstance(result, GraphQueryResult)
+                else GraphQueryResult.model_validate(result)
+            ).model_dump()
+            for result in graph_results or ()
+        ]
         proof_cards_by_id = {
             finding_id: card
             for card in proof_card_data
@@ -1242,6 +1253,7 @@ class ReportRenderer:
             "coverage_records": coverage_data,
             "proof_cards": proof_card_data,
             "proof_cards_by_id": proof_cards_by_id,
+            "graph_visualizations": graph_visualizations,
             "model_token_breakdown": self._load_model_usage(
                 Path(audit_log_path).parent, case_metadata.case_id
             ),
@@ -1493,6 +1505,10 @@ class ReportRenderer:
             html_by_id[g.finding_id] for g in ctx.get("timeline_findings", [])
         ]
         ctx["executive_summary"] = Markup(ctx["executive_summary"])
+        ctx["graph_visualizations"] = [
+            {**visualization, "svg": Markup(visualization["svg"])}
+            for visualization in ctx.get("graph_visualizations", [])
+        ]
 
         template = self._html_env.get_template("report.html.j2")
         return template.render(**ctx)
@@ -1509,6 +1525,7 @@ class ReportRenderer:
         enrichment_windows: list[dict[str, Any]] | None = None,
         coverage_records: list[CoverageRecord] | None = None,
         proof_cards: list[dict[str, object]] | None = None,
+        graph_results: list[GraphQueryResult] | None = None,
     ) -> str:
         """Render the markdown report template (``report.md.j2``) to a string.
 
@@ -1527,6 +1544,7 @@ class ReportRenderer:
                 DB source for threat intel context.
             coverage_records: Persistent analysis coverage and boundary rows.
             proof_cards: Per-finding proof-card data.
+            graph_results: Bounded graph query results for static review views.
 
         Returns:
             Rendered markdown report string.
@@ -1542,6 +1560,7 @@ class ReportRenderer:
             enrichment_windows=enrichment_windows,
             coverage_records=coverage_records,
             proof_cards=proof_cards,
+            graph_results=graph_results,
         )
         return self._render_markdown(ctx)
 
@@ -1558,6 +1577,7 @@ class ReportRenderer:
         enrichment_windows: list[dict[str, Any]] | None = None,
         coverage_records: list[CoverageRecord] | None = None,
         proof_cards: list[dict[str, object]] | None = None,
+        graph_results: list[GraphQueryResult] | None = None,
     ) -> str:
         """Render the HTML report with markdown descriptions converted to HTML.
 
@@ -1577,6 +1597,7 @@ class ReportRenderer:
                 DB source for threat intel context.
             coverage_records: Persistent analysis coverage and boundary rows.
             proof_cards: Per-finding proof-card data.
+            graph_results: Bounded graph query results for static review views.
 
         Returns:
             Rendered HTML report string.
@@ -1593,6 +1614,7 @@ class ReportRenderer:
             enrichment_windows=enrichment_windows,
             coverage_records=coverage_records,
             proof_cards=proof_cards,
+            graph_results=graph_results,
         )
         return self._render_html(ctx)
 
@@ -1610,6 +1632,7 @@ class ReportRenderer:
         enrichment_windows: list[dict[str, Any]] | None = None,
         coverage_records: list[CoverageRecord] | None = None,
         proof_cards: list[dict[str, object]] | None = None,
+        graph_results: list[GraphQueryResult] | None = None,
     ) -> tuple[str, str, bytes | None]:
         """Render markdown, HTML, and optionally PDF reports.
 
@@ -1632,6 +1655,7 @@ class ReportRenderer:
                 DB source for threat intel context.
             coverage_records: Persistent analysis coverage and boundary rows.
             proof_cards: Per-finding proof-card data.
+            graph_results: Bounded graph query results for static review views.
 
         Returns:
             Tuple of (markdown_text, html_text, pdf_bytes_or_none).
@@ -1648,6 +1672,7 @@ class ReportRenderer:
             enrichment_windows=enrichment_windows,
             coverage_records=coverage_records,
             proof_cards=proof_cards,
+            graph_results=graph_results,
         )
         md_text = self._render_markdown(ctx)
         html_text = self._render_html(dict(ctx))

@@ -200,6 +200,8 @@ body { background: var(--bg); color: var(--text); font-family: var(--font); line
 .filter-btn { background: var(--surface); border: 1px solid var(--border); color: var(--text-muted); padding: 0.35em 0.85em; border-radius: 8px; font-size: 0.72rem; font-weight: 500; cursor: pointer; transition: all 0.15s; font-family: var(--font); }
 .filter-btn:hover { border-color: var(--accent); color: var(--text); }
 .filter-btn.active { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #fff; border-color: transparent; font-weight: 600; }
+.graph-static-view { margin-bottom: 1.5rem; overflow-x: auto; }
+.graph-static-view svg { display: block; min-width: 420px; width: 100%; height: auto; border-radius: var(--radius); }
 
 table.data-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
 table.data-table th { text-align: left; padding: 0.65rem 0.85rem; background: var(--surface2); border-bottom: 2px solid var(--border); font-weight: 600; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); cursor: pointer; user-select: none; white-space: nowrap; }
@@ -566,6 +568,10 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
       <span class="nav-icon">&#8614;</span> Timeline
       <span class="nav-badge">{{ timeline_findings | length }}</span>
     </a>
+    {% if graph_visualizations %}<a class="nav-item" onclick="navigate('graph')" data-page="graph">
+      <span class="nav-icon">&#9678;</span> Entity Graph
+      <span class="nav-badge">{{ graph_visualizations | length }}</span>
+    </a>{% endif %}
     <div class="nav-section-label">Appendices</div>
     <a class="nav-item" onclick="navigate('findings')" data-page="findings">
       <span class="nav-icon">&#9888;</span> Findings
@@ -820,6 +826,22 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
   <p class="text-muted">No timeline events available.</p>
   {% endif %}
 </div>
+
+{% if graph_visualizations %}
+<!-- ==================== VERIFIED ENTITY GRAPH ==================== -->
+<div class="page" id="page-graph">
+  <div class="page-header">
+    <h2>Verified Entity Graph</h2>
+    <div class="subtitle">Deterministic bounded views with claim, anchor, and source selectors</div>
+  </div>
+  {% for visualization in graph_visualizations %}
+  <div class="card graph-static-view">
+    <div class="card-header">{{ visualization.query_kind | replace('_', ' ') }}</div>
+    <div class="card-body">{{ visualization.svg }}</div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
 
 <!-- ==================== FINDINGS ==================== -->
 <div class="page" id="page-findings">

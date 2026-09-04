@@ -84,6 +84,19 @@ SHA-256 hashes recorded at ingestion. Verify with `sha256sum <file>`.
 No timestamped findings to build a timeline from.
 {% endif %}
 
+{% if graph_visualizations %}
+---
+
+## Verified Entity Graph Views
+
+These deterministic, bounded views are derived from verified atomic claims.
+Superseded and refuted relations are labelled explicitly when included.
+
+{% for visualization in graph_visualizations %}
+{{ visualization.markdown }}
+{% endfor %}
+{% endif %}
+
 {% if negative_findings %}
 ---
 

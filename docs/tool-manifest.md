@@ -1963,3 +1963,68 @@ Return a reference guide of available forensic tools and their relationships.
 **Returns:** `categories[]`, `guide{}` or `tools[]`
 
 **Roles:** `CROSS_PLANNER`
+
+---
+
+## 21. Verified Entity Graph
+
+All graph tools refresh the deterministic verified-claim projection, enforce
+server-owned bounds, and return versioned machine-readable results plus static
+Markdown/SVG review views. Every node and edge retains claim, anchor, and source
+selectors. No tool accepts SQL, Cypher, table names, or query fragments.
+
+### neighbors
+
+Return relations around an exact entity ID.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| entity_id | str | yes | Exact graph entity ID |
+| depth | int | no | Traversal depth (default 1, maximum 4) |
+| direction | str | no | `incoming`, `outgoing`, or `both` |
+| limit | int | no | Relation limit (default 50, maximum 100) |
+| include_superseded | bool | no | Include non-refuted historical edges |
+| include_refuted | bool | no | Include later-contradicted historical edges |
+
+**Roles:** `CROSS_ANALYST` `NARRATIVE_ANALYST` `REPORT`
+
+### path_between
+
+Return one deterministic shortest path between exact entity IDs.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| source_entity_id | str | yes | Exact starting entity ID |
+| target_entity_id | str | yes | Exact destination entity ID |
+| max_depth | int | no | Path depth (default 6, maximum 8) |
+| directed | bool | no | Follow only source-to-target edges |
+| include_superseded | bool | no | Include non-refuted historical edges |
+| include_refuted | bool | no | Include later-contradicted historical edges |
+
+**Roles:** `CROSS_ANALYST` `NARRATIVE_ANALYST` `REPORT`
+
+### events_for_entity
+
+Return chronological graph events touching an exact entity ID.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| entity_id | str | yes | Exact graph entity ID |
+| limit | int | no | Event limit (default 50, maximum 100) |
+| include_superseded | bool | no | Include non-refuted historical edges |
+| include_refuted | bool | no | Include later-contradicted historical edges |
+
+**Roles:** `CROSS_ANALYST` `NARRATIVE_ANALYST` `REPORT`
+
+### host_timeline
+
+Return chronological events for normalized host-scoped endpoints.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| host | str | yes | Hostname selector (case/trailing-dot normalized) |
+| limit | int | no | Event limit (default 50, maximum 100) |
+| include_superseded | bool | no | Include non-refuted historical edges |
+| include_refuted | bool | no | Include later-contradicted historical edges |
+
+**Roles:** `CROSS_ANALYST` `NARRATIVE_ANALYST` `REPORT`
