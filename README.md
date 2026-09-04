@@ -161,6 +161,7 @@ Each investigation produces:
 | [Domain Packs](https://github.com/calebevans/mulder/blob/main/docs/domain-packs.md) | Versioned domain workflow contract and preflight |
 | [Adding Tools](https://github.com/calebevans/mulder/blob/main/docs/adding-tools.md) | Contributor guide for adding new forensic tools |
 | [Glossary](https://github.com/calebevans/mulder/blob/main/docs/glossary.md) | Terminology and definitions |
+| [Plugin Packs](https://github.com/calebevans/mulder/blob/main/docs/plugin-packs.md) | Declarative discovery, capability ceilings, compatibility, and release metadata |
 
 ## License
 

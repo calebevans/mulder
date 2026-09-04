@@ -18,6 +18,7 @@ if TYPE_CHECKING:  # heavy imports stay inside the command bodies
 
     from mulder.assets.fetch import Fetcher
     from mulder.assets.install import Plan, Result, SetupOptions
+    from mulder.plugin_packs import PluginDiscoveryRequest
 
 #: The default ``.mcp.json`` shipped as package data, copied into a fresh
 #: workspace on first run so a ``pipx``/``uv tool`` install works out of the box.
@@ -37,6 +38,330 @@ def _is_interactive() -> bool:
 @click.version_option(version=__version__, prog_name="mulder")
 def cli() -> None:
     """Mulder: forensic MCP server for the SANS SIFT Workstation."""
+
+
+def _read_json_object(path: Path | None, label: str) -> dict[str, object]:
+    """Read one optional local JSON object for an offline CLI command."""
+    if path is None:
+        return {}
+    import json
+
+    def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate JSON key: {key!r}")
+            result[key] = value
+        return result
+
+    def reject_constant(value: str) -> object:
+        raise ValueError(f"non-finite JSON number: {value}")
+
+    try:
+        value = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=unique_object,
+            parse_constant=reject_constant,
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise click.ClickException(f"Cannot read {label} {path}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise click.ClickException(f"{label} must contain a JSON object")
+    return value
+
+
+def _plugin_request(
+    roots: tuple[Path, ...],
+    manifests: tuple[Path, ...],
+    approval_path: Path | None,
+    inventory_path: Path | None,
+) -> PluginDiscoveryRequest:
+    """Build the typed discovery request without importing plugins at CLI import."""
+    from pydantic import ValidationError
+
+    from mulder.plugin_packs import (
+        CapabilityApproval,
+        ComponentInventory,
+        PluginDiscoveryRequest,
+    )
+
+    try:
+        approval = CapabilityApproval.model_validate(
+            _read_json_object(approval_path, "capability approval")
+        )
+        inventory = ComponentInventory.model_validate(
+            _read_json_object(inventory_path, "component inventory")
+        )
+        return PluginDiscoveryRequest(
+            approved_roots=roots,
+            approved_manifests=manifests,
+            capability_approval=approval,
+            inventory=inventory,
+        )
+    except ValidationError as exc:
+        raise click.ClickException(f"Invalid plugin discovery input: {exc}") from exc
+
+
+@cli.group("plugins")
+def plugins_cmd() -> None:
+    """Discover and activate examiner-approved declarative plugin packs."""
+
+
+@plugins_cmd.command("discover")
+@click.option(
+    "--root",
+    "roots",
+    multiple=True,
+    type=click.Path(path_type=Path, file_okay=False),
+    help="Examiner-approved discovery root; repeat as needed.",
+)
+@click.option(
+    "--manifest",
+    "manifests",
+    multiple=True,
+    type=click.Path(path_type=Path, dir_okay=False),
+    help="Examiner-approved exact manifest; repeat as needed.",
+)
+@click.option(
+    "--approval",
+    "approval_path",
+    type=click.Path(path_type=Path, dir_okay=False),
+    help="JSON capability ceiling. Defaults to no tools, writes, paths, or network.",
+)
+@click.option(
+    "--inventory",
+    "inventory_path",
+    type=click.Path(path_type=Path, dir_okay=False),
+    help="Offline JSON inventory of tool, parser, and binary versions/digests.",
+)
+@click.option("--json", "json_output", is_flag=True, help="Emit the versioned catalog as JSON.")
+def discover_plugins_cmd(
+    roots: tuple[Path, ...],
+    manifests: tuple[Path, ...],
+    approval_path: Path | None,
+    inventory_path: Path | None,
+    json_output: bool,
+) -> None:
+    """Validate metadata and digests without importing or activating code."""
+    import json
+
+    from mulder.plugin_packs import PluginPackError, discover_plugin_packs
+
+    request = _plugin_request(roots, manifests, approval_path, inventory_path)
+    try:
+        catalog = discover_plugin_packs(request)
+    except PluginPackError as exc:
+        raise click.ClickException(str(exc)) from exc
+    if json_output:
+        click.echo(
+            json.dumps(
+                catalog.model_dump(mode="json", by_alias=True), indent=2, sort_keys=True
+            )
+        )
+        return
+    if not catalog.packs:
+        click.echo("No plugin packs selected for discovery.")
+        return
+    for pack in catalog.packs:
+        identity = pack.manifest.plugin
+        click.echo(
+            f"{identity.plugin_id}@{identity.version}: {pack.status} "
+            f"({pack.plugin_digest})"
+        )
+        for check in pack.compatibility:
+            click.echo(
+                f"  {check.requirement.kind}:{check.requirement.name} "
+                f"{check.status} — {check.reason}"
+            )
+
+
+@plugins_cmd.command("activate")
+@click.argument("case_id")
+@click.option("--db-dir", default=DEFAULT_DB_DIR, show_default=True)
+@click.option(
+    "--plugin",
+    "plugin_ids",
+    multiple=True,
+    required=True,
+    help="Exact plugin ID to activate; repeat as needed.",
+)
+@click.option("--root", "roots", multiple=True, type=click.Path(path_type=Path, file_okay=False))
+@click.option(
+    "--manifest", "manifests", multiple=True, type=click.Path(path_type=Path, dir_okay=False)
+)
+@click.option(
+    "--approval", "approval_path", type=click.Path(path_type=Path, dir_okay=False)
+)
+@click.option(
+    "--inventory", "inventory_path", type=click.Path(path_type=Path, dir_okay=False)
+)
+@click.option("--json", "json_output", is_flag=True)
+def activate_plugins_cmd(
+    case_id: str,
+    db_dir: str,
+    plugin_ids: tuple[str, ...],
+    roots: tuple[Path, ...],
+    manifests: tuple[Path, ...],
+    approval_path: Path | None,
+    inventory_path: Path | None,
+    json_output: bool,
+) -> None:
+    """Bind selected, compatible pack identities to a case receipt."""
+    import json
+
+    from pydantic import ValidationError
+
+    from mulder.db import CaseDB
+    from mulder.plugin_packs import (
+        PluginActivationRequest,
+        PluginPackError,
+    )
+
+    discovery = _plugin_request(roots, manifests, approval_path, inventory_path)
+    try:
+        request = PluginActivationRequest(discovery=discovery, plugin_ids=plugin_ids)
+        with CaseDB.open(case_id, Path(db_dir)) as db:
+            activations = db.activate_plugin_packs(request)
+    except (FileNotFoundError, PluginPackError, ValidationError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    if json_output:
+        click.echo(
+            json.dumps(
+                [activation.model_dump(mode="json") for activation in activations],
+                indent=2,
+                sort_keys=True,
+            )
+        )
+    else:
+        for activation in activations:
+            click.echo(
+                f"Activated {activation.plugin.plugin_id}@{activation.plugin.version} "
+                f"for {case_id}: {activation.plugin_digest}"
+            )
+
+
+@cli.group("release-metadata")
+def release_metadata_cmd() -> None:
+    """Generate or verify an offline release SBOM and build provenance."""
+
+
+@release_metadata_cmd.command("generate")
+@click.option(
+    "--project-root",
+    type=click.Path(path_type=Path, file_okay=False),
+    default=Path("."),
+)
+@click.option("--artifact", "artifacts", multiple=True, type=click.Path(path_type=Path))
+@click.option(
+    "--artifact-dir",
+    type=click.Path(path_type=Path, file_okay=False),
+    help="Include wheel and source-distribution files directly under this directory.",
+)
+@click.option(
+    "--output",
+    "output_path",
+    type=click.Path(path_type=Path, dir_okay=False),
+    default=Path("dist/release-supply-chain.json"),
+    show_default=True,
+)
+@click.option("--project-name", default="mulder-dfir", show_default=True)
+@click.option("--project-version", default=__version__, show_default=True)
+@click.option("--source-revision", required=True)
+@click.option("--source-date-epoch", type=int, required=True, envvar="SOURCE_DATE_EPOCH")
+@click.option("--builder-id", required=True)
+@click.option(
+    "--dependency-lock",
+    "dependency_lock_path",
+    type=click.Path(path_type=Path, dir_okay=False),
+    default=Path("uv.lock"),
+    show_default=True,
+)
+def generate_release_metadata_cmd(
+    project_root: Path,
+    artifacts: tuple[Path, ...],
+    artifact_dir: Path | None,
+    output_path: Path,
+    project_name: str,
+    project_version: str,
+    source_revision: str,
+    source_date_epoch: int,
+    builder_id: str,
+    dependency_lock_path: Path,
+) -> None:
+    """Create deterministic metadata without querying a registry or build service."""
+    from mulder.supply_chain import (
+        ReleaseMetadataRequest,
+        SupplyChainError,
+        generate_release_metadata,
+    )
+
+    root = project_root.expanduser().absolute()
+    selected = list(artifacts)
+    if artifact_dir is not None:
+        selected_dir = artifact_dir if artifact_dir.is_absolute() else root / artifact_dir
+        try:
+            selected.extend(
+                path
+                for path in sorted(selected_dir.iterdir())
+                if path.is_file() and (path.suffix == ".whl" or path.name.endswith(".tar.gz"))
+            )
+        except OSError as exc:
+            raise click.ClickException(f"Cannot read artifact directory: {exc}") from exc
+    if not selected:
+        raise click.UsageError("provide --artifact or --artifact-dir")
+    output = output_path if output_path.is_absolute() else root / output_path
+    lock = (
+        dependency_lock_path
+        if dependency_lock_path.is_absolute()
+        else root / dependency_lock_path
+    )
+    try:
+        result = generate_release_metadata(
+            ReleaseMetadataRequest(
+                project_root=root,
+                artifact_paths=tuple(selected),
+                output_path=output,
+                project_name=project_name,
+                project_version=project_version,
+                source_revision=source_revision,
+                source_date_epoch=source_date_epoch,
+                builder_id=builder_id,
+                invocation={"frontend": "mulder release-metadata generate"},
+                dependency_lock_path=lock,
+            )
+        )
+    except (OSError, SupplyChainError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"Release metadata: {output}")
+    click.echo(f"Digest: {result.document_digest}")
+
+
+@release_metadata_cmd.command("verify")
+@click.argument("metadata_path", type=click.Path(path_type=Path, dir_okay=False))
+@click.option(
+    "--release-root", type=click.Path(path_type=Path, file_okay=False), default=Path(".")
+)
+@click.option("--json", "json_output", is_flag=True)
+def verify_release_metadata_cmd(
+    metadata_path: Path,
+    release_root: Path,
+    json_output: bool,
+) -> None:
+    """Verify the document, dependency lock, and release artifacts offline."""
+    import json
+
+    from mulder.supply_chain import verify_release_metadata
+
+    result = verify_release_metadata(metadata_path, release_root)
+    if json_output:
+        click.echo(json.dumps(result.model_dump(mode="json"), indent=2, sort_keys=True))
+    else:
+        click.echo(f"Release metadata: {result.status}")
+        click.echo(f"Artifacts checked: {result.artifacts_checked}")
+        for diagnostic in result.diagnostics:
+            click.echo(f"- {diagnostic}")
+    if not result.ok:
+        raise click.exceptions.Exit(1)
 
 
 @cli.command()

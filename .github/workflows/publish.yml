@@ -50,8 +50,27 @@ jobs:
       - name: Build distributions
         run: uv build
 
+      - name: Generate and verify release supply-chain metadata
+        run: |
+          epoch="$(git log -1 --format=%ct)"
+          uv run --frozen mulder release-metadata generate \
+            --project-root . \
+            --artifact-dir dist \
+            --output release-supply-chain.json \
+            --source-revision "$GITHUB_SHA" \
+            --source-date-epoch "$epoch" \
+            --builder-id "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          uv run --frozen mulder release-metadata verify \
+            release-supply-chain.json --release-root .
+
       - name: Verify package metadata
-        run: uvx twine check --strict dist/*
+        run: uvx twine check --strict dist/*.whl dist/*.tar.gz
+
+      - name: Upload release supply-chain metadata
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-supply-chain-metadata
+          path: release-supply-chain.json
 
       - name: Upload distributions
         uses: actions/upload-artifact@v7

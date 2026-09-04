@@ -1,0 +1,44 @@
+{
+  "schema": "mulder.plugin-pack",
+  "version": 1,
+  "plugin": {
+    "plugin_id": "example.evtx-hunt",
+    "name": "Example EVTX Hunt",
+    "version": "1.2.0",
+    "license": "Apache-2.0"
+  },
+  "description": "A deliberately inert, declarative test pack.",
+  "capabilities": {
+    "tools": ["search"],
+    "path_scopes": ["pack_read"],
+    "write_scopes": [],
+    "network": "none"
+  },
+  "compatibility": [
+    {
+      "kind": "tool",
+      "name": "search",
+      "supported_versions": ["1.0.0"],
+      "supported_digests": ["sha256:1111111111111111111111111111111111111111111111111111111111111111"]
+    },
+    {
+      "kind": "parser",
+      "name": "evtx",
+      "supported_versions": ["0.8.1"],
+      "supported_digests": ["sha256:2222222222222222222222222222222222222222222222222222222222222222"]
+    },
+    {
+      "kind": "binary",
+      "name": "chainsaw",
+      "supported_versions": ["2.9.1"],
+      "supported_digests": ["sha256:3333333333333333333333333333333333333333333333333333333333333333"]
+    }
+  ],
+  "resources": [
+    {
+      "path": "rules/hunt.json",
+      "sha256": "sha256:ca1e621e230dcd4be0149a081c70cb5b3f37a88a43ea389f0ed52a548a64585a",
+      "media_type": "application/json"
+    }
+  ]
+}
