@@ -9,3 +9,4 @@
 | [Usage Guide](usage-guide.md) | Try-it-out instructions: pulling the image, configuring providers, running investigations |
 | [Glossary](glossary.md) | Project terminology, forensic artifact definitions, and architecture concepts |
 | [Verified-claim Graph](graph-projection.md) | Deterministic projection, bounded pivots, provenance selectors, and static views |
+| [Immutable Intake and Runs](intake-and-runs.md) | KAPE/Velociraptor intake, profiles, forecasts, durable handles, cancellation, and exact checkpoint resume |

@@ -92,6 +92,8 @@ class RoleRunner:
         case_id: str,
         env: dict[str, str],
         cwd: str,
+        budget_multiplier: float = 1.0,
+        scope_instruction: str = "",
     ) -> None:
         """Initialize the role runner.
 
@@ -102,6 +104,8 @@ class RoleRunner:
             case_id: Case identifier for plan IDs and utility queries.
             env: Environment variables for agent sessions.
             cwd: Working directory for agent sessions.
+            budget_multiplier: Profile-level multiplier for every role budget.
+            scope_instruction: Epistemic coverage instruction prepended to prompts.
         """
         self._session = session
         self._dashboard = dashboard
@@ -109,6 +113,14 @@ class RoleRunner:
         self._case_id = case_id
         self._env = env
         self._cwd = cwd
+        self._budget_multiplier = budget_multiplier
+        self._scope_instruction = scope_instruction.strip()
+
+    def _scoped(self, prompt: str) -> str:
+        """Prepend the persisted run-scope constraint to an agent prompt."""
+        if not self._scope_instruction:
+            return prompt
+        return f"{self._scope_instruction}\n\n{prompt}"
 
     async def run_planner(
         self,
@@ -159,12 +171,12 @@ class RoleRunner:
 
         result = await self._session.execute(
             system_prompt=phase.planner_system_prompt,
-            prompt=prompt,
+            prompt=self._scoped(prompt),
             model=model,
             allowed_tools=phase.planner_allowed_tools,
             disallowed_tools=phase.disallowed_tools,
             max_turns=phase.planner_max_turns,
-            max_budget=phase.planner_max_budget_usd,
+            max_budget=phase.planner_max_budget_usd * self._budget_multiplier,
             log_prefix=log_prefix,
             identity=identity_for_phase(phase.name, "planner"),
         )
@@ -220,12 +232,12 @@ class RoleRunner:
 
         result = await self._session.execute(
             system_prompt=phase.executor_system_prompt,
-            prompt=prompt,
+            prompt=self._scoped(prompt),
             model=model,
             allowed_tools=allowed_tools,
             disallowed_tools=phase.disallowed_tools,
             max_turns=phase.executor_max_turns,
-            max_budget=phase.executor_max_budget_usd,
+            max_budget=phase.executor_max_budget_usd * self._budget_multiplier,
             log_prefix=log_prefix,
             task_system=task_system,
             identity=identity_for_phase(phase.name, "executor"),
@@ -238,7 +250,7 @@ class RoleRunner:
             allowed_tools=allowed_tools,
             disallowed_tools=phase.disallowed_tools,
             max_turns=phase.executor_max_turns,
-            max_budget=phase.executor_max_budget_usd,
+            max_budget=phase.executor_max_budget_usd * self._budget_multiplier,
             continuation_prompt=(
                 "CONTINUATION: The previous executor session exhausted its "
                 "context window. All tool results have been saved. Continue "
@@ -332,12 +344,12 @@ class RoleRunner:
 
         result = await self._session.execute(
             system_prompt=phase.analyst_system_prompt,
-            prompt=prompt,
+            prompt=self._scoped(prompt),
             model=model,
             allowed_tools=phase.analyst_allowed_tools,
             disallowed_tools=phase.disallowed_tools,
             max_turns=phase.analyst_max_turns,
-            max_budget=phase.analyst_max_budget_usd,
+            max_budget=phase.analyst_max_budget_usd * self._budget_multiplier,
             log_prefix=log_prefix,
             task_system=task_system,
             identity=identity_for_phase(phase.name, "analyst"),
@@ -350,7 +362,7 @@ class RoleRunner:
             allowed_tools=phase.analyst_allowed_tools,
             disallowed_tools=phase.disallowed_tools,
             max_turns=phase.analyst_max_turns,
-            max_budget=phase.analyst_max_budget_usd,
+            max_budget=phase.analyst_max_budget_usd * self._budget_multiplier,
             continuation_prompt=(
                 "CONTINUATION: The previous analyst session exhausted its "
                 "context window. All submitted findings are saved. Review "
@@ -419,15 +431,37 @@ class RoleRunner:
             budget=1.50,
         )
 
-        if result and result.get("all_done"):
+        batch_results = result.get("batch_results") if result else None
+        invalid_batches = result.get("invalid_batches") if result else None
+        exact_results = (
+            isinstance(batch_results, dict)
+            and set(batch_results) == set(ids_list)
+            and all(
+                isinstance(item, dict) and item.get("all_done") is True
+                for item in batch_results.values()
+            )
+        )
+        if (
+            result
+            and result.get("status") == "done"
+            and result.get("all_done") is True
+            and not invalid_batches
+            and exact_results
+        ):
             self._dashboard.log_info(f"{pfx}All extraction batches confirmed complete")
         elif result and result.get("status") == "timeout":
             still = result.get("still_running", [])
             self._dashboard.log_info(
                 f"{pfx}Batch wait timed out; {len(still)} batch(es) still running"
             )
+            raise RuntimeError(
+                f"background extraction did not reach a durable terminal state: {ids_list}"
+            )
         else:
-            self._dashboard.log_info(f"{pfx}Batch wait returned; proceeding to analysis")
+            self._dashboard.log_info(f"{pfx}Batch wait failed; refusing to analyze")
+            raise RuntimeError(
+                f"background extraction completion could not be verified: {ids_list}"
+            )
 
     async def compaction_loop(
         self,
@@ -476,7 +510,7 @@ class RoleRunner:
             )
             continuation = await self._session.execute(
                 system_prompt=system_prompt,
-                prompt=continuation_prompt,
+                prompt=self._scoped(continuation_prompt),
                 model=model,
                 allowed_tools=allowed_tools,
                 disallowed_tools=disallowed_tools,
@@ -540,7 +574,7 @@ class RoleRunner:
             allowed_tools=[],
             disallowed_tools=["Bash", "Shell"],
             max_turns=1,
-            max_budget=0.50,
+            max_budget=0.50 * self._budget_multiplier,
             identity=JSON_REPAIR_IDENTITY,
         )
 

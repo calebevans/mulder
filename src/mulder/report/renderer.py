@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import functools
+import hashlib
 import html
 import json
 import logging
 import re
+import sqlite3
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import jinja2
 from jinja2.sandbox import SandboxedEnvironment
@@ -983,7 +985,7 @@ def _clean_finding_description(text: str) -> str:
 class ReportRenderer:
     """Renders validated findings into markdown and HTML investigation reports."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, run_id: str | None = None) -> None:
         """Configure format-specific Jinja template environments.
 
         Markdown must remain unescaped until its own presentation pass.  HTML
@@ -991,6 +993,7 @@ class ReportRenderer:
         :func:`render_safe_markdown` are explicitly marked trusted only after
         that structural conversion.
         """
+        self._run_id = run_id
         self._markdown_env = jinja2.Environment(
             loader=jinja2.PackageLoader("mulder", "report/templates"),
             autoescape=False,
@@ -1264,6 +1267,11 @@ class ReportRenderer:
             "outbound_policy": summarize_outbound_manifest(
                 Path(audit_log_path).parent / f"{case_metadata.case_id}.outbound.jsonl"
             ),
+            "run_state": self._load_run_summary(
+                Path(audit_log_path).parent,
+                case_metadata.case_id,
+                self._run_id,
+            ),
         }
 
         rendered_narrative = self._render_narrative_template(case_metadata.narrative or "", ctx)
@@ -1275,6 +1283,122 @@ class ReportRenderer:
         )
 
         return ctx
+
+    @staticmethod
+    def _load_run_summary(
+        db_dir: Path,
+        case_id: str,
+        run_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Load the bounded, case-bound run scope sidecar for report labelling."""
+        selected_id = run_id
+        binding_path = db_dir / f"{case_id}.report-run.json"
+        if selected_id is None and binding_path.is_file():
+            try:
+                if binding_path.stat().st_size > 1 << 20:
+                    raise ValueError("report/run binding exceeds 1 MiB")
+                binding = json.loads(binding_path.read_text(encoding="utf-8"))
+                if (
+                    not isinstance(binding, dict)
+                    or binding.get("schema") != "mulder.report-run-binding"
+                    or binding.get("version") != 1
+                    or binding.get("case_id") != case_id
+                    or not isinstance(binding.get("run_id"), str)
+                ):
+                    raise ValueError("report/run binding is invalid")
+                reports = binding.get("reports")
+                if not isinstance(reports, dict):
+                    raise ValueError("report/run artifact commitments are invalid")
+                for name, expected in reports.items():
+                    if not isinstance(name, str) or Path(name).name != name:
+                        raise ValueError("report/run artifact name is invalid")
+                    report_path = db_dir / name
+                    if not report_path.is_file() or not isinstance(expected, str):
+                        raise ValueError("bound report artifact is absent")
+                    observed = "sha256:" + hashlib.sha256(report_path.read_bytes()).hexdigest()
+                    if observed != expected:
+                        raise ValueError("bound report artifact changed")
+                selected_id = cast(str, binding["run_id"])
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+                return {"error": str(exc)}
+        if selected_id is not None and (
+            not selected_id or Path(selected_id).name != selected_id
+        ):
+            return {"error": "run ID is invalid"}
+        if selected_id is None and (db_dir / f"{case_id}.runs.db").exists():
+            return {"error": "durable report has no immutable report/run binding"}
+        path = (
+            db_dir / f"{case_id}.{selected_id}.run.json"
+            if selected_id is not None
+            else db_dir / f"{case_id}.run.json"
+        )
+        if not path.exists():
+            if (db_dir / f"{case_id}.runs.db").exists():
+                return {
+                    "error": "durable run ledger exists but no report-bound scope is available"
+                }
+            return None
+        try:
+            if path.stat().st_size > 1 << 20:
+                raise ValueError("run summary exceeds 1 MiB")
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                raise ValueError("run summary is not an object")
+            if raw.get("schema") != "mulder.run-state" or raw.get("version") != 1:
+                raise ValueError("run summary schema is unsupported")
+            if raw.get("case_id") != case_id:
+                raise ValueError("run summary belongs to another case")
+            if raw.get("profile") not in {"quick", "full"}:
+                raise ValueError("run profile is invalid")
+            if raw.get("coverage_ceiling") not in {"sampled", "evidence_bounded"}:
+                raise ValueError("run coverage ceiling is invalid")
+            expected_ceiling = "sampled" if raw["profile"] == "quick" else "evidence_bounded"
+            if raw["coverage_ceiling"] != expected_ceiling:
+                raise ValueError("run profile and coverage ceiling are inconsistent")
+            run_id = raw.get("run_id")
+            if (
+                not isinstance(run_id, str)
+                or not run_id
+                or Path(run_id).name != run_id
+            ):
+                raise ValueError("run ID is invalid")
+            if raw.get("ledger") != f"{case_id}.runs.db":
+                raise ValueError("run summary names an unexpected ledger")
+            ledger_path = db_dir / f"{case_id}.runs.db"
+            if not ledger_path.is_file():
+                raise ValueError("run ledger is absent")
+            with sqlite3.connect(f"file:{ledger_path}?mode=ro", uri=True) as connection:
+                row = connection.execute(
+                    "SELECT case_id,profile,coverage_ceiling,input_digest,contract_digest,"
+                    "approval_required,generation,status,cancel_requested FROM runs "
+                    "WHERE run_id=?",
+                    (run_id,),
+                ).fetchone()
+            if row is None:
+                raise ValueError("run summary is not present in the authoritative ledger")
+            summary_values = (
+                raw.get("case_id"),
+                raw.get("profile"),
+                raw.get("coverage_ceiling"),
+                raw.get("input_digest"),
+                raw.get("contract_digest"),
+                int(raw.get("approval_required") is True),
+                raw.get("generation"),
+                raw.get("status"),
+                int(raw.get("cancel_requested") is True),
+            )
+            if row != summary_values:
+                raise ValueError("run summary does not match the authoritative ledger")
+            return raw
+        except (
+            OSError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            sqlite3.DatabaseError,
+            ValueError,
+        ) as exc:
+            logger.warning("Ignoring invalid run summary %s: %s", path, exc)
+            return {"error": str(exc)}
 
     @staticmethod
     def _load_model_usage(db_dir: Path, case_id: str) -> list[dict[str, Any]]:
@@ -1372,6 +1496,7 @@ class ReportRenderer:
         }
         markdown_ctx["proof_cards"] = list(markdown_ctx["proof_cards_by_id"].values())
         markdown_ctx["case_review"] = _safe_proof_value(ctx.get("case_review"))
+        markdown_ctx["run_state"] = _safe_proof_value(ctx.get("run_state"))
         markdown_ctx["network_iocs"] = [
             SimpleNamespace(
                 **{

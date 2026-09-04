@@ -56,6 +56,19 @@ mulder setup
 mulder investigate /path/to/evidence my-case-id
 ```
 
+For a collector export or an interruptible long run, bind intake and retain the
+printed run handle:
+
+```bash
+mulder intake-collection /path/to/kape-export my-case-id
+mulder investigate /path/to/kape-export my-case-id --profile full
+mulder investigate /path/to/kape-export my-case-id --resume-run RUN_ID
+```
+
+Quick triage is available with `--profile quick`; its reports are permanently
+labelled sampled and cannot present themselves as full coverage. See
+[Immutable intake and restart-safe runs](docs/intake-and-runs.md).
+
 `pipx` installs mulder into its own isolated virtualenv and puts the `mulder` command on your PATH; `uv tool install "mulder-dfir[forensics]"` works identically. The `forensics` extra pulls in Zircolite's runtime dependencies. If `mulder` is not found afterwards, open a new terminal — Ubuntu only adds `~/.local/bin` to `PATH` at login, and only if it already existed.
 
 On first run mulder creates a working directory at `~/.mulder/workspace` (override with `--cwd` or `MULDER_CWD`) and writes a default `.mcp.json` into it. Case databases and reports go to `~/.mulder/cases` (override with `--db-dir`).

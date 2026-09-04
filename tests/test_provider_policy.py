@@ -26,7 +26,7 @@ from mulder.security.provider_policy import (
     resolve_provider_route,
     summarize_outbound_manifest,
 )
-from mulder.server.app import _tool_dispatch_sync
+from mulder.server.app import _tool_dispatch, _tool_dispatch_sync
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "provider_policy" / "cases.json"
 
@@ -268,7 +268,8 @@ async def test_airgap_external_ti_rejects_before_http_client(
 ) -> None:
     monkeypatch.setenv("MULDER_ZERO_EGRESS", "1")
     network_adapter = MagicMock()
-    handler = _tool_dispatch_sync["enrich_iocs"]
+    assert "enrich_iocs" not in _tool_dispatch_sync
+    handler = _tool_dispatch["enrich_iocs"]
 
     with (
         patch("mulder.server.tools.enrichment.httpx.AsyncClient", network_adapter),

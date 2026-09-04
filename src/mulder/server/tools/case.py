@@ -5,15 +5,24 @@ Tier 1 tools: help the agent orient before running any extractions.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import shutil
 import subprocess
 import tarfile
+import tempfile
 import time
 import zipfile
 from pathlib import Path
 
+from mulder.adapters import (
+    IntakeError,
+    IntakeManifest,
+    load_intake_manifest,
+    materialize_intake,
+    verify_intake_source,
+)
 from mulder.server.app import (
     create_case,
     get_cfg,
@@ -29,6 +38,8 @@ from mulder.server.tool_access import ALL_ROLES, Role, tool_access
 logger = logging.getLogger(__name__)
 
 _EXTRACT_TIMEOUT = 600
+_INTAKE_EXTRACT_MAX_FILE_BYTES = 512 << 20
+_INTAKE_EXTRACT_MAX_TOTAL_BYTES = 8 << 30
 
 
 @mcp.tool()
@@ -252,6 +263,8 @@ def list_cases() -> dict[str, object]:
     cases: list[dict[str, object]] = []
 
     for db_path in sorted(cfg.db_dir.glob("*.db")):
+        if db_path.name.endswith(".runs.db"):
+            continue
         cid = db_path.stem
         try:
             from mulder.db import CaseDB
@@ -426,6 +439,67 @@ def _extract_zip(archive: Path, dest: Path) -> list[str]:
     return [str(f.relative_to(dest)) for f in dest.rglob("*") if f.is_file()]
 
 
+def _intake_for_archive(archive: Path) -> IntakeManifest | None:
+    """Return the active case intake when ``archive`` is its committed ZIP."""
+    if not has_ctx():
+        return None
+    ctx = get_ctx()
+    manifest_path = Path(ctx.db.db_path).parent / f"{ctx.case_id}.intake.json"
+    if not manifest_path.is_file():
+        return None
+    manifest = load_intake_manifest(manifest_path)
+    if Path(manifest.source_path).resolve(strict=False) != archive:
+        return None
+    if manifest.source_kind != "zip":
+        raise IntakeError("intake source is not a ZIP archive")
+    return manifest
+
+
+def _verify_intake_materialization(manifest: IntakeManifest, dest: Path) -> list[str]:
+    """Verify that an existing extracted view is exact and contains no links."""
+    verify_intake_source(manifest)
+    expected = {entry.relative_path: entry for entry in manifest.entries}
+    observed: dict[str, Path] = {}
+    for candidate in dest.rglob("*"):
+        relative = candidate.relative_to(dest).as_posix()
+        if candidate.is_symlink():
+            raise IntakeError(f"materialized intake contains a link: {relative}")
+        if candidate.is_file():
+            observed[relative] = candidate
+    if set(observed) != set(expected):
+        raise IntakeError("materialized intake inventory differs from its manifest")
+    for relative, path in observed.items():
+        entry = expected[relative]
+        if path.stat().st_size != entry.size_bytes:
+            raise IntakeError(f"materialized intake member size changed: {relative}")
+        hasher = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                hasher.update(chunk)
+        digest = "sha256:" + hasher.hexdigest()
+        if digest != entry.sha256:
+            raise IntakeError(f"materialized intake member changed: {relative}")
+    return sorted(observed)
+
+
+def _extract_intake_zip(manifest: IntakeManifest, dest: Path) -> list[str]:
+    """Materialize a bounded verified ZIP intake without a fallback extractor."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=f".{dest.name}.", dir=dest.parent) as temporary:
+        staged = Path(temporary) / "content"
+        staged.mkdir()
+        files = materialize_intake(
+            manifest,
+            staged,
+            max_file_bytes=_INTAKE_EXTRACT_MAX_FILE_BYTES,
+            max_total_bytes=_INTAKE_EXTRACT_MAX_TOTAL_BYTES,
+        )
+        if dest.exists():
+            dest.rmdir()
+        os.replace(staged, dest)
+    return list(files)
+
+
 def _safe_tar_filter(member: tarfile.TarInfo, path: str) -> tarfile.TarInfo | None:
     """Allow extraction but neutralize absolute symlinks and path traversal."""
     if member.name.startswith("/") or ".." in member.name:
@@ -495,9 +569,35 @@ def extract_archive(
         cfg = get_cfg()
         dest = cfg.db_dir / "extracted" / archive.stem
 
+    try:
+        intake_manifest = _intake_for_archive(archive)
+    except IntakeError as exc:
+        return error_response(
+            tc_id,
+            "extract_archive",
+            params,
+            f"Intake verification failed: {exc}",
+            (time.monotonic() - t0) * 1000,
+            error_type="intake_verification_failed",
+        )
+
     # Idempotent: if already extracted, return the existing files
     if dest.exists() and any(dest.iterdir()):
-        existing_files = [str(f.relative_to(dest)) for f in dest.rglob("*") if f.is_file()]
+        try:
+            existing_files = (
+                _verify_intake_materialization(intake_manifest, dest)
+                if intake_manifest is not None
+                else [str(f.relative_to(dest)) for f in dest.rglob("*") if f.is_file()]
+            )
+        except IntakeError as exc:
+            return error_response(
+                tc_id,
+                "extract_archive",
+                params,
+                f"Existing intake materialization failed verification: {exc}",
+                (time.monotonic() - t0) * 1000,
+                error_type="intake_verification_failed",
+            )
         result: dict[str, object] = {
             "tool_call_id": tc_id,
             "status": "already_extracted",
@@ -532,7 +632,11 @@ def extract_archive(
 
     try:
         if ext == ".zip":
-            files = _extract_zip(archive, dest)
+            files = (
+                _extract_intake_zip(intake_manifest, dest)
+                if intake_manifest is not None
+                else _extract_zip(archive, dest)
+            )
         elif (
             ext in (".tar", ".tgz")
             or name_lower.endswith((".tar.gz", ".tar.bz2"))

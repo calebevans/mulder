@@ -10,13 +10,14 @@ import sqlite3
 import stat
 import tempfile
 from collections.abc import Iterable, Mapping, Sequence
+from contextlib import ExitStack
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, cast
 
 from mulder import __version__
-from mulder.audit import AuditIntegrityResult, AuditLog
+from mulder.audit import AuditFileSnapshot, AuditLog
 from mulder.case_signing import (
     SIGNATURE_ALGORITHM,
     SIGNATURE_PROFILE,
@@ -28,6 +29,7 @@ from mulder.case_signing import (
     public_key_metadata,
     verify_manifest_signature,
 )
+from mulder.run_state import RUN_CHECKPOINT_VERSION, hold_run_ledger_snapshot
 
 MANIFEST_SCHEMA = "mulder.case-manifest"
 MANIFEST_VERSION = 1
@@ -42,6 +44,7 @@ _STANDARD_ARTIFACT_SUFFIXES = (
     ".report.md",
     ".report.html",
     ".report.pdf",
+    ".report-run.json",
     ".publication.json",
     ".publication.executive.md",
     ".publication.executive.html",
@@ -58,6 +61,9 @@ _STANDARD_ARTIFACT_SUFFIXES = (
     ".iocs.csv",
     ".iocs.stix.json",
     ".navigator.json",
+    ".intake.json",
+    ".runs.db",
+    ".run.json",
 )
 
 
@@ -477,23 +483,51 @@ def _stable_file_commitment(path: Path) -> tuple[str, int]:
     raise SealError(f"Artifact changed while it was being sealed: {path}")
 
 
-def _audit_commitment(path: Path) -> tuple[AuditIntegrityResult, str, int, dict[str, int]]:
-    """Capture a stable audit file, including its externally retained head."""
+def _stable_file_bytes(
+    path: Path,
+    *,
+    max_bytes: int = 16 << 20,
+) -> tuple[bytes, str, int]:
+    """Read and hash one bounded regular-file snapshot from the same bytes."""
     for _attempt in range(3):
-        first = AuditLog(path)
-        first_result = first.verify_integrity()
-        digest, size = _stable_file_commitment(path)
-        second = AuditLog(path)
-        second_result = second.verify_integrity()
-        second_digest, second_size = _stable_file_commitment(path)
-        if first_result == second_result and digest == second_digest and size == second_size:
-            if not first_result.ok:
-                raise SealError(
-                    "Cannot seal an invalid audit chain: "
-                    f"{first_result.error_code or 'invalid'}: {first_result.message}"
-                )
-            return first_result, digest, size, dict(first.summary().tool_call_counts)
-    raise SealError(f"Audit log changed while it was being sealed: {path}")
+        before = path.stat()
+        with path.open("rb") as handle:
+            opened = os.fstat(handle.fileno())
+            data = handle.read(max_bytes + 1)
+            after_open = os.fstat(handle.fileno())
+        after = path.stat()
+        if len(data) > max_bytes:
+            raise SealError(f"Artifact exceeds the {max_bytes}-byte snapshot cap: {path}")
+        fingerprints = {
+            (item.st_dev, item.st_ino, item.st_size, item.st_mtime_ns)
+            for item in (before, opened, after_open, after)
+        }
+        if len(fingerprints) == 1 and len(data) == after.st_size:
+            return data, _sha256_bytes(data), len(data)
+    raise SealError(f"Artifact changed while it was being read: {path}")
+
+
+def _audit_commitment(
+    path: Path,
+) -> tuple[AuditFileSnapshot, dict[str, int]]:
+    """Capture one locked audit snapshot, including its retained head and bytes."""
+    snapshot = AuditLog(path).read_verified_file_snapshot()
+    if not snapshot.integrity.ok:
+        raise SealError(
+            "Cannot seal an invalid audit chain: "
+            f"{snapshot.integrity.error_code or 'invalid'}: "
+            f"{snapshot.integrity.message}"
+        )
+    tool_counts: dict[str, int] = {}
+    for entry in snapshot.entries:
+        tool_name = entry.get("tool_name")
+        if (
+            entry.get("type") == "tool_call"
+            and isinstance(tool_name, str)
+            and tool_name != "run_parallel"
+        ):
+            tool_counts[tool_name] = tool_counts.get(tool_name, 0) + 1
+    return snapshot, tool_counts
 
 
 def _manifest_hash(manifest: Mapping[str, object]) -> str:
@@ -698,6 +732,254 @@ def _write_manifest(path: Path, manifest: Mapping[str, object], overwrite: bool)
         raise
 
 
+def _operational_state_commitment(
+    case_id: str,
+    db_dir: Path,
+    audit_path: Path,
+    manifest_parent: Path,
+    *,
+    verify_live_intake: bool = True,
+    audit_file_snapshot: AuditFileSnapshot | None = None,
+) -> dict[str, object]:
+    """Cross-check intake/run artifacts and return their semantic commitment."""
+    intake_path = db_dir / f"{case_id}.intake.json"
+    intake: dict[str, object] = {"status": "absent"}
+    intake_digest: str | None = None
+    if intake_path.is_file():
+        if verify_live_intake:
+            from mulder.adapters import IntakeError, load_intake_manifest
+
+            try:
+                intake_manifest = load_intake_manifest(intake_path)
+            except IntakeError as exc:
+                raise SealError(f"Intake manifest is invalid: {exc}") from exc
+            raw_intake = cast(
+                dict[str, object],
+                intake_manifest.model_dump(mode="json", by_alias=True),
+            )
+        else:
+            try:
+                raw_intake = json.loads(
+                    intake_path.read_text(encoding="utf-8"),
+                    parse_constant=_reject_json_constant,
+                    object_pairs_hook=_unique_json_object,
+                )
+            except (OSError, UnicodeDecodeError, ValueError) as exc:
+                raise SealError(f"Intake manifest is invalid: {exc}") from exc
+        if not isinstance(raw_intake, dict) or raw_intake.get("case_id") != case_id:
+            raise SealError("Intake manifest does not bind the sealed case")
+        intake_digest = cast(str | None, raw_intake.get("collection_digest"))
+        integrity = raw_intake.get("integrity")
+        manifest_hash = integrity.get("manifest_hash") if isinstance(integrity, dict) else None
+        if _stored_sha256(intake_digest) is None or _stored_sha256(manifest_hash) is None:
+            raise SealError("Intake manifest has invalid semantic commitments")
+        intake = {
+            "status": "present",
+            "path": _portable_path(intake_path, manifest_parent),
+            "collection_digest": intake_digest,
+            "manifest_hash": manifest_hash,
+        }
+
+    ledger_path = db_dir / f"{case_id}.runs.db"
+    binding_path = db_dir / f"{case_id}.report-run.json"
+    bound_run_id: str | None = None
+    if binding_path.is_file():
+        try:
+            binding = json.loads(
+                binding_path.read_text(encoding="utf-8"),
+                parse_constant=_reject_json_constant,
+                object_pairs_hook=_unique_json_object,
+            )
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
+            raise SealError(f"Report/run binding is invalid: {exc}") from exc
+        if (
+            not isinstance(binding, dict)
+            or binding.get("schema") != "mulder.report-run-binding"
+            or binding.get("version") != 1
+            or binding.get("case_id") != case_id
+            or not isinstance(binding.get("run_id"), str)
+        ):
+            raise SealError("Report/run binding envelope is inconsistent")
+        bound_run_id = cast(str, binding["run_id"])
+        reports = binding.get("reports")
+        if not isinstance(reports, dict):
+            raise SealError("Report/run artifact commitments are invalid")
+        for name, expected_hash in reports.items():
+            if not isinstance(name, str) or Path(name).name != name:
+                raise SealError("Report/run artifact name is invalid")
+            report = db_dir / name
+            if (
+                not report.is_file()
+                or not isinstance(expected_hash, str)
+                or _sha256_file(report)[0] != expected_hash
+            ):
+                raise SealError(f"Report/run artifact commitment failed: {name}")
+    summary_path = (
+        db_dir / f"{case_id}.{bound_run_id}.run.json"
+        if bound_run_id is not None
+        else db_dir / f"{case_id}.run.json"
+    )
+    if not ledger_path.exists() and not summary_path.exists() and not binding_path.exists():
+        return {"intake": intake, "run": {"status": "absent"}}
+    if not ledger_path.is_file() or not summary_path.is_file():
+        raise SealError("Run ledger and run summary must both be present")
+    try:
+        summary_bytes, summary_sha256, summary_size = _stable_file_bytes(summary_path)
+        summary_raw = json.loads(
+            summary_bytes,
+            parse_constant=_reject_json_constant,
+            object_pairs_hook=_unique_json_object,
+        )
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise SealError(f"Run summary is invalid: {exc}") from exc
+    if not isinstance(summary_raw, dict):
+        raise SealError("Run summary must be a JSON object")
+    run_id = summary_raw.get("run_id")
+    if not isinstance(run_id, str) or not run_id or Path(run_id).name != run_id:
+        raise SealError("Run summary has an invalid run ID")
+    if bound_run_id is not None and run_id != bound_run_id:
+        raise SealError("Run summary does not match the report/run binding")
+    if (
+        summary_raw.get("schema") != "mulder.run-state"
+        or summary_raw.get("version") != 1
+        or summary_raw.get("case_id") != case_id
+        or summary_raw.get("ledger") != ledger_path.name
+    ):
+        raise SealError("Run summary envelope is inconsistent")
+    try:
+        with sqlite3.connect(ledger_path) as connection:
+            connection.execute("PRAGMA query_only=ON")
+            connection.execute("BEGIN")
+            row = connection.execute(
+                "SELECT case_id,profile,coverage_ceiling,input_digest,contract_digest,"
+                "approval_required,generation,status,cancel_requested FROM runs WHERE run_id=?",
+                (run_id,),
+            ).fetchone()
+            checkpoints = connection.execute(
+                "SELECT attempt_id,run_id,step_key,phase_name,input_digest,"
+                "audit_head_before,audit_head_after,result_json,result_digest,"
+                "checkpoint_event_hash,run_generation,attempt_number FROM phase_attempts "
+                "WHERE run_id=? AND status='completed' ORDER BY rowid",
+                (run_id,),
+            ).fetchall()
+            if audit_file_snapshot is None:
+                captured_audit = AuditLog(audit_path).read_verified_file_snapshot()
+            else:
+                captured_audit = audit_file_snapshot
+            integrity = captured_audit.integrity
+            audit_snapshot = captured_audit.entries
+            if (summary_sha256, summary_size) != _stable_file_commitment(summary_path):
+                raise SealError("Run summary changed during the ledger/audit snapshot")
+    except sqlite3.DatabaseError as exc:
+        raise SealError(f"Run ledger is invalid: {exc}") from exc
+    if row is None:
+        raise SealError("Run summary is absent from the run ledger")
+    expected_summary = (
+        summary_raw.get("case_id"),
+        summary_raw.get("profile"),
+        summary_raw.get("coverage_ceiling"),
+        summary_raw.get("input_digest"),
+        summary_raw.get("contract_digest"),
+        int(summary_raw.get("approval_required") is True),
+        summary_raw.get("generation"),
+        summary_raw.get("status"),
+        int(summary_raw.get("cancel_requested") is True),
+    )
+    if row != expected_summary:
+        raise SealError("Run summary does not match the authoritative ledger")
+    if (row[1], row[2]) not in {
+        ("quick", "sampled"),
+        ("full", "evidence_bounded"),
+    }:
+        raise SealError("Run profile has an invalid coverage ceiling")
+    if intake_digest is not None and row[3] != intake_digest:
+        raise SealError("Run input does not bind the immutable intake collection")
+
+    if not integrity.ok or not integrity.cryptographically_verified:
+        raise SealError("Run checkpoints require a verified native audit chain")
+    audit_entries = {
+        entry["entry_hash"]: (index, entry)
+        for index, entry in enumerate(audit_snapshot)
+        if isinstance(entry.get("entry_hash"), str)
+    }
+    checkpoint_hashes: list[str] = []
+    completed_steps: list[str] = []
+    for checkpoint in checkpoints:
+        try:
+            result = json.loads(checkpoint[7])
+        except (TypeError, ValueError) as exc:
+            raise SealError("Run checkpoint result is invalid") from exc
+        if not isinstance(result, dict):
+            raise SealError("Run checkpoint result must be a JSON object")
+        result_digest = _sha256_bytes(
+            b"mulder.phase-result:v1\0" + _canonical_json(result)
+        )
+        event_hash = checkpoint[9]
+        event_record = audit_entries.get(event_hash)
+        event_index, event = event_record if event_record is not None else (-1, None)
+        expected_event = {
+            "type": "run_checkpoint",
+            "checkpoint_state": "proposed",
+            "case_id": case_id,
+            "checkpoint_schema": "mulder.run-checkpoint",
+            "checkpoint_version": RUN_CHECKPOINT_VERSION,
+            "attempt_id": checkpoint[0],
+            "attempt_number": checkpoint[11],
+            "run_id": checkpoint[1],
+            "step_key": checkpoint[2],
+            "phase_name": checkpoint[3],
+            "input_digest": checkpoint[4],
+            "result_digest": result_digest,
+            "phase_start_audit_head": checkpoint[5],
+            "run_generation": checkpoint[10],
+        }
+        prior_hashes = {
+            candidate.get("entry_hash") for candidate in audit_snapshot[:event_index]
+        }
+        if (
+            checkpoint[6] != event_hash
+            or checkpoint[8] != result_digest
+            or not isinstance(event, dict)
+            or any(event.get(key) != value for key, value in expected_event.items())
+            or event.get("phase_start_audit_head") not in prior_hashes
+            or event.get("result_parent_audit_head") not in prior_hashes
+            or event.get("previous_hash") != event.get("result_parent_audit_head")
+        ):
+            raise SealError(f"Run checkpoint is not audit-bound: {checkpoint[2]}")
+        checkpoint_hashes.append(cast(str, event_hash))
+        step_key = cast(str, checkpoint[2])
+        if step_key not in completed_steps:
+            completed_steps.append(step_key)
+    if summary_raw.get("completed_steps") != completed_steps:
+        raise SealError("Run summary completed steps do not match verified checkpoints")
+    return {
+        "intake": intake,
+        "run": {
+            "status": "present",
+            "ledger_path": _portable_path(ledger_path, manifest_parent),
+            "summary_path": _portable_path(summary_path, manifest_parent),
+            "summary_sha256": summary_sha256,
+            "summary_size_bytes": summary_size,
+            "report_binding_path": (
+                _portable_path(binding_path, manifest_parent)
+                if binding_path.is_file()
+                else None
+            ),
+            "run_id": run_id,
+            "profile": row[1],
+            "coverage_ceiling": row[2],
+            "input_digest": row[3],
+            "contract_digest": row[4],
+            "approval_required": bool(row[5]),
+            "generation": row[6],
+            "run_status": row[7],
+            "cancel_requested": bool(row[8]),
+            "completed_steps": completed_steps,
+            "checkpoint_event_hashes": checkpoint_hashes,
+        },
+    }
+
+
 def seal_case(
     case_id: str,
     db_dir: Path,
@@ -797,7 +1079,8 @@ def seal_case(
             }
         )
 
-    audit_result, audit_hash, audit_size, tool_counts = _audit_commitment(audit_path)
+    audit_snapshot, tool_counts = _audit_commitment(audit_path)
+    audit_result = audit_snapshot.integrity
 
     reports: list[dict[str, object]] = []
     candidates = [*_discover_reports(case_id, db_dir), *(Path(p) for p in report_artifacts)]
@@ -835,6 +1118,13 @@ def seal_case(
 
     replay = _replay_contract(case_id, db_path, db_dir)
     replay["extractor_versions"] = dict(sorted(database.extractor_versions.items()))
+    operational_state = _operational_state_commitment(
+        case_id,
+        db_dir,
+        audit_path,
+        output.parent,
+        audit_file_snapshot=audit_snapshot,
+    )
     manifest: dict[str, object] = {
         "schema": MANIFEST_SCHEMA,
         "version": MANIFEST_VERSION,
@@ -866,8 +1156,8 @@ def seal_case(
         },
         "audit": {
             "path": _portable_path(audit_path, output.parent),
-            "sha256": audit_hash,
-            "size_bytes": audit_size,
+            "sha256": audit_snapshot.sha256,
+            "size_bytes": audit_snapshot.size_bytes,
             "chain_status": audit_result.status,
             "entry_count": audit_result.entries_checked,
             "legacy_entries": audit_result.legacy_entries,
@@ -880,6 +1170,7 @@ def seal_case(
             "audit_tool_counts": dict(sorted(tool_counts.items())),
             "replay": replay,
         },
+        "operational_state": operational_state,
         "reports": reports,
         "integrity": {
             "algorithm": "sha256",
@@ -893,7 +1184,81 @@ def seal_case(
             manifest, key_provider
         )
     cast(dict[str, object], manifest["integrity"])["manifest_hash"] = _manifest_hash(manifest)
-    _write_manifest(output, manifest, overwrite)
+    if output.exists() and not overwrite:
+        raise SealError(f"Manifest already exists (pass --force to replace it): {output}")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    candidate_manifest: Path | None = None
+    previous_manifest: Path | None = None
+    published_manifest = False
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=output.parent,
+            prefix=f".{output.name}.candidate.",
+            suffix=".json",
+            delete=False,
+        ) as handle:
+            candidate_manifest = Path(handle.name)
+        _write_manifest(candidate_manifest, manifest, overwrite=True)
+        with ExitStack() as publication_locks:
+            run_ledger_path = db_dir / f"{case_id}.runs.db"
+            if run_ledger_path.is_file():
+                publication_locks.enter_context(
+                    hold_run_ledger_snapshot(run_ledger_path)
+                )
+            publication_audit = publication_locks.enter_context(
+                AuditLog(audit_path).hold_verified_file_snapshot()
+            )
+            if publication_audit != audit_snapshot:
+                raise SealError("Audit log changed while the receipt was being sealed")
+            verification = verify_case(candidate_manifest)
+            if verification.status not in {"verified", "legacy_unverified"}:
+                reasons = "; ".join(
+                    diagnostic.message
+                    for diagnostic in verification.diagnostics
+                    if diagnostic.severity == "error"
+                )
+                raise SealError(
+                    "Case changed while the receipt was being sealed"
+                    + (f": {reasons}" if reasons else "")
+                )
+            if overwrite and output.exists():
+                with tempfile.NamedTemporaryFile(
+                    dir=output.parent,
+                    prefix=f".{output.name}.previous.",
+                    delete=False,
+                ) as handle:
+                    previous_manifest = Path(handle.name)
+                previous_manifest.unlink()
+                os.link(output, previous_manifest, follow_symlinks=False)
+            if overwrite:
+                os.replace(candidate_manifest, output)
+                published_manifest = True
+            else:
+                try:
+                    os.link(
+                        candidate_manifest,
+                        output,
+                        follow_symlinks=False,
+                    )
+                except FileExistsError as exc:
+                    raise SealError(
+                        f"Manifest already exists (pass --force to replace it): {output}"
+                    ) from exc
+                published_manifest = True
+                candidate_manifest.unlink()
+        if previous_manifest is not None:
+            previous_manifest.unlink(missing_ok=True)
+    except BaseException:
+        if published_manifest:
+            if previous_manifest is not None and previous_manifest.exists():
+                os.replace(previous_manifest, output)
+            else:
+                output.unlink(missing_ok=True)
+        elif previous_manifest is not None:
+            previous_manifest.unlink(missing_ok=True)
+        if candidate_manifest is not None:
+            candidate_manifest.unlink(missing_ok=True)
+        raise
     return output
 
 
@@ -1425,6 +1790,73 @@ def _verify_reports(
     return checked
 
 
+def _verify_operational_state(
+    manifest_parent: Path,
+    raw: object,
+    case_id: str | None,
+    audit_path: Path,
+    diagnostics: list[VerificationDiagnostic],
+) -> int:
+    """Verify semantic intake/run relationships in addition to artifact bytes."""
+    if raw is None:
+        _diagnostic(
+            diagnostics,
+            "operational_state.absent_legacy",
+            "operational_state",
+            "Legacy manifest has no semantic intake/run commitment.",
+            severity="warning",
+        )
+        return 0
+    if not isinstance(raw, dict) or case_id is None:
+        _diagnostic(
+            diagnostics,
+            "operational_state.invalid",
+            "operational_state",
+            "Operational state commitment must be a case-bound object.",
+        )
+        return 0
+    run = raw.get("run")
+    intake = raw.get("intake")
+    try:
+        if isinstance(run, dict) and run.get("status") == "present":
+            ledger_path = _resolve_relative(manifest_parent, run.get("ledger_path"))
+            if ledger_path.name != f"{case_id}.runs.db":
+                raise ValueError("operational run ledger has an unexpected name")
+            state_dir = ledger_path.parent
+        elif isinstance(intake, dict) and intake.get("status") == "present":
+            intake_path = _resolve_relative(manifest_parent, intake.get("path"))
+            if intake_path.name != f"{case_id}.intake.json":
+                raise ValueError("operational intake manifest has an unexpected name")
+            state_dir = intake_path.parent
+        else:
+            state_dir = manifest_parent
+        observed = _operational_state_commitment(
+            case_id,
+            state_dir,
+            audit_path,
+            manifest_parent,
+            verify_live_intake=False,
+        )
+    except (OSError, SealError, ValueError) as exc:
+        _diagnostic(
+            diagnostics,
+            "operational_state.verification_failed",
+            "operational_state",
+            str(exc),
+        )
+        return 1
+    if observed != raw:
+        _diagnostic(
+            diagnostics,
+            "operational_state.mismatch",
+            "operational_state",
+            "Intake/run semantic state differs from the sealed commitment.",
+            expected=raw,
+            actual=observed,
+        )
+    return 1
+
+
 def _verify_signature(
     manifest: Mapping[str, object],
     integrity: Mapping[str, object],
@@ -1672,6 +2104,21 @@ def verify_case(
     )
     checked += evidence_checked
     checked += _verify_reports(path.parent, manifest.get("reports"), diagnostics)
+    try:
+        operational_audit_path = _resolve_relative(
+            path.parent,
+            cast(dict[str, object], audit).get("path"),
+        )
+    except ValueError:
+        pass
+    else:
+        _verify_operational_state(
+            path.parent,
+            manifest.get("operational_state"),
+            case_id,
+            operational_audit_path,
+            diagnostics,
+        )
 
     has_errors = any(diagnostic.severity == "error" for diagnostic in diagnostics)
     if has_errors:

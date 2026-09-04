@@ -622,6 +622,25 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
     <div class="subtitle">Case <span class="mono">{{ case_id }}</span> &middot; Evidence: <span class="mono">{{ evidence_root }}</span></div>
   </div>
 
+  {% if run_state and not run_state.error %}
+  <div class="card mb-1"{% if run_state.coverage_ceiling == "sampled" %} style="border-color:var(--critical);"{% endif %}>
+    <div class="card-header">Run Scope</div>
+    <div class="card-body">
+      <span class="mono">{{ run_state.run_id }}</span> &middot;
+      profile <strong>{{ run_state.profile }}</strong> &middot;
+      coverage ceiling <strong>{{ run_state.coverage_ceiling }}</strong>
+      {% if run_state.coverage_ceiling == "sampled" %}
+      <p><strong>SAMPLED TRIAGE &mdash; NOT FULL COVERAGE.</strong> This report must not be interpreted as complete evidence, host, time-range, or case coverage.</p>
+      {% endif %}
+    </div>
+  </div>
+  {% elif run_state and run_state.error %}
+  <div class="card mb-1" style="border-color:var(--critical);">
+    <div class="card-header">Coverage Unknown &mdash; Do Not Claim Full Coverage</div>
+    <div class="card-body">Run scope unavailable: {{ run_state.error }}</div>
+  </div>
+  {% endif %}
+
   <div class="exec-summary">
     <div class="exec-summary-label">Executive Summary</div>
     <p>{{ executive_summary }}</p>

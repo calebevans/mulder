@@ -83,7 +83,9 @@ class JobStore:
         Upper bound on concurrent extraction threads.  Should match or be
         less than the server's ``max_workers`` setting.
     tool_dispatch:
-        Map of tool name -> async callable (from ``app._tool_dispatch``).
+        Map of tool name -> guarded synchronous callable (from
+        ``app._tool_dispatch_sync``). Async MCP tools are excluded at
+        registration time.
     """
 
     def __init__(

@@ -9,7 +9,8 @@ import os
 import re
 import threading
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ParamSpec, TypeVar
@@ -36,6 +37,24 @@ _P = ParamSpec("_P")
 _R = TypeVar("_R")
 
 _tool_limiter: anyio.CapacityLimiter | None = None
+
+
+@contextmanager
+def _active_run_tool_lease() -> Iterator[None]:
+    """Hold the configured durable-run lease across one complete tool body."""
+    lease = _run_lease
+    if lease is None:
+        yield
+        return
+    from mulder.run_state import hold_active_run_lease
+
+    with hold_active_run_lease(
+        lease.case_id,
+        lease.ledger_path,
+        lease.run_id,
+        lease.generation,
+    ):
+        yield
 
 
 def _get_tool_limiter() -> anyio.CapacityLimiter:
@@ -67,6 +86,32 @@ def _wrap_sync_tool(fn: Callable[_P, _R]) -> Callable[_P, Awaitable[_R]]:
     return wrapper
 
 
+def _guard_sync_tool(fn: Callable[_P, _R]) -> Callable[_P, _R]:
+    """Fence a synchronous tool body against cancellation or run takeover."""
+
+    @functools.wraps(fn)
+    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        with _active_run_tool_lease():
+            return fn(*args, **kwargs)
+
+    return wrapper
+
+
+def _guard_async_tool(
+    fn: Callable[_P, Awaitable[_R]],
+) -> Callable[_P, Awaitable[_R]]:
+    """Throttle and fence an asynchronous tool body at its execution boundary."""
+    tool_name = getattr(fn, "__name__", "unknown")
+
+    @functools.wraps(fn)
+    async def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        await async_wait_for_resources(tool_name)
+        with _active_run_tool_lease():
+            return await fn(*args, **kwargs)
+
+    return wrapper
+
+
 _original_mcp_tool = mcp.tool
 _tool_dispatch: dict[str, Callable[..., Any]] = {}
 _tool_dispatch_sync: dict[str, Callable[..., Any]] = {}
@@ -79,11 +124,18 @@ def _concurrent_tool(**kwargs: Any) -> Callable[..., Any]:
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
         """Register *fn* with the MCP server, wrapping sync handlers for threading."""
         tool_name = kwargs.get("name") or fn.__name__
-        _tool_dispatch_sync[tool_name] = fn
-        if not inspect.iscoroutinefunction(fn):
-            fn = _wrap_sync_tool(fn)
-        _tool_dispatch[tool_name] = fn
-        return original_decorator(fn)
+        if inspect.iscoroutinefunction(fn):
+            # Background workers are deliberately sync-only.  Keeping async
+            # handlers out makes submission fail before a coroutine can be
+            # mistaken for a completed extraction result.
+            _tool_dispatch_sync.pop(tool_name, None)
+            registered = _guard_async_tool(fn)
+        else:
+            guarded_sync = _guard_sync_tool(fn)
+            _tool_dispatch_sync[tool_name] = guarded_sync
+            registered = _wrap_sync_tool(guarded_sync)
+        _tool_dispatch[tool_name] = registered
+        return original_decorator(registered)
 
     return decorator
 
@@ -218,6 +270,16 @@ class ServerConfig:
     cpu_percent_limit: float = 90.0
 
 
+@dataclass(frozen=True)
+class ServerRunLease:
+    """Immutable durable-run identity inherited by this server process."""
+
+    case_id: str
+    run_id: str
+    generation: int
+    ledger_path: Path
+
+
 @dataclass
 class ServerContext:
     """Shared state available to every MCP tool at runtime."""
@@ -232,6 +294,7 @@ _cfg: ServerConfig | None = None
 _ctx: ServerContext | None = None
 _ctx_lock = threading.Lock()
 _job_store: JobStore | None = None
+_run_lease: ServerRunLease | None = None
 
 
 def get_cfg() -> ServerConfig:
@@ -279,7 +342,7 @@ def init_server(
 
     Called by ``cli.py`` before ``mcp.run()``.
     """
-    global _cfg, _job_store, _tool_limiter  # noqa: PLW0603
+    global _cfg, _job_store, _run_lease, _tool_limiter  # noqa: PLW0603
 
     _cfg = ServerConfig(
         db_dir=db_dir,
@@ -287,6 +350,38 @@ def init_server(
         mem_percent_limit=mem_percent_limit,
         cpu_percent_limit=cpu_percent_limit,
     )
+    # Reinitialization must fail closed rather than retaining an earlier lease.
+    _run_lease = None
+    run_id = os.environ.get("MULDER_RUN_ID")
+    generation_text = os.environ.get("MULDER_RUN_GENERATION")
+    if (run_id is None) != (generation_text is None):
+        raise RuntimeError(
+            "MULDER_RUN_ID and MULDER_RUN_GENERATION must be configured together"
+        )
+    if run_id is not None and generation_text is not None:
+        env_case_id = os.environ.get("MULDER_CASE_ID")
+        if not env_case_id:
+            raise RuntimeError("MULDER_CASE_ID is required for a durable run lease")
+        if case_id is not None and env_case_id != case_id:
+            raise RuntimeError("durable run lease case does not match the served case")
+        if not generation_text.isascii() or not generation_text.isdecimal():
+            raise RuntimeError("MULDER_RUN_GENERATION must be a canonical positive integer")
+        generation = int(generation_text)
+        if generation < 1 or str(generation) != generation_text:
+            raise RuntimeError("MULDER_RUN_GENERATION must be a canonical positive integer")
+        ledger_path = Path(db_dir).expanduser().resolve(strict=False) / (
+            f"{env_case_id}.runs.db"
+        )
+        from mulder.run_state import hold_active_run_lease
+
+        with hold_active_run_lease(env_case_id, ledger_path, run_id, generation):
+            pass
+        _run_lease = ServerRunLease(
+            case_id=env_case_id,
+            run_id=run_id,
+            generation=generation,
+            ledger_path=ledger_path,
+        )
 
     _tool_limiter = anyio.CapacityLimiter(max_workers)
 
