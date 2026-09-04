@@ -1,0 +1,257 @@
+{
+  "$defs": {
+    "CaseRunResult": {
+      "additionalProperties": false,
+      "description": "Normalized output for one case in an offline benchmark run.",
+      "properties": {
+        "case_id": {
+          "minLength": 1,
+          "title": "Case Id",
+          "type": "string"
+        },
+        "claims": {
+          "items": {
+            "$ref": "#/$defs/ObservedClaim"
+          },
+          "title": "Claims",
+          "type": "array"
+        },
+        "coverage": {
+          "items": {
+            "$ref": "#/$defs/ObservedCoverage"
+          },
+          "title": "Coverage",
+          "type": "array"
+        },
+        "verdict": {
+          "enum": [
+            "positive",
+            "no_evil_within_coverage",
+            "no_verdict"
+          ],
+          "title": "Verdict",
+          "type": "string"
+        }
+      },
+      "required": [
+        "case_id",
+        "verdict"
+      ],
+      "title": "CaseRunResult",
+      "type": "object"
+    },
+    "ObservedClaim": {
+      "additionalProperties": false,
+      "description": "One atomic proposition emitted by a benchmarked system.",
+      "properties": {
+        "citations": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Citations",
+          "type": "array"
+        },
+        "claim_id": {
+          "minLength": 1,
+          "title": "Claim Id",
+          "type": "string"
+        },
+        "object_value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Object Value"
+        },
+        "predicate": {
+          "minLength": 1,
+          "title": "Predicate",
+          "type": "string"
+        },
+        "qualifiers": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Qualifiers",
+          "type": "object"
+        },
+        "subject": {
+          "minLength": 1,
+          "title": "Subject",
+          "type": "string"
+        },
+        "verification_state": {
+          "enum": [
+            "verified",
+            "contradicted",
+            "inconclusive",
+            "unsupported",
+            "unverified"
+          ],
+          "title": "Verification State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "claim_id",
+        "subject",
+        "predicate",
+        "object_value",
+        "verification_state"
+      ],
+      "title": "ObservedClaim",
+      "type": "object"
+    },
+    "ObservedCoverage": {
+      "additionalProperties": false,
+      "description": "Observed outcome for one declared evidence domain.",
+      "properties": {
+        "domain": {
+          "minLength": 1,
+          "title": "Domain",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/ToolOutcomeStatus"
+        }
+      },
+      "required": [
+        "domain",
+        "status"
+      ],
+      "title": "ObservedCoverage",
+      "type": "object"
+    },
+    "ResourceUsage": {
+      "additionalProperties": false,
+      "description": "Measured resources for one complete benchmark run.",
+      "properties": {
+        "cost_usd": {
+          "minimum": 0,
+          "title": "Cost Usd",
+          "type": "number"
+        },
+        "input_tokens": {
+          "minimum": 0,
+          "title": "Input Tokens",
+          "type": "integer"
+        },
+        "output_tokens": {
+          "minimum": 0,
+          "title": "Output Tokens",
+          "type": "integer"
+        },
+        "runtime_ms": {
+          "minimum": 0,
+          "title": "Runtime Ms",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "runtime_ms",
+        "input_tokens",
+        "output_tokens",
+        "cost_usd"
+      ],
+      "title": "ResourceUsage",
+      "type": "object"
+    },
+    "ToolOutcomeStatus": {
+      "description": "Machine-readable execution state for a forensic tool result.\n\nThe legacy MCP response ``status`` remains ``success`` or ``error`` for\nbackwards compatibility.  This enum carries the more precise state needed\nto decide what conclusions the result can support.",
+      "enum": [
+        "SUCCESS_NONEMPTY",
+        "SUCCESS_EMPTY",
+        "NOT_APPLICABLE",
+        "UNAVAILABLE",
+        "UNSUPPORTED_VERSION",
+        "FAILED",
+        "TIMED_OUT",
+        "PARTIAL",
+        "SAMPLED",
+        "NOT_RUN"
+      ],
+      "title": "ToolOutcomeStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Versioned, committed result object consumed by the scorer.",
+  "properties": {
+    "benchmark_id": {
+      "minLength": 1,
+      "title": "Benchmark Id",
+      "type": "string"
+    },
+    "cases": {
+      "items": {
+        "$ref": "#/$defs/CaseRunResult"
+      },
+      "minItems": 1,
+      "title": "Cases",
+      "type": "array"
+    },
+    "resources": {
+      "$ref": "#/$defs/ResourceUsage"
+    },
+    "run_id": {
+      "minLength": 1,
+      "title": "Run Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "system_name": {
+      "minLength": 1,
+      "title": "System Name",
+      "type": "string"
+    },
+    "system_version": {
+      "minLength": 1,
+      "title": "System Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "benchmark_id",
+    "run_id",
+    "system_name",
+    "system_version",
+    "cases",
+    "resources"
+  ],
+  "title": "BenchmarkRunResult",
+  "type": "object"
+}

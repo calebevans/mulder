@@ -1,0 +1,2 @@
+host=workstation-17 image=cmd.exe pid=412 parent=winword.exe
+destination=203.0.113.42 port=443 bytes=8192

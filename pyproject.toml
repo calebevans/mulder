@@ -119,6 +119,7 @@ packages = ["src/mulder"]
 include = [
     "/src",
     "/tests",
+    "/benchmarks",
     "/README.md",
     "/LICENSE",
     "/pyproject.toml",

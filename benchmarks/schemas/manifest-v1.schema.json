@@ -1,0 +1,434 @@
+{
+  "$defs": {
+    "BenchmarkCase": {
+      "additionalProperties": false,
+      "description": "Ground truth and evidence metadata for one benchmark case.",
+      "properties": {
+        "anchors": {
+          "items": {
+            "$ref": "#/$defs/ExpectedAnchor"
+          },
+          "title": "Anchors",
+          "type": "array"
+        },
+        "applicability": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Applicability",
+          "type": "array"
+        },
+        "case_id": {
+          "minLength": 1,
+          "title": "Case Id",
+          "type": "string"
+        },
+        "coverage": {
+          "items": {
+            "$ref": "#/$defs/CoverageExpectation"
+          },
+          "minItems": 1,
+          "title": "Coverage",
+          "type": "array"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/EvidenceArtifact"
+          },
+          "minItems": 1,
+          "title": "Evidence",
+          "type": "array"
+        },
+        "expected_claims": {
+          "items": {
+            "$ref": "#/$defs/ExpectedClaim"
+          },
+          "title": "Expected Claims",
+          "type": "array"
+        },
+        "expected_verdict": {
+          "enum": [
+            "positive",
+            "no_evil_within_coverage",
+            "no_verdict"
+          ],
+          "title": "Expected Verdict",
+          "type": "string"
+        },
+        "ground_truth_label": {
+          "enum": [
+            "clean",
+            "nonempty"
+          ],
+          "title": "Ground Truth Label",
+          "type": "string"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "case_id",
+        "title",
+        "ground_truth_label",
+        "applicability",
+        "expected_verdict",
+        "evidence",
+        "coverage"
+      ],
+      "title": "BenchmarkCase",
+      "type": "object"
+    },
+    "CoverageExpectation": {
+      "additionalProperties": false,
+      "description": "Expected applicability and content state for one evidence domain.",
+      "properties": {
+        "acceptable_statuses": {
+          "items": {
+            "$ref": "#/$defs/ToolOutcomeStatus"
+          },
+          "minItems": 1,
+          "title": "Acceptable Statuses",
+          "type": "array"
+        },
+        "applicability": {
+          "enum": [
+            "applicable",
+            "not_applicable"
+          ],
+          "title": "Applicability",
+          "type": "string"
+        },
+        "domain": {
+          "minLength": 1,
+          "title": "Domain",
+          "type": "string"
+        },
+        "expected_content": {
+          "enum": [
+            "empty",
+            "nonempty",
+            "either",
+            "not_applicable"
+          ],
+          "title": "Expected Content",
+          "type": "string"
+        },
+        "required": {
+          "default": true,
+          "title": "Required",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "domain",
+        "applicability",
+        "expected_content",
+        "acceptable_statuses"
+      ],
+      "title": "CoverageExpectation",
+      "type": "object"
+    },
+    "EvidenceArtifact": {
+      "additionalProperties": false,
+      "description": "Content-addressed evidence declared by a benchmark case.",
+      "properties": {
+        "artifact_id": {
+          "minLength": 1,
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "license": {
+          "$ref": "#/$defs/EvidenceLicense"
+        },
+        "origin": {
+          "enum": [
+            "synthetic",
+            "real"
+          ],
+          "title": "Origin",
+          "type": "string"
+        },
+        "path": {
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "redistribution": {
+          "enum": [
+            "redistributable",
+            "restricted",
+            "manifest_only"
+          ],
+          "title": "Redistribution",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Size Bytes"
+        },
+        "source_url": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Url"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "path",
+        "sha256",
+        "origin",
+        "redistribution",
+        "license"
+      ],
+      "title": "EvidenceArtifact",
+      "type": "object"
+    },
+    "EvidenceLicense": {
+      "additionalProperties": false,
+      "description": "License and redistribution terms for one benchmark artifact.",
+      "properties": {
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "spdx_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Spdx Id"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "EvidenceLicense",
+      "type": "object"
+    },
+    "ExpectedAnchor": {
+      "additionalProperties": false,
+      "description": "A known evidence locator and the claims it is allowed to support.",
+      "properties": {
+        "anchor_id": {
+          "minLength": 1,
+          "title": "Anchor Id",
+          "type": "string"
+        },
+        "artifact_id": {
+          "minLength": 1,
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "exact_text_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Exact Text Sha256",
+          "type": "string"
+        },
+        "selector": {
+          "minLength": 1,
+          "title": "Selector",
+          "type": "string"
+        },
+        "supports_claim_ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Supports Claim Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "anchor_id",
+        "artifact_id",
+        "selector",
+        "exact_text_sha256",
+        "supports_claim_ids"
+      ],
+      "title": "ExpectedAnchor",
+      "type": "object"
+    },
+    "ExpectedClaim": {
+      "additionalProperties": false,
+      "description": "One true atomic proposition in the benchmark answer key.",
+      "properties": {
+        "claim_id": {
+          "minLength": 1,
+          "title": "Claim Id",
+          "type": "string"
+        },
+        "object_value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Object Value"
+        },
+        "predicate": {
+          "minLength": 1,
+          "title": "Predicate",
+          "type": "string"
+        },
+        "qualifiers": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Qualifiers",
+          "type": "object"
+        },
+        "subject": {
+          "minLength": 1,
+          "title": "Subject",
+          "type": "string"
+        }
+      },
+      "required": [
+        "claim_id",
+        "subject",
+        "predicate",
+        "object_value"
+      ],
+      "title": "ExpectedClaim",
+      "type": "object"
+    },
+    "ToolOutcomeStatus": {
+      "description": "Machine-readable execution state for a forensic tool result.\n\nThe legacy MCP response ``status`` remains ``success`` or ``error`` for\nbackwards compatibility.  This enum carries the more precise state needed\nto decide what conclusions the result can support.",
+      "enum": [
+        "SUCCESS_NONEMPTY",
+        "SUCCESS_EMPTY",
+        "NOT_APPLICABLE",
+        "UNAVAILABLE",
+        "UNSUPPORTED_VERSION",
+        "FAILED",
+        "TIMED_OUT",
+        "PARTIAL",
+        "SAMPLED",
+        "NOT_RUN"
+      ],
+      "title": "ToolOutcomeStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Versioned benchmark definition independent of any agent run.",
+  "properties": {
+    "benchmark_id": {
+      "minLength": 1,
+      "title": "Benchmark Id",
+      "type": "string"
+    },
+    "cases": {
+      "items": {
+        "$ref": "#/$defs/BenchmarkCase"
+      },
+      "minItems": 1,
+      "title": "Cases",
+      "type": "array"
+    },
+    "description": {
+      "minLength": 1,
+      "title": "Description",
+      "type": "string"
+    },
+    "methodology_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Methodology Version",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "title": {
+      "minLength": 1,
+      "title": "Title",
+      "type": "string"
+    }
+  },
+  "required": [
+    "benchmark_id",
+    "title",
+    "description",
+    "cases"
+  ],
+  "title": "BenchmarkManifest",
+  "type": "object"
+}

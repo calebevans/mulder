@@ -1,0 +1,109 @@
+schema_version: 1
+benchmark_id: mulder-fixture-v1
+title: Mulder deterministic benchmark fixtures
+description: Small synthetic controls for scorer and schema regression tests.
+methodology_version: "1.0"
+cases:
+  - case_id: incident-nonempty
+    title: Two independently answerable incident facts
+    ground_truth_label: nonempty
+    applicability:
+      - platform:windows
+      - artifact:memory
+    expected_verdict: positive
+    evidence:
+      - artifact_id: incident-log
+        path: evidence/incident.txt
+        sha256: 0cd48f94949318355fe751c163699c667c95c39aa7b5349311716fc8301f6bfa
+        origin: synthetic
+        redistribution: redistributable
+        license:
+          name: Creative Commons Zero v1.0 Universal
+          spdx_id: CC0-1.0
+          url: https://creativecommons.org/publicdomain/zero/1.0/
+        size_bytes: 106
+    coverage:
+      - domain: process_memory
+        applicability: applicable
+        expected_content: nonempty
+        acceptable_statuses: [SUCCESS_NONEMPTY]
+        required: true
+    expected_claims:
+      - claim_id: expected-process-image
+        subject: process:412
+        predicate: image_name
+        object_value: cmd.exe
+        qualifiers: {}
+      - claim_id: expected-destination-ip
+        subject: connection:412:443
+        predicate: ip_equals
+        object_value: 203.0.113.42
+        qualifiers:
+          port: 443
+    anchors:
+      - anchor_id: anchor-process-image
+        artifact_id: incident-log
+        selector: line=1;field=image
+        exact_text_sha256: 7371f071a9a4e653a5afd134bce9c735ef74b0421d6988958e5c6d8a34feaa3b
+        supports_claim_ids: [expected-process-image]
+      - anchor_id: anchor-destination-ip
+        artifact_id: incident-log
+        selector: line=2;field=destination
+        exact_text_sha256: 17af1cf3d1b5332c53349fc789abdc853bbeea7ed33eff727ff794ab741ccac9
+        supports_claim_ids: [expected-destination-ip]
+
+  - case_id: clean-control
+    title: Clean negative control
+    ground_truth_label: clean
+    applicability:
+      - platform:windows
+      - artifact:memory
+      - control:clean
+    expected_verdict: no_evil_within_coverage
+    evidence:
+      - artifact_id: clean-log
+        path: evidence/clean.txt
+        sha256: db78b9c4c8425e4420742f187c4f50fd09a81b29e7d31b72b0e9e0e9e6c78921
+        origin: synthetic
+        redistribution: redistributable
+        license:
+          name: Creative Commons Zero v1.0 Universal
+          spdx_id: CC0-1.0
+          url: https://creativecommons.org/publicdomain/zero/1.0/
+        size_bytes: 81
+    coverage:
+      - domain: process_memory
+        applicability: applicable
+        expected_content: empty
+        acceptable_statuses: [SUCCESS_EMPTY]
+        required: true
+    expected_claims: []
+    anchors: []
+
+  - case_id: unsupported-no-verdict
+    title: Unsupported format requiring an explicit no-verdict
+    ground_truth_label: clean
+    applicability:
+      - platform:vendor-x
+      - artifact:vendor-log
+      - control:no-verdict
+    expected_verdict: no_verdict
+    evidence:
+      - artifact_id: unsupported-log
+        path: evidence/unsupported.txt
+        sha256: b800c557ecb9a37df56ca2ac0638e2f60f1a94590509a0b67192587a537c124d
+        origin: synthetic
+        redistribution: redistributable
+        license:
+          name: Creative Commons Zero v1.0 Universal
+          spdx_id: CC0-1.0
+          url: https://creativecommons.org/publicdomain/zero/1.0/
+        size_bytes: 65
+    coverage:
+      - domain: vendor_x_log
+        applicability: applicable
+        expected_content: either
+        acceptable_statuses: [UNSUPPORTED_VERSION]
+        required: true
+    expected_claims: []
+    anchors: []
