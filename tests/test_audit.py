@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -70,6 +71,225 @@ class TestLoadExisting:
         assert log.has_tool_call("tc_good")
         assert log.has_tool_call("tc_good2")
         assert any("2 lines failed to parse" in msg for msg in caplog.messages)
+
+
+class TestIntegrityChain:
+    @staticmethod
+    def _write_lines(path: Path, entries: list[dict[str, object]]) -> None:
+        path.write_text(
+            "".join(json.dumps(entry, separators=(",", ":")) + "\n" for entry in entries),
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def _read_lines(path: Path) -> list[dict[str, object]]:
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+    @staticmethod
+    def _three_entry_log(path: Path) -> AuditLog:
+        audit = AuditLog(path)
+        audit.log_tool_call("tc_1", "search", {"query": "one"}, "blake2b:one")
+        audit.log_tool_call("tc_2", "search", {"query": "two"}, "blake2b:two")
+        audit.log_finding_submission("finding-1", ["tc_1", "tc_2"])
+        return audit
+
+    def test_new_events_are_canonical_and_verified(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "audit.jsonl"
+        audit = AuditLog(log_path)
+        audit.log_tool_call(
+            "tc_1",
+            "search",
+            {"z": {"last": 2, "first": 1}, "a": "value"},
+            "blake2b:output",
+        )
+
+        raw = log_path.read_text(encoding="utf-8").strip()
+        entry = json.loads(raw)
+        assert list(entry) == sorted(entry)
+        assert list(entry["params"]) == ["a", "z"]
+        assert list(entry["params"]["z"]) == ["first", "last"]
+        assert entry["schema"] == "mulder.audit"
+        assert entry["version"] == 1
+        assert entry["sequence"] == 1
+        assert entry["previous_hash"].startswith("sha256:")
+        assert entry["entry_hash"].startswith("sha256:")
+
+        result = audit.verify_integrity()
+        assert result.ok
+        assert result.cryptographically_verified
+        assert result.status == "verified"
+        assert result.entries_checked == 1
+        assert result.head_hash == entry["entry_hash"]
+
+    def test_key_reordering_does_not_break_canonical_hash(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "audit.jsonl"
+        audit = AuditLog(log_path)
+        audit.log_tool_call("tc_1", "search", {"b": 2, "a": 1}, "blake2b:output")
+        entry = self._read_lines(log_path)[0]
+        reversed_entry = dict(reversed(list(entry.items())))
+        log_path.write_text(json.dumps(reversed_entry) + "\n", encoding="utf-8")
+
+        result = audit.verify_integrity()
+        assert result.ok
+        assert result.status == "verified"
+
+    def test_edit_reports_first_broken_entry(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "audit.jsonl"
+        audit = self._three_entry_log(log_path)
+        entries = self._read_lines(log_path)
+        entries[1]["tool_name"] = "edited"
+        self._write_lines(log_path, entries)
+
+        result = audit.verify_integrity()
+        assert not result.ok
+        assert result.first_error_line == 2
+        assert result.first_error_sequence == 2
+        assert result.error_code == "entry_hash_mismatch"
+
+    def test_delete_reports_sequence_gap(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "audit.jsonl"
+        audit = self._three_entry_log(log_path)
+        entries = self._read_lines(log_path)
+        self._write_lines(log_path, [entries[0], entries[2]])
+
+        result = audit.verify_integrity()
+        assert not result.ok
+        assert result.first_error_line == 2
+        assert result.error_code == "sequence_mismatch"
+        assert result.expected == 2
+        assert result.actual == 3
+
+    def test_insert_reports_duplicate_sequence(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "audit.jsonl"
+        audit = self._three_entry_log(log_path)
+        entries = self._read_lines(log_path)
+        self._write_lines(log_path, [entries[0], entries[0], entries[1], entries[2]])
+
+        result = audit.verify_integrity()
+        assert not result.ok
+        assert result.first_error_line == 2
+        assert result.error_code == "sequence_mismatch"
+
+    def test_reorder_reports_first_out_of_order_entry(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "audit.jsonl"
+        audit = self._three_entry_log(log_path)
+        entries = self._read_lines(log_path)
+        self._write_lines(log_path, [entries[1], entries[0], entries[2]])
+
+        result = audit.verify_integrity()
+        assert not result.ok
+        assert result.first_error_line == 1
+        assert result.error_code == "sequence_mismatch"
+
+    def test_truncated_final_json_is_invalid(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "audit.jsonl"
+        audit = self._three_entry_log(log_path)
+        raw = log_path.read_bytes()
+        log_path.write_bytes(raw[:-12])
+
+        result = audit.verify_integrity()
+        assert not result.ok
+        assert result.first_error_line == 3
+        assert result.error_code == "invalid_json"
+
+    def test_bit_flip_is_detected(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "audit.jsonl"
+        audit = self._three_entry_log(log_path)
+        raw = log_path.read_bytes()
+        original = b"blake2b:two"
+        replacement = b"blake2b:Two"
+        assert original in raw
+        log_path.write_bytes(raw.replace(original, replacement, 1))
+
+        result = audit.verify_integrity()
+        assert not result.ok
+        assert result.first_error_line == 2
+        assert result.error_code == "entry_hash_mismatch"
+
+    def test_append_and_reload_continue_chain(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "audit.jsonl"
+        AuditLog(log_path).log_tool_call("tc_1", "search", {}, "blake2b:one")
+        reloaded = AuditLog(log_path)
+        reloaded.log_tool_call("tc_2", "search", {}, "blake2b:two")
+
+        entries = self._read_lines(log_path)
+        assert [entry["sequence"] for entry in entries] == [1, 2]
+        assert entries[1]["previous_hash"] == entries[0]["entry_hash"]
+        result = AuditLog(log_path).verify_integrity()
+        assert result.ok
+        assert result.status == "verified"
+        assert result.entries_checked == 2
+
+    def test_concurrent_writers_serialize_under_file_lock(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "audit.jsonl"
+        writers = [AuditLog(log_path) for _ in range(4)]
+
+        def write(index: int) -> None:
+            writers[index % len(writers)].log_tool_call(
+                f"tc_{index}", "search", {"index": index}, f"blake2b:{index}"
+            )
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            list(pool.map(write, range(40)))
+
+        result = AuditLog(log_path).verify_integrity()
+        assert result.ok
+        assert result.status == "verified"
+        assert result.entries_checked == 40
+        assert [entry["sequence"] for entry in self._read_lines(log_path)] == list(range(1, 41))
+
+    def test_invalid_native_log_refuses_append(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "audit.jsonl"
+        audit = self._three_entry_log(log_path)
+        entries = self._read_lines(log_path)
+        entries[0]["tool_name"] = "tampered"
+        self._write_lines(log_path, entries)
+
+        with pytest.raises(RuntimeError, match="Refusing to append"):
+            audit.log_tool_call("tc_4", "search", {}, "blake2b:four")
+
+    def test_legacy_log_is_readable_but_explicitly_unverified(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "audit.jsonl"
+        legacy = [
+            {"type": "tool_call", "tool_call_id": "legacy-1", "tool_name": "x"},
+            {"type": "finding", "finding_id": "legacy-f", "evidence_refs": ["legacy-1"]},
+        ]
+        self._write_lines(log_path, legacy)
+
+        audit = AuditLog(log_path)
+        assert audit.has_tool_call("legacy-1")
+        result = audit.verify_integrity()
+        assert result.ok
+        assert not result.cryptographically_verified
+        assert result.status == "legacy_unverified"
+        assert result.legacy_entries == 2
+        assert result.head_hash is None
+
+    def test_first_new_entry_anchors_and_labels_legacy_prefix(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "audit.jsonl"
+        legacy = [
+            {"type": "tool_call", "tool_call_id": "legacy-1", "tool_name": "x"},
+            {"type": "finding", "finding_id": "legacy-f", "evidence_refs": ["legacy-1"]},
+        ]
+        self._write_lines(log_path, legacy)
+        audit = AuditLog(log_path)
+        audit.log_tool_call("native-1", "search", {}, "blake2b:one")
+
+        entries = self._read_lines(log_path)
+        assert entries[2]["sequence"] == 3
+        assert entries[2]["legacy_prefix_entries"] == 2
+        result = audit.verify_integrity()
+        assert result.ok
+        assert result.cryptographically_verified
+        assert result.status == "verified_with_legacy_anchor"
+        assert result.legacy_entries == 2
+
+        entries[0]["tool_name"] = "edited-legacy"
+        self._write_lines(log_path, entries)
+        tampered = audit.verify_integrity()
+        assert not tampered.ok
+        assert tampered.first_error_line == 3
+        assert tampered.error_code == "previous_hash_mismatch"
 
 
 class TestProvenance:
