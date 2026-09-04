@@ -1,0 +1,882 @@
+{
+  "$defs": {
+    "AtomicClaim": {
+      "description": "Persisted atomic finding statement with resolved evidence anchors.",
+      "properties": {
+        "anchors": {
+          "items": {
+            "$ref": "#/$defs/EvidenceAnchor"
+          },
+          "title": "Anchors",
+          "type": "array"
+        },
+        "claim_id": {
+          "title": "Claim Id",
+          "type": "string"
+        },
+        "epistemic_state": {
+          "default": "unverified",
+          "enum": [
+            "legacy_unverified",
+            "unverified",
+            "verified",
+            "contradicted",
+            "inconclusive"
+          ],
+          "title": "Epistemic State",
+          "type": "string"
+        },
+        "finding_id": {
+          "title": "Finding Id",
+          "type": "string"
+        },
+        "object_value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Object Value"
+        },
+        "ordinal": {
+          "minimum": 0,
+          "title": "Ordinal",
+          "type": "integer"
+        },
+        "predicate": {
+          "title": "Predicate",
+          "type": "string"
+        },
+        "qualifiers": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Qualifiers",
+          "type": "object"
+        },
+        "statement": {
+          "title": "Statement",
+          "type": "string"
+        },
+        "subject": {
+          "title": "Subject",
+          "type": "string"
+        }
+      },
+      "required": [
+        "claim_id",
+        "finding_id",
+        "ordinal",
+        "statement",
+        "subject",
+        "predicate",
+        "object_value"
+      ],
+      "title": "AtomicClaim",
+      "type": "object"
+    },
+    "ClaimVerification": {
+      "description": "Append-only persisted execution of a deterministic claim verifier.",
+      "properties": {
+        "claim_id": {
+          "title": "Claim Id",
+          "type": "string"
+        },
+        "details": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Details",
+          "type": "object"
+        },
+        "reason_code": {
+          "title": "Reason Code",
+          "type": "string"
+        },
+        "result": {
+          "enum": [
+            "verified",
+            "contradicted",
+            "inconclusive"
+          ],
+          "title": "Result",
+          "type": "string"
+        },
+        "verification_id": {
+          "title": "Verification Id",
+          "type": "string"
+        },
+        "verified_at": {
+          "title": "Verified At",
+          "type": "string"
+        },
+        "verifier_name": {
+          "title": "Verifier Name",
+          "type": "string"
+        },
+        "verifier_version": {
+          "title": "Verifier Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "result",
+        "reason_code",
+        "verification_id",
+        "claim_id",
+        "verifier_name",
+        "verifier_version",
+        "verified_at"
+      ],
+      "title": "ClaimVerification",
+      "type": "object"
+    },
+    "CoverageKey": {
+      "description": "Stable coordinates for one evidence-domain coverage assertion.",
+      "properties": {
+        "check_name": {
+          "minLength": 1,
+          "title": "Check Name",
+          "type": "string"
+        },
+        "evidence_domain": {
+          "minLength": 1,
+          "title": "Evidence Domain",
+          "type": "string"
+        },
+        "system_name": {
+          "minLength": 1,
+          "title": "System Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "system_name",
+        "evidence_domain",
+        "check_name"
+      ],
+      "title": "CoverageKey",
+      "type": "object"
+    },
+    "CoverageMetadata": {
+      "description": "Structured scope and implementation provenance for a tool outcome.\n\n``examined`` values describe content successfully examined, rather than\ncontent merely discovered or attempted.  Unknown values stay ``None``;\ncallers must not turn an unknown total into an implicit complete result.",
+      "properties": {
+        "bytes_examined": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bytes Examined"
+        },
+        "bytes_total": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bytes Total"
+        },
+        "fallback_lineage": {
+          "items": {
+            "$ref": "#/$defs/FallbackAttempt"
+          },
+          "title": "Fallback Lineage",
+          "type": "array"
+        },
+        "parser_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parser Version"
+        },
+        "rows_examined": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rows Examined"
+        },
+        "rows_total": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rows Total"
+        },
+        "sample_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sample Reason"
+        },
+        "tool_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tool Version"
+        },
+        "truncation_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Truncation Reason"
+        }
+      },
+      "title": "CoverageMetadata",
+      "type": "object"
+    },
+    "CoverageRecord": {
+      "description": "Persisted result and scope for one case/system/domain/check tuple.",
+      "properties": {
+        "case_id": {
+          "title": "Case Id",
+          "type": "string"
+        },
+        "key": {
+          "$ref": "#/$defs/CoverageKey"
+        },
+        "outcome": {
+          "$ref": "#/$defs/ToolOutcome"
+        },
+        "recorded_at": {
+          "title": "Recorded At",
+          "type": "string"
+        },
+        "source_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Name"
+        },
+        "tool_call_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tool Call Id"
+        }
+      },
+      "required": [
+        "case_id",
+        "key",
+        "outcome",
+        "recorded_at"
+      ],
+      "title": "CoverageRecord",
+      "type": "object"
+    },
+    "EvidenceAnchor": {
+      "description": "Server-resolved immutable evidence locator for an atomic claim.",
+      "properties": {
+        "anchor_id": {
+          "title": "Anchor Id",
+          "type": "string"
+        },
+        "artifact_family": {
+          "title": "Artifact Family",
+          "type": "string"
+        },
+        "char_end": {
+          "title": "Char End",
+          "type": "integer"
+        },
+        "char_start": {
+          "title": "Char Start",
+          "type": "integer"
+        },
+        "claim_id": {
+          "title": "Claim Id",
+          "type": "string"
+        },
+        "exact_text": {
+          "title": "Exact Text",
+          "type": "string"
+        },
+        "extractor_family": {
+          "title": "Extractor Family",
+          "type": "string"
+        },
+        "independence_key": {
+          "title": "Independence Key",
+          "type": "string"
+        },
+        "line_end": {
+          "title": "Line End",
+          "type": "integer"
+        },
+        "line_start": {
+          "title": "Line Start",
+          "type": "integer"
+        },
+        "normalized_value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalized Value"
+        },
+        "role": {
+          "default": "supports",
+          "enum": [
+            "supports",
+            "contradicts"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "source_hash": {
+          "title": "Source Hash",
+          "type": "string"
+        },
+        "source_id": {
+          "title": "Source Id",
+          "type": "integer"
+        },
+        "source_name": {
+          "title": "Source Name",
+          "type": "string"
+        },
+        "tool_call_id": {
+          "title": "Tool Call Id",
+          "type": "string"
+        },
+        "value_type": {
+          "title": "Value Type",
+          "type": "string"
+        },
+        "window_id": {
+          "title": "Window Id",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "anchor_id",
+        "claim_id",
+        "tool_call_id",
+        "source_id",
+        "source_name",
+        "source_hash",
+        "window_id",
+        "line_start",
+        "line_end",
+        "char_start",
+        "char_end",
+        "exact_text",
+        "artifact_family",
+        "extractor_family",
+        "independence_key",
+        "value_type"
+      ],
+      "title": "EvidenceAnchor",
+      "type": "object"
+    },
+    "FallbackAttempt": {
+      "description": "One earlier adapter attempt retained when a fallback produced a result.",
+      "properties": {
+        "adapter": {
+          "title": "Adapter",
+          "type": "string"
+        },
+        "parser_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parser Version"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "status": {
+          "$ref": "#/$defs/ToolOutcomeStatus"
+        },
+        "tool_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tool Version"
+        }
+      },
+      "required": [
+        "adapter",
+        "status"
+      ],
+      "title": "FallbackAttempt",
+      "type": "object"
+    },
+    "Finding": {
+      "description": "An investigative finding backed by evidence references.",
+      "properties": {
+        "case_id": {
+          "title": "Case Id",
+          "type": "string"
+        },
+        "confidence": {
+          "enum": [
+            "confirmed",
+            "inference"
+          ],
+          "title": "Confidence",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "event_time_end": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Event Time End"
+        },
+        "event_time_start": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Event Time Start"
+        },
+        "evidence_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "finding_id": {
+          "title": "Finding Id",
+          "type": "string"
+        },
+        "mitre_attack_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Mitre Attack Ids",
+          "type": "array"
+        },
+        "negative_verdict": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScopedNegativeVerdict"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "severity": {
+          "enum": [
+            "critical",
+            "high",
+            "medium",
+            "low",
+            "info"
+          ],
+          "title": "Severity",
+          "type": "string"
+        },
+        "sources": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Sources",
+          "type": "array"
+        },
+        "submitted_at": {
+          "title": "Submitted At",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "finding_id",
+        "case_id",
+        "title",
+        "description",
+        "severity",
+        "confidence",
+        "evidence_refs",
+        "sources",
+        "submitted_at"
+      ],
+      "title": "Finding",
+      "type": "object"
+    },
+    "FindingRevision": {
+      "description": "Immutable snapshot recording one visible change to a finding.",
+      "properties": {
+        "actor_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Actor Id"
+        },
+        "actor_kind": {
+          "enum": [
+            "investigator",
+            "deterministic_rule",
+            "blind_reviewer",
+            "human",
+            "system"
+          ],
+          "title": "Actor Kind",
+          "type": "string"
+        },
+        "changed_fields": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Changed Fields",
+          "type": "array"
+        },
+        "created_at": {
+          "title": "Created At",
+          "type": "string"
+        },
+        "evidence_added": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Added",
+          "type": "array"
+        },
+        "evidence_removed": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Removed",
+          "type": "array"
+        },
+        "finding_id": {
+          "title": "Finding Id",
+          "type": "string"
+        },
+        "parent_revision_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Revision Id"
+        },
+        "reason_code": {
+          "title": "Reason Code",
+          "type": "string"
+        },
+        "revision_id": {
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "revision_number": {
+          "minimum": 1,
+          "title": "Revision Number",
+          "type": "integer"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/Finding"
+        },
+        "state": {
+          "enum": [
+            "draft",
+            "indicated",
+            "confirmed",
+            "refuted",
+            "quarantined",
+            "unknown",
+            "withdrawn"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "tombstone": {
+          "default": false,
+          "title": "Tombstone",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "revision_id",
+        "finding_id",
+        "revision_number",
+        "state",
+        "snapshot",
+        "actor_kind",
+        "reason_code",
+        "created_at"
+      ],
+      "title": "FindingRevision",
+      "type": "object"
+    },
+    "ScopedNegativeVerdict": {
+      "description": "A negative conclusion explicitly limited to completed coverage.",
+      "properties": {
+        "scope": {
+          "items": {
+            "$ref": "#/$defs/CoverageKey"
+          },
+          "minItems": 1,
+          "title": "Scope",
+          "type": "array"
+        },
+        "verdict": {
+          "const": "NO_EVIL_WITHIN_COVERAGE",
+          "default": "NO_EVIL_WITHIN_COVERAGE",
+          "title": "Verdict",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope"
+      ],
+      "title": "ScopedNegativeVerdict",
+      "type": "object"
+    },
+    "ToolOutcome": {
+      "description": "Versioned, serializable execution semantics for an MCP tool response.",
+      "properties": {
+        "coverage": {
+          "$ref": "#/$defs/CoverageMetadata"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "status": {
+          "$ref": "#/$defs/ToolOutcomeStatus"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "ToolOutcome",
+      "type": "object"
+    },
+    "ToolOutcomeStatus": {
+      "description": "Machine-readable execution state for a forensic tool result.\n\nThe legacy MCP response ``status`` remains ``success`` or ``error`` for\nbackwards compatibility.  This enum carries the more precise state needed\nto decide what conclusions the result can support.",
+      "enum": [
+        "SUCCESS_NONEMPTY",
+        "SUCCESS_EMPTY",
+        "NOT_APPLICABLE",
+        "UNAVAILABLE",
+        "UNSUPPORTED_VERSION",
+        "FAILED",
+        "TIMED_OUT",
+        "PARTIAL",
+        "SAMPLED",
+        "NOT_RUN"
+      ],
+      "title": "ToolOutcomeStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "One fixture-shaped envelope covering every foundational contract.\n\nRuntime APIs continue to exchange the individual models.  This bundle is a\nschema publication surface: it gives CI and external implementers one\nversioned document whose definitions cannot drift independently from the\nauthoritative Pydantic types.",
+  "properties": {
+    "atomic_claim": {
+      "$ref": "#/$defs/AtomicClaim"
+    },
+    "claim_verification": {
+      "$ref": "#/$defs/ClaimVerification"
+    },
+    "coverage_record": {
+      "$ref": "#/$defs/CoverageRecord"
+    },
+    "finding_revision": {
+      "$ref": "#/$defs/FindingRevision"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "tool_outcome": {
+      "$ref": "#/$defs/ToolOutcome"
+    }
+  },
+  "required": [
+    "tool_outcome",
+    "coverage_record",
+    "finding_revision",
+    "atomic_claim",
+    "claim_verification"
+  ],
+  "title": "CoreContractBundle",
+  "type": "object"
+}

@@ -1,0 +1,37 @@
+{
+  "cases": [
+    {
+      "model": "tool_outcome",
+      "payload": {
+        "schema_version": 1,
+        "status": "SAMPLED",
+        "coverage": {}
+      }
+    },
+    {
+      "model": "atomic_claim",
+      "payload": {
+        "claim_id": "c_invalid",
+        "finding_id": "f_invalid",
+        "ordinal": -1,
+        "statement": "unsupported",
+        "subject": "x",
+        "predicate": "equals",
+        "object_value": "x"
+      }
+    },
+    {
+      "model": "finding_revision",
+      "payload": {
+        "revision_id": "fr_invalid",
+        "finding_id": "f_invalid",
+        "revision_number": 0,
+        "state": "erased",
+        "snapshot": {},
+        "actor_kind": "unknown_actor",
+        "reason_code": "invalid",
+        "created_at": "not-a-timestamp"
+      }
+    }
+  ]
+}

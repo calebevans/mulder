@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "tool_outcome": {
+    "schema_version": 1,
+    "status": "SUCCESS_NONEMPTY",
+    "coverage": {
+      "rows_examined": 1,
+      "rows_total": 1,
+      "tool_version": "fixture-tool-1",
+      "parser_version": "fixture-parser-1"
+    }
+  },
+  "coverage_record": {
+    "case_id": "case-contract",
+    "key": {
+      "system_name": "host-a",
+      "evidence_domain": "processes",
+      "check_name": "memory-process-list"
+    },
+    "outcome": {
+      "schema_version": 1,
+      "status": "SUCCESS_NONEMPTY",
+      "coverage": {
+        "rows_examined": 1,
+        "rows_total": 1
+      }
+    },
+    "source_name": "volatility.pslist",
+    "tool_call_id": "tc_contract",
+    "recorded_at": "2026-09-04T00:00:00+00:00"
+  },
+  "finding_revision": {
+    "revision_id": "fr_contract",
+    "finding_id": "f_contract",
+    "revision_number": 1,
+    "state": "confirmed",
+    "snapshot": {
+      "finding_id": "f_contract",
+      "case_id": "case-contract",
+      "title": "Unexpected process",
+      "description": "cmd.exe was observed as a child process.",
+      "severity": "medium",
+      "confidence": "confirmed",
+      "evidence_refs": ["tc_contract"],
+      "sources": ["volatility.pslist"],
+      "submitted_at": "2026-09-04T00:00:00+00:00"
+    },
+    "actor_kind": "deterministic_rule",
+    "reason_code": "finding_submitted",
+    "changed_fields": ["description"],
+    "evidence_added": ["tc_contract"],
+    "created_at": "2026-09-04T00:00:00+00:00"
+  },
+  "atomic_claim": {
+    "claim_id": "c_contract",
+    "finding_id": "f_contract",
+    "ordinal": 0,
+    "statement": "cmd.exe is present",
+    "subject": "cmd.exe",
+    "predicate": "equals",
+    "object_value": "cmd.exe",
+    "epistemic_state": "verified",
+    "anchors": [
+      {
+        "anchor_id": "a_contract",
+        "claim_id": "c_contract",
+        "tool_call_id": "tc_contract",
+        "source_id": 1,
+        "source_name": "volatility.pslist",
+        "source_hash": "sha256:fixture",
+        "window_id": 1,
+        "line_start": 1,
+        "line_end": 1,
+        "char_start": 0,
+        "char_end": 7,
+        "exact_text": "cmd.exe",
+        "artifact_family": "memory-process-list",
+        "extractor_family": "volatility3",
+        "independence_key": "source:sha256:fixture",
+        "value_type": "text",
+        "normalized_value": "cmd.exe",
+        "role": "supports"
+      }
+    ]
+  },
+  "claim_verification": {
+    "verification_id": "cv_contract",
+    "claim_id": "c_contract",
+    "verifier_name": "mulder.claims",
+    "verifier_version": "1",
+    "result": "verified",
+    "reason_code": "exact_value_match",
+    "details": {},
+    "verified_at": "2026-09-04T00:00:00+00:00"
+  }
+}
