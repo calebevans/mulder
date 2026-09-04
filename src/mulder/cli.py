@@ -259,6 +259,66 @@ def report(case_id: str, db_dir: str) -> None:
     click.echo("Done.")
 
 
+@cli.command("publish")
+@click.argument("case_id")
+@click.option(
+    "--db-dir",
+    default=DEFAULT_DB_DIR,
+    show_default=True,
+    help="Directory containing the authoritative case artifacts.",
+)
+@click.option(
+    "--pdf/--no-pdf",
+    default=True,
+    show_default=True,
+    help="Render PDFs when the optional WeasyPrint dependency is available.",
+)
+@click.option(
+    "--approve",
+    "approve_publication",
+    is_flag=True,
+    help="Promote the new draft after QA and state-bound analyst approval checks.",
+)
+def publish_cmd(
+    case_id: str,
+    db_dir: str,
+    pdf: bool,
+    approve_publication: bool,
+) -> None:
+    """Render one fact snapshot for executive, technical, and examiner audiences."""
+    from mulder.review.model import CaseReviewError
+    from mulder.review.publication import PublicationError, PublicationManager
+
+    manager = PublicationManager(case_id, Path(db_dir))
+    try:
+        path = manager.create_draft(generate_pdf=pdf)
+        if approve_publication:
+            path = manager.approve()
+        manifest = manager.read()
+    except (OSError, CaseReviewError, PublicationError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    qa = manifest.get("qa")
+    qa_passed = isinstance(qa, dict) and qa.get("passed") is True
+    click.echo(
+        f"Publication {manifest['state']}: {path} "
+        f"(QA {'passed' if qa_passed else 'failed'})"
+    )
+
+
+@cli.command("publication-status")
+@click.argument("case_id")
+@click.option("--db-dir", default=DEFAULT_DB_DIR, show_default=True)
+def publication_status_cmd(case_id: str, db_dir: str) -> None:
+    """Verify and print the current publication sidecar."""
+    from mulder.review.publication import PublicationError, PublicationManager
+
+    try:
+        manifest = PublicationManager(case_id, Path(db_dir)).read()
+    except PublicationError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps(manifest, sort_keys=True))
+
+
 @cli.command("review")
 @click.argument("case_id")
 @click.option(

@@ -37,6 +37,7 @@ Try-it-out instructions for running Mulder, the forensic investigation platform.
     - [`mulder setup`](#mulder-setup)
     - [`mulder serve`](#mulder-serve)
     - [`mulder report`](#mulder-report)
+    - [`mulder publish`](#mulder-publish)
     - [`mulder review`](#mulder-review)
     - [`mulder seal-case`](#mulder-seal-case)
     - [`mulder verify-case`](#mulder-verify-case)
@@ -570,6 +571,23 @@ Regenerates reports (Markdown, HTML, PDF) offline from an existing case database
 The static report consumes the same versioned case-review calculation as `mulder review` for
 proof cards, receipt/audit/replay state, costs, coverage, and observed phase state.
 
+### `mulder publish`
+
+```
+mulder publish <case_id> [--pdf|--no-pdf] [--approve]
+```
+
+Renders executive, technical, and examiner views from one immutable `mulder.case-review`
+snapshot. Each view includes a fact-model digest, exact epistemic labels, and a proof appendix.
+The `{case_id}.publication.json` sidecar commits every rendered byte and records blocking checks
+for complete bounded facts, exact anchors, audit integrity, HTML and Markdown proof targets,
+visible content, and PDF page geometry where the optional renderer is available.
+
+The default state is `DRAFT`. `--approve` permits the `DRAFT`→`APPROVED` transition only when
+all blocking checks pass and `mulder approve` already binds the same current claim set. Changed
+case facts or output bytes require a new draft; an approved publication cannot be silently
+downgraded. `mulder publication-status CASE` verifies and prints the sidecar self-commitment.
+
 ### `mulder review`
 
 ```
@@ -705,6 +723,7 @@ After an investigation completes, all artifacts are written to the cases directo
 | `{case_id}.db` | SQLite database with all indexed evidence, findings, and metadata |
 | `{case_id}.audit.jsonl` | Append-only audit log recording every tool invocation with parameters and timestamps |
 | `{case_id}.manifest.json` | Relocatable, optionally examiner-signed case receipt produced by `mulder seal-case` |
+| `{case_id}.publication.json` | DRAFT/APPROVED publication state, fact digest, render QA, and exact audience-artifact commitments |
 
 ### Reports
 
@@ -713,6 +732,7 @@ After an investigation completes, all artifacts are written to the cases directo
 | `{case_id}.report.md` | Markdown report for plain-text review |
 | `{case_id}.report.html` | Self-contained HTML report with dark/light theme and sidebar navigation |
 | `{case_id}.report.pdf` | PDF report for formal distribution |
+| `{case_id}.publication.{executive,technical,examiner}.{md,html,pdf}` | State-bound audience views; PDF is optional |
 
 All report formats include an executive summary, severity overview, evidence integrity hashes, attack timeline, detailed findings with MITRE ATT&CK mappings, IOC tables, audit metrics, and a sources appendix.
 
