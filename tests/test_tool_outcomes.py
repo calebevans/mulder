@@ -28,6 +28,7 @@ def test_all_outcome_states_serialize_as_stable_strings() -> None:
         "TIMED_OUT",
         "PARTIAL",
         "SAMPLED",
+        "NOT_RUN",
     }
     assert {status.value for status in ToolOutcomeStatus} == expected
 
@@ -96,9 +97,7 @@ def test_coverage_serializes_fallback_lineage_and_versions() -> None:
         ({"rows_examined": 2, "rows_total": 1}, "rows_examined"),
     ],
 )
-def test_coverage_rejects_impossible_scope(
-    field_values: dict[str, int], message: str
-) -> None:
+def test_coverage_rejects_impossible_scope(field_values: dict[str, int], message: str) -> None:
     """An adapter cannot claim to examine more than its known input scope."""
     with pytest.raises(ValidationError, match=message):
         CoverageMetadata(**field_values)

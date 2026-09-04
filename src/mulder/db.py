@@ -23,6 +23,7 @@ from sqlalchemy import (
     MetaData,
     Table,
     Text,
+    UniqueConstraint,
     create_engine,
     delete,
     event,
@@ -42,9 +43,13 @@ from mulder.models import (
     AtomicClaimInput,
     CaseMetadataRow,
     ClaimVerification,
+    CoverageKey,
+    CoverageRecord,
     EvidenceAnchor,
     Finding,
     SourceRow,
+    ToolOutcome,
+    ToolOutcomeStatus,
     WindowRow,
 )
 
@@ -103,7 +108,31 @@ findings_t = Table(
     Column("mitre_attack_ids", Text),
     Column("event_time_start", Text),
     Column("event_time_end", Text),
+    Column("negative_verdict", Text),
     Column("submitted_at", Text, nullable=False),
+)
+
+coverage_register_t = Table(
+    "coverage_register",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("case_id", Text, ForeignKey("case_metadata.case_id"), nullable=False),
+    Column("system_name", Text, nullable=False),
+    Column("evidence_domain", Text, nullable=False),
+    Column("check_name", Text, nullable=False),
+    Column("status", Text, nullable=False),
+    Column("coverage", Text, nullable=False),
+    Column("reason", Text),
+    Column("source_name", Text),
+    Column("tool_call_id", Text),
+    Column("recorded_at", Text, nullable=False),
+    UniqueConstraint(
+        "case_id",
+        "system_name",
+        "evidence_domain",
+        "check_name",
+        name="uq_coverage_register_key",
+    ),
 )
 
 claims_t = Table(
@@ -380,6 +409,20 @@ def _migrate_add_claim_tables(conn: Connection) -> None:
     claim_verifications_t.create(conn, checkfirst=True)
 
 
+def _migrate_add_coverage_register(conn: Connection) -> None:
+    """Create the additive coverage register for databases from older releases."""
+    coverage_register_t.create(conn, checkfirst=True)
+
+
+def _migrate_add_negative_verdict(conn: Connection) -> None:
+    """Add scoped negative verdict storage to databases from older releases."""
+    try:
+        conn.execute(text("ALTER TABLE findings ADD COLUMN negative_verdict TEXT"))
+    except Exception as exc:
+        if "duplicate column" not in str(exc).lower():
+            raise
+
+
 _SENTINEL = object()
 
 
@@ -531,6 +574,8 @@ class CaseDB:
             _migrate_add_progress(conn)
             _migrate_add_kv_store(conn)
             _migrate_add_claim_tables(conn)
+            _migrate_add_coverage_register(conn)
+            _migrate_add_negative_verdict(conn)
         return db
 
     def close(self) -> None:
@@ -1074,6 +1119,11 @@ class CaseDB:
                         mitre_attack_ids=json.dumps(finding.mitre_attack_ids),
                         event_time_start=finding.event_time_start,
                         event_time_end=finding.event_time_end,
+                        negative_verdict=(
+                            finding.negative_verdict.model_dump_json()
+                            if finding.negative_verdict is not None
+                            else None
+                        ),
                         submitted_at=finding.submitted_at,
                     )
                 )
@@ -1140,9 +1190,7 @@ class CaseDB:
                                 "Evidence anchor character range is outside window "
                                 f"{anchor_input.window_id} (length {len(raw_text)})"
                             )
-                        exact_text = raw_text[
-                            anchor_input.char_start : anchor_input.char_end
-                        ]
+                        exact_text = raw_text[anchor_input.char_start : anchor_input.char_end]
                         if exact_text != anchor_input.expected_text:
                             raise ValueError(
                                 "Evidence anchor text does not match the immutable window at "
@@ -1479,6 +1527,11 @@ class CaseDB:
             mitre_attack_ids=json.loads(row.mitre_attack_ids) if row.mitre_attack_ids else [],
             event_time_start=row.event_time_start,
             event_time_end=row.event_time_end,
+            negative_verdict=(
+                json.loads(row.negative_verdict)
+                if getattr(row, "negative_verdict", None)
+                else None
+            ),
             submitted_at=row.submitted_at,
         )
 
@@ -1500,7 +1553,105 @@ class CaseDB:
                 mitre_attack_ids=json.loads(row.mitre_attack_ids) if row.mitre_attack_ids else [],
                 event_time_start=row.event_time_start,
                 event_time_end=row.event_time_end,
+                negative_verdict=(
+                    json.loads(row.negative_verdict)
+                    if getattr(row, "negative_verdict", None)
+                    else None
+                ),
                 submitted_at=row.submitted_at,
+            )
+            for row in rows
+        ]
+
+    def record_coverage(
+        self,
+        key: CoverageKey,
+        outcome: ToolOutcome,
+        *,
+        source_name: str | None = None,
+        tool_call_id: str | None = None,
+    ) -> CoverageRecord:
+        """Upsert one coverage assertion and return its canonical stored form.
+
+        The tuple ``(case, system, evidence domain, check)`` is the stable
+        identity. A later complete fallback therefore replaces the current
+        state while its earlier failures remain in ``fallback_lineage``.
+        """
+        case_id = self._get_case_id()
+        recorded_at = datetime.now(timezone.utc).isoformat()
+        record = CoverageRecord(
+            case_id=case_id,
+            key=key,
+            outcome=outcome,
+            source_name=source_name,
+            tool_call_id=tool_call_id,
+            recorded_at=recorded_at,
+        )
+
+        def _do_upsert() -> None:
+            with self._engine.begin() as conn:
+                selector = (
+                    (coverage_register_t.c.case_id == case_id)
+                    & (coverage_register_t.c.system_name == key.system_name)
+                    & (coverage_register_t.c.evidence_domain == key.evidence_domain)
+                    & (coverage_register_t.c.check_name == key.check_name)
+                )
+                conn.execute(delete(coverage_register_t).where(selector))
+                conn.execute(
+                    insert(coverage_register_t).values(
+                        case_id=case_id,
+                        system_name=key.system_name,
+                        evidence_domain=key.evidence_domain,
+                        check_name=key.check_name,
+                        status=outcome.status.value,
+                        coverage=outcome.coverage.model_dump_json(),
+                        reason=outcome.reason,
+                        source_name=source_name,
+                        tool_call_id=tool_call_id,
+                        recorded_at=recorded_at,
+                    )
+                )
+
+        self._wq.submit(_do_upsert)
+        return record
+
+    def get_coverage(
+        self,
+        *,
+        system_name: str | None = None,
+        evidence_domain: str | None = None,
+        check_name: str | None = None,
+    ) -> list[CoverageRecord]:
+        """Return coverage records, optionally filtered at the stable key seam."""
+        stmt = select(coverage_register_t).order_by(
+            coverage_register_t.c.system_name,
+            coverage_register_t.c.evidence_domain,
+            coverage_register_t.c.check_name,
+        )
+        if system_name is not None:
+            stmt = stmt.where(coverage_register_t.c.system_name == system_name)
+        if evidence_domain is not None:
+            stmt = stmt.where(coverage_register_t.c.evidence_domain == evidence_domain)
+        if check_name is not None:
+            stmt = stmt.where(coverage_register_t.c.check_name == check_name)
+        with self._engine.connect() as conn:
+            rows = conn.execute(stmt).fetchall()
+        return [
+            CoverageRecord(
+                case_id=row.case_id,
+                key=CoverageKey(
+                    system_name=row.system_name,
+                    evidence_domain=row.evidence_domain,
+                    check_name=row.check_name,
+                ),
+                outcome=ToolOutcome(
+                    status=ToolOutcomeStatus(row.status),
+                    coverage=json.loads(row.coverage),
+                    reason=row.reason,
+                ),
+                source_name=row.source_name,
+                tool_call_id=row.tool_call_id,
+                recorded_at=row.recorded_at,
             )
             for row in rows
         ]

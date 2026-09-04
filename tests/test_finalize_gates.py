@@ -128,7 +128,7 @@ class TestAtomicConfirmationGate:
             metadata,
             sources,
             audit,
-            {"f_001": assessment},
+            confirmation_assessments={"f_001": assessment},
         )
         gate = next(item for item in gates if item["name"] == "atomic_confirmation")
         assert gate["passed"] is False
@@ -330,7 +330,7 @@ class TestAllGatesPass:
     def test_all_gates_pass(self) -> None:
         findings, metadata, sources, audit = _passing_gate_inputs()
         gates = _evaluate_finalize_gates(findings, metadata, sources, audit)
-        assert len(gates) == 6
+        assert len(gates) == 7
         for gate in gates:
             assert gate["passed"] is True, f"Gate '{gate['name']}' unexpectedly failed"
 

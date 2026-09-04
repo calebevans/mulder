@@ -26,8 +26,11 @@ from mulder.models import (
     AuditSummary,
     CaseMetadataRow,
     ConfirmationAssessment,
+    CoverageRecord,
     Finding,
+    ScopedNegativeVerdict,
     SourceRow,
+    ToolOutcomeStatus,
 )
 from mulder.patterns import SEVERITY_ORDER, source_is_cited
 from mulder.report.renderer import ReportRenderer
@@ -43,12 +46,115 @@ _MIDNIGHT_RE = re.compile(r"T00:00:00(?:Z|[+-]00:?00)?$")
 _MIN_NON_NEGATIVE_FINDINGS = 3
 _MIN_EVIDENCE_CITATION_PCT = 50.0
 
+_COVERAGE_BLOCKING_STATUSES = frozenset(
+    {
+        ToolOutcomeStatus.UNAVAILABLE,
+        ToolOutcomeStatus.UNSUPPORTED_VERSION,
+        ToolOutcomeStatus.FAILED,
+        ToolOutcomeStatus.TIMED_OUT,
+        ToolOutcomeStatus.PARTIAL,
+        ToolOutcomeStatus.SAMPLED,
+        ToolOutcomeStatus.NOT_RUN,
+    }
+)
+_COVERAGE_SUPPORTING_STATUSES = frozenset(
+    {ToolOutcomeStatus.SUCCESS_EMPTY, ToolOutcomeStatus.SUCCESS_NONEMPTY}
+)
+
+
+def _coverage_tuple(record: CoverageRecord) -> tuple[str, str, str]:
+    """Return the stable lookup key for a coverage record."""
+    return (
+        record.key.system_name,
+        record.key.evidence_domain,
+        record.key.check_name,
+    )
+
+
+def _evaluate_negative_coverage(
+    findings: list[Finding], coverage_records: list[CoverageRecord]
+) -> tuple[bool, str]:
+    """Decide whether negative findings stay within successfully examined scope.
+
+    Legacy investigations with no coverage register remain renderable. Once a
+    register exists, an unscoped negative conclusion is allowed only when at
+    least one applicable check completed and no applicable check has an
+    incomplete/error state. New scoped verdicts are stricter: every named key
+    must exist and have a successful outcome.
+    """
+    negative_findings = [
+        finding
+        for finding in findings
+        if finding.title.startswith("[NEGATIVE]") or finding.negative_verdict is not None
+    ]
+    if not negative_findings:
+        return True, "No clean or absence conclusion requires coverage validation"
+    if not coverage_records:
+        return True, (
+            "Legacy case has no coverage register; negative findings remain unverified "
+            "and are not promoted to NO_EVIL_WITHIN_COVERAGE"
+        )
+
+    coverage_by_key = {_coverage_tuple(record): record for record in coverage_records}
+    failures: list[str] = []
+    for finding in negative_findings:
+        if finding.negative_verdict is not None:
+            for key in finding.negative_verdict.scope:
+                tuple_key = (key.system_name, key.evidence_domain, key.check_name)
+                record = coverage_by_key.get(tuple_key)
+                label = "/".join(tuple_key)
+                if record is None:
+                    failures.append(f"{finding.finding_id}: missing {label}")
+                elif record.outcome.status not in _COVERAGE_SUPPORTING_STATUSES:
+                    failures.append(
+                        f"{finding.finding_id}: {label} is {record.outcome.status.value}"
+                    )
+            continue
+
+        applicable = [
+            record
+            for record in coverage_records
+            if record.outcome.status is not ToolOutcomeStatus.NOT_APPLICABLE
+        ]
+        blocking = [
+            record for record in applicable if record.outcome.status in _COVERAGE_BLOCKING_STATUSES
+        ]
+        successful = [
+            record
+            for record in applicable
+            if record.outcome.status in _COVERAGE_SUPPORTING_STATUSES
+        ]
+        if blocking:
+            labels = [
+                f"{'/'.join(_coverage_tuple(record))}={record.outcome.status.value}"
+                for record in blocking[:5]
+            ]
+            failures.append(f"{finding.finding_id}: unscoped negative crosses {labels}")
+        elif not successful:
+            failures.append(f"{finding.finding_id}: no applicable completed coverage")
+
+    if failures:
+        return False, (
+            "Negative conclusions require successful, explicit coverage. "
+            + "; ".join(failures)
+            + ". Narrow the verdict to completed checks or finish the missing analysis."
+        )
+    scoped = sum(finding.negative_verdict is not None for finding in negative_findings)
+    empty = sum(
+        record.outcome.status is ToolOutcomeStatus.SUCCESS_EMPTY for record in coverage_records
+    )
+    return True, (
+        f"{len(negative_findings)} negative conclusion(s) supported by completed coverage "
+        f"({scoped} explicitly scoped; {empty} successful-empty check(s))"
+    )
+
 
 def _evaluate_finalize_gates(
     findings: list[Finding],
     case_metadata: CaseMetadataRow,
     sources: list[SourceRow],
     audit_summary: AuditSummary,
+    coverage_records: list[CoverageRecord] | None = None,
     confirmation_assessments: dict[str, ConfirmationAssessment] | None = None,
 ) -> list[dict[str, object]]:
     """Evaluate all finalize_report hard gates and return per-gate results.
@@ -59,7 +165,9 @@ def _evaluate_finalize_gates(
     (which reports all gates).
     """
     gates: list[dict[str, object]] = []
-    non_negative = [f for f in findings if not f.title.startswith("[NEGATIVE]")]
+    non_negative = [
+        f for f in findings if not f.title.startswith("[NEGATIVE]") and f.negative_verdict is None
+    ]
 
     # Gate 1: Minimum non-negative finding count
     count = len(non_negative)
@@ -158,7 +266,11 @@ def _evaluate_finalize_gates(
         detail = "No non-empty sources to check"
     gates.append({"name": "evidence_citation_coverage", "passed": passed, "detail": detail})
 
-    # Gate 6: Atomic confirmed findings still satisfy deterministic policy.
+    # Gate 6: clean/absence conclusions cannot outrun actual analysis scope.
+    passed, detail = _evaluate_negative_coverage(findings, coverage_records or [])
+    gates.append({"name": "negative_coverage_scope", "passed": passed, "detail": detail})
+
+    # Gate 7: Atomic confirmed findings still satisfy deterministic policy.
     # Legacy findings have no assessment and remain explicitly outside this
     # additive gate until migrated; new atomic findings cannot bypass it.
     assessments = confirmation_assessments or {}
@@ -216,6 +328,7 @@ def submit_finding(
     event_time_start: str | None = None,
     event_time_end: str | None = None,
     claims: list[dict[str, Any]] | None = None,
+    negative_verdict: dict[str, Any] | None = None,
 ) -> dict[str, object]:
     """Record a forensic finding with validated evidence references and metadata.
 
@@ -237,6 +350,10 @@ def submit_finding(
     values from the caller. Omitting ``claims`` remains supported for legacy
     clients; such prose is not promoted to a verified atomic claim.
 
+    A clean or absence conclusion can carry ``negative_verdict`` with verdict
+    ``NO_EVIL_WITHIN_COVERAGE`` and an explicit list of coverage-register
+    keys. Finalization verifies that every named check completed successfully.
+
     Returns finding_id on acceptance. Severity must be
     critical/high/medium/low/info. Confidence must be "confirmed"
     (corroborated by 2+ sources) or "inference".
@@ -247,23 +364,24 @@ def submit_finding(
 
     try:
         claim_inputs = [AtomicClaimInput.model_validate(raw) for raw in claims or []]
+        scoped_negative = (
+            ScopedNegativeVerdict.model_validate(negative_verdict)
+            if negative_verdict is not None
+            else None
+        )
     except Exception as exc:
         return error_response(
             tc_id,
             "submit_finding",
             {"title": title, "evidence_refs": evidence_refs},
-            f"Atomic claim validation error: {exc}",
+            f"Finding input validation error: {exc}",
             (time.monotonic() - t0) * 1000,
             error_type="validation",
         )
 
-    claim_refs = {
-        anchor.tool_call_id for claim in claim_inputs for anchor in claim.anchors
-    }
+    claim_refs = {anchor.tool_call_id for claim in claim_inputs for anchor in claim.anchors}
     invalid_refs = [
-        ref
-        for ref in sorted(set(evidence_refs) | claim_refs)
-        if not ctx.audit.has_tool_call(ref)
+        ref for ref in sorted(set(evidence_refs) | claim_refs) if not ctx.audit.has_tool_call(ref)
     ]
     if invalid_refs:
         recent_ids = sorted(ctx.audit.tool_call_ids)[-10:]
@@ -313,6 +431,7 @@ def submit_finding(
             mitre_attack_ids=mitre_attack_ids or [],
             event_time_start=event_time_start,
             event_time_end=event_time_end,
+            negative_verdict=scoped_negative,
             submitted_at=now,
         )
     except Exception as exc:
@@ -385,6 +504,11 @@ def submit_finding(
         "claim_verifications": [item.model_dump() for item in verifications],
         "confirmation_assessment": confirmation.model_dump() if confirmation else None,
         "claim_mode": "atomic_checked" if stored_claims else "legacy_unverified",
+        "negative_verdict": (
+            finding.negative_verdict.model_dump(mode="json")
+            if finding.negative_verdict is not None
+            else None
+        ),
     }
     if thin_evidence_warning:
         result["hint"] = thin_evidence_warning
@@ -403,6 +527,11 @@ def submit_finding(
             "sources": sources,
             "mitre_attack_ids": mitre_attack_ids or [],
             "claim_count": len(stored_claims),
+            "negative_verdict": (
+                finding.negative_verdict.model_dump(mode="json")
+                if finding.negative_verdict is not None
+                else None
+            ),
         },
         output_hash=hash_output(result),
         duration_ms=elapsed,
@@ -707,6 +836,7 @@ def finalize_report() -> dict[str, object]:
     case_metadata = ctx.db.get_case_metadata()
     audit_summary = ctx.audit.summary()
     sources_list = ctx.db.get_sources()
+    coverage_records = ctx.db.get_coverage()
 
     confirmation_assessments: dict[str, ConfirmationAssessment] = {}
     for finding in findings:
@@ -724,7 +854,8 @@ def finalize_report() -> dict[str, object]:
         case_metadata,
         sources_list,
         audit_summary,
-        confirmation_assessments,
+        coverage_records=coverage_records,
+        confirmation_assessments=confirmation_assessments,
     )
     for gate in gate_results:
         if not gate["passed"]:
@@ -775,6 +906,7 @@ def finalize_report() -> dict[str, object]:
             source_windows=source_windows,
             generate_pdf=False,
             enrichment_windows=enrichment_windows,
+            coverage_records=coverage_records,
         )
     except Exception as exc:
         logger.warning(
@@ -788,6 +920,7 @@ def finalize_report() -> dict[str, object]:
             sources_list=sources_list,
             evidence_integrity=evidence_integrity,
             enrichment_windows=enrichment_windows,
+            coverage_records=coverage_records,
         )
         html_text = ""
         html_warning: str | None = f"HTML report generation failed: {exc}"

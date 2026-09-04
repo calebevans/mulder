@@ -299,7 +299,22 @@ erDiagram
         text mitre_attack_ids
         text event_time_start
         text event_time_end
+        text negative_verdict
         text submitted_at
+    }
+
+    coverageRegister {
+        int id PK
+        text case_id FK
+        text system_name
+        text evidence_domain
+        text check_name
+        text status
+        text coverage
+        text reason
+        text source_name
+        text tool_call_id
+        text recorded_at
     }
 
     evidenceRegistry {
@@ -334,6 +349,7 @@ erDiagram
     }
 
     caseMetadata ||--o{ sources : "has"
+    caseMetadata ||--o{ coverageRegister : "records scope"
     sources ||--o{ windows : "contains"
     windows ||--|| windowsFts : "indexed by"
     windows ||--o{ bookmarks : "flagged by"
@@ -349,6 +365,7 @@ erDiagram
 - **evidence_registry**: SHA-256 chain-of-custody records for original evidence files
 - **bookmarks**: Agent-flagged windows of interest for later review
 - **progress**: Per-system records of tools executed and questions addressed
+- **coverage_register**: One current, typed outcome per case/system/evidence-domain/check. `SUCCESS_EMPTY` is distinguished from parser failure; sampled, partial, unavailable, unsupported, timed-out, and not-run states remain reportable scope boundaries.
 - **kv_store**: General-purpose key-value persistence for cross-tool state sharing. Stores TSK partition offsets (`tsk_partition_offset:<image>`), EVTX extraction directory paths, and other data that must survive server restarts and context compaction
 
 ### Write Safety
@@ -482,6 +499,8 @@ The container runs with `--privileged` (or `--cap-add SYS_ADMIN`) to support dis
 ## Evidence Reference Validation
 
 The `submit_finding` tool performs server-side evidence-ref validation: every `tool_call_id` cited in a finding's `evidence_refs` is verified against the append-only audit log. Findings that reference non-existent tool invocations are rejected, preventing hallucinated evidence citations.
+
+Negative findings can additionally use the typed `NO_EVIL_WITHIN_COVERAGE` verdict and name exact coverage-register keys. The finalization gate accepts those scoped conclusions only when every named check has a successful outcome. Legacy `[NEGATIVE]` findings remain readable, but a registered failed, unavailable, partial, sampled, unsupported, timed-out, or not-run check blocks an unscoped clean conclusion. `NOT_APPLICABLE` is neutral and never treated as successful empty evidence.
 
 ### Global Consistency Analysis
 
