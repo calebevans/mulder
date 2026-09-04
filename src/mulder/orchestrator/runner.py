@@ -84,6 +84,8 @@ class Orchestrator:
         proxy_config: str | None = None,
         case_id: str = "",
         db_dir: str | Path = DEFAULT_DB_DIR,
+        approval_before_report: bool = False,
+        resume_after_approval: bool = False,
     ) -> None:
         """Initialize the orchestrator.
 
@@ -101,6 +103,10 @@ class Orchestrator:
             case_id: Case identifier used for the database filename and
                 referenced by all phases.
             db_dir: Case sidecar directory for outbound manifest records.
+            approval_before_report: Persist a state-bound review request and
+                stop before the report until an examiner approves it.
+            resume_after_approval: Run only the report phase after validating
+                a durable approval checkpoint from a prior invocation.
         """
         self.evidence_path = evidence_path
         self.cwd = str(cwd)
@@ -109,6 +115,8 @@ class Orchestrator:
         self.env = env or {}
         self._case_id: str = case_id
         self._db_dir = Path(db_dir).expanduser()
+        self._approval_before_report = approval_before_report
+        self._resume_after_approval = resume_after_approval
         if self._case_id:
             self.env["MULDER_CASE_ID"] = self._case_id
         self.env["MULDER_DATA_POLICY"] = self.model_config.data_policy.value
@@ -177,6 +185,8 @@ class Orchestrator:
         self.dashboard.start()
 
         try:
+            if self._resume_after_approval:
+                return await self._run_approved_report(result)
             return await self._run_pipeline(result)
         finally:
             self._running = False
@@ -345,6 +355,26 @@ class Orchestrator:
         # finalize_report can inject real counts into the rendered report.
         self._write_model_usage()
 
+        if self._approval_before_report:
+            from mulder.review.decisions import ReviewWorkflow, ReviewWorkflowError
+
+            workflow = ReviewWorkflow(self._case_id, self._db_dir)
+            status = workflow.status()
+            if status.state != "approved":
+                try:
+                    request = workflow.request_approval(requested_by="orchestrator")
+                except ReviewWorkflowError:
+                    # A rejected unchanged snapshot remains rejected; it must
+                    # change before a fresh request can be created.
+                    result.review_state = workflow.status().state
+                    result.success = False
+                    return result
+                result.review_state = "awaiting_review"
+                result.approval_request_id = request.request_id
+                result.success = False
+                return result
+            result.review_state = "approved"
+
         # Phase 5: Report (single-mode)
         report_result = await self._run_single_phase(
             REPORT,
@@ -355,6 +385,29 @@ class Orchestrator:
 
         result.success = all(p.success for p in result.phases)
         # Re-write with final totals (includes report phase overhead).
+        self._write_model_usage()
+        return result
+
+    async def _run_approved_report(
+        self, result: InvestigationResult
+    ) -> InvestigationResult:
+        """Resume at report only after validating a persisted exact-state approval."""
+        from mulder.review.decisions import ReviewWorkflow
+
+        status = ReviewWorkflow(self._case_id, self._db_dir).require_approved_state()
+        result.review_state = status.state
+        result.approval_request_id = (
+            status.request.request_id if status.request is not None else None
+        )
+        self._total_phases = 1
+        self._case_briefing = self._evidence.load_case_briefing()
+        report_result = await self._run_single_phase(
+            REPORT,
+            prompt_vars={"case_briefing": self._case_briefing},
+        )
+        result.phases.append(report_result)
+        self._accumulate(result, report_result)
+        result.success = report_result.success
         self._write_model_usage()
         return result
 

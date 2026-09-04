@@ -32,6 +32,7 @@ from mulder.models import (
     ToolOutcomeStatus,
 )
 from mulder.receipt import ReplayInventory, verify_case
+from mulder.review.decisions import ReviewWorkflow, ReviewWorkflowError
 
 REVIEW_SCHEMA = "mulder.case-review"
 REVIEW_VERSION = 1
@@ -209,9 +210,32 @@ class CostsState(_FrozenModel):
 
 
 class ProjectionPlaceholder(_FrozenModel):
-    status: Literal["not_implemented"] = "not_implemented"
+    status: Literal["not_implemented", "available"] = "not_implemented"
     items: tuple[object, ...] = ()
     note: str
+
+
+class ReviewActionState(_FrozenModel):
+    sequence: int = Field(ge=1)
+    event_id: str
+    kind: str
+    subject_type: str
+    subject_id: str
+    reviewer: str
+    comment: str
+    created_at: str
+
+
+class ApprovalReviewState(_FrozenModel):
+    state: Literal[
+        "unavailable", "not_requested", "awaiting_review", "approved", "rejected", "stale"
+    ]
+    claim_set_digest: str | None = None
+    audit_head_digest: str | None = None
+    request_id: str | None = None
+    decision_id: str | None = None
+    reviewer: str | None = None
+    reason: str = ""
 
 
 class CaseReviewModel(_FrozenModel):
@@ -228,6 +252,8 @@ class CaseReviewModel(_FrozenModel):
     audit: AuditState
     receipt: ReceiptState
     costs: CostsState
+    review_actions: tuple[ReviewActionState, ...]
+    approval: ApprovalReviewState
     contradictions: ProjectionPlaceholder
     follow_ups: ProjectionPlaceholder
     graph: ProjectionPlaceholder
@@ -975,6 +1001,50 @@ def query_case_review(query: ReviewQuery) -> CaseReviewModel:
 
     audit = _audit_state(query.case_id, case_dir)
     receipt = _receipt_state(query, case_dir)
+    try:
+        workflow = ReviewWorkflow(query.case_id, case_dir)
+        review_events = workflow.events(limit=1000)
+        approval_status = workflow.status()
+        review_actions = tuple(
+            ReviewActionState(
+                sequence=event.sequence,
+                event_id=event.event_id,
+                kind=event.kind,
+                subject_type=event.subject_type,
+                subject_id=event.subject_id,
+                reviewer=event.reviewer,
+                comment=event.comment,
+                created_at=event.created_at,
+            )
+            for event in review_events
+        )
+        approval = ApprovalReviewState(
+            state=approval_status.state,
+            claim_set_digest=approval_status.claim_set_digest,
+            audit_head_digest=approval_status.audit_head_digest,
+            request_id=(
+                approval_status.request.request_id
+                if approval_status.request is not None
+                else None
+            ),
+            decision_id=(
+                approval_status.decision.decision_id
+                if approval_status.decision is not None
+                else None
+            ),
+            reviewer=(
+                approval_status.decision.reviewer
+                if approval_status.decision is not None
+                else None
+            ),
+            reason=approval_status.reason,
+        )
+    except ReviewWorkflowError:
+        review_actions = ()
+        approval = ApprovalReviewState(
+            state="unavailable",
+            reason="approval requires native atomic claims and a verified audit chain",
+        )
     usage = _load_model_usage(case_dir / f"{query.case_id}.model_usage.json", legacy)
     report_names = tuple(
         f"{query.case_id}{suffix}"
@@ -1063,6 +1133,8 @@ def query_case_review(query: ReviewQuery) -> CaseReviewModel:
             recorded_input_tokens=sum(item.input_tokens for item in usage),
             recorded_output_tokens=sum(item.output_tokens for item in usage),
         ),
+        review_actions=review_actions,
+        approval=approval,
         contradictions=ProjectionPlaceholder(
             note=(
                 "No first-class contradiction table exists yet; claim epistemic states, "
@@ -1070,7 +1142,17 @@ def query_case_review(query: ReviewQuery) -> CaseReviewModel:
             )
         ),
         follow_ups=ProjectionPlaceholder(
-            note="No durable follow-up store exists yet; absence is not represented as completion."
+            status="available" if "review_events" in tables else "not_implemented",
+            items=tuple(
+                action.model_dump(mode="json")
+                for action in review_actions
+                if action.kind == "follow_up"
+            ),
+            note=(
+                "Durable append-only follow-up review events."
+                if "review_events" in tables
+                else "No durable follow-up store exists yet; absence is not completion."
+            ),
         ),
         graph=ProjectionPlaceholder(
             note="No authoritative graph projection exists yet; no entities or edges are inferred."
@@ -1091,6 +1173,7 @@ def format_case_review(review: CaseReviewModel) -> str:
             f"Audit: {review.audit.integrity_status}; receipt: {review.receipt.status}; "
             f"signature: {review.receipt.signature_status}; replay: {review.receipt.replay_status}"
         ),
+        f"Review approval: {review.approval.state}",
         (
             f"Cost: ${review.costs.estimated_cost_usd:.4f} estimated from audit; "
             f"recorded model tokens: {review.costs.recorded_input_tokens} in / "

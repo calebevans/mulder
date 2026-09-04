@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
 from pathlib import Path
@@ -354,6 +355,118 @@ def review_case_cmd(
     )
 
 
+@cli.command("review-action")
+@click.argument("case_id")
+@click.argument("kind", type=click.Choice(["accept", "reject", "comment", "follow_up"]))
+@click.option("--subject-type", required=True)
+@click.option("--subject-id", required=True)
+@click.option("--reviewer", required=True)
+@click.option("--comment", default="")
+@click.option("--db-dir", default=DEFAULT_DB_DIR, show_default=True)
+def review_action_cmd(
+    case_id: str,
+    kind: str,
+    subject_type: str,
+    subject_id: str,
+    reviewer: str,
+    comment: str,
+    db_dir: str,
+) -> None:
+    """Append an immutable analyst review action for CASE_ID."""
+    from dataclasses import asdict
+    from typing import cast
+
+    from mulder.review.decisions import ReviewEventKind, ReviewWorkflow, ReviewWorkflowError
+
+    try:
+        event = ReviewWorkflow(case_id, Path(db_dir)).append_event(
+            cast("ReviewEventKind", kind),
+            subject_type=subject_type,
+            subject_id=subject_id,
+            reviewer=reviewer,
+            comment=comment,
+        )
+    except ReviewWorkflowError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps(asdict(event), sort_keys=True))
+
+
+@cli.command("request-approval")
+@click.argument("case_id")
+@click.option("--requested-by", required=True)
+@click.option("--db-dir", default=DEFAULT_DB_DIR, show_default=True)
+def request_approval_cmd(case_id: str, requested_by: str, db_dir: str) -> None:
+    """Create an approval request bound to the current claims and audit head."""
+    from dataclasses import asdict
+
+    from mulder.review.decisions import ReviewWorkflow, ReviewWorkflowError
+
+    try:
+        request = ReviewWorkflow(case_id, Path(db_dir)).request_approval(
+            requested_by=requested_by
+        )
+    except ReviewWorkflowError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps(asdict(request), sort_keys=True))
+
+
+@cli.command("approve")
+@click.argument("case_id")
+@click.option("--request-id", default=None, help="Defaults to the current pending request.")
+@click.option("--decision", type=click.Choice(["approve", "reject"]), required=True)
+@click.option("--reviewer", required=True)
+@click.option("--comment", default="")
+@click.option("--db-dir", default=DEFAULT_DB_DIR, show_default=True)
+def approve_cmd(
+    case_id: str,
+    request_id: str | None,
+    decision: str,
+    reviewer: str,
+    comment: str,
+    db_dir: str,
+) -> None:
+    """Approve or reject exactly the CASE_ID state that was requested."""
+    from dataclasses import asdict
+    from typing import cast
+
+    from mulder.review.decisions import (
+        ApprovalDecisionKind,
+        ReviewWorkflow,
+        ReviewWorkflowError,
+    )
+
+    workflow = ReviewWorkflow(case_id, Path(db_dir))
+    try:
+        if request_id is None:
+            status = workflow.status()
+            if status.state != "awaiting_review" or status.request is None:
+                raise ReviewWorkflowError("Case has no current pending approval request")
+            request_id = status.request.request_id
+        result = workflow.decide(
+            request_id,
+            cast("ApprovalDecisionKind", decision),
+            reviewer=reviewer,
+            comment=comment,
+        )
+    except ReviewWorkflowError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps(asdict(result), sort_keys=True))
+
+
+@cli.command("approval-status")
+@click.argument("case_id")
+@click.option("--db-dir", default=DEFAULT_DB_DIR, show_default=True)
+def approval_status_cmd(case_id: str, db_dir: str) -> None:
+    """Show the conservative approval state for CASE_ID."""
+    from mulder.review.decisions import ReviewWorkflow, ReviewWorkflowError
+
+    try:
+        status = ReviewWorkflow(case_id, Path(db_dir)).status()
+    except ReviewWorkflowError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps(status.as_mapping(), sort_keys=True))
+
+
 @cli.command("seal-case")
 @click.argument("case_id")
 @click.option(
@@ -388,6 +501,11 @@ def review_case_cmd(
 )
 @click.option("--examiner", help="Optional caller-asserted examiner label stored as metadata.")
 @click.option("--key-id", help="Optional caller-selected key identifier; defaults to fingerprint.")
+@click.option(
+    "--require-approval",
+    is_flag=True,
+    help="Seal only an approval bound to the current claims and an audit-chain ancestor.",
+)
 def seal_case_cmd(
     case_id: str,
     db_dir: str,
@@ -397,6 +515,7 @@ def seal_case_cmd(
     signing_key: Path | None,
     examiner: str | None,
     key_id: str | None,
+    require_approval: bool,
 ) -> None:
     """Seal CASE_ID into a relocatable, optionally signed case manifest.
 
@@ -425,6 +544,7 @@ def seal_case_cmd(
             report_artifacts=artifacts,
             overwrite=force,
             key_provider=provider,
+            require_approval=require_approval,
         )
     except (OSError, SealError) as exc:
         raise click.ClickException(str(exc)) from exc
@@ -580,6 +700,16 @@ def verify_case_cmd(
     default=None,
     help="Require zero egress; only verified local model routes are allowed.",
 )
+@click.option(
+    "--approval-before-report",
+    is_flag=True,
+    help="Stop after counter-analysis and persist an exact-state approval request.",
+)
+@click.option(
+    "--resume-after-approval",
+    is_flag=True,
+    help="Validate a persisted approval and run only the report phase.",
+)
 def investigate(
     evidence_path: str,
     case_id: str,
@@ -595,6 +725,8 @@ def investigate(
     proxy_config: str | None,
     data_policy: str | None,
     zero_egress: bool | None,
+    approval_before_report: bool,
+    resume_after_approval: bool,
 ) -> None:
     """Run a full multi-pass forensic investigation.
 
@@ -620,6 +752,11 @@ def investigate(
     from mulder.orchestrator.models import ModelConfig
     from mulder.orchestrator.runner import Orchestrator
     from mulder.orchestrator.types import EffortLevel
+
+    if approval_before_report and resume_after_approval:
+        raise click.UsageError(
+            "--approval-before-report and --resume-after-approval are mutually exclusive"
+        )
 
     model_config = ModelConfig.from_args(
         model=model,
@@ -706,12 +843,15 @@ def investigate(
         proxy_config=proxy_config,
         case_id=case_id,
         db_dir=log_dir,
+        approval_before_report=approval_before_report,
+        resume_after_approval=resume_after_approval,
     )
 
     from mulder.orchestrator.errors import (
         AuthenticationError,
         ModelNotAvailableError,
     )
+    from mulder.review.decisions import ReviewWorkflowError
     from mulder.security.provider_policy import ProviderPolicyError
 
     try:
@@ -750,8 +890,25 @@ def investigate(
         orchestrator.dashboard.stop()
         click.echo(f"\nError: {exc}", err=True)
         raise SystemExit(2) from None
+    except ReviewWorkflowError as exc:
+        orchestrator.dashboard.stop()
+        click.echo(f"\nError: {exc}", err=True)
+        raise SystemExit(2) from None
 
     orchestrator.dashboard.print_summary(result)
+
+    if result.review_state in {"awaiting_review", "rejected"}:
+        if result.approval_request_id is not None:
+            click.echo(
+                f"Approval required: mulder approve {case_id} --request-id "
+                f"{result.approval_request_id} --decision approve --reviewer NAME",
+                err=True,
+            )
+        click.echo(
+            f"After approval, resume with: mulder investigate {evidence_path} {case_id} "
+            "--resume-after-approval",
+            err=True,
+        )
 
     if not result.success:
         raise SystemExit(1)

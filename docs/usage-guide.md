@@ -590,6 +590,29 @@ facts interpreted as a completed or clean investigation.
 The database must be quiescent: a non-empty SQLite WAL or rollback journal is rejected. Review
 uses immutable read mode so it cannot migrate the schema or create SQLite sidecars.
 
+Review actions are separate append-only events. Record an examiner decision or
+follow-up without rewriting a finding:
+
+```bash
+mulder review-action CASE comment --subject-type claim --subject-id CLAIM_ID \
+  --reviewer examiner@example --comment "Check the parent process"
+```
+
+An optional human checkpoint can stop the pipeline after Alternative Narrative:
+
+```bash
+mulder investigate /evidence CASE --approval-before-report
+mulder approve CASE --decision approve --reviewer examiner@example
+mulder investigate /evidence CASE --resume-after-approval
+```
+
+The request binds the exact active findings, claims, anchors, verification
+history, and audit head. Rejection requires the case state to change before a
+new request; changed claims make old approvals stale. The resume path validates
+the durable checkpoint and runs only the report phase, so a restart does not
+repeat extraction. These flags are opt-in; autonomous investigations retain
+their existing behavior.
+
 ### `mulder seal-case`
 
 ```
@@ -609,6 +632,10 @@ infers an examiner identity. The public key and fingerprint are portable verific
 an examiner label is only a caller assertion. Without `--signing-key`, the receipt remains
 explicitly **unsigned**. Sealing fails if registered evidence is missing or has already changed,
 or if the current audit chain is invalid.
+Pass `--require-approval` to additionally require a current approval. The
+manifest then includes the approved claim-set and pre-report audit-head
+commitments; the approved head must remain an ancestor of the current verified
+audit chain.
 
 The `sqlite-logical-v1` database commitment includes every non-internal SQLite schema object and
 every typed value in every non-internal table, in deterministic value order. It intentionally
