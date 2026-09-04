@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import text
 
 from mulder.db import (
@@ -203,9 +204,7 @@ class TestFindings:
         assert anchor.source_hash == "sha256-memory"
         assert anchor.extractor_family == "volatility"
         assert anchor.independence_key == "source:sha256-memory"
-        assert tmp_case_db.get_finding(sample_finding.finding_id).sources == [
-            "volatility.pslist"
-        ]
+        assert tmp_case_db.get_finding(sample_finding.finding_id).sources == ["volatility.pslist"]
 
     def test_stale_anchor_rejects_entire_finding(
         self, tmp_case_db: CaseDB, sample_finding: Finding
@@ -616,6 +615,11 @@ class TestUpdateFinding:
         assert f is not None
         assert f.title == "Updated Title"
         assert f.description == sample_finding.description
+        revisions = tmp_case_db.get_finding_revisions("f-001")
+        assert [revision.revision_number for revision in revisions] == [1, 2]
+        assert revisions[1].parent_revision_id == revisions[0].revision_id
+        assert revisions[1].changed_fields == ["title"]
+        assert revisions[1].snapshot.title == "Updated Title"
 
     def test_serializes_list_fields_as_json(
         self, tmp_case_db: CaseDB, sample_finding: Finding
@@ -629,11 +633,29 @@ class TestUpdateFinding:
         assert f is not None
         assert f.evidence_refs == new_refs
         assert f.mitre_attack_ids == new_mitre
+        revision = tmp_case_db.get_finding_revisions("f-001")[-1]
+        assert revision.evidence_added == ["tc_new1", "tc_new2"]
+        assert revision.evidence_removed == ["tc_aabbccdd"]
 
     def test_returns_false_for_missing_id(self, tmp_case_db: CaseDB) -> None:
         """Non-existent finding_id returns False, no error."""
         result = tmp_case_db.update_finding("nonexistent-id", title="x")
         assert result is False
+
+    def test_invalid_revision_state_rolls_back_projection(
+        self, tmp_case_db: CaseDB, sample_finding: Finding
+    ) -> None:
+        tmp_case_db.insert_finding(sample_finding)
+        with pytest.raises(ValidationError):
+            tmp_case_db.update_finding(
+                "f-001",
+                revision_state="invented",
+                title="Must roll back",
+            )
+        current = tmp_case_db.get_finding("f-001")
+        assert current is not None
+        assert current.title == sample_finding.title
+        assert len(tmp_case_db.get_finding_revisions("f-001")) == 1
 
 
 class TestDeleteFinding:
@@ -644,10 +666,31 @@ class TestDeleteFinding:
         tmp_case_db.insert_finding(sample_finding)
         assert tmp_case_db.delete_finding("f-001") is True
         assert tmp_case_db.get_finding("f-001") is None
+        revisions = tmp_case_db.get_finding_revisions("f-001")
+        assert len(revisions) == 2
+        assert revisions[-1].state == "withdrawn"
+        assert revisions[-1].tombstone is True
+        assert revisions[-1].snapshot == sample_finding
 
     def test_returns_false_for_missing(self, tmp_case_db: CaseDB) -> None:
         """Non-existent ID returns False."""
         assert tmp_case_db.delete_finding("no-such-id") is False
+
+    def test_legacy_open_backfills_initial_revision(
+        self, tmp_path: Path, sample_finding: Finding
+    ) -> None:
+        db = CaseDB.create("legacy-revision", "/evidence", tmp_path)
+        db.insert_finding(sample_finding.model_copy(update={"case_id": "legacy-revision"}))
+        with db._engine.begin() as conn:
+            conn.execute(text("DROP TABLE finding_revisions"))
+        db.close()
+
+        reopened = CaseDB.open("legacy-revision", tmp_path)
+        revisions = reopened.get_finding_revisions("f-001")
+        reopened.close()
+        assert len(revisions) == 1
+        assert revisions[0].reason_code == "legacy_import"
+        assert revisions[0].actor_kind == "system"
 
 
 class TestNarrative:
