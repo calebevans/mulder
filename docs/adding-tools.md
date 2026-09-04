@@ -132,6 +132,12 @@ Role registration is only the first authorization layer. Session identities in
 `src/mulder/orchestrator/capabilities.py` also constrain security-relevant tool
 effects. A new extraction-only tool requires `forensic-execution`; case writes,
 job control, and report publication require their corresponding capabilities.
+Tools that combine effects must declare all of them with
+`effects=(ToolEffect.CASE_READ, ToolEffect.CASE_WRITE, ...)`; authorization is
+conjunctive, so the initiating identity must hold every effect for both direct
+and nested dispatch. The effect set must be immutable and nonempty. Do not
+declare audit-log writes or internal call bookkeeping as case mutation: those
+are mandatory enforcement mechanics, not independently usable tool behavior.
 Add a focused authorization test when introducing a new effect category rather
 than broadening an identity implicitly.
 

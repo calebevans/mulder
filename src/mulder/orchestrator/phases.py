@@ -24,7 +24,12 @@ from mulder.orchestrator.prompts import (
     NARRATIVE_PLANNER_PROMPT,
     REPORT_PROMPT,
 )
-from mulder.server.tool_access import Role, get_tools_for_role
+from mulder.server.tool_access import (
+    Role,
+    ToolEffect,
+    get_registered_tool_effect_set,
+    get_tools_for_role,
+)
 
 
 @dataclass
@@ -118,8 +123,16 @@ CATALOG: PhaseConfig = PhaseConfig(
     mode="single",
     single_role="planner",
     single_system_prompt=CATALOG_PROMPT,
-    single_prompt_template="Catalog all evidence in {evidence_path}.{case_id_instruction}",
-    single_allowed_tools=get_tools_for_role(Role.CATALOG),
+    single_prompt_template=(
+        "Case ID: {case_id}\n"
+        "Call open_case(case_id='{case_id}') first.\n\n"
+        "CLI-PREPARED CONTENT-BOUND CATALOG SNAPSHOT:\n{catalog_snapshot}"
+    ),
+    single_allowed_tools=[
+        tool
+        for tool in get_tools_for_role(Role.CATALOG)
+        if get_registered_tool_effect_set(tool) == frozenset({ToolEffect.CASE_READ})
+    ],
     single_max_turns=40,
     single_max_budget_usd=8.0,
 )
@@ -166,6 +179,7 @@ EXTRACTION: PhaseConfig = PhaseConfig(
         "Case ID: {case_id}\n"
         "Call open_case(case_id='{case_id}') as your FIRST action.\n\n"
         "System: {system_name}\n\n"
+        "Evidence context:\n{evidence_context}\n\n"
         "Execution results:\n{execution_results}\n\n"
         "Investigation questions:\n{investigation_questions}"
     ),

@@ -1404,6 +1404,7 @@ def investigate(
     import asyncio
     from typing import cast
 
+    from mulder.adapters import IntakeError, prepare_evidence_case
     from mulder.orchestrator.models import ModelConfig
     from mulder.orchestrator.runner import Orchestrator
     from mulder.orchestrator.types import EffortLevel
@@ -1518,6 +1519,10 @@ def investigate(
             f"Health forecast unavailable: evidence path does not exist: {evidence}",
             err=True,
         )
+    try:
+        prepared_intake = prepare_evidence_case(evidence, case_id, log_dir)
+    except (IntakeError, OSError) as exc:
+        raise click.ClickException(f"Evidence preparation failed: {exc}") from exc
     log_file = log_dir / "orchestrator.log"
     file_handler = logging.FileHandler(str(log_file), mode="a")
     file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
@@ -1568,6 +1573,7 @@ def investigate(
             run_id=resume_run_id or run_id,
             resume_run=resume_run_id is not None,
             run_state_path=log_dir / f"{case_id}.runs.db",
+            prepared_intake=prepared_intake,
         )
     except (OSError, RunStateError) as exc:
         raise click.ClickException(str(exc)) from exc

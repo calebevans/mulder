@@ -19,6 +19,7 @@ from enum import Enum
 from mulder.server.tool_access import (
     Role,
     get_registered_tool_effect,
+    get_registered_tool_effect_set,
     get_registered_tool_roles,
 )
 
@@ -54,11 +55,20 @@ _DELEGATION_VERSION = 1
 
 
 def tool_capability(tool_name: str) -> Capability:
-    """Return the registered tool's explicit security-relevant effect."""
-    effect = get_registered_tool_effect(tool_name)
-    if effect is None:
-        raise CapabilityViolation(f"unknown tool effect for {tool_name!r}")
+    """Return the registered tool's sole effect for legacy callers."""
+    effects = get_registered_tool_effect(tool_name)
+    if effects is None or len(effects) != 1:
+        raise CapabilityViolation(f"tool {tool_name!r} does not have exactly one effect")
+    effect = next(iter(effects))
     return Capability(effect.value)
+
+
+def tool_capabilities(tool_name: str) -> frozenset[Capability]:
+    """Return all security-relevant effects declared by a registered tool."""
+    effects = get_registered_tool_effect_set(tool_name)
+    if effects is None:
+        raise CapabilityViolation(f"unknown tool effect for {tool_name!r}")
+    return frozenset(Capability(effect.value) for effect in effects)
 
 
 def authorize_tool(identity: AgentIdentity, tool_name: str) -> None:
@@ -72,10 +82,12 @@ def authorize_tool(identity: AgentIdentity, tool_name: str) -> None:
         raise CapabilityViolation(
             f"identity {identity.name!r} is not assigned role for {tool_name!r}"
         )
-    required = tool_capability(tool_name)
-    if required not in identity.capabilities:
+    required = tool_capabilities(tool_name)
+    missing = required - identity.capabilities
+    if missing:
         raise CapabilityViolation(
-            f"identity {identity.name!r} lacks {required.value!r} for {tool_name!r}"
+            f"identity {identity.name!r} lacks effects "
+            f"{sorted(capability.value for capability in missing)!r} for {tool_name!r}"
         )
 
 

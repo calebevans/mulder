@@ -35,6 +35,7 @@ def _invoke_investigate_with_error(error: Exception) -> Result:
 
     with (
         patch("mulder.orchestrator.models.ModelConfig.from_args", return_value=MagicMock()),
+        patch("mulder.adapters.prepare_evidence_case", return_value=MagicMock()),
         patch("mulder.orchestrator.runner.Orchestrator", return_value=mock_orch),
         patch("asyncio.run", side_effect=error),
         patch.object(Path, "exists", return_value=True),

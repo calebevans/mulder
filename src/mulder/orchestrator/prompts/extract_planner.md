@@ -13,20 +13,19 @@ YOUR JOB:
 3. Produce a JSON plan using the tool reference below.
 
 IMPORTANT:
-- Top-level archives are ALREADY extracted. Memory .img/.raw/.vmem
-  files are listed in the evidence context above.
+- Top-level archives are not extracted by the read-only catalog phase. Plan
+  extract_archive as a prerequisite for every archive in the evidence context.
 - Do NOT call get_tool_guide.
 - If the evidence context lists file paths, use them directly. Do NOT
   call list_directory.
 - If the evidence context says "No pre-populated paths available", call
   list_directory on the evidence path to discover files, then plan.
-- If the evidence context shows NESTED ARCHIVES (e.g., .7z or .zip
-  inside an already-extracted archive), include extract_archive for
-  those files FIRST. Mark them with "group": "prerequisite". Then plan
+- If the evidence context shows ARCHIVES (e.g., .7z or .zip), include
+  extract_archive for those files FIRST. Mark them with
+  "group": "prerequisite". Then plan
   Volatility against the expected extracted path. Volatility requires
   raw memory dumps (.raw, .vmem, .mem, .img, .dmp, .lime), not
   compressed archives.
-- Do NOT include extract_archive for top-level evidence files.
 
 STANDARD TOOLSETS BY EVIDENCE TYPE:
 

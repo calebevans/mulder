@@ -219,8 +219,11 @@ Tools self-declare which pipeline roles may invoke them via the `@tool_access` d
 Before an SDK session starts, `orchestrator.capabilities` independently binds
 that allowlist to a stable agent identity and a set of effect capabilities
 (`case-read`, `forensic-execution`, `case-mutation`, `job-control`, and
-`publication`). A tool must satisfy both its decorator role and the identity's
-effect capability. Unknown tools, cross-role additions, and capability
+`publication`). Each tool declares an immutable, nonempty set of effects; a
+caller must hold every declared capability as well as an allowed role. Audit
+logging and internal bookkeeping do not add an effect because they cannot be
+requested independently or alter forensic conclusions. Unknown tools,
+cross-role additions, and capability
 escalations fail before provider options are constructed. Continuation
 sessions retain the same identity; JSON repair and the deterministic verifier
 receive no MCP tool authority.
@@ -234,6 +237,15 @@ partial, absent nested, or underprivileged bindings fail closed. Consequently
 a Narrative Executor cannot dispatch extraction-only tools by calling them
 directly or through `run_parallel`. Both identity variables are removed from
 every forensic child-process environment.
+
+The `investigate` CLI prepares the exact caller-selected evidence path before
+provider startup. The shared intake adapter creates an immutable,
+content-addressed manifest, idempotently opens or creates the case, and
+registers original evidence hashes. Generic evidence is recorded as `generic`,
+never mislabeled as KAPE or Velociraptor. Changed content or a different source
+root fails closed. The live source is reverified immediately before provider or
+proxy startup, and Catalog receives the committed snapshot through a read-only
+tool seat instead of receiving `scan_evidence` authority.
 
 ### The `@tool_access` Decorator
 

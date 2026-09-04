@@ -1,10 +1,10 @@
-"""Immutable, content-addressed KAPE and Velociraptor collection intake.
+"""Immutable, content-addressed forensic evidence intake.
 
-The adapter reads a directory or ZIP export without executing collector
-content.  It validates every logical path, hashes every byte, records
-collector provenance separately from inferred format metadata, and writes one
-case-bound manifest.  Re-importing identical bytes is idempotent; attempting
-to replace a case's intake with different bytes is a loud error.
+The adapter reads an ordinary file, directory, or ZIP export without executing
+evidence content. It validates every logical path, hashes every byte, records
+generic or collector provenance separately from inferred format metadata, and
+writes one case-bound manifest. Re-importing identical bytes is idempotent;
+attempting to replace a case's intake with different bytes is a loud error.
 """
 
 from __future__ import annotations
@@ -28,8 +28,8 @@ from mulder.db import CaseDB
 
 INTAKE_SCHEMA: Literal["mulder.collection-intake"] = "mulder.collection-intake"
 INTAKE_VERSION: Literal[1] = 1
-CollectionFormat = Literal["kape", "velociraptor"]
-SourceKind = Literal["directory", "zip"]
+CollectionFormat = Literal["generic", "kape", "velociraptor"]
+SourceKind = Literal["directory", "file", "zip"]
 AssertionField = Literal["collector_version", "collection_id", "host"]
 
 
@@ -128,8 +128,8 @@ class IntakeManifest(_FrozenModel):
         paths = [entry.relative_path for entry in self.entries]
         if paths != sorted(paths) or len({path.casefold() for path in paths}) != len(paths):
             raise ValueError("entries must be sorted without case-folding collisions")
-        if self.source_kind == "zip" and self.source_sha256 is None:
-            raise ValueError("ZIP intake requires a source_sha256")
+        if self.source_kind in {"file", "zip"} and self.source_sha256 is None:
+            raise ValueError("file and ZIP intake require a source_sha256")
         if self.source_kind == "directory" and self.source_sha256 is not None:
             raise ValueError("directory intake cannot carry a container hash")
         if self.integrity.get("algorithm") != "sha256" or re.fullmatch(
@@ -444,7 +444,7 @@ def _read_zip(
     return tuple(entries), total
 
 
-def _format_from_names(names: set[str]) -> CollectionFormat:
+def _format_from_names(names: set[str], *, allow_generic: bool = False) -> CollectionFormat:
     lowered = {name.casefold() for name in names}
     velociraptor = any(
         name.endswith("collection_context.json")
@@ -456,10 +456,15 @@ def _format_from_names(names: set[str]) -> CollectionFormat:
         name.endswith("_kape.log") or name.endswith("kape.log") or "!basiccollection" in name
         for name in lowered
     )
-    if velociraptor == kape:
-        reason = "ambiguous" if velociraptor else "unrecognized"
+    if velociraptor and kape:
         raise IntakeError(
-            f"{reason} collection format; specify --format kape or --format velociraptor"
+            "ambiguous collection format; specify --format kape or --format velociraptor"
+        )
+    if not velociraptor and not kape:
+        if allow_generic:
+            return "generic"
+        raise IntakeError(
+            "unrecognized collection format; specify --format kape or --format velociraptor"
         )
     return "velociraptor" if velociraptor else "kape"
 
@@ -547,7 +552,9 @@ def _provenance(
         entries,
         ("collection_context.json",)
         if collection_format == "velociraptor"
-        else ("_kape.log", "kape.log"),
+        else ("_kape.log", "kape.log")
+        if collection_format == "kape"
+        else (),
     )
     values: dict[str, str | None] = {
         "collector_version": None,
@@ -581,7 +588,7 @@ def _provenance(
                         ),
                     }
                 )
-        else:
+        elif collection_format == "kape":
             text = metadata.decode("utf-8-sig", errors="replace")
             patterns = {
                 "collector_version": r"(?im)^\s*KAPE(?:\s+version)?\s*[:=]\s*(\S+)",
@@ -692,6 +699,19 @@ def verify_intake_source(manifest: IntakeManifest) -> None:
                     raise IntakeError(f"intake member changed: {entry.relative_path}")
         return
 
+    if manifest.source_kind == "file":
+        if not stat.S_ISREG(mode) or manifest.source_sha256 is None:
+            raise IntakeError("intake file source changed type or lacks its commitment")
+        if len(manifest.entries) != 1 or manifest.entries[0].storage != "file":
+            raise IntakeError("file intake must contain one regular-file entry")
+        with _open_nofollow(source) as source_fd:
+            digest, size = _hash_descriptor(source_fd, manifest.entries[0].size_bytes)
+        if digest != manifest.source_sha256 or digest != manifest.entries[0].sha256:
+            raise IntakeError("intake file source changed")
+        if size != manifest.entries[0].size_bytes:
+            raise IntakeError("intake file size changed")
+        return
+
     if not stat.S_ISREG(mode):
         raise IntakeError("intake ZIP source changed type")
     if manifest.source_sha256 is None:
@@ -733,6 +753,18 @@ def read_intake_member(
     if manifest.source_kind == "directory":
         with _open_nofollow(source, directory=True) as root_fd:
             content = _directory_member_bytes(root_fd, entry, max_bytes)
+    elif manifest.source_kind == "file":
+        if len(manifest.entries) != 1:
+            raise IntakeError("file intake must contain one entry")
+        entry = manifest.entries[0]
+        with _open_nofollow(source) as source_fd:
+            content, digest = _read_descriptor(
+                source_fd,
+                expected_size=entry.size_bytes,
+                max_bytes=max_bytes,
+            )
+        if digest != entry.sha256:
+            raise IntakeError("intake file changed while reading")
     else:
         if manifest.source_sha256 is None:
             raise IntakeError("ZIP intake is missing its container commitment")
@@ -804,6 +836,19 @@ def materialize_intake(
                     entry,
                     _directory_member_bytes(root_fd, entry, max_file_bytes),
                 )
+    elif manifest.source_kind == "file":
+        if len(manifest.entries) != 1:
+            raise IntakeError("file intake must contain one entry")
+        entry = manifest.entries[0]
+        with _open_nofollow(source) as source_fd:
+            content, digest = _read_descriptor(
+                source_fd,
+                expected_size=entry.size_bytes,
+                max_bytes=max_file_bytes,
+            )
+        if digest != entry.sha256:
+            raise IntakeError("intake file changed during materialization")
+        persist(entry, content)
     else:
         if manifest.source_sha256 is None:
             raise IntakeError("ZIP intake is missing its container commitment")
@@ -839,7 +884,8 @@ def scan_collection(
     source: Path,
     case_id: str,
     *,
-    collection_format: Literal["auto", "kape", "velociraptor"] = "auto",
+    collection_format: Literal["auto", "generic", "kape", "velociraptor"] = "auto",
+    allow_generic: bool = False,
     limits: IntakeLimits | None = None,
     collector_version: str | None = None,
     collection_id: str | None = None,
@@ -865,10 +911,13 @@ def scan_collection(
         source_kind: SourceKind = "directory"
         with _open_nofollow(resolved, directory=True) as root_fd:
             entries, total = _read_directory(root_fd, limits)
-            if not entries:
+            if not entries and not allow_generic:
                 raise IntakeError("collection contains no regular files")
             selected_format = (
-                _format_from_names({entry.relative_path for entry in entries})
+                _format_from_names(
+                    {entry.relative_path for entry in entries},
+                    allow_generic=allow_generic,
+                )
                 if collection_format == "auto"
                 else collection_format
             )
@@ -876,7 +925,9 @@ def scan_collection(
                 entries,
                 ("collection_context.json",)
                 if selected_format == "velociraptor"
-                else ("_kape.log", "kape.log"),
+                else ("_kape.log", "kape.log")
+                if selected_format == "kape"
+                else (),
             )
             metadata_entry = _entry_by_name(entries, metadata_name)
             metadata = (
@@ -885,7 +936,7 @@ def scan_collection(
                 else None
             )
         source_sha256: str | None = None
-    elif stat.S_ISREG(source_mode):
+    elif stat.S_ISREG(source_mode) and resolved.suffix.casefold() == ".zip":
         source_kind = "zip"
         try:
             with (
@@ -893,10 +944,13 @@ def scan_collection(
                 zipfile.ZipFile(snapshot) as archive,
             ):
                 entries, total = _read_zip(archive, limits)
-                if not entries:
+                if not entries and not allow_generic:
                     raise IntakeError("collection contains no regular files")
                 selected_format = (
-                    _format_from_names({entry.relative_path for entry in entries})
+                    _format_from_names(
+                        {entry.relative_path for entry in entries},
+                        allow_generic=allow_generic,
+                    )
                     if collection_format == "auto"
                     else collection_format
                 )
@@ -904,7 +958,9 @@ def scan_collection(
                     entries,
                     ("collection_context.json",)
                     if selected_format == "velociraptor"
-                    else ("_kape.log", "kape.log"),
+                    else ("_kape.log", "kape.log")
+                    if selected_format == "kape"
+                    else (),
                 )
                 metadata_entry = _entry_by_name(entries, metadata_name)
                 metadata = (
@@ -919,6 +975,30 @@ def scan_collection(
             zipfile.LargeZipFile,
         ) as exc:
             raise IntakeError(f"collection ZIP cannot be read safely: {exc}") from exc
+    elif stat.S_ISREG(source_mode):
+        if collection_format == "auto" and not allow_generic:
+            raise IntakeError(
+                "unrecognized collection format; ordinary evidence files require "
+                "the CLI-owned generic intake path"
+            )
+        if collection_format not in {"auto", "generic"}:
+            raise IntakeError("KAPE and Velociraptor collections must be directories or ZIPs")
+        source_kind = "file"
+        with _open_nofollow(resolved) as source_fd:
+            source_sha256, total = _hash_descriptor(source_fd)
+        if total > limits.max_file_bytes or total > limits.max_total_bytes:
+            raise IntakeError("evidence file exceeds configured intake byte limits")
+        entries = (
+            IntakeEntry(
+                relative_path=resolved.name,
+                size_bytes=total,
+                sha256=source_sha256,
+                artifact_type=_artifact_type(resolved.name),
+                storage="file",
+            ),
+        )
+        selected_format = "generic"
+        metadata = None
     else:
         raise IntakeError("collection source must be a directory or ZIP archive")
     provenance = _provenance(
@@ -1032,6 +1112,14 @@ def _register_evidence(manifest: IntakeManifest, db_dir: Path) -> tuple[bool, in
             if actual_digest != manifest.source_sha256:
                 raise IntakeError("ZIP collection changed after manifest creation")
             registrations.append((str(source), manifest.source_sha256, actual_size))
+        elif manifest.source_kind == "file":
+            if manifest.source_sha256 is None:
+                raise IntakeError("file intake is missing its source commitment")
+            with _open_nofollow(source) as source_fd:
+                actual_digest, actual_size = _hash_descriptor(source_fd)
+            if actual_digest != manifest.source_sha256:
+                raise IntakeError("evidence file changed after manifest creation")
+            registrations.append((str(source), manifest.source_sha256, actual_size))
         else:
             with _open_nofollow(source, directory=True) as root_fd:
                 for entry in manifest.entries:
@@ -1054,33 +1142,31 @@ def _register_evidence(manifest: IntakeManifest, db_dir: Path) -> tuple[bool, in
     return database_created, len(missing)
 
 
-def ingest_collection(
-    source: Path,
-    case_id: str,
-    db_dir: Path,
-    *,
-    collection_format: Literal["auto", "kape", "velociraptor"] = "auto",
-    limits: IntakeLimits | None = None,
-    collector_version: str | None = None,
-    collection_id: str | None = None,
-    host: str | None = None,
-) -> IntakeResult:
-    """Create an immutable manifest and idempotently register its evidence."""
-    target_dir = Path(db_dir).expanduser().resolve(strict=False)
+def _commit_intake(
+    scanned: IntakeManifest,
+    target_dir: Path,
+) -> tuple[IntakeResult, IntakeManifest]:
+    """Atomically select one case commitment, then idempotently register it."""
+    case_id = scanned.case_id
     manifest_path = target_dir / f"{case_id}.intake.json"
-    scanned = scan_collection(
-        source,
-        case_id,
-        collection_format=collection_format,
-        limits=limits,
-        collector_version=collector_version,
-        collection_id=collection_id,
-        host=host,
-    )
+    database_path = target_dir / f"{case_id}.db"
+    if database_path.exists() and not manifest_path.exists():
+        with CaseDB.open(case_id, target_dir) as database:
+            metadata = database.get_case_metadata()
+        registered_root = Path(metadata.evidence_root).expanduser().resolve(strict=False)
+        scanned_root = Path(scanned.source_path).expanduser().resolve(strict=False)
+        if metadata.case_id != case_id or registered_root != scanned_root:
+            raise IntakeError(
+                "existing case database belongs to a different evidence source"
+            )
     created = False
     if manifest_path.exists():
         existing = load_intake_manifest(manifest_path)
-        if existing.case_id != case_id or existing.collection_digest != scanned.collection_digest:
+        if (
+            existing.case_id != case_id
+            or existing.source_path != scanned.source_path
+            or existing.collection_digest != scanned.collection_digest
+        ):
             raise IntakeError(
                 "case already has a different immutable intake; choose a new case_id"
             )
@@ -1093,16 +1179,58 @@ def ingest_collection(
             created = True
         except FileExistsError:
             selected = load_intake_manifest(manifest_path)
-            if selected.collection_digest != scanned.collection_digest:
+            if (
+                selected.source_path != scanned.source_path
+                or selected.collection_digest != scanned.collection_digest
+            ):
                 raise IntakeError("concurrent intake created different case content") from None
     database_created, registered = _register_evidence(selected, target_dir)
-    return IntakeResult(
-        manifest_path=str(manifest_path),
-        collection_digest=selected.collection_digest,
-        created=created,
-        database_created=database_created,
-        registered_files=registered,
+    return (
+        IntakeResult(
+            manifest_path=str(manifest_path),
+            collection_digest=selected.collection_digest,
+            created=created,
+            database_created=database_created,
+            registered_files=registered,
+        ),
+        selected,
     )
+
+
+def ingest_collection(
+    source: Path,
+    case_id: str,
+    db_dir: Path,
+    *,
+    collection_format: Literal["auto", "generic", "kape", "velociraptor"] = "auto",
+    allow_generic: bool = False,
+    limits: IntakeLimits | None = None,
+    collector_version: str | None = None,
+    collection_id: str | None = None,
+    host: str | None = None,
+) -> IntakeResult:
+    """Create an immutable manifest and idempotently register its evidence."""
+    target_dir = Path(db_dir).expanduser().resolve(strict=False)
+    scanned = scan_collection(
+        source,
+        case_id,
+        collection_format=collection_format,
+        allow_generic=allow_generic,
+        limits=limits,
+        collector_version=collector_version,
+        collection_id=collection_id,
+        host=host,
+    )
+    result, _selected = _commit_intake(scanned, target_dir)
+    return result
+
+
+def prepare_evidence_case(source: Path, case_id: str, db_dir: Path) -> IntakeManifest:
+    """Prepare generic or collector evidence before any model session starts."""
+    target_dir = Path(db_dir).expanduser().resolve(strict=False)
+    scanned = scan_collection(source, case_id, allow_generic=True)
+    _result, selected = _commit_intake(scanned, target_dir)
+    return selected
 
 
 __all__ = [
@@ -1117,6 +1245,7 @@ __all__ = [
     "IntakeResult",
     "ingest_collection",
     "load_intake_manifest",
+    "prepare_evidence_case",
     "read_intake_member",
     "scan_collection",
     "verify_intake_source",

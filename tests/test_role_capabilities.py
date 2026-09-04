@@ -35,6 +35,7 @@ from mulder.server.tool_access import (
     Role,
     ToolEffect,
     get_registered_tool_effect,
+    get_registered_tool_effect_set,
     get_registered_tool_effects,
     get_registered_tool_roles,
     tool_access,
@@ -117,12 +118,112 @@ def test_role_declaration_and_effect_capability_are_both_required() -> None:
         authorize_tool_list(underprivileged, [extraction_tool])
 
 
-def test_every_registered_tool_has_one_explicit_effect_declaration() -> None:
+def test_every_registered_tool_has_a_nonempty_immutable_effect_set() -> None:
     from mulder.server.tool_access import _registry
 
     effects = get_registered_tool_effects()
     assert set(effects) == set(_registry)
-    assert all(isinstance(effect, ToolEffect) for effect in effects.values())
+    assert all(
+        isinstance(effect_set, frozenset)
+        and effect_set
+        and all(isinstance(effect, ToolEffect) for effect in effect_set)
+        for effect_set in effects.values()
+    )
+
+
+def test_mutating_readers_declare_every_security_relevant_effect() -> None:
+    assert get_registered_tool_effect_set("correlate_across_sources") == frozenset(
+        {ToolEffect.CASE_READ, ToolEffect.CASE_WRITE}
+    )
+    assert get_registered_tool_effect_set("parse_autoruns") == frozenset(
+        {
+            ToolEffect.CASE_READ,
+            ToolEffect.FORENSIC_EXECUTION,
+            ToolEffect.CASE_WRITE,
+        }
+    )
+    assert get_registered_tool_effect_set("scan_evidence") == frozenset(
+        {ToolEffect.CASE_READ, ToolEffect.CASE_WRITE}
+    )
+
+
+def test_multi_effect_authorization_requires_every_effect() -> None:
+    underprivileged = AgentIdentity(
+        "read-only-correlation",
+        Role.NARRATIVE_EXECUTOR,
+        frozenset({Capability.CASE_READ, Capability.JOB_CONTROL}),
+    )
+    with pytest.raises(CapabilityViolation, match="case-mutation"):
+        authorize_tool(underprivileged, "correlate_across_sources")
+
+    authorize_tool(
+        identity_for_phase("alternative_narrative", "executor"),
+        "correlate_across_sources",
+    )
+    authorize_tool(identity_for_phase("extraction", "analyst"), "parse_autoruns")
+    authorize_tool(identity_for_phase("cross_system", "executor"), "parse_autoruns")
+
+
+def test_catalog_and_pack_executors_gain_no_mutating_parser_authority() -> None:
+    assert "mcp__mulder__scan_evidence" not in CATALOG.single_allowed_tools
+    assert "scan_evidence" not in CATALOG.single_prompt_template
+    assert "{catalog_snapshot}" in CATALOG.single_prompt_template
+    assert all(
+        get_registered_tool_effect_set(tool) == frozenset({ToolEffect.CASE_READ})
+        for tool in CATALOG.single_allowed_tools
+    )
+    with pytest.raises(CapabilityViolation):
+        authorize_tool(identity_for_phase("extraction", "executor"), "parse_autoruns")
+    with pytest.raises(CapabilityViolation):
+        authorize_tool(identity_for_phase("pack.synthetic", "executor"), "parse_autoruns")
+    assert "mcp__mulder__parse_autoruns" not in EXTRACTION.executor_allowed_tools
+    assert "mcp__mulder__parse_autoruns" in EXTRACTION.analyst_allowed_tools
+    assert "parse_autoruns" in EXTRACTION.analyst_system_prompt
+
+
+def test_identity_capability_sets_are_unchanged() -> None:
+    expected = {
+        ("catalog", "single"): {Capability.CASE_READ, Capability.JOB_CONTROL},
+        ("extraction", "planner"): {Capability.CASE_READ},
+        ("extraction", "executor"): {
+            Capability.CASE_READ,
+            Capability.FORENSIC_EXECUTION,
+            Capability.JOB_CONTROL,
+        },
+        ("extraction", "analyst"): {
+            Capability.CASE_READ,
+            Capability.CASE_WRITE,
+            Capability.FORENSIC_EXECUTION,
+        },
+        ("cross_system", "planner"): {Capability.CASE_READ},
+        ("cross_system", "executor"): {
+            Capability.CASE_READ,
+            Capability.CASE_WRITE,
+            Capability.FORENSIC_EXECUTION,
+            Capability.JOB_CONTROL,
+        },
+        ("cross_system", "analyst"): {
+            Capability.CASE_READ,
+            Capability.CASE_WRITE,
+        },
+        ("alternative_narrative", "planner"): {Capability.CASE_READ},
+        ("alternative_narrative", "executor"): {
+            Capability.CASE_READ,
+            Capability.CASE_WRITE,
+            Capability.JOB_CONTROL,
+        },
+        ("alternative_narrative", "analyst"): {
+            Capability.CASE_READ,
+            Capability.CASE_WRITE,
+        },
+        ("report", "single"): {
+            Capability.CASE_READ,
+            Capability.CASE_WRITE,
+            Capability.PUBLICATION,
+        },
+    }
+    for phase_seat, capabilities in expected.items():
+        assert identity_for_phase(*phase_seat).capabilities == frozenset(capabilities)
 
 
 def test_raw_analyzers_and_persistent_reasoning_writers_have_strong_effects() -> None:
@@ -136,7 +237,9 @@ def test_raw_analyzers_and_persistent_reasoning_writers_have_strong_effects() ->
         "filter_timeline",
         "export_timeline_slice",
     ):
-        assert get_registered_tool_effect(name) is ToolEffect.FORENSIC_EXECUTION
+        assert get_registered_tool_effect(name) == frozenset(
+            {ToolEffect.FORENSIC_EXECUTION}
+        )
     for name in (
         "create_hypothesis",
         "record_hypothesis_test",
@@ -144,7 +247,7 @@ def test_raw_analyzers_and_persistent_reasoning_writers_have_strong_effects() ->
         "resolve_contradiction",
         "record_review_verdict",
     ):
-        assert get_registered_tool_effect(name) is ToolEffect.CASE_WRITE
+        assert get_registered_tool_effect(name) == frozenset({ToolEffect.CASE_WRITE})
 
 
 def test_registration_without_an_explicit_effect_fails_closed() -> None:
@@ -153,6 +256,11 @@ def test_registration_without_an_explicit_effect_fails_closed() -> None:
         @tool_access(Role.CATALOG)
         def undeclared_test_tool() -> dict[str, object]:
             return {}
+
+
+def test_registration_rejects_empty_multi_effect_declaration() -> None:
+    with pytest.raises(ValueError, match="nonempty"):
+        tool_access(Role.CATALOG, effects=())
 
 
 def test_unknown_tool_is_rejected_before_provider_startup() -> None:
@@ -275,6 +383,40 @@ async def test_nested_authorization_has_direct_parity_and_preserves_valid_calls(
     )
     assert called == ["search", "run_volatility"]
     assert extraction_response["parallel_results"][0]["result"]["status"] == "success"
+
+
+@pytest.mark.asyncio()
+async def test_nested_dispatch_rejects_identity_missing_one_declared_effect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mulder.server import app
+
+    identity = AgentIdentity(
+        "read-only-narrative",
+        Role.NARRATIVE_EXECUTOR,
+        frozenset({Capability.CASE_READ, Capability.JOB_CONTROL}),
+    )
+    secret = "multi-effect-nested-secret"
+    called = False
+
+    async def fake_correlation(**_kwargs: object) -> dict[str, object]:
+        nonlocal called
+        called = True
+        return {"status": "success"}
+
+    monkeypatch.setenv(DELEGATION_SECRET_ENV, secret)
+    monkeypatch.setitem(
+        app._tool_dispatch,
+        "correlate_across_sources",
+        fake_correlation,
+    )
+    response = await inspect.unwrap(app.run_parallel)(
+        tasks=[{"tool": "correlate_across_sources", "args": {}}],
+        delegation_grant=create_delegation_grant(identity, secret),
+    )
+
+    assert called is False
+    assert "Unauthorized nested tool" in response["parallel_results"][0]["result"]["error"]
 
 
 @pytest.mark.asyncio()

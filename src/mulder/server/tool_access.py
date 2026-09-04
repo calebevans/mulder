@@ -8,7 +8,7 @@ tool list maintenance.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from enum import Enum, Flag, auto
 from typing import TypeVar
 
@@ -37,7 +37,7 @@ ANALYSTS = Role.EXTRACT_ANALYST | Role.CROSS_ANALYST | Role.NARRATIVE_ANALYST
 ALL_ROLES = Role.CATALOG | PLANNERS | EXECUTORS | ANALYSTS | Role.REPORT
 
 _registry: dict[str, Role] = {}
-_effect_registry: dict[str, ToolEffect] = {}
+_effect_registry: dict[str, frozenset[ToolEffect]] = {}
 
 
 class ToolEffect(str, Enum):
@@ -170,7 +170,6 @@ _TOOLS_BY_EFFECT: dict[ToolEffect, frozenset[str]] = {
             "audit_evidence_coverage",
             "audit_tool_coverage",
             "check_finalize_readiness",
-            "correlate_across_sources",
             "correlate_pcap_with_host",
             "decode_payload",
             "detect_timestomping",
@@ -214,7 +213,6 @@ _TOOLS_BY_EFFECT: dict[ToolEffect, frozenset[str]] = {
             "neighbors",
             "open_case",
             "parse_amcache",
-            "parse_autoruns",
             "parse_jump_lists",
             "parse_lnk_files",
             "parse_mft",
@@ -228,7 +226,6 @@ _TOOLS_BY_EFFECT: dict[ToolEffect, frozenset[str]] = {
             "query_registry_value",
             "read_evidence_file",
             "reconstruct_execution_chains",
-            "scan_evidence",
             "scan_files_in_memory",
             "scan_hidden_processes",
             "scan_kernel_modules",
@@ -248,6 +245,7 @@ if sum(len(names) for names in _TOOLS_BY_EFFECT.values()) != len(_EFFECT_DECLARA
 def tool_access(
     *roles: Role,
     effect: ToolEffect | None = None,
+    effects: Iterable[ToolEffect] | None = None,
 ) -> Callable[[F], F]:
     """Declare which pipeline roles may call this tool.
 
@@ -264,20 +262,42 @@ def tool_access(
     combined = Role(0)
     for r in roles:
         combined |= r
+    if effect is not None and effects is not None:
+        raise TypeError("declare either effect or effects, not both")
+    explicit_effects = (
+        frozenset(effects)
+        if effects is not None
+        else frozenset({effect})
+        if effect is not None
+        else None
+    )
+    if explicit_effects is not None and not explicit_effects:
+        raise ValueError("tool effect declarations must be nonempty")
+    if explicit_effects is not None and not all(
+        isinstance(declared, ToolEffect) for declared in explicit_effects
+    ):
+        raise TypeError("tool effects must be ToolEffect values")
 
     def decorator(fn: F) -> F:
         built_in_effect = _EFFECT_DECLARATIONS.get(fn.__name__)
-        registered_effect = effect or built_in_effect
-        if registered_effect is None:
+        built_in_effects = (
+            frozenset({built_in_effect}) if built_in_effect is not None else None
+        )
+        registered_effects = explicit_effects or built_in_effects
+        if registered_effects is None:
             raise RuntimeError(
                 f"registered tool {fn.__name__!r} has no explicit effect declaration"
             )
-        if effect is not None and built_in_effect is not None and effect is not built_in_effect:
+        if (
+            explicit_effects is not None
+            and built_in_effects is not None
+            and explicit_effects != built_in_effects
+        ):
             raise RuntimeError(
                 f"registered tool {fn.__name__!r} conflicts with its built-in effect declaration"
             )
         _registry[fn.__name__] = combined
-        _effect_registry[fn.__name__] = registered_effect
+        _effect_registry[fn.__name__] = registered_effects
         return fn
 
     return decorator
@@ -298,12 +318,17 @@ def get_registered_tool_roles(tool_name: str) -> Role | None:
     return get_tool_access(tool_name)
 
 
-def get_registered_tool_effect(tool_name: str) -> ToolEffect | None:
-    """Return the explicit registered effect for one short or qualified name."""
+def get_registered_tool_effect(tool_name: str) -> frozenset[ToolEffect] | None:
+    """Return the immutable nonempty effect set for a registered tool."""
     return _effect_registry.get(tool_name.removeprefix("mcp__mulder__"))
 
 
-def get_registered_tool_effects() -> Mapping[str, ToolEffect]:
+def get_registered_tool_effect_set(tool_name: str) -> frozenset[ToolEffect] | None:
+    """Compatibility alias for :func:`get_registered_tool_effect`."""
+    return get_registered_tool_effect(tool_name)
+
+
+def get_registered_tool_effects() -> Mapping[str, frozenset[ToolEffect]]:
     """Return an immutable snapshot suitable for completeness validation."""
     return dict(_effect_registry)
 

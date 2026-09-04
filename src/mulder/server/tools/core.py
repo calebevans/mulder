@@ -36,7 +36,7 @@ from mulder.server.helpers import (
     serialize_windows,
     windowed_response,
 )
-from mulder.server.tool_access import PLANNERS, Role, tool_access
+from mulder.server.tool_access import PLANNERS, Role, ToolEffect, tool_access
 
 logger = logging.getLogger(__name__)
 
@@ -387,7 +387,10 @@ def search(
 
 
 @mcp.tool()
-@tool_access(Role.CROSS_EXECUTOR | Role.NARRATIVE_EXECUTOR)
+@tool_access(
+    Role.CROSS_EXECUTOR | Role.NARRATIVE_EXECUTOR,
+    effects=(ToolEffect.CASE_READ, ToolEffect.CASE_WRITE),
+)
 def correlate_across_sources(
     t_start: str,
     t_end: str,

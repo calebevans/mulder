@@ -10,7 +10,10 @@ Every tool is exposed as `mcp__mulder__{name}`. All tools return a dict containi
 
 ### scan_evidence
 
-Scan an evidence directory and create a new case for investigation.
+Administrative compatibility tool that scans evidence and creates a case. The
+agent pipeline does not expose it to any model role: `mulder investigate`
+performs immutable, content-addressed intake before provider startup and gives
+Catalog a read-only snapshot.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -20,7 +23,7 @@ Scan an evidence directory and create a new case for investigation.
 
 **Returns:** `case_id`, `evidence_path`, `evidence_tree`, `type_summary`, `total_items`
 
-**Roles:** `CATALOG`
+**Roles:** none (standalone administrative invocation only)
 
 ### open_case
 
@@ -1286,6 +1289,8 @@ Cross-reference all evidence sources within a time window.
 
 **Roles:** `CROSS_EXECUTOR` `NARRATIVE_EXECUTOR`
 
+**Effects:** `case-read` + `case-mutation`
+
 ### reconstruct_execution_chains
 
 Reconstruct parent-child process execution chains from memory forensics.
@@ -1672,7 +1677,9 @@ Extract and parse macOS plist files from a disk image.
 
 **Returns:** `source` (plist.parsed), `result_count`
 
-**Roles:** `EXTRACT_EXECUTOR` `EXTRACT_ANALYST` `CROSS_EXECUTOR`
+**Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR`
+
+**Effects:** `case-read` + `forensic-execution` + `case-mutation`
 
 ### query_sqlite_from_image
 

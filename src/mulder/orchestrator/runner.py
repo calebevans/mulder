@@ -20,7 +20,13 @@ from pathlib import Path
 from typing import Any, Literal
 
 from mulder import __version__
-from mulder.adapters import IntakeError, load_intake_manifest
+from mulder.adapters import (
+    IntakeError,
+    IntakeManifest,
+    load_intake_manifest,
+    prepare_evidence_case,
+    verify_intake_source,
+)
 from mulder.orchestrator.capabilities import identity_for_phase
 from mulder.orchestrator.display import InvestigationDashboard
 from mulder.orchestrator.errors import AuthenticationError, ModelNotAvailableError
@@ -108,6 +114,7 @@ class Orchestrator:
         run_id: str | None = None,
         resume_run: bool = False,
         run_state_path: str | Path | None = None,
+        prepared_intake: IntakeManifest | None = None,
     ) -> None:
         """Initialize the orchestrator.
 
@@ -139,6 +146,8 @@ class Orchestrator:
             resume_run: Resume the exact persisted handle and evidence identity.
             run_state_path: Optional SQLite run ledger. Enabling it also enables
                 phase checkpoints and cooperative cancellation.
+            prepared_intake: Content-bound evidence preparation produced by the
+                CLI before this orchestrator is constructed.
         """
         self.evidence_path = evidence_path
         self.cwd = str(cwd)
@@ -147,6 +156,7 @@ class Orchestrator:
         self.env = env or {}
         self._case_id: str = case_id
         self._db_dir = Path(db_dir).expanduser().resolve(strict=False)
+        self._prepared_intake = prepared_intake
         self._approval_before_report = approval_before_report
         self._resume_after_approval = resume_after_approval
         profile_spec = PROFILES.get(run_profile)
@@ -162,6 +172,10 @@ class Orchestrator:
             raise RunStateError("resume_run requires run_state_path")
         if resume_after_approval and run_state_path is not None and not resume_run:
             raise RunStateError("resume_after_approval requires an explicit durable run resume")
+        if self._prepared_intake is not None:
+            self._validate_prepared_intake(self._prepared_intake)
+        elif run_state_path is not None:
+            self._prepared_intake = self._prepare_input()
         self._run_profile = run_profile
         self._run_profile_spec = profile_spec
         self._run_scope_instruction = (
@@ -289,6 +303,8 @@ class Orchestrator:
 
     def _resolve_run_input_digest(self) -> str:
         """Prefer a verified intake commitment over a mutable path inventory."""
+        if self._prepared_intake is not None:
+            return self._prepared_intake.collection_digest
         evidence = Path(self.evidence_path).expanduser().resolve(strict=True)
         intake_path = self._db_dir / f"{self._case_id}.intake.json"
         if not intake_path.exists():
@@ -305,6 +321,50 @@ class Orchestrator:
                 "evidence path does not match the case's immutable intake source"
             )
         return intake.collection_digest
+
+    def _validate_prepared_intake(self, manifest: IntakeManifest) -> None:
+        """Reject a caller-provided preparation for a different case or path."""
+        if manifest.case_id != self._case_id:
+            raise RunStateError("prepared intake belongs to a different case")
+        evidence = Path(self.evidence_path).expanduser().resolve(strict=True)
+        source = Path(manifest.source_path).expanduser().resolve(strict=False)
+        if source != evidence:
+            raise RunStateError("prepared intake belongs to a different evidence path")
+
+    def _prepare_input(self) -> IntakeManifest:
+        """Commit and register the CLI-selected evidence without model authority."""
+        if not self._case_id:
+            raise RunStateError("case_id is required to prepare evidence")
+        try:
+            manifest = prepare_evidence_case(
+                Path(self.evidence_path),
+                self._case_id,
+                self._db_dir,
+            )
+        except IntakeError as exc:
+            raise RunStateError(f"evidence preparation failed: {exc}") from exc
+        self._validate_prepared_intake(manifest)
+        return manifest
+
+    def _catalog_snapshot_json(self) -> str:
+        """Return the exact content commitment handed to the catalog model."""
+        manifest = self._prepared_intake
+        if manifest is None:
+            return json.dumps({"status": "not-prepared"}, sort_keys=True)
+        return json.dumps(
+            {
+                "schema": manifest.intake_schema,
+                "case_id": manifest.case_id,
+                "evidence_root": manifest.source_path,
+                "collection_format": manifest.collection_format,
+                "collection_digest": manifest.collection_digest,
+                "file_count": manifest.file_count,
+                "total_bytes": manifest.total_bytes,
+                "entries": [entry.model_dump(mode="json") for entry in manifest.entries],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
 
     def _run_contract_digest(self, *, approval_required: bool) -> str:
         """Bind every execution-policy input that can change phase semantics."""
@@ -462,6 +522,15 @@ class Orchestrator:
         self._phase_counter = 0
 
         try:
+            if self._case_id and self._prepared_intake is None:
+                self._prepared_intake = self._prepare_input()
+            if self._prepared_intake is not None:
+                try:
+                    verify_intake_source(self._prepared_intake)
+                except IntakeError as exc:
+                    raise RunStateError(
+                        f"prepared evidence changed before provider startup: {exc}"
+                    ) from exc
             self._preflight_provider_routes()
             self._start_proxy_if_needed()
             self._running = True
@@ -616,10 +685,8 @@ class Orchestrator:
         catalog_result = await self._run_single_phase(
             CATALOG,
             prompt_vars={
-                "evidence_path": self.evidence_path,
-                "case_id_instruction": (
-                    f' Use case_id="{self._case_id}" when calling scan_evidence.'
-                ),
+                "case_id": self._case_id,
+                "catalog_snapshot": self._catalog_snapshot_json(),
             },
         )
         result.phases.append(catalog_result)

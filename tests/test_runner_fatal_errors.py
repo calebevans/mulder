@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -153,10 +154,16 @@ class TestRunPipelineAbort:
     """Fatal errors propagate through the full run() pipeline."""
 
     @pytest.mark.asyncio()
-    async def test_auth_error_propagates_through_run(self) -> None:
+    async def test_auth_error_propagates_through_run(self, tmp_path: Path) -> None:
         """AuthenticationError in the catalog phase propagates through run()."""
-        orch = _make_orchestrator()
-        orch._case_id = "test-case"
+        evidence = tmp_path / "evidence"
+        evidence.mkdir()
+        (evidence / "sample.log").write_text("event", encoding="utf-8")
+        orch = _make_orchestrator(
+            evidence_path=str(evidence),
+            case_id="test-case",
+            db_dir=tmp_path / "cases",
+        )
 
         async def mock_execute(**kwargs: object) -> PhaseResult:
             raise AuthenticationError(

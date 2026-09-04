@@ -28,6 +28,7 @@ def _invoke(
     """Run ``mulder investigate`` with the orchestrator stubbed out."""
     runner = CliRunner()
     with (
+        patch("mulder.adapters.prepare_evidence_case", return_value=MagicMock()),
         patch("mulder.orchestrator.runner.Orchestrator") as orchestrator_cls,
         patch("asyncio.run", return_value=MagicMock(success=True)),
     ):

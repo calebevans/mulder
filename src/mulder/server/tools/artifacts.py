@@ -28,7 +28,7 @@ from mulder.security.evidence_envelope import present_model_evidence
 from mulder.server.app import get_cfg, get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import hash_output, make_tool_call_id
-from mulder.server.tool_access import Role, tool_access
+from mulder.server.tool_access import Role, ToolEffect, tool_access
 
 logger = logging.getLogger(__name__)
 
@@ -1393,7 +1393,14 @@ def _parse_autoruns_csv_content(csv_path: Path) -> tuple[list[str], str]:
 
 
 @mcp.tool()
-@tool_access(Role.EXTRACT_EXECUTOR | Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR)
+@tool_access(
+    Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR,
+    effects=(
+        ToolEffect.CASE_READ,
+        ToolEffect.FORENSIC_EXECUTION,
+        ToolEffect.CASE_WRITE,
+    ),
+)
 def parse_autoruns(csv_path: str = "", force: bool = False) -> dict[str, object]:
     """Parse Sysinternals Autoruns CSV output to identify persistence mechanisms.
 

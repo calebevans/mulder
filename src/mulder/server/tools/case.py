@@ -33,7 +33,7 @@ from mulder.server.app import (
     slugify,
 )
 from mulder.server.helpers import error_response, hash_output, make_tool_call_id
-from mulder.server.tool_access import ALL_ROLES, Role, tool_access
+from mulder.server.tool_access import ALL_ROLES, Role, ToolEffect, tool_access
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ _INTAKE_EXTRACT_MAX_TOTAL_BYTES = 8 << 30
 
 
 @mcp.tool()
-@tool_access(Role.CATALOG)
+@tool_access(Role(0), effects=(ToolEffect.CASE_READ, ToolEffect.CASE_WRITE))
 def scan_evidence(
     evidence_path: str,
     case_id: str | None = None,
