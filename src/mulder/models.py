@@ -144,6 +144,24 @@ class AtomicClaim(BaseModel):
     anchors: list[EvidenceAnchor] = Field(default_factory=list)
 
 
+class VerificationDecision(BaseModel):
+    """Pure deterministic decision returned by the claim verifier module."""
+
+    result: Literal["verified", "contradicted", "inconclusive"]
+    reason_code: str
+    details: dict[str, JsonScalar] = Field(default_factory=dict)
+
+
+class ClaimVerification(VerificationDecision):
+    """Append-only persisted execution of a deterministic claim verifier."""
+
+    verification_id: str
+    claim_id: str
+    verifier_name: str
+    verifier_version: str
+    verified_at: str
+
+
 class ToolCallEntry(BaseModel):
     """A single tool invocation recorded in the audit log."""
 

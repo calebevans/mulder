@@ -141,10 +141,13 @@ class TestEvidenceValidation:
         )
 
         assert result["status"] == "accepted"
-        assert result["claim_mode"] == "atomic_unverified"
+        assert result["claim_mode"] == "atomic_checked"
+        assert result["claim_verifications"][0]["result"] == "verified"
         finding_id = str(result["finding_id"])
         assert case_db.get_finding(finding_id).sources == ["volatility.pslist"]
-        assert case_db.get_claims(finding_id)[0].anchors[0].exact_text == "cmd.exe"
+        claim = case_db.get_claims(finding_id)[0]
+        assert claim.anchors[0].exact_text == "cmd.exe"
+        assert claim.epistemic_state == "verified"
 
     def test_claim_refs_must_exactly_match_finding_refs(
         self, case_db: CaseDB, audit_log: AuditLog

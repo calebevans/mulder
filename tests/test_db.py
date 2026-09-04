@@ -253,7 +253,7 @@ class TestFindings:
                 )
             }
         reopened.close()
-        assert {"claims", "evidence_anchors"} <= names
+        assert {"claims", "evidence_anchors", "claim_verifications"} <= names
 
 
 class TestExtractorVersions:
