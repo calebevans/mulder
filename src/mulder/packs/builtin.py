@@ -104,13 +104,15 @@ ANTI_FORENSICS_CLOCK_PACK = DomainPackManifest.model_validate(
                 ],
                 "planner_instructions": (
                     "Use the existing SI/FN detector, then the normalized clock analysis. "
-                    "Inventory VSS only when a disk image is available. Do not claim clean "
-                    "coverage for absent $UsnJrnl, $LogFile, event logs, process/file state, "
-                    "VSS, or clock anchors."
+                    "Use parsed $LogFile, Volatility cmdline/pslist, TSK file-list, per-file "
+                    "VSS, and clock-anchor sources only when they are indexed under the "
+                    "documented schemas. Do not claim clean coverage for absent $UsnJrnl, "
+                    "$LogFile, event logs, process/file state, VSS, or clock anchors."
                 ),
                 "executor_instructions": (
-                    "Preserve every typed outcome. Never substitute free-text interpretation "
-                    "for an unsupported parser Adapter."
+                    "Preserve every typed outcome and every primary/correlated selector. "
+                    "Never substitute free-text interpretation for an unsupported parser "
+                    "Adapter."
                 ),
                 "analyst_instructions": (
                     "A SI/FN backdate is indicated until an independent USN, $LogFile, or VSS "
@@ -142,6 +144,12 @@ ANTI_FORENSICS_CLOCK_PACK = DomainPackManifest.model_validate(
                 "size_bytes": 6280,
             },
             {
+                "fixture_id": "indexed-adapter",
+                "path": "indexed-adapter.json",
+                "sha256": "f956204eab6c55b81926a6c407003f6ecc544a3c2a1d60ef490bfdccd30de2e1",
+                "size_bytes": 2410,
+            },
+            {
                 "fixture_id": "prompt-injected",
                 "path": "prompt-injected.json",
                 "sha256": "b00ab162b64ab28aa90cd2f22ae880db4e05947d26a807c86753359db6217b80",
@@ -165,6 +173,13 @@ ANTI_FORENSICS_CLOCK_PACK = DomainPackManifest.model_validate(
             {
                 "expectation_id": "malicious-indicators-partial-clock",
                 "fixture_id": "malicious",
+                "hunt_id": "temporal-integrity",
+                "acceptable_statuses": ["PARTIAL"],
+                "required_gate_ids": ["clock-analysis-attempted"],
+            },
+            {
+                "expectation_id": "indexed-adapter-cross-source-evidence",
+                "fixture_id": "indexed-adapter",
                 "hunt_id": "temporal-integrity",
                 "acceptable_statuses": ["PARTIAL"],
                 "required_gate_ids": ["clock-analysis-attempted"],

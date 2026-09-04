@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -33,6 +34,20 @@ from mulder.server.tools.artifacts import _analyze_mft_windows_for_timestomping
 def _fixture(name: str) -> dict[str, object]:
     path = anti_forensics_fixture_root() / f"{name}.json"
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _indexed_sources() -> list[tuple[str, str]]:
+    sources = _fixture("indexed-adapter")["sources"]
+    assert isinstance(sources, list)
+    result: list[tuple[str, str]] = []
+    for item in sources:
+        assert isinstance(item, dict)
+        source_name = item.get("source_name")
+        raw = item.get("raw")
+        assert isinstance(source_name, str)
+        assert isinstance(raw, str)
+        result.append((source_name, raw))
+    return result
 
 
 def test_builtin_pack_preflights_through_existing_tool_registry() -> None:
@@ -315,8 +330,8 @@ def test_missing_and_unsupported_artifacts_can_never_be_clean() -> None:
     assert result.outcome.status is ToolOutcomeStatus.PARTIAL
     coverage = {cell.family.value: cell.outcome.status for cell in result.coverage}
     assert coverage["mft"] is ToolOutcomeStatus.UNAVAILABLE
-    assert coverage["logfile"] is ToolOutcomeStatus.UNSUPPORTED_VERSION
-    assert coverage["process_file_state"] is ToolOutcomeStatus.UNSUPPORTED_VERSION
+    assert coverage["logfile"] is ToolOutcomeStatus.UNAVAILABLE
+    assert coverage["process_file_state"] is ToolOutcomeStatus.UNAVAILABLE
 
 
 def test_normalized_schema_forbids_silent_drift() -> None:
@@ -355,7 +370,7 @@ def _register_source(db: CaseDB, name: str, raw: str) -> None:
     source_id = db.register_source(
         source_name=name,
         source_path=f"/{name}",
-        source_hash="sha256:" + ("1" if name == "ez.mft" else "2") * 64,
+        source_hash="sha256:" + hashlib.sha256(raw.encode()).hexdigest(),
         extractor="fixture",
         line_count=len(raw.splitlines()),
     )
@@ -408,6 +423,148 @@ def test_mcp_adapter_normalizes_indexed_mft_usn_and_log_clear(tmp_path: Path) ->
         assert timestomp["state"] == "confirmed"
         assert result["outcome"]["status"] == "PARTIAL"
         coverage = {item["family"]: item["outcome"]["status"] for item in result["coverage"]}
-        assert coverage["logfile"] == "UNSUPPORTED_VERSION"
+        assert coverage["logfile"] == "UNAVAILABLE"
+    finally:
+        db.close()
+
+
+def test_activated_pack_adapter_uses_real_indexed_cross_source_evidence(
+    tmp_path: Path,
+) -> None:
+    registry = DomainPackRegistry()
+    register_builtin_packs(registry)
+    activation = registry.enable(
+        ["anti-forensics.clock"],
+        PackRuntimeInventory(
+            available_capabilities=("forensic.local-read",),
+            parser_versions={
+                "mftecmd-si-fn": "1.0",
+                "anti-forensics-clock": "1.0",
+            },
+            fixture_root=anti_forensics_fixture_root(),
+        ),
+    )
+    assert activation.ready
+
+    db = CaseDB.create(case_id="adapter-case", evidence_root="/evidence", db_dir=tmp_path)
+    audit = AuditLog(tmp_path / "adapter.audit.jsonl")
+    try:
+        for source_name, raw in _indexed_sources():
+            _register_source(db, source_name, raw)
+
+        source_ids = {source.source_name: str(source.source_id) for source in db.get_sources()}
+        context = MagicMock(db=db, audit=audit)
+        with patch("mulder.server.tools.clock.get_ctx", return_value=context):
+            result = _tool_dispatch_sync["analyze_anti_forensics_clock"]()
+
+        observations = {item["kind"]: item for item in result["observations"]}
+        assert observations["logfile_change"]["provenance"]["selector"] == (
+            "csv:row=2;lsn=500"
+        )
+        assert observations["vss_file"]["provenance"]["selector"] == (
+            "csv:row=2;column=CreatedTimestamp;snapshot=shadow-1"
+        )
+        process = observations["process_file_mismatch"]
+        assert process["action"] == "running_image_deleted_and_path_mismatch"
+        assert process["provenance"]["selector"] == "tsv:row=2;pid=4242"
+        assert process["attributes"]["cmdline_selector"] == "tsv:row=2;pid=4242"
+        assert process["attributes"]["deleted_file_selector"] == "line:2;inode=44-128-1"
+
+        timestomp = next(
+            item for item in result["findings"] if item["finding_type"] == "timestomp"
+        )
+        assert timestomp["state"] == "confirmed"
+        witness_kinds = {
+            item["kind"]
+            for item in result["observations"]
+            if item["observation_id"] in timestomp["independent_witness_ids"]
+        }
+        assert witness_kinds == {"usn_change", "logfile_change", "vss_file"}
+
+        coverage = {item["family"]: item for item in result["coverage"]}
+        assert coverage["logfile"]["outcome"]["status"] == "SUCCESS_NONEMPTY"
+        assert coverage["process_file_state"]["outcome"]["status"] == (
+            "SUCCESS_NONEMPTY"
+        )
+        assert coverage["vss"]["outcome"]["status"] == "SUCCESS_NONEMPTY"
+        expectation = next(
+            item
+            for item in ANTI_FORENSICS_CLOCK_PACK.benchmark_expectations
+            if item.fixture_id == "indexed-adapter"
+        )
+        assert ToolOutcomeStatus(result["outcome"]["status"]) in (
+            expectation.acceptable_statuses
+        )
+
+        clock_models = {item["source_id"]: item for item in result["clock_models"]}
+        anchors = {item["anchor_id"]: item for item in result["clock_anchors"]}
+        assert anchors["mft-1"]["source_id"] == source_ids["ez.mft"]
+        assert anchors["mft-1"]["reference_provenance"]["selector"] == (
+            "csv:row=2;anchor=mft-1;reference=gps.host"
+        )
+        assert anchors["mft-1"]["source_time"]["uncertainty_ms"] == 250
+        assert anchors["mft-1"]["reference_time"]["uncertainty_ms"] == 500
+        for source_name in (
+            "ez.mft",
+            "ez.usnjrnl",
+            "ez.logfile",
+            "volatility.pslist",
+            "vshadow.files",
+        ):
+            model = clock_models[source_ids[source_name]]
+            assert model["outcome"]["status"] == "SUCCESS_NONEMPTY"
+            assert model["offset_ms"] == 1000
+            assert model["drift_ppm"] == 0.0
+            assert model["uncertainty_ms"] == 750
+            assert len(model["anchor_ids"]) == 2
+    finally:
+        db.close()
+
+
+def test_indexed_adapter_reports_recognized_schema_drift(tmp_path: Path) -> None:
+    db = CaseDB.create(case_id="drift-case", evidence_root="/evidence", db_dir=tmp_path)
+    audit = AuditLog(tmp_path / "drift.audit.jsonl")
+    try:
+        _register_source(db, "ez.logfile", "Offset,Payload\n0x00,raw-binary\n")
+        _register_source(db, "vshadow.files", "SnapshotId,Path\nshadow-1,C:\\bad.exe\n")
+        _register_source(db, "volatility.pslist", "PID\tName\n4\tSystem\n")
+        context = MagicMock(db=db, audit=audit)
+        with patch("mulder.server.tools.clock.get_ctx", return_value=context):
+            result = _tool_dispatch_sync["analyze_anti_forensics_clock"]()
+
+        coverage = {item["family"]: item for item in result["coverage"]}
+        assert coverage["logfile"]["outcome"]["status"] == "UNSUPPORTED_VERSION"
+        assert "schema lacks" in coverage["logfile"]["outcome"]["reason"]
+        assert coverage["vss"]["outcome"]["status"] == "UNSUPPORTED_VERSION"
+        assert coverage["process_file_state"]["outcome"]["status"] == (
+            "UNSUPPORTED_VERSION"
+        )
+        assert not any(
+            item["kind"] in {"logfile_change", "vss_file"}
+            for item in result["observations"]
+        )
+    finally:
+        db.close()
+
+
+def test_indexed_clock_anchor_schema_drift_is_loud(tmp_path: Path) -> None:
+    db = CaseDB.create(case_id="anchor-drift", evidence_root="/evidence", db_dir=tmp_path)
+    audit = AuditLog(tmp_path / "anchor-drift.audit.jsonl")
+    try:
+        indexed_sources = dict(_indexed_sources())
+        _register_source(
+            db,
+            "ez.mft",
+            indexed_sources["ez.mft"],
+        )
+        _register_source(db, "clock.anchors", "SourceName,Offset\nez.mft,1000\n")
+        context = MagicMock(db=db, audit=audit)
+        with patch("mulder.server.tools.clock.get_ctx", return_value=context):
+            result = _tool_dispatch_sync["analyze_anti_forensics_clock"]()
+
+        assert result["outcome"]["status"] == "UNSUPPORTED_VERSION"
+        assert "clock anchor CSV schema lacks" in result["outcome"]["reason"]
+        assert result["coverage"] == []
+        assert result["observations"] == []
     finally:
         db.close()

@@ -284,6 +284,7 @@ class ClockAnalysisResult(_StrictModel):
     case_id: str
     outcome: ToolOutcome
     coverage: tuple[SourceCoverage, ...]
+    clock_anchors: tuple[ClockAnchor, ...]
     clock_models: tuple[SourceClockModel, ...]
     observations: tuple[TemporalObservation, ...]
     findings: tuple[TemporalFinding, ...]
@@ -291,6 +292,24 @@ class ClockAnalysisResult(_StrictModel):
     @model_validator(mode="after")
     def _check_finding_graph(self) -> ClockAnalysisResult:
         observations = {item.observation_id: item for item in self.observations}
+        anchors = {item.anchor_id: item for item in self.clock_anchors}
+        for model in self.clock_models:
+            missing_anchors = set(model.anchor_ids) - anchors.keys()
+            if missing_anchors:
+                raise ValueError(
+                    f"clock model {model.source_id!r} references unknown anchors: "
+                    f"{sorted(missing_anchors)!r}"
+                )
+            wrong_source = [
+                anchor_id
+                for anchor_id in model.anchor_ids
+                if anchors[anchor_id].source_id != model.source_id
+            ]
+            if wrong_source:
+                raise ValueError(
+                    f"clock model {model.source_id!r} references anchors for another "
+                    f"source: {sorted(wrong_source)!r}"
+                )
         for finding in self.findings:
             referenced = set(finding.observation_ids) | set(
                 finding.independent_witness_ids
@@ -480,18 +499,13 @@ def _coverage(request: ClockEvidenceRequest) -> tuple[SourceCoverage, ...]:
     for family in ArtifactFamily:
         if family in covered:
             continue
-        if family in {ArtifactFamily.LOGFILE, ArtifactFamily.PROCESS_FILE_STATE}:
-            status = ToolOutcomeStatus.UNSUPPORTED_VERSION
-            reason = (
-                "no built-in raw parser Adapter; supply versioned normalized observations"
-            )
-        else:
-            status = ToolOutcomeStatus.UNAVAILABLE
-            reason = "required artifact family was not supplied"
         cells.append(
             SourceCoverage(
                 family=family,
-                outcome=ToolOutcome(status=status, reason=reason),
+                outcome=ToolOutcome(
+                    status=ToolOutcomeStatus.UNAVAILABLE,
+                    reason="required artifact family was not supplied",
+                ),
             )
         )
     return tuple(sorted(cells, key=lambda item: (item.family.value, item.source_id or "")))
@@ -754,6 +768,7 @@ def analyze_clock_evidence(
                     reason=f"unsupported clock evidence schema {schema!r} version {version!r}",
                 ),
                 coverage=(),
+                clock_anchors=(),
                 clock_models=(),
                 observations=(),
                 findings=(),
@@ -768,6 +783,7 @@ def analyze_clock_evidence(
                     reason=f"clock evidence schema drift or invalid normalized input: {exc}",
                 ),
                 coverage=(),
+                clock_anchors=(),
                 clock_models=(),
                 observations=(),
                 findings=(),
@@ -841,6 +857,7 @@ def analyze_clock_evidence(
             reason=reason,
         ),
         coverage=coverage,
+        clock_anchors=tuple(sorted(request.clock_anchors, key=lambda item: item.anchor_id)),
         clock_models=clock_models,
         observations=observations,
         findings=findings,

@@ -1,0 +1,37 @@
+{
+  "case_id": "adapter-case",
+  "sources": [
+    {
+      "source_name": "ez.mft",
+      "raw": "FileName,ParentPath,Created0x10,Created0x30,LastModified0x10\npayload.exe,C:\\Temp,2024-01-01T00:00:00Z,2024-03-01T12:00:00Z,2024-02-01T00:00:00Z\n"
+    },
+    {
+      "source_name": "ez.usnjrnl",
+      "raw": "FileName,ParentPath,USN,Timestamp,Reason\npayload.exe,C:\\Temp,100,2024-03-01T12:00:01Z,FILE_CREATE\nother.tmp,C:\\Temp,101,2024-02-28T11:00:00Z,CLOSE\n"
+    },
+    {
+      "source_name": "ez.logfile",
+      "raw": "LSN,Timestamp,Operation,FileName,ParentPath,TransactionId\n500,2024-03-01T12:00:00.500Z,Create,payload.exe,C:\\Temp,0x2a\n"
+    },
+    {
+      "source_name": "volatility.pslist",
+      "raw": "PID\tPPID\tImageFileName\tOffset(V)\tThreads\tHandles\tSessionId\tWow64\tCreateTime\tExitTime\tFile output\n4242\t4\tsvchost.exe\t0x9d01\t8\t120\t1\tFalse\t2024-03-01T12:00:00Z\t\tDisabled\n"
+    },
+    {
+      "source_name": "volatility.cmdline",
+      "raw": "PID\tProcess\tArgs\n4242\tsvchost.exe\tC:\\Temp\\payload.exe --service\n"
+    },
+    {
+      "source_name": "tsk.filelist",
+      "raw": "r/r 4-128-1: Windows/System32/notepad.exe\nr/r * 44-128-1: Temp/payload.exe\n"
+    },
+    {
+      "source_name": "vshadow.files",
+      "raw": "SnapshotId,FilePath,CreatedTimestamp,SnapshotCreatedTimestamp,UncertaintyMs\nshadow-1,C:\\Temp\\payload.exe,2024-03-01T12:00:02Z,2024-03-01T12:10:00Z,750\n"
+    },
+    {
+      "source_name": "clock.anchors",
+      "raw": "AnchorId,SourceName,SourceTimestamp,ReferenceTimestamp,ReferenceSource,SourceUncertaintyMs,ReferenceUncertaintyMs\nmft-1,ez.mft,2024-01-01T00:00:00Z,2024-01-01T00:00:01Z,gps.host,250,500\nmft-2,ez.mft,2024-03-01T00:00:00Z,2024-03-01T00:00:01Z,gps.host,250,500\nusn-1,ez.usnjrnl,2024-02-01T00:00:00Z,2024-02-01T00:00:01Z,gps.host,250,500\nusn-2,ez.usnjrnl,2024-03-01T00:00:00Z,2024-03-01T00:00:01Z,gps.host,250,500\nlogfile-1,ez.logfile,2024-02-01T00:00:00Z,2024-02-01T00:00:01Z,gps.host,250,500\nlogfile-2,ez.logfile,2024-03-01T00:00:00Z,2024-03-01T00:00:01Z,gps.host,250,500\nprocess-1,volatility.pslist,2024-02-01T00:00:00Z,2024-02-01T00:00:01Z,gps.host,250,500\nprocess-2,volatility.pslist,2024-03-01T00:00:00Z,2024-03-01T00:00:01Z,gps.host,250,500\nvss-1,vshadow.files,2024-02-01T00:00:00Z,2024-02-01T00:00:01Z,gps.host,250,500\nvss-2,vshadow.files,2024-03-01T00:00:00Z,2024-03-01T00:00:01Z,gps.host,250,500\n"
+    }
+  ]
+}

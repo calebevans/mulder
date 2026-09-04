@@ -159,14 +159,41 @@ different independence key. The sole no-witness exception is the versioned
 `ntfs-si-after-modified` rule at version `1.0`; other SI/FN differences remain
 `indicated`.
 
-The indexed-evidence Adapter supports the MFTECmd MFT/USN CSV and Mulder's
-python-evtx line formats. It inventories VSS creation times but cannot produce
-per-file VSS witnesses. Mulder does not currently include a raw `$LogFile`
-parser or a process/file-state normalizer. Those cells are reported as
-`UNSUPPORTED_VERSION`; absent MFT, USN, event-log, or VSS sources are
-`UNAVAILABLE`. Either state makes the aggregate result `PARTIAL`, never a
-clean result. Evidence-envelope flags are preserved as handling metadata and
-cannot create a finding.
+The indexed-evidence Adapter supports these exact local contracts:
+
+- MFTECmd MFT/USN CSV under `ez.mft*` and `ez.usnjrnl*`;
+- parsed `$LogFile` CSV under `ez.logfile*` or `ntfs.logfile*`, with LSN,
+  timestamp, operation, and either a full path or filename/parent columns;
+- Mulder's python-evtx line format under `evtx.*`;
+- running-process correlation from tab-separated `volatility.pslist*` and its
+  suffix-matched `volatility.cmdline*`, with normalized volume-relative
+  deleted-file checks against `tsk.filelist*` when a single process-list
+  evidence set is present;
+- libvshadow inventory under `vshadow.info*`, plus per-file VSS CSV under
+  `vshadow.files*` with snapshot ID, file path, and file creation timestamp;
+  and
+- independent calibration pairs under `clock.anchors*`, naming the target
+  source, source/reference timestamps, reference identity, and both
+  uncertainties.
+
+The Adapter calls a process running only when `pslist` has a typed creation
+time and no exit time. It reports a path mismatch only when the executable
+basename in `cmdline` disagrees with the `pslist` image name, and reports a
+deleted image only on an exact normalized volume-relative path match to an
+`fls` row marked deleted. Its process observation retains the exact `pslist`,
+`cmdline`, and deleted-file selectors/digests. VSS witnesses use file creation
+timestamps; snapshot inventory times alone are never promoted to file witnesses.
+Clock models require two positive-time-spanning anchors for drift; one anchor stays
+`PARTIAL` and no anchors stay `UNAVAILABLE`. Returned anchors retain their
+source/reference times, uncertainties, independent reference identity, digest,
+and exact CSV selector.
+
+This does not claim to parse raw binary `$LogFile` bytes or recover per-file
+timestamps from inventory-only VSS output. A missing family is `UNAVAILABLE`;
+a recognized source with incompatible columns is `UNSUPPORTED_VERSION`, and
+malformed rows make that source `PARTIAL`. Any incomplete state makes the
+aggregate result `PARTIAL`, never a clean result. Evidence-envelope flags are
+preserved as handling metadata and cannot create a finding.
 
 ## EVTX, Kubernetes, and CloudTrail pilots
 
