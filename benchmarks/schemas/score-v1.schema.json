@@ -1,5 +1,42 @@
 {
   "$defs": {
+    "AggregateScore": {
+      "additionalProperties": false,
+      "description": "Repeat-aware score distributions for one explicit matrix cell.",
+      "properties": {
+        "matrix_cell": {
+          "title": "Matrix Cell",
+          "type": "string"
+        },
+        "metrics": {
+          "additionalProperties": {
+            "$ref": "#/$defs/MetricDistribution"
+          },
+          "title": "Metrics",
+          "type": "object"
+        },
+        "repeat_count": {
+          "minimum": 1,
+          "title": "Repeat Count",
+          "type": "integer"
+        },
+        "run_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Run Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "matrix_cell",
+        "run_ids",
+        "repeat_count",
+        "metrics"
+      ],
+      "title": "AggregateScore",
+      "type": "object"
+    },
     "CaseScore": {
       "additionalProperties": false,
       "description": "Detailed score for a single benchmark case.",
@@ -264,38 +301,220 @@
       "title": "EpistemicScore",
       "type": "object"
     },
+    "MetricDistribution": {
+      "additionalProperties": false,
+      "description": "Population statistics for one metric across comparable repeats.",
+      "properties": {
+        "count": {
+          "minimum": 0,
+          "title": "Count",
+          "type": "integer"
+        },
+        "maximum": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Maximum"
+        },
+        "mean": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mean"
+        },
+        "minimum": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Minimum"
+        },
+        "population_stddev": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Population Stddev"
+        },
+        "population_variance": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Population Variance"
+        }
+      },
+      "required": [
+        "count"
+      ],
+      "title": "MetricDistribution",
+      "type": "object"
+    },
     "ResourceUsage": {
       "additionalProperties": false,
       "description": "Measured resources for one complete benchmark run.",
       "properties": {
         "cost_usd": {
-          "minimum": 0,
-          "title": "Cost Usd",
-          "type": "number"
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cost Usd"
         },
         "input_tokens": {
+          "default": 0,
           "minimum": 0,
           "title": "Input Tokens",
           "type": "integer"
         },
         "output_tokens": {
+          "default": 0,
           "minimum": 0,
           "title": "Output Tokens",
           "type": "integer"
         },
         "runtime_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Runtime Ms"
+        },
+        "unattributed_tokens": {
+          "default": 0,
           "minimum": 0,
-          "title": "Runtime Ms",
+          "title": "Unattributed Tokens",
           "type": "integer"
         }
       },
-      "required": [
-        "runtime_ms",
-        "input_tokens",
-        "output_tokens",
-        "cost_usd"
-      ],
       "title": "ResourceUsage",
+      "type": "object"
+    },
+    "RunIdentity": {
+      "additionalProperties": false,
+      "description": "Comparable run identity for repeats, matrices, and ablations.",
+      "properties": {
+        "ablations": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Ablations",
+          "type": "array"
+        },
+        "matrix_cell": {
+          "minLength": 1,
+          "title": "Matrix Cell",
+          "type": "string"
+        },
+        "methodology_version": {
+          "minLength": 1,
+          "title": "Methodology Version",
+          "type": "string"
+        },
+        "models": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Models",
+          "type": "object"
+        },
+        "orchestrator_version": {
+          "minLength": 1,
+          "title": "Orchestrator Version",
+          "type": "string"
+        },
+        "prompt_set_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Prompt Set Sha256"
+        },
+        "repeat_index": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Repeat Index",
+          "type": "integer"
+        },
+        "seed": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Seed"
+        },
+        "toolset_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Toolset Sha256"
+        }
+      },
+      "required": [
+        "matrix_cell",
+        "orchestrator_version",
+        "methodology_version"
+      ],
+      "title": "RunIdentity",
       "type": "object"
     },
     "RunScore": {
@@ -311,6 +530,17 @@
         },
         "clean": {
           "$ref": "#/$defs/ScoreSlice"
+        },
+        "identity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "nonempty": {
           "$ref": "#/$defs/ScoreSlice"
@@ -468,6 +698,11 @@
           "title": "Accuracy",
           "type": "number"
         },
+        "completed_cases": {
+          "minimum": 0,
+          "title": "Completed Cases",
+          "type": "integer"
+        },
         "correct": {
           "minimum": 0,
           "title": "Correct",
@@ -481,6 +716,11 @@
         "expected_no_verdict": {
           "minimum": 0,
           "title": "Expected No Verdict",
+          "type": "integer"
+        },
+        "failed_cases": {
+          "minimum": 0,
+          "title": "Failed Cases",
           "type": "integer"
         },
         "no_verdict": {
@@ -513,6 +753,8 @@
       },
       "required": [
         "total_cases",
+        "completed_cases",
+        "failed_cases",
         "correct",
         "no_verdict",
         "expected_no_verdict",
@@ -529,6 +771,13 @@
   "additionalProperties": false,
   "description": "Deterministic comparison artifact emitted by the benchmark CLI.",
   "properties": {
+    "aggregates": {
+      "items": {
+        "$ref": "#/$defs/AggregateScore"
+      },
+      "title": "Aggregates",
+      "type": "array"
+    },
     "benchmark_id": {
       "title": "Benchmark Id",
       "type": "string"

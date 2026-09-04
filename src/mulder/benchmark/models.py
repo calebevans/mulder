@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -219,6 +220,8 @@ class CaseRunResult(StrictModel):
 
     case_id: str = Field(min_length=1)
     verdict: Verdict
+    cell_status: Literal["completed", "failed", "no_verdict"] = "completed"
+    failure_reason: str | None = Field(default=None, min_length=1)
     claims: list[ObservedClaim] = Field(default_factory=list)
     coverage: list[ObservedCoverage] = Field(default_factory=list)
 
@@ -230,20 +233,91 @@ class CaseRunResult(StrictModel):
         domains = [item.domain for item in self.coverage]
         if len(set(domains)) != len(domains):
             raise ValueError("observed coverage domains must be unique within a case")
+        if self.cell_status == "failed":
+            if self.failure_reason is None:
+                raise ValueError("failed cells require failure_reason")
+            if self.verdict != "no_verdict":
+                raise ValueError("failed cells must use the no_verdict verdict")
+        elif self.failure_reason is not None:
+            raise ValueError("failure_reason is valid only for failed cells")
+        if self.cell_status == "no_verdict" and self.verdict != "no_verdict":
+            raise ValueError("no_verdict cells must use the no_verdict verdict")
         return self
 
 
 class ResourceUsage(StrictModel):
     """Measured resources for one complete benchmark run."""
 
-    runtime_ms: int = Field(ge=0)
-    input_tokens: int = Field(ge=0)
-    output_tokens: int = Field(ge=0)
-    cost_usd: float = Field(ge=0)
+    runtime_ms: int | None = Field(default=None, ge=0)
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    unattributed_tokens: int = Field(default=0, ge=0)
+    cost_usd: float | None = Field(default=None, ge=0)
 
     @property
     def total_tokens(self) -> int:
-        return self.input_tokens + self.output_tokens
+        return self.input_tokens + self.output_tokens + self.unattributed_tokens
+
+
+class RunIdentity(StrictModel):
+    """Comparable run identity for repeats, matrices, and ablations."""
+
+    matrix_cell: str = Field(min_length=1)
+    models: dict[str, str] = Field(default_factory=dict)
+    prompt_set_sha256: Sha256 | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    toolset_sha256: Sha256 | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    orchestrator_version: str = Field(min_length=1)
+    methodology_version: str = Field(min_length=1)
+    repeat_index: int = Field(default=0, ge=0)
+    seed: int | None = None
+    ablations: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _check_identity(self) -> RunIdentity:
+        if any(not role.strip() or not model.strip() for role, model in self.models.items()):
+            raise ValueError("model role and identifier values must be non-empty")
+        if len(set(self.ablations)) != len(self.ablations):
+            raise ValueError("ablation labels must be unique")
+        return self
+
+
+class SourceAdjudicationItem(StrictModel):
+    """One unchanged label imported from an earlier human adjudication."""
+
+    item_id: str = Field(min_length=1)
+    status: str = Field(min_length=1)
+    ground_truth: str = Field(min_length=1)
+    observed: str = Field(min_length=1)
+
+
+class SourceAdjudication(StrictModel):
+    """Provenance envelope retaining a historical evaluation verbatim."""
+
+    scheme: str = Field(min_length=1)
+    source_path: str = Field(min_length=1)
+    source_sha256: Sha256 = Field(pattern=r"^[0-9a-f]{64}$")
+    reported_counts: dict[str, int] = Field(min_length=1)
+    items: list[SourceAdjudicationItem] = Field(min_length=1)
+    count_mismatch_note: str | None = Field(default=None, min_length=1)
+    note: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _check_adjudication(self) -> SourceAdjudication:
+        if any(count < 0 for count in self.reported_counts.values()):
+            raise ValueError("adjudication counts cannot be negative")
+        item_ids = [item.item_id for item in self.items]
+        if len(set(item_ids)) != len(item_ids):
+            raise ValueError("adjudication item IDs must be unique")
+        actual = Counter(item.status for item in self.items)
+        if dict(actual) != self.reported_counts and self.count_mismatch_note is None:
+            raise ValueError(
+                "a count_mismatch_note is required when reported_counts differ from item statuses"
+            )
+        if dict(actual) == self.reported_counts and self.count_mismatch_note is not None:
+            raise ValueError(
+                "count_mismatch_note is valid only when reported_counts differ from item statuses"
+            )
+        return self
 
 
 class BenchmarkRunResult(StrictModel):
@@ -254,8 +328,10 @@ class BenchmarkRunResult(StrictModel):
     run_id: str = Field(min_length=1)
     system_name: str = Field(min_length=1)
     system_version: str = Field(min_length=1)
+    identity: RunIdentity | None = None
     cases: list[CaseRunResult] = Field(min_length=1)
     resources: ResourceUsage
+    source_adjudication: SourceAdjudication | None = None
 
     @model_validator(mode="after")
     def _check_case_ids(self) -> BenchmarkRunResult:
@@ -321,6 +397,8 @@ class VerdictScore(StrictModel):
     """Verdict accuracy and abstention/unsafe-clean behavior."""
 
     total_cases: int = Field(ge=0)
+    completed_cases: int = Field(ge=0)
+    failed_cases: int = Field(ge=0)
     correct: int = Field(ge=0)
     no_verdict: int = Field(ge=0)
     expected_no_verdict: int = Field(ge=0)
@@ -359,12 +437,33 @@ class RunScore(StrictModel):
     run_id: str
     system_name: str
     system_version: str
+    identity: RunIdentity | None = None
     result_sha256: Sha256 = Field(pattern=r"^[0-9a-f]{64}$")
     overall: ScoreSlice
     clean: ScoreSlice
     nonempty: ScoreSlice
     cases: list[CaseScore]
     resources: ResourceUsage
+
+
+class MetricDistribution(StrictModel):
+    """Population statistics for one metric across comparable repeats."""
+
+    count: int = Field(ge=0)
+    mean: float | None = None
+    population_variance: float | None = Field(default=None, ge=0)
+    population_stddev: float | None = Field(default=None, ge=0)
+    minimum: float | None = None
+    maximum: float | None = None
+
+
+class AggregateScore(StrictModel):
+    """Repeat-aware score distributions for one explicit matrix cell."""
+
+    matrix_cell: str
+    run_ids: list[str]
+    repeat_count: int = Field(ge=1)
+    metrics: dict[str, MetricDistribution]
 
 
 class BenchmarkScoreDocument(StrictModel):
@@ -376,3 +475,4 @@ class BenchmarkScoreDocument(StrictModel):
     manifest_sha256: Sha256 = Field(pattern=r"^[0-9a-f]{64}$")
     methodology_version: Literal["1.0"] = METHODOLOGY_VERSION
     runs: list[RunScore]
+    aggregates: list[AggregateScore] = Field(default_factory=list)

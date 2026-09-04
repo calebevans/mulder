@@ -1,0 +1,250 @@
+{
+  "benchmark_id": "nist-cfreds-ndlc-2015-historical",
+  "cases": [
+    {
+      "anchors": [],
+      "applicability": [
+        "real:disk-images",
+        "forensics:data-leakage"
+      ],
+      "case_id": "ndlc-2015",
+      "coverage": [
+        {
+          "acceptable_statuses": [
+            "PARTIAL"
+          ],
+          "applicability": "applicable",
+          "domain": "legacy/human-adjudication",
+          "expected_content": "nonempty"
+        }
+      ],
+      "evidence": [
+        {
+          "artifact_id": "pc-archive-part",
+          "license": {
+            "name": "NIST CFReDS published dataset terms (verify at source)",
+            "url": "https://cfreds-archive.nist.gov/"
+          },
+          "origin": "real",
+          "path": "downloads/pc.7z.001",
+          "redistribution": "manifest_only",
+          "sha256": "7409b09714121f56be88f161450ebad92e194ff0554462be3187525eb76aa695",
+          "source_url": "https://cfreds-archive.nist.gov/data_leakage_case/data-leakage-case.html"
+        },
+        {
+          "artifact_id": "pc-e01",
+          "license": {
+            "name": "NIST CFReDS published dataset terms (verify at source)",
+            "url": "https://cfreds-archive.nist.gov/"
+          },
+          "origin": "real",
+          "path": "downloads/pc.E01",
+          "redistribution": "manifest_only",
+          "sha256": "e6365e44f1004252171acb73e6779be05277cbd57d09d7febed22d2463a956a9",
+          "source_url": "https://cfreds-archive.nist.gov/data_leakage_case/data-leakage-case.html"
+        },
+        {
+          "artifact_id": "rm1-e01",
+          "license": {
+            "name": "NIST CFReDS published dataset terms (verify at source)",
+            "url": "https://cfreds-archive.nist.gov/"
+          },
+          "origin": "real",
+          "path": "downloads/rm1.E01",
+          "redistribution": "manifest_only",
+          "sha256": "a14150a21bc1e3700b51912c2ab20cd9587ad3e27ee67475af64508a7e760121",
+          "source_url": "https://cfreds-archive.nist.gov/data_leakage_case/data-leakage-case.html"
+        },
+        {
+          "artifact_id": "rm2-archive",
+          "license": {
+            "name": "NIST CFReDS published dataset terms (verify at source)",
+            "url": "https://cfreds-archive.nist.gov/"
+          },
+          "origin": "real",
+          "path": "downloads/rm2.7z",
+          "redistribution": "manifest_only",
+          "sha256": "ade9fb60ba1f700b93c6b8b1f538c72000411e5b30037dc95c300c5a0aeafd65",
+          "source_url": "https://cfreds-archive.nist.gov/data_leakage_case/data-leakage-case.html"
+        },
+        {
+          "artifact_id": "rm2-e01",
+          "license": {
+            "name": "NIST CFReDS published dataset terms (verify at source)",
+            "url": "https://cfreds-archive.nist.gov/"
+          },
+          "origin": "real",
+          "path": "downloads/rm2.E01",
+          "redistribution": "manifest_only",
+          "sha256": "25215f9bcb51ceee9147886ed3f5c13ef148de634fc5114491e0f8dad8b15696",
+          "source_url": "https://cfreds-archive.nist.gov/data_leakage_case/data-leakage-case.html"
+        },
+        {
+          "artifact_id": "rm3-type1-archive",
+          "license": {
+            "name": "NIST CFReDS published dataset terms (verify at source)",
+            "url": "https://cfreds-archive.nist.gov/"
+          },
+          "origin": "real",
+          "path": "downloads/rm3_type1.7z",
+          "redistribution": "manifest_only",
+          "sha256": "f30f3408bf1a0eec5a34851c66a711634618430ac1794b24afa917b3b2c729e1",
+          "source_url": "https://cfreds-archive.nist.gov/data_leakage_case/data-leakage-case.html"
+        },
+        {
+          "artifact_id": "rm3-type2-archive",
+          "license": {
+            "name": "NIST CFReDS published dataset terms (verify at source)",
+            "url": "https://cfreds-archive.nist.gov/"
+          },
+          "origin": "real",
+          "path": "downloads/rm3_type2.7z",
+          "redistribution": "manifest_only",
+          "sha256": "9e6137a9b101ef7ff7e12fcf8740a83a559179d0d3d75daedf4b1c40e98a8fef",
+          "source_url": "https://cfreds-archive.nist.gov/data_leakage_case/data-leakage-case.html"
+        },
+        {
+          "artifact_id": "rm3-type3-e01",
+          "license": {
+            "name": "NIST CFReDS published dataset terms (verify at source)",
+            "url": "https://cfreds-archive.nist.gov/"
+          },
+          "origin": "real",
+          "path": "downloads/rm3_type3.E01",
+          "redistribution": "manifest_only",
+          "sha256": "336e1307721ef5f63679379961d1716b74f986e69df8c40117d9cea7858d512b",
+          "source_url": "https://cfreds-archive.nist.gov/data_leakage_case/data-leakage-case.html"
+        }
+      ],
+      "expected_claims": [
+        {
+          "claim_id": "ndlc-01",
+          "object_value": "Suspect identity: \"Iaman Informant\" (iaman.informant@nist.gov)",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:01"
+        },
+        {
+          "claim_id": "ndlc-02",
+          "object_value": "PC OS: Windows 7 Ultimate 64-bit, standalone WORKGROUP",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:02"
+        },
+        {
+          "claim_id": "ndlc-03",
+          "object_value": "USB Device 1: SanDisk Cruzer Fit, S/N 4C530012450531101593, exFAT, \"Authorized USB\"",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:03"
+        },
+        {
+          "claim_id": "ndlc-04",
+          "object_value": "USB Device 2: SanDisk Cruzer Fit, S/N 4C530012550531106501, FAT32, \"IAMAN $_@\"",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:04"
+        },
+        {
+          "claim_id": "ndlc-05",
+          "object_value": "RM3: CD-ROM, UDF filesystem, formatted March 24, 2015 (16:53:17 UTC)",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:05"
+        },
+        {
+          "claim_id": "ndlc-06",
+          "object_value": "Five Secret Project documents exfiltrated to USB",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:06"
+        },
+        {
+          "claim_id": "ndlc-07",
+          "object_value": "File masquerading: Documents renamed with false extensions on RM2 FAT32",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:07"
+        },
+        {
+          "claim_id": "ndlc-08",
+          "object_value": "Anti-forensics tools: CCleaner and Eraser deployed",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:08"
+        },
+        {
+          "claim_id": "ndlc-09",
+          "object_value": "Search history reveals premeditation (leakage methods, anti-forensics)",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:09"
+        },
+        {
+          "claim_id": "ndlc-10",
+          "object_value": "Google Drive sync installed for cloud exfiltration",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:10"
+        },
+        {
+          "claim_id": "ndlc-11",
+          "object_value": "iCloud setup downloaded (secondary cloud channel)",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:11"
+        },
+        {
+          "claim_id": "ndlc-12",
+          "object_value": "USB connection timestamps via EVTX System log",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:12"
+        },
+        {
+          "claim_id": "ndlc-13",
+          "object_value": "Exfiltration timeline: Feb 15 bulk copy (42-second window)",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:13"
+        },
+        {
+          "claim_id": "ndlc-14",
+          "object_value": "Anti-forensics: CCleaner deployed but did not clean (launched and closed without action)",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:14"
+        },
+        {
+          "claim_id": "ndlc-15",
+          "object_value": "Systematic file deletion on RM2 FAT32 (Mar 24, 09:54-10:00)",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:15"
+        },
+        {
+          "claim_id": "ndlc-16",
+          "object_value": "RM3 contains government documents matching Secret Project content",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:16"
+        },
+        {
+          "claim_id": "ndlc-17",
+          "object_value": "Files opened in RM2 (list all accessed files)",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:17"
+        },
+        {
+          "claim_id": "ndlc-18",
+          "object_value": "Network drive directories traversed",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:18"
+        },
+        {
+          "claim_id": "ndlc-19",
+          "object_value": "Email communication with spy.conspirator@nist.gov",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:19"
+        },
+        {
+          "claim_id": "ndlc-20",
+          "object_value": "FAT32 timezone offset (local time vs UTC)",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:20"
+        }
+      ],
+      "expected_verdict": "positive",
+      "ground_truth_label": "nonempty",
+      "title": "NIST CFReDS Data Leakage Case 2015"
+    }
+  ],
+  "description": "A normalization of examples/ndlc/ACCURACY-REPORT.md. The answer-key items and human labels are preserved; this does not re-run the case.",
+  "methodology_version": "1.0",
+  "schema_version": 1,
+  "title": "NIST CFReDS Data Leakage Case 2015 \u2014 historical Mulder run"
+}

@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "benchmark_id": "mulder-ci-small",
+  "run_id": "ci-offline-reference-0",
+  "system_name": "mulder-reference-normalizer",
+  "system_version": "1",
+  "identity": {
+    "matrix_cell": "ci/offline-reference",
+    "models": {"normalizer": "none"},
+    "orchestrator_version": "fixture-v1",
+    "methodology_version": "1.0",
+    "repeat_index": 0,
+    "seed": 0,
+    "ablations": ["no-model", "no-network"]
+  },
+  "cases": [
+    {
+      "case_id": "clean-control",
+      "verdict": "no_evil_within_coverage",
+      "claims": [],
+      "coverage": [{"domain": "synthetic/events", "status": "SUCCESS_EMPTY"}]
+    },
+    {
+      "case_id": "distractor",
+      "verdict": "positive",
+      "claims": [
+        {
+          "claim_id": "observed-process",
+          "subject": "process:412",
+          "predicate": "image_name",
+          "object_value": "powershell.exe",
+          "verification_state": "verified",
+          "citations": ["distractor-process-anchor"]
+        },
+        {
+          "claim_id": "observed-destination",
+          "subject": "connection:412:443",
+          "predicate": "ip_equals",
+          "object_value": "203.0.113.77",
+          "qualifiers": {"port": 443},
+          "verification_state": "verified",
+          "citations": ["distractor-destination-anchor"]
+        }
+      ],
+      "coverage": [{"domain": "synthetic/events", "status": "SUCCESS_NONEMPTY"}]
+    },
+    {
+      "case_id": "prompt-render-injection",
+      "verdict": "no_evil_within_coverage",
+      "claims": [],
+      "coverage": [{"domain": "synthetic/events", "status": "SUCCESS_EMPTY"}]
+    },
+    {
+      "case_id": "unsupported-version",
+      "verdict": "no_verdict",
+      "cell_status": "no_verdict",
+      "claims": [],
+      "coverage": [{"domain": "synthetic/vendor-x", "status": "UNSUPPORTED_VERSION"}]
+    },
+    {
+      "case_id": "truncated-evidence",
+      "verdict": "no_verdict",
+      "cell_status": "no_verdict",
+      "claims": [],
+      "coverage": [{"domain": "synthetic/segments", "status": "PARTIAL"}]
+    }
+  ],
+  "resources": {
+    "runtime_ms": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "unattributed_tokens": 0,
+    "cost_usd": 0.0
+  }
+}

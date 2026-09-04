@@ -73,6 +73,12 @@ jobs:
       - name: Run tests
         run: uv run --locked --extra dev --python ${{ matrix.python-version }} pytest tests/ -v
 
+      - name: Run deterministic benchmark subset
+        run: >-
+          uv run --locked --extra dev --python ${{ matrix.python-version }} mulder benchmark
+          benchmarks/ci/manifest-v1.yaml benchmarks/ci/result-reference.json
+          --output benchmark-ci-score.json
+
   dists:
     name: Build and check distributions
     runs-on: ubuntu-latest

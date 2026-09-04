@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import statistics
 from collections import Counter
 from collections.abc import Hashable, Iterable
 from dataclasses import dataclass
 from typing import Literal, TypeAlias, TypeVar
 
 from mulder.benchmark.models import (
+    AggregateScore,
     BenchmarkCase,
     BenchmarkManifest,
     BenchmarkRunResult,
@@ -21,6 +23,7 @@ from mulder.benchmark.models import (
     CoverageScore,
     EpistemicScore,
     ExpectedClaim,
+    MetricDistribution,
     ObservedClaim,
     RunScore,
     ScoreSlice,
@@ -94,9 +97,7 @@ def _set_score(expected: set[SetKeyT], observed: set[SetKeyT]) -> SetScore:
     precision = _rate(tp, tp + fp, empty=1.0 if not expected else 0.0)
     recall = _rate(tp, tp + fn, empty=1.0)
     f1 = (
-        0.0
-        if precision + recall == 0
-        else round(2 * precision * recall / (precision + recall), 6)
+        0.0 if precision + recall == 0 else round(2 * precision * recall / (precision + recall), 6)
     )
     return SetScore(
         true_positive=tp,
@@ -152,6 +153,8 @@ class _RawCaseScore:
     expected_no_verdict: int
     correct_no_verdict: int
     unsafe_clean_verdicts: int
+    completed_cases: int
+    failed_cases: int
     duplicate_claims: int
     duplicate_citations: int
 
@@ -190,9 +193,7 @@ def _score_case(manifest_case: BenchmarkCase, run_case: CaseRunResult) -> _RawCa
                 claim_has_valid_citation = True
         claims_with_valid_citation += int(claim_has_valid_citation)
 
-    state_counts: Counter[str] = Counter(
-        claim.verification_state for claim in run_case.claims
-    )
+    state_counts: Counter[str] = Counter(claim.verification_state for claim in run_case.claims)
     expected_coverage = {item.domain: item for item in manifest_case.coverage}
     observed_coverage = {item.domain: item.status for item in run_case.coverage}
     matched_expected_outcomes = 0
@@ -210,10 +211,16 @@ def _score_case(manifest_case: BenchmarkCase, run_case: CaseRunResult) -> _RawCa
             )
             completed_required_domains += int(complete)
 
-    verdict_correct = int(run_case.verdict == manifest_case.expected_verdict)
+    # An infrastructure failure is never a correct analytical abstention, even
+    # when the answer key itself expects no_verdict.
+    verdict_correct = int(
+        run_case.cell_status != "failed" and run_case.verdict == manifest_case.expected_verdict
+    )
     no_verdict = int(run_case.verdict == "no_verdict")
     expected_no_verdict = int(manifest_case.expected_verdict == "no_verdict")
-    correct_no_verdict = int(no_verdict and expected_no_verdict)
+    correct_no_verdict = int(
+        run_case.cell_status != "failed" and no_verdict and expected_no_verdict
+    )
     required_complete = completed_required_domains == required_domains
     unsafe_clean_verdicts = int(
         run_case.verdict == "no_evil_within_coverage"
@@ -246,6 +253,8 @@ def _score_case(manifest_case: BenchmarkCase, run_case: CaseRunResult) -> _RawCa
         expected_no_verdict=expected_no_verdict,
         correct_no_verdict=correct_no_verdict,
         unsafe_clean_verdicts=unsafe_clean_verdicts,
+        completed_cases=int(run_case.cell_status == "completed"),
+        failed_cases=int(run_case.cell_status == "failed"),
         duplicate_claims=duplicate_claims,
         duplicate_citations=duplicate_citations,
     )
@@ -277,9 +286,7 @@ def _aggregate(raw_scores: list[_RawCaseScore]) -> ScoreSlice:
     citation_resolved = sum(score.citation_resolved for score in raw_scores)
     citation_valid = sum(score.citation_valid for score in raw_scores)
     verified_claims = sum(score.verified_claims for score in raw_scores)
-    claims_with_valid_citation = sum(
-        score.claims_with_valid_citation for score in raw_scores
-    )
+    claims_with_valid_citation = sum(score.claims_with_valid_citation for score in raw_scores)
     total_claims = sum(states.values())
     expected_domains = sum(score.expected_domains for score in raw_scores)
     matched_expected_outcomes = sum(score.matched_expected_outcomes for score in raw_scores)
@@ -305,9 +312,7 @@ def _aggregate(raw_scores: list[_RawCaseScore]) -> ScoreSlice:
             uncited_verified_claims=sum(score.uncited_verified_claims for score in raw_scores),
             resolution_rate=_rate(citation_resolved, citation_total, empty=1.0),
             validity_rate=_rate(citation_valid, citation_total, empty=1.0),
-            claim_citation_rate=_rate(
-                claims_with_valid_citation, verified_claims, empty=1.0
-            ),
+            claim_citation_rate=_rate(claims_with_valid_citation, verified_claims, empty=1.0),
         ),
         epistemic=EpistemicScore(
             total_claims=total_claims,
@@ -326,15 +331,13 @@ def _aggregate(raw_scores: list[_RawCaseScore]) -> ScoreSlice:
             required_domains=required_domains,
             completed_required_domains=completed_required,
             unexpected_domains=sum(score.unexpected_domains for score in raw_scores),
-            expectation_accuracy=_rate(
-                matched_expected_outcomes, expected_domains, empty=1.0
-            ),
-            required_completeness=_rate(
-                completed_required, required_domains, empty=1.0
-            ),
+            expectation_accuracy=_rate(matched_expected_outcomes, expected_domains, empty=1.0),
+            required_completeness=_rate(completed_required, required_domains, empty=1.0),
         ),
         verdicts=VerdictScore(
             total_cases=total_cases,
+            completed_cases=sum(score.completed_cases for score in raw_scores),
+            failed_cases=sum(score.failed_cases for score in raw_scores),
             correct=verdict_correct,
             no_verdict=no_verdict,
             expected_no_verdict=expected_no_verdict,
@@ -350,6 +353,117 @@ def _aggregate(raw_scores: list[_RawCaseScore]) -> ScoreSlice:
         ),
         duplicate_claims=sum(score.duplicate_claims for score in raw_scores),
         duplicate_citations=sum(score.duplicate_citations for score in raw_scores),
+    )
+
+
+def _distribution(values: Iterable[int | float | None]) -> MetricDistribution:
+    """Build stable population statistics, retaining an explicit zero count."""
+    samples = [float(value) for value in values if value is not None]
+    if not samples:
+        return MetricDistribution(count=0)
+    mean = round(statistics.fmean(samples), 6)
+    variance = round(statistics.pvariance(samples), 6)
+    stddev = round(statistics.pstdev(samples), 6)
+    return MetricDistribution(
+        count=len(samples),
+        mean=mean,
+        population_variance=variance,
+        population_stddev=stddev,
+        minimum=round(min(samples), 6),
+        maximum=round(max(samples), 6),
+    )
+
+
+def _aggregate_repeats(runs: list[RunScore]) -> list[AggregateScore]:
+    by_cell: dict[str, list[RunScore]] = {}
+    for run in runs:
+        cell = (
+            run.identity.matrix_cell
+            if run.identity is not None
+            else f"{run.system_name}@{run.system_version}"
+        )
+        by_cell.setdefault(cell, []).append(run)
+
+    aggregates: list[AggregateScore] = []
+    for cell, cell_runs in sorted(by_cell.items()):
+        cell_runs.sort(key=lambda run: run.run_id)
+        metrics = {
+            "atomic_claims.precision": _distribution(
+                run.overall.atomic_claims.precision for run in cell_runs
+            ),
+            "atomic_claims.recall": _distribution(
+                run.overall.atomic_claims.recall for run in cell_runs
+            ),
+            "atomic_claims.f1": _distribution(run.overall.atomic_claims.f1 for run in cell_runs),
+            "entities.f1": _distribution(run.overall.entities.f1 for run in cell_runs),
+            "predicates.f1": _distribution(run.overall.predicates.f1 for run in cell_runs),
+            "citations.validity_rate": _distribution(
+                run.overall.citations.validity_rate for run in cell_runs
+            ),
+            "citations.claim_citation_rate": _distribution(
+                run.overall.citations.claim_citation_rate for run in cell_runs
+            ),
+            "coverage.expectation_accuracy": _distribution(
+                run.overall.coverage.expectation_accuracy for run in cell_runs
+            ),
+            "coverage.required_completeness": _distribution(
+                run.overall.coverage.required_completeness for run in cell_runs
+            ),
+            "verdicts.accuracy": _distribution(run.overall.verdicts.accuracy for run in cell_runs),
+            "verdicts.no_verdict_rate": _distribution(
+                run.overall.verdicts.no_verdict_rate for run in cell_runs
+            ),
+            "verdicts.failed_cases": _distribution(
+                run.overall.verdicts.failed_cases for run in cell_runs
+            ),
+            "verdicts.failed_rate": _distribution(
+                _rate(run.overall.verdicts.failed_cases, run.overall.case_count)
+                for run in cell_runs
+            ),
+            "verdicts.completed_rate": _distribution(
+                _rate(run.overall.verdicts.completed_cases, run.overall.case_count)
+                for run in cell_runs
+            ),
+            "epistemic.unsupported_rate": _distribution(
+                run.overall.epistemic.unsupported_rate for run in cell_runs
+            ),
+            "epistemic.contradicted_rate": _distribution(
+                run.overall.epistemic.contradicted_rate for run in cell_runs
+            ),
+            "epistemic.inconclusive_rate": _distribution(
+                run.overall.epistemic.inconclusive_rate for run in cell_runs
+            ),
+            "resources.runtime_ms": _distribution(run.resources.runtime_ms for run in cell_runs),
+            "resources.total_tokens": _distribution(
+                run.resources.total_tokens for run in cell_runs
+            ),
+            "resources.cost_usd": _distribution(run.resources.cost_usd for run in cell_runs),
+        }
+        aggregates.append(
+            AggregateScore(
+                matrix_cell=cell,
+                run_ids=[run.run_id for run in cell_runs],
+                repeat_count=len(cell_runs),
+                metrics=metrics,
+            )
+        )
+    return aggregates
+
+
+def _matrix_identity_key(run: BenchmarkRunResult) -> tuple[object, ...] | None:
+    """Return cell-invariant provenance, excluding repeat index and seed."""
+    identity = run.identity
+    if identity is None:
+        return None
+    return (
+        run.system_name,
+        run.system_version,
+        tuple(sorted(identity.models.items())),
+        identity.prompt_set_sha256,
+        identity.toolset_sha256,
+        identity.orchestrator_version,
+        identity.methodology_version,
+        tuple(sorted(identity.ablations)),
     )
 
 
@@ -370,6 +484,8 @@ def score_benchmark(
     expected_case_ids = set(manifest_cases)
     run_scores: list[RunScore] = []
     seen_run_ids: set[str] = set()
+    seen_repeats: set[tuple[str, int]] = set()
+    matrix_identities: dict[str, tuple[object, ...]] = {}
     for result in results:
         if result.benchmark_id != manifest.benchmark_id:
             raise ValueError(
@@ -379,6 +495,29 @@ def score_benchmark(
         if result.run_id in seen_run_ids:
             raise ValueError(f"duplicate run_id: {result.run_id!r}")
         seen_run_ids.add(result.run_id)
+        if result.identity is not None:
+            if result.identity.methodology_version != manifest.methodology_version:
+                raise ValueError(
+                    f"run {result.run_id!r} methodology version "
+                    f"{result.identity.methodology_version!r} does not match manifest "
+                    f"{manifest.methodology_version!r}"
+                )
+            repeat = (result.identity.matrix_cell, result.identity.repeat_index)
+            if repeat in seen_repeats:
+                raise ValueError(
+                    f"duplicate repeat_index {repeat[1]} for matrix cell {repeat[0]!r}"
+                )
+            seen_repeats.add(repeat)
+            identity_key = _matrix_identity_key(result)
+            assert identity_key is not None
+            earlier_identity = matrix_identities.setdefault(
+                result.identity.matrix_cell, identity_key
+            )
+            if identity_key != earlier_identity:
+                raise ValueError(
+                    f"matrix cell {result.identity.matrix_cell!r} has inconsistent "
+                    "system/model/prompt/tool/orchestrator/methodology/ablation identity"
+                )
         result_cases = {case.case_id: case for case in result.cases}
         if set(result_cases) != expected_case_ids:
             missing = sorted(expected_case_ids - set(result_cases))
@@ -398,6 +537,7 @@ def score_benchmark(
                 run_id=result.run_id,
                 system_name=result.system_name,
                 system_version=result.system_version,
+                identity=result.identity,
                 result_sha256=_document_hash(result),
                 overall=_aggregate(raw),
                 clean=_aggregate(clean),
@@ -415,4 +555,5 @@ def score_benchmark(
         manifest_sha256=_document_hash(manifest),
         methodology_version=manifest.methodology_version,
         runs=run_scores,
+        aggregates=_aggregate_repeats(run_scores),
     )

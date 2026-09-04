@@ -1,0 +1,2 @@
+2026-01-02T03:04:05Z host=lab-01 process=explorer.exe action=start result=success
+2026-01-02T03:04:06Z host=lab-01 user=analyst action=interactive_logon result=success

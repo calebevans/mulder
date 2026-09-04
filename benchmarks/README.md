@@ -11,6 +11,14 @@ mulder benchmark benchmarks/fixtures/manifest-v1.yaml \
   --output benchmark-scores.json
 ```
 
+For the five-case synthetic smoke set used by CI:
+
+```console
+mulder benchmark benchmarks/ci/manifest-v1.yaml \
+  benchmarks/ci/result-reference.json \
+  --output benchmark-ci-score.json
+```
+
 The manifest is the answer-key contract. It records case applicability tags,
 clean versus nonempty ground truth, expected coverage outcomes, content hashes,
 redistribution status, and license metadata. Every evidence artifact must use
@@ -38,12 +46,40 @@ precision and recall are defined as 1 only when the corresponding empty result
 is correct, so clean controls do not produce undefined values.
 
 Every result must include every manifest case. A system that cannot complete a
-case records the failed/unsupported coverage status and `no_verdict`; silently
-omitting hard cases is rejected as incomparable. The table's `U/C/I` column is
+case records `cell_status: failed`, a reason, and `no_verdict`. A completed
+case that correctly abstains records `cell_status: no_verdict`. Unsupported or
+partial coverage is recorded separately; silently omitting hard cases is
+rejected as incomparable. The table's `U/C/I` column is
 the unsupported/contradicted/inconclusive distribution. Runtime is milliseconds,
-tokens combine input and output, and cost is USD. Output hashes bind the
+tokens combine input, output, and explicitly unattributed historical totals,
+and cost is USD. Unknown runtime and cost stay `null`, never synthetic zeroes.
+Output hashes bind the
 canonical semantic manifest and result objects, so JSON/YAML formatting changes
 do not create a new benchmark identity.
+
+`mulder benchmark-export` normalizes current Mulder case databases without
+running an investigation or contacting a model or network service. Inputs must
+cover the manifest exactly, using one `--case-db CASE_ID=PATH` or
+`--failed-case CASE_ID=REASON` per case. It stamps the run identity required for
+repeat and ablation comparisons:
+
+```console
+mulder benchmark-export benchmarks/my-suite/manifest-v1.yaml \
+  --case-db case-a=.mulder/cases/case-a.db \
+  --failed-case case-b='worker resource limit' \
+  --run-id candidate-r2 --system-version "$MULDER_BUILD" \
+  --matrix-cell opus/default --model analyst=vendor-model-version \
+  --orchestrator-version "$ORCHESTRATOR_BUILD" \
+  --prompt-set-sha256 "$PROMPT_SHA256" --toolset-sha256 "$TOOLSET_SHA256" \
+  --repeat-index 2 --seed 1002 --output candidate-r2.json
+```
+
+The extractor opens case databases without applying migrations. Citation IDs
+derive from source coordinates and evidence text rather than database UUIDs;
+coverage domains use URL-escaped `system/domain/check` components. This makes
+normalization stable, but the answer-key anchors must use those canonical IDs
+for citations to resolve. See `MATRICES.md` for scheduled-run and aggregation
+rules, and `ndlc/README.md` for the conservative historical NDLC conversion.
 
 The strict Pydantic models in `mulder.benchmark.models` are authoritative. Their
 portable JSON Schema exports are committed in `benchmarks/schemas/`; a parity

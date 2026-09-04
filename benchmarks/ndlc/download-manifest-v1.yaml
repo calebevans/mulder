@@ -1,0 +1,22 @@
+schema: mulder.benchmark.downloads/v1
+case_id: ndlc-2015
+redistribution: manifest_only
+source_landing_page: https://cfreds-archive.nist.gov/data_leakage_case/data-leakage-case.html
+answer_key: https://cfreds-archive.nist.gov/data_leakage_case/leakage-answers.pdf
+license:
+  name: NIST CFReDS published dataset terms (verify at source)
+  url: https://cfreds-archive.nist.gov/
+instructions: >-
+  Acquire the evidence from NIST CFReDS under its current terms, place the
+  named files under a local downloads directory, and verify every SHA-256
+  before use. This manifest intentionally contains no downloader and no copy
+  of the restricted real evidence.
+artifacts:
+  - {path: downloads/pc.7z.001, sha256: 7409b09714121f56be88f161450ebad92e194ff0554462be3187525eb76aa695}
+  - {path: downloads/pc.E01, sha256: e6365e44f1004252171acb73e6779be05277cbd57d09d7febed22d2463a956a9}
+  - {path: downloads/rm1.E01, sha256: a14150a21bc1e3700b51912c2ab20cd9587ad3e27ee67475af64508a7e760121}
+  - {path: downloads/rm2.7z, sha256: ade9fb60ba1f700b93c6b8b1f538c72000411e5b30037dc95c300c5a0aeafd65}
+  - {path: downloads/rm2.E01, sha256: 25215f9bcb51ceee9147886ed3f5c13ef148de634fc5114491e0f8dad8b15696}
+  - {path: downloads/rm3_type1.7z, sha256: f30f3408bf1a0eec5a34851c66a711634618430ac1794b24afa917b3b2c729e1}
+  - {path: downloads/rm3_type2.7z, sha256: 9e6137a9b101ef7ff7e12fcf8740a83a559179d0d3d75daedf4b1c40e98a8fef}
+  - {path: downloads/rm3_type3.E01, sha256: 336e1307721ef5f63679379961d1716b74f986e69df8c40117d9cea7858d512b}
