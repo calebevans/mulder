@@ -9,6 +9,7 @@ import pytest
 
 from mulder.audit import AuditLog
 from mulder.db import CaseDB
+from mulder.models import WindowRow
 from mulder.server.app import _tool_dispatch_sync
 from mulder.server.tools.findings import _sanitize_event_time
 
@@ -89,6 +90,94 @@ class TestEvidenceValidation:
         )
         assert "error" in result or result.get("status") != "accepted"
         assert "valid_refs" in result
+
+    def test_atomic_claim_is_resolved_and_persisted(
+        self, case_db: CaseDB, audit_log: AuditLog
+    ) -> None:
+        sid = case_db.register_source(
+            "volatility.pslist", "/evidence/memory.raw", "memory-hash", "volatility", 1
+        )
+        case_db.insert_windows(
+            sid,
+            [
+                WindowRow(
+                    source_id=sid,
+                    line_start=1,
+                    line_end=1,
+                    event_time=None,
+                    raw_text="PID 1234 cmd.exe",
+                )
+            ],
+        )
+        window = case_db.get_windows_by_source("volatility.pslist")[0]
+        assert window.window_id is not None
+
+        result = _call_submit_finding(
+            case_db,
+            audit_log,
+            title="Suspicious process",
+            description="PID 1234 is cmd.exe",
+            severity="high",
+            confidence="inference",
+            evidence_refs=["tc_aabbccdd"],
+            sources=["caller-controlled-name"],
+            claims=[
+                {
+                    "statement": "PID 1234 is cmd.exe",
+                    "subject": "process:1234",
+                    "predicate": "image_name",
+                    "object_value": "cmd.exe",
+                    "anchors": [
+                        {
+                            "tool_call_id": "tc_aabbccdd",
+                            "window_id": window.window_id,
+                            "char_start": 9,
+                            "char_end": 16,
+                            "expected_text": "cmd.exe",
+                        }
+                    ],
+                }
+            ],
+        )
+
+        assert result["status"] == "accepted"
+        assert result["claim_mode"] == "atomic_unverified"
+        finding_id = str(result["finding_id"])
+        assert case_db.get_finding(finding_id).sources == ["volatility.pslist"]
+        assert case_db.get_claims(finding_id)[0].anchors[0].exact_text == "cmd.exe"
+
+    def test_claim_refs_must_exactly_match_finding_refs(
+        self, case_db: CaseDB, audit_log: AuditLog
+    ) -> None:
+        result = _call_submit_finding(
+            case_db,
+            audit_log,
+            title="Mismatched refs",
+            description="desc",
+            severity="medium",
+            confidence="inference",
+            evidence_refs=["tc_aabbccdd", "tc_11223344"],
+            sources=["src"],
+            claims=[
+                {
+                    "statement": "statement",
+                    "subject": "subject",
+                    "predicate": "equals",
+                    "object_value": "value",
+                    "anchors": [
+                        {
+                            "tool_call_id": "tc_aabbccdd",
+                            "window_id": 1,
+                            "char_start": 0,
+                            "char_end": 1,
+                            "expected_text": "x",
+                        }
+                    ],
+                }
+            ],
+        )
+        assert result.get("error_type") == "validation"
+        assert "exactly match" in str(result.get("error_message"))
 
 
 class TestTimestampSanitization:

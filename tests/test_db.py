@@ -11,7 +11,7 @@ from mulder.db import (
     CaseDB,
     _sanitize_fts5_query,
 )
-from mulder.models import Finding, WindowRow
+from mulder.models import AtomicClaimInput, EvidenceAnchorInput, Finding, WindowRow
 
 
 class TestCaseLifecycle:
@@ -155,6 +155,105 @@ class TestFindings:
         assert f.finding_id == "f-001"
         assert f.evidence_refs == ["tc_aabbccdd"]
         assert f.mitre_attack_ids == ["T1059.001"]
+
+    def test_atomic_claim_resolves_exact_immutable_anchor(
+        self, tmp_case_db: CaseDB, sample_finding: Finding
+    ) -> None:
+        sid = tmp_case_db.register_source(
+            "volatility.pslist", "/evidence/memory.raw", "sha256-memory", "volatility", 1
+        )
+        tmp_case_db.insert_windows(
+            sid,
+            [
+                WindowRow(
+                    source_id=sid,
+                    line_start=20,
+                    line_end=20,
+                    event_time=None,
+                    raw_text="PID 1234 cmd.exe parent 500",
+                )
+            ],
+        )
+        window = tmp_case_db.get_windows_by_source("volatility.pslist")[0]
+        assert window.window_id is not None
+        claim_input = AtomicClaimInput(
+            statement="Process 1234 is cmd.exe",
+            subject="process:1234",
+            predicate="image_name",
+            object_value="cmd.exe",
+            anchors=[
+                EvidenceAnchorInput(
+                    tool_call_id="tc_aabbccdd",
+                    window_id=window.window_id,
+                    char_start=9,
+                    char_end=16,
+                    expected_text="cmd.exe",
+                    artifact_family="memory_process_list",
+                )
+            ],
+        )
+
+        stored = tmp_case_db.insert_finding(sample_finding, [claim_input])
+
+        assert len(stored) == 1
+        claims = tmp_case_db.get_claims(sample_finding.finding_id)
+        assert claims == stored
+        anchor = claims[0].anchors[0]
+        assert anchor.exact_text == "cmd.exe"
+        assert anchor.source_hash == "sha256-memory"
+        assert anchor.extractor_family == "volatility"
+        assert anchor.independence_key == "source:sha256-memory"
+        assert tmp_case_db.get_finding(sample_finding.finding_id).sources == [
+            "volatility.pslist"
+        ]
+
+    def test_stale_anchor_rejects_entire_finding(
+        self, tmp_case_db: CaseDB, sample_finding: Finding
+    ) -> None:
+        sid = tmp_case_db.register_source("src", "/p", "hash", "text", 1)
+        tmp_case_db.insert_windows(
+            sid,
+            [WindowRow(source_id=sid, line_start=1, line_end=1, event_time=None, raw_text="abc")],
+        )
+        window = tmp_case_db.get_windows_by_source("src")[0]
+        assert window.window_id is not None
+        claim = AtomicClaimInput(
+            statement="Value is xyz",
+            subject="value",
+            predicate="equals",
+            object_value="xyz",
+            anchors=[
+                EvidenceAnchorInput(
+                    tool_call_id="tc_aabbccdd",
+                    window_id=window.window_id,
+                    char_start=0,
+                    char_end=3,
+                    expected_text="xyz",
+                )
+            ],
+        )
+
+        with pytest.raises(ValueError, match="does not match"):
+            tmp_case_db.insert_finding(sample_finding, [claim])
+        assert tmp_case_db.get_finding(sample_finding.finding_id) is None
+
+    def test_open_migrates_missing_claim_tables(self, tmp_path: Path) -> None:
+        db = CaseDB.create(case_id="legacy-claims", evidence_root="/ev", db_dir=tmp_path)
+        with db._engine.begin() as conn:
+            conn.execute(text("DROP TABLE evidence_anchors"))
+            conn.execute(text("DROP TABLE claims"))
+        db.close()
+
+        reopened = CaseDB.open("legacy-claims", tmp_path)
+        with reopened._engine.connect() as conn:
+            names = {
+                row[0]
+                for row in conn.execute(
+                    text("SELECT name FROM sqlite_master WHERE type = 'table'")
+                )
+            }
+        reopened.close()
+        assert {"claims", "evidence_anchors"} <= names
 
 
 class TestExtractorVersions:

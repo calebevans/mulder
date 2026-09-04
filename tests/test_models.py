@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from mulder.models import Finding
+from mulder.models import AtomicClaimInput, EvidenceAnchorInput, Finding
 
 
 class TestFinding:
@@ -85,3 +85,25 @@ class TestFinding:
         assert f.mitre_attack_ids == []
         assert f.event_time_start is None
         assert f.event_time_end is None
+
+
+class TestAtomicClaimInput:
+    def test_rejects_empty_anchor_list(self) -> None:
+        with pytest.raises(ValidationError, match="anchors"):
+            AtomicClaimInput(
+                statement="cmd.exe executed",
+                subject="cmd.exe",
+                predicate="executed",
+                object_value=True,
+                anchors=[],
+            )
+
+    def test_rejects_reversed_character_range(self) -> None:
+        with pytest.raises(ValidationError, match="char_end"):
+            EvidenceAnchorInput(
+                tool_call_id="tc_1",
+                window_id=1,
+                char_start=8,
+                char_end=4,
+                expected_text="cmd",
+            )
