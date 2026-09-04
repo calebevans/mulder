@@ -26,6 +26,12 @@ Directories are opened descriptor-relative without following symbolic links.
 ZIP validation and provenance use one stable container snapshot and reject
 absolute/traversing/backslash paths, links, encryption, duplicates,
 case-folding collisions, oversized members, and unsafe compression ratios.
+Before Python's ZIP reader materializes the central directory, intake also
+enforces hard compressed-container, entry-count, and central-directory byte
+bounds (64 GiB, 200,000 entries, and 128 MiB by default). ZIP64 metadata is
+parsed for the same preflight and multi-disk containers are rejected. Members
+that happen to contain another archive remain inert evidence bytes; intake does
+not recursively expand nested containers.
 The reviewed materializer has fixed 512 MiB/member and 8 GiB/collection caps,
 never invokes `7z`, and writes a read-only view. Re-importing identical evidence
 content is idempotent even if an examiner corrects a separate assertion.

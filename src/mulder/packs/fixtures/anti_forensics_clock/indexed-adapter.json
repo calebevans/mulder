@@ -30,8 +30,12 @@
       "raw": "SnapshotId,FilePath,CreatedTimestamp,SnapshotCreatedTimestamp,UncertaintyMs\nshadow-1,C:\\Temp\\payload.exe,2024-03-01T12:00:02Z,2024-03-01T12:10:00Z,750\n"
     },
     {
+      "source_name": "clock.reference.gps.host",
+      "raw": "reference-clock=gps.host\n"
+    },
+    {
       "source_name": "clock.anchors",
-      "raw": "AnchorId,SourceName,SourceTimestamp,ReferenceTimestamp,ReferenceSource,SourceUncertaintyMs,ReferenceUncertaintyMs\nmft-1,ez.mft,2024-01-01T00:00:00Z,2024-01-01T00:00:01Z,gps.host,250,500\nmft-2,ez.mft,2024-03-01T00:00:00Z,2024-03-01T00:00:01Z,gps.host,250,500\nusn-1,ez.usnjrnl,2024-02-01T00:00:00Z,2024-02-01T00:00:01Z,gps.host,250,500\nusn-2,ez.usnjrnl,2024-03-01T00:00:00Z,2024-03-01T00:00:01Z,gps.host,250,500\nlogfile-1,ez.logfile,2024-02-01T00:00:00Z,2024-02-01T00:00:01Z,gps.host,250,500\nlogfile-2,ez.logfile,2024-03-01T00:00:00Z,2024-03-01T00:00:01Z,gps.host,250,500\nprocess-1,volatility.pslist,2024-02-01T00:00:00Z,2024-02-01T00:00:01Z,gps.host,250,500\nprocess-2,volatility.pslist,2024-03-01T00:00:00Z,2024-03-01T00:00:01Z,gps.host,250,500\nvss-1,vshadow.files,2024-02-01T00:00:00Z,2024-02-01T00:00:01Z,gps.host,250,500\nvss-2,vshadow.files,2024-03-01T00:00:00Z,2024-03-01T00:00:01Z,gps.host,250,500\n"
+      "raw": "AnchorId,SourceName,SourceTimestamp,ReferenceTimestamp,ReferenceSource,SourceUncertaintyMs,ReferenceUncertaintyMs\nmft-1,ez.mft,2024-01-01T00:00:00Z,2024-01-01T00:00:01Z,clock.reference.gps.host,250,500\nmft-2,ez.mft,2024-03-01T00:00:00Z,2024-03-01T00:00:01Z,clock.reference.gps.host,250,500\nusn-1,ez.usnjrnl,2024-02-01T00:00:00Z,2024-02-01T00:00:01Z,clock.reference.gps.host,250,500\nusn-2,ez.usnjrnl,2024-03-01T00:00:00Z,2024-03-01T00:00:01Z,clock.reference.gps.host,250,500\nlogfile-1,ez.logfile,2024-02-01T00:00:00Z,2024-02-01T00:00:01Z,clock.reference.gps.host,250,500\nlogfile-2,ez.logfile,2024-03-01T00:00:00Z,2024-03-01T00:00:01Z,clock.reference.gps.host,250,500\nprocess-1,volatility.pslist,2024-02-01T00:00:00Z,2024-02-01T00:00:01Z,clock.reference.gps.host,250,500\nprocess-2,volatility.pslist,2024-03-01T00:00:00Z,2024-03-01T00:00:01Z,clock.reference.gps.host,250,500\nvss-1,vshadow.files,2024-02-01T00:00:00Z,2024-02-01T00:00:01Z,clock.reference.gps.host,250,500\nvss-2,vshadow.files,2024-03-01T00:00:00Z,2024-03-01T00:00:01Z,clock.reference.gps.host,250,500\n"
     }
   ]
 }

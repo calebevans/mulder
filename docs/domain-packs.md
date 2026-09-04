@@ -167,14 +167,17 @@ The indexed-evidence Adapter supports these exact local contracts:
 - Mulder's python-evtx line format under `evtx.*`;
 - running-process correlation from tab-separated `volatility.pslist*` and its
   suffix-matched `volatility.cmdline*`, with normalized volume-relative
-  deleted-file checks against `tsk.filelist*` when a single process-list
-  evidence set is present;
+  deleted-file checks only against a `tsk.filelist*` source in the same named
+  acquisition scope (partition suffixes such as `.p1` stay within that scope),
+  or the same acquisition directory when names are unscoped;
 - libvshadow inventory under `vshadow.info*`, plus per-file VSS CSV under
   `vshadow.files*` with snapshot ID, file path, and file creation timestamp;
   and
 - independent calibration pairs under `clock.anchors*`, naming the target
-  source, source/reference timestamps, reference identity, and both
-  uncertainties.
+  source, source/reference timestamps, an exact indexed `clock.reference.*`
+  source, and both uncertainties. Returned anchors retain separate provenance
+  for the calibration row and the resolved reference source; free-text clock
+  names are not treated as independent evidence.
 
 The Adapter calls a process running only when `pslist` has a typed creation
 time and no exit time. It reports a path mismatch only when the executable
@@ -194,6 +197,13 @@ a recognized source with incompatible columns is `UNSUPPORTED_VERSION`, and
 malformed rows make that source `PARTIAL`. Any incomplete state makes the
 aggregate result `PARTIAL`, never a clean result. Evidence-envelope flags are
 preserved as handling metadata and cannot create a finding.
+
+The indexed Adapter inventories recognized sources in SQL before loading raw
+windows. It has hard bounds of 128 sources, 100,000 lines, 1,024 windows, and
+8 MiB per source, plus 64 MiB across loadable sources. A breached bound becomes
+typed `PARTIAL` coverage without materializing that source. Malformed MFT, USN,
+or clock-anchor rows likewise remain `PARTIAL`; valid observations and valid
+anchors from the same request are preserved.
 
 ## EVTX, Kubernetes, and CloudTrail pilots
 

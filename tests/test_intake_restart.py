@@ -8,6 +8,7 @@ import multiprocessing as mp
 import os
 import sqlite3
 import stat
+import struct
 import threading
 import zipfile
 from pathlib import Path
@@ -21,6 +22,7 @@ import mulder.audit as audit_module
 import mulder.receipt as receipt_module
 from mulder.adapters import (
     IntakeError,
+    IntakeLimits,
     ingest_collection,
     load_intake_manifest,
     materialize_intake,
@@ -307,6 +309,48 @@ def test_archive_symlink_duplicate_and_compression_bomb_are_rejected(tmp_path: P
         handle.writestr("uploads/repeated.bin", b"x" * (1 << 20))
     with pytest.raises(IntakeError, match="max_archive_ratio"):
         scan_collection(bomb_archive, "case-bomb")
+
+
+def test_archive_container_and_central_directory_are_bounded_before_expansion(
+    tmp_path: Path,
+) -> None:
+    container = tmp_path / "container.zip"
+    with zipfile.ZipFile(container, "w") as handle:
+        handle.writestr("collection_context.json", "{}")
+        handle.writestr("large.bin", b"x" * 4096)
+    with pytest.raises(IntakeError, match="max_container_bytes"):
+        scan_collection(
+            container,
+            "case-container",
+            limits=IntakeLimits(max_container_bytes=1024),
+        )
+
+    directory_bomb = tmp_path / "directory-bomb.zip"
+    with zipfile.ZipFile(directory_bomb, "w") as handle:
+        handle.writestr("collection_context.json", "{}")
+        handle.writestr("one", "1")
+        handle.writestr("two", "2")
+    with pytest.raises(IntakeError, match="max_archive_entries"):
+        scan_collection(
+            directory_bomb,
+            "case-directory",
+            limits=IntakeLimits(max_archive_entries=2),
+        )
+    with pytest.raises(IntakeError, match="max_central_directory_bytes"):
+        scan_collection(
+            directory_bomb,
+            "case-central-directory",
+            limits=IntakeLimits(max_central_directory_bytes=64),
+        )
+
+    forged = bytearray(directory_bomb.read_bytes())
+    eocd = forged.rfind(b"PK\x05\x06")
+    assert eocd >= 0
+    struct.pack_into("<HH", forged, eocd + 8, 1, 1)
+    forged_archive = tmp_path / "forged-count.zip"
+    forged_archive.write_bytes(forged)
+    with pytest.raises(IntakeError, match="entry count is inconsistent"):
+        scan_collection(forged_archive, "case-forged-directory")
 
 
 @pytest.mark.parametrize("member", ["../escape", "/absolute", "dir\\file"])

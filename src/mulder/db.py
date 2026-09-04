@@ -1134,6 +1134,31 @@ class CaseDB:
 
         return result
 
+    def get_window_inventory_by_sources(
+        self,
+        source_names: list[str],
+    ) -> dict[str, tuple[int, int]]:
+        """Return exact window counts and UTF-8 byte totals without materializing text."""
+        if not source_names:
+            return {}
+        placeholders = ", ".join(f":sn{i}" for i in range(len(source_names)))
+        params = {f"sn{i}": name for i, name in enumerate(source_names)}
+        query = text(
+            "SELECT s.source_name, COUNT(w.window_id) AS window_count, "
+            "COALESCE(SUM(length(CAST(w.raw_text AS BLOB))), 0) AS byte_count "
+            "FROM sources s LEFT JOIN windows w ON w.source_id = s.source_id "
+            f"WHERE s.source_name IN ({placeholders}) GROUP BY s.source_id, s.source_name"
+        )
+        with self._engine.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        inventory = {
+            str(row.source_name): (int(row.window_count), int(row.byte_count))
+            for row in rows
+        }
+        for name in source_names:
+            inventory.setdefault(name, (0, 0))
+        return inventory
+
     def get_windows_by_source_prefix(
         self,
         source_prefix: str,

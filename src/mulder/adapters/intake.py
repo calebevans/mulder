@@ -14,6 +14,7 @@ import json
 import os
 import re
 import stat
+import struct
 import tempfile
 import zipfile
 from collections.abc import Iterable, Iterator, Mapping
@@ -49,6 +50,9 @@ class IntakeLimits(_FrozenModel):
     max_file_bytes: int = Field(default=1 << 38, ge=1)
     max_metadata_bytes: int = Field(default=1 << 20, ge=1, le=16 << 20)
     max_archive_ratio: int = Field(default=250, ge=1, le=10_000)
+    max_container_bytes: int = Field(default=64 << 30, ge=1, le=64 << 30)
+    max_archive_entries: int = Field(default=200_000, ge=1, le=1_000_000)
+    max_central_directory_bytes: int = Field(default=128 << 20, ge=1, le=1 << 30)
 
 
 class ExaminerAssertion(_FrozenModel):
@@ -277,6 +281,8 @@ def _read_descriptor(fd: int, *, expected_size: int, max_bytes: int) -> tuple[by
 @contextmanager
 def _zip_snapshot(
     path: Path,
+    *,
+    max_bytes: int,
 ) -> Iterator[tuple[tempfile.SpooledTemporaryFile[bytes], str, int]]:
     """Yield one stable snapshot copied from a single no-follow descriptor."""
     with _open_nofollow(path) as source_fd, tempfile.SpooledTemporaryFile(
@@ -284,6 +290,11 @@ def _zip_snapshot(
         mode="w+b",
     ) as snapshot:
         before = os.fstat(source_fd)
+        if before.st_size > max_bytes:
+            raise IntakeError(
+                f"ZIP collection exceeds max_container_bytes: "
+                f"{before.st_size} > {max_bytes}"
+            )
         digest = hashlib.sha256()
         size = 0
         os.lseek(source_fd, 0, os.SEEK_SET)
@@ -291,12 +302,151 @@ def _zip_snapshot(
             snapshot.write(chunk)
             digest.update(chunk)
             size += len(chunk)
+            if size > max_bytes:
+                raise IntakeError(
+                    f"ZIP collection exceeds max_container_bytes: {size} > {max_bytes}"
+                )
         after = os.fstat(source_fd)
         if _descriptor_identity(before) != _descriptor_identity(after) or size != before.st_size:
             raise IntakeError(f"ZIP collection changed while snapshotting: {path}")
         snapshot.flush()
         snapshot.seek(0)
         yield snapshot, "sha256:" + digest.hexdigest(), size
+
+
+def _preflight_zip_directory(
+    snapshot: tempfile.SpooledTemporaryFile[bytes],
+    container_size: int,
+    limits: IntakeLimits,
+) -> None:
+    """Bound ZIP metadata before ``zipfile`` materializes its entry list."""
+    if container_size < 22:
+        raise IntakeError("ZIP collection lacks an end-of-central-directory record")
+    tail_size = min(container_size, 22 + 65_535)
+    snapshot.seek(container_size - tail_size)
+    tail = snapshot.read(tail_size)
+    search_end = len(tail)
+    eocd_index = -1
+    eocd: tuple[bytes, int, int, int, int, int, int, int] | None = None
+    while search_end >= 22:
+        candidate = tail.rfind(b"PK\x05\x06", 0, search_end)
+        if candidate < 0 or candidate + 22 > len(tail):
+            break
+        parsed = struct.unpack_from("<4s4H2LH", tail, candidate)
+        if candidate + 22 + parsed[-1] == len(tail):
+            eocd_index = candidate
+            eocd = parsed
+            break
+        search_end = candidate
+    if eocd is None:
+        raise IntakeError("ZIP collection lacks a valid end-of-central-directory record")
+
+    (
+        _signature,
+        disk_number,
+        central_disk,
+        entries_on_disk,
+        entry_count,
+        central_size,
+        central_offset,
+        _comment_size,
+    ) = eocd
+    eocd_offset = container_size - tail_size + eocd_index
+    central_end = eocd_offset
+    zip64 = (
+        entry_count == 0xFFFF
+        or entries_on_disk == 0xFFFF
+        or central_size == 0xFFFFFFFF
+        or central_offset == 0xFFFFFFFF
+    )
+    if zip64:
+        locator_offset = eocd_offset - 20
+        if locator_offset < 0:
+            raise IntakeError("ZIP64 collection lacks a locator record")
+        snapshot.seek(locator_offset)
+        locator = snapshot.read(20)
+        if len(locator) != 20:
+            raise IntakeError("ZIP64 collection has a truncated locator record")
+        locator_signature, zip64_disk, zip64_offset, total_disks = struct.unpack(
+            "<4sLQL", locator
+        )
+        if locator_signature != b"PK\x06\x07":
+            raise IntakeError("ZIP64 collection lacks a locator record")
+        snapshot.seek(zip64_offset)
+        record = snapshot.read(56)
+        if len(record) != 56:
+            raise IntakeError("ZIP64 end-of-central-directory record is truncated")
+        (
+            zip64_signature,
+            _record_size,
+            _made_by,
+            _needed,
+            disk_number,
+            central_disk,
+            entries_on_disk,
+            entry_count,
+            central_size,
+            central_offset,
+        ) = struct.unpack("<4sQ2H2L4Q", record)
+        if zip64_signature != b"PK\x06\x06" or zip64_disk != 0 or total_disks != 1:
+            raise IntakeError("multi-disk ZIP collections are not accepted")
+        central_end = zip64_offset
+
+    if disk_number != 0 or central_disk != 0 or entries_on_disk != entry_count:
+        raise IntakeError("multi-disk ZIP collections are not accepted")
+    if entry_count > limits.max_archive_entries:
+        raise IntakeError(
+            f"ZIP collection exceeds max_archive_entries: "
+            f"{entry_count} > {limits.max_archive_entries}"
+        )
+    if central_size > limits.max_central_directory_bytes:
+        raise IntakeError(
+            f"ZIP collection exceeds max_central_directory_bytes: "
+            f"{central_size} > {limits.max_central_directory_bytes}"
+        )
+    if central_offset + central_size > central_end:
+        raise IntakeError("ZIP central directory lies outside the container")
+    central_start = central_end - central_size
+    snapshot.seek(central_start)
+    counted_entries = 0
+    remaining = central_size
+    while remaining:
+        if remaining < 4:
+            raise IntakeError("ZIP central directory is truncated")
+        signature = snapshot.read(4)
+        if signature == b"PK\x05\x05":
+            if remaining < 6:
+                raise IntakeError("ZIP central-directory signature is truncated")
+            signature_size_raw = snapshot.read(2)
+            signature_size = struct.unpack("<H", signature_size_raw)[0]
+            if remaining != 6 + signature_size:
+                raise IntakeError("ZIP central-directory signature has an invalid size")
+            snapshot.seek(signature_size, os.SEEK_CUR)
+            remaining = 0
+            break
+        if signature != b"PK\x01\x02" or remaining < 46:
+            raise IntakeError("ZIP central directory contains an invalid entry record")
+        fixed_tail = snapshot.read(42)
+        fields = struct.unpack("<6H3L5H2L", fixed_tail)
+        name_size, extra_size, comment_size = fields[9:12]
+        disk_start = fields[12]
+        variable_size = name_size + extra_size + comment_size
+        record_size = 46 + variable_size
+        if disk_start != 0:
+            raise IntakeError("multi-disk ZIP collections are not accepted")
+        if record_size > remaining:
+            raise IntakeError("ZIP central-directory entry is truncated")
+        counted_entries += 1
+        if counted_entries > limits.max_archive_entries:
+            raise IntakeError(
+                f"ZIP collection exceeds max_archive_entries: "
+                f"{counted_entries} > {limits.max_archive_entries}"
+            )
+        snapshot.seek(variable_size, os.SEEK_CUR)
+        remaining -= record_size
+    if counted_entries != entry_count:
+        raise IntakeError("ZIP central-directory entry count is inconsistent")
+    snapshot.seek(0)
 
 
 def _artifact_type(relative_path: str) -> str:
@@ -696,12 +846,16 @@ def verify_intake_source(manifest: IntakeManifest) -> None:
         raise IntakeError("intake ZIP source changed type")
     if manifest.source_sha256 is None:
         raise IntakeError("ZIP intake is missing its container commitment")
+    verification_limits = _verification_limits(manifest)
     try:
-        with _zip_snapshot(source) as (snapshot, source_digest, _source_size):
+        with _zip_snapshot(
+            source, max_bytes=verification_limits.max_container_bytes
+        ) as (snapshot, source_digest, source_size):
             if source_digest != manifest.source_sha256:
                 raise IntakeError("ZIP intake source changed")
+            _preflight_zip_directory(snapshot, source_size, verification_limits)
             with zipfile.ZipFile(snapshot) as archive:
-                entries, _total = _read_zip(archive, _verification_limits(manifest))
+                entries, _total = _read_zip(archive, verification_limits)
     except (NotImplementedError, RuntimeError, zipfile.BadZipFile, zipfile.LargeZipFile) as exc:
         raise IntakeError(f"intake ZIP cannot be verified safely: {exc}") from exc
     actual = tuple(_entry_bytes_identity(entry) for entry in entries)
@@ -736,10 +890,14 @@ def read_intake_member(
     else:
         if manifest.source_sha256 is None:
             raise IntakeError("ZIP intake is missing its container commitment")
+        verification_limits = _verification_limits(manifest)
         try:
-            with _zip_snapshot(source) as (snapshot, source_digest, _source_size):
+            with _zip_snapshot(
+                source, max_bytes=verification_limits.max_container_bytes
+            ) as (snapshot, source_digest, source_size):
                 if source_digest != manifest.source_sha256:
                     raise IntakeError("ZIP intake source changed")
+                _preflight_zip_directory(snapshot, source_size, verification_limits)
                 with zipfile.ZipFile(snapshot) as archive:
                     content = _zip_member_bytes(archive, entry, max_bytes)
         except (
@@ -807,14 +965,18 @@ def materialize_intake(
     else:
         if manifest.source_sha256 is None:
             raise IntakeError("ZIP intake is missing its container commitment")
+        verification_limits = _verification_limits(manifest)
         try:
-            with _zip_snapshot(source) as (snapshot, source_digest, _source_size):
+            with _zip_snapshot(
+                source, max_bytes=verification_limits.max_container_bytes
+            ) as (snapshot, source_digest, source_size):
                 if source_digest != manifest.source_sha256:
                     raise IntakeError("ZIP intake source changed")
+                _preflight_zip_directory(snapshot, source_size, verification_limits)
                 with zipfile.ZipFile(snapshot) as archive:
                     actual_entries, _total = _read_zip(
                         archive,
-                        _verification_limits(manifest),
+                        verification_limits,
                     )
                     if tuple(map(_entry_bytes_identity, actual_entries)) != tuple(
                         map(_entry_bytes_identity, manifest.entries)
@@ -888,30 +1050,33 @@ def scan_collection(
     elif stat.S_ISREG(source_mode):
         source_kind = "zip"
         try:
-            with (
-                _zip_snapshot(resolved) as (snapshot, source_sha256, _source_size),
-                zipfile.ZipFile(snapshot) as archive,
-            ):
-                entries, total = _read_zip(archive, limits)
-                if not entries:
-                    raise IntakeError("collection contains no regular files")
-                selected_format = (
-                    _format_from_names({entry.relative_path for entry in entries})
-                    if collection_format == "auto"
-                    else collection_format
-                )
-                metadata_name = _first_name(
-                    entries,
-                    ("collection_context.json",)
-                    if selected_format == "velociraptor"
-                    else ("_kape.log", "kape.log"),
-                )
-                metadata_entry = _entry_by_name(entries, metadata_name)
-                metadata = (
-                    _zip_member_bytes(archive, metadata_entry, limits.max_metadata_bytes)
-                    if metadata_entry is not None
-                    else None
-                )
+            with _zip_snapshot(
+                resolved, max_bytes=limits.max_container_bytes
+            ) as (snapshot, source_sha256, source_size):
+                _preflight_zip_directory(snapshot, source_size, limits)
+                with zipfile.ZipFile(snapshot) as archive:
+                    entries, total = _read_zip(archive, limits)
+                    if not entries:
+                        raise IntakeError("collection contains no regular files")
+                    selected_format = (
+                        _format_from_names({entry.relative_path for entry in entries})
+                        if collection_format == "auto"
+                        else collection_format
+                    )
+                    metadata_name = _first_name(
+                        entries,
+                        ("collection_context.json",)
+                        if selected_format == "velociraptor"
+                        else ("_kape.log", "kape.log"),
+                    )
+                    metadata_entry = _entry_by_name(entries, metadata_name)
+                    metadata = (
+                        _zip_member_bytes(
+                            archive, metadata_entry, limits.max_metadata_bytes
+                        )
+                        if metadata_entry is not None
+                        else None
+                    )
         except (
             NotImplementedError,
             RuntimeError,
@@ -1027,7 +1192,10 @@ def _register_evidence(manifest: IntakeManifest, db_dir: Path) -> tuple[bool, in
         if manifest.source_kind == "zip":
             if manifest.source_sha256 is None:
                 raise IntakeError("ZIP intake is missing its container commitment")
-            with _zip_snapshot(source) as (_snapshot, actual_digest, actual_size):
+            with _zip_snapshot(
+                source,
+                max_bytes=_verification_limits(manifest).max_container_bytes,
+            ) as (_snapshot, actual_digest, actual_size):
                 pass
             if actual_digest != manifest.source_sha256:
                 raise IntakeError("ZIP collection changed after manifest creation")

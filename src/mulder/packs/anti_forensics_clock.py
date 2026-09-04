@@ -179,6 +179,7 @@ class ClockAnchor(_StrictModel):
     source_time: PreservedTime
     reference_time: PreservedTime
     reference_provenance: TemporalProvenance
+    calibration_provenance: TemporalProvenance | None = None
 
 
 class ClockEvidenceRequest(_StrictModel):
@@ -191,6 +192,7 @@ class ClockEvidenceRequest(_StrictModel):
     case_id: str = Field(min_length=1)
     sources: tuple[SourceEvidence, ...]
     clock_anchors: tuple[ClockAnchor, ...] = ()
+    adapter_outcome: ToolOutcome | None = None
 
     @model_validator(mode="after")
     def _check_graph(self) -> ClockEvidenceRequest:
@@ -283,6 +285,7 @@ class ClockAnalysisResult(_StrictModel):
     analysis_version: Literal["1.0"] = CLOCK_ANALYSIS_VERSION
     case_id: str
     outcome: ToolOutcome
+    adapter_outcome: ToolOutcome | None = None
     coverage: tuple[SourceCoverage, ...]
     clock_anchors: tuple[ClockAnchor, ...]
     clock_models: tuple[SourceClockModel, ...]
@@ -813,6 +816,22 @@ def analyze_clock_evidence(
         )
     )
 
+    if (
+        request.adapter_outcome is not None
+        and request.adapter_outcome.status is ToolOutcomeStatus.UNSUPPORTED_VERSION
+        and not request.sources
+    ):
+        return ClockAnalysisResult(
+            case_id=request.case_id,
+            outcome=request.adapter_outcome,
+            adapter_outcome=request.adapter_outcome,
+            coverage=(),
+            clock_anchors=tuple(sorted(request.clock_anchors, key=lambda item: item.anchor_id)),
+            clock_models=(),
+            observations=(),
+            findings=(),
+        )
+
     incomplete = [
         cell
         for cell in coverage
@@ -828,7 +847,11 @@ def analyze_clock_evidence(
         if model.source_id in sources_with_observations
         and model.outcome.status is not ToolOutcomeStatus.SUCCESS_NONEMPTY
     ]
-    if incomplete or clock_incomplete:
+    adapter_incomplete = request.adapter_outcome is not None and (
+        request.adapter_outcome.status
+        not in {ToolOutcomeStatus.SUCCESS_EMPTY, ToolOutcomeStatus.SUCCESS_NONEMPTY}
+    )
+    if incomplete or clock_incomplete or adapter_incomplete:
         status = ToolOutcomeStatus.PARTIAL
         reason = (
             "indicators found, but artifact/clock coverage is incomplete"
@@ -856,6 +879,7 @@ def analyze_clock_evidence(
             ),
             reason=reason,
         ),
+        adapter_outcome=request.adapter_outcome,
         coverage=coverage,
         clock_anchors=tuple(sorted(request.clock_anchors, key=lambda item: item.anchor_id)),
         clock_models=clock_models,
