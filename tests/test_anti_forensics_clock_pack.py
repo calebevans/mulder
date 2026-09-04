@@ -14,7 +14,7 @@ from pydantic import ValidationError
 from mulder.audit import AuditLog
 from mulder.db import CaseDB
 from mulder.extractors.classifier import ClassifierConfig, EvidenceClassifier
-from mulder.models import ToolOutcomeStatus, WindowRow
+from mulder.models import AcquisitionIdentity, ToolOutcomeStatus, WindowRow
 from mulder.packs import DomainPackRegistry, PackRuntimeInventory
 from mulder.packs.anti_forensics_clock import (
     ClockAnalysisResult,
@@ -28,6 +28,7 @@ from mulder.packs.builtin import (
     register_builtin_packs,
 )
 from mulder.server.app import _tool_dispatch_sync
+from mulder.server.extract_helpers import extract_and_index
 from mulder.server.tools.artifacts import _analyze_mft_windows_for_timestomping
 
 
@@ -372,6 +373,7 @@ def _register_source(
     raw: str,
     *,
     source_path: str | None = None,
+    acquisition: AcquisitionIdentity | None = None,
 ) -> int:
     source_id = db.register_source(
         source_name=name,
@@ -379,6 +381,7 @@ def _register_source(
         source_hash="sha256:" + hashlib.sha256(raw.encode()).hexdigest(),
         extractor="fixture",
         line_count=len(raw.splitlines()),
+        acquisition=acquisition,
     )
     db.insert_windows(
         source_id,
@@ -455,9 +458,27 @@ def test_activated_pack_adapter_uses_real_indexed_cross_source_evidence(
 
     db = CaseDB.create(case_id="adapter-case", evidence_root="/evidence", db_dir=tmp_path)
     audit = AuditLog(tmp_path / "adapter.audit.jsonl")
+    acquisition = AcquisitionIdentity(
+        acquisition_id="sha256:" + "a" * 64,
+        host_id="host-01",
+    )
     try:
         for source_name, raw in _indexed_sources():
-            _register_source(db, source_name, raw)
+            source_path = None
+            source_acquisition = None
+            if source_name.startswith("volatility."):
+                source_path = "/intake/memory.raw"
+                source_acquisition = acquisition
+            elif source_name.startswith("tsk.filelist"):
+                source_path = "/intake/disk.E01"
+                source_acquisition = acquisition
+            _register_source(
+                db,
+                source_name,
+                raw,
+                source_path=source_path,
+                acquisition=source_acquisition,
+            )
 
         source_ids = {source.source_name: str(source.source_id) for source in db.get_sources()}
         context = MagicMock(db=db, audit=audit)
@@ -525,7 +546,7 @@ def test_activated_pack_adapter_uses_real_indexed_cross_source_evidence(
             "ez.mft",
             "ez.usnjrnl",
             "ez.logfile",
-            "volatility.pslist.host-01",
+                "volatility.pslist",
             "vshadow.files",
         ):
             model = clock_models[source_ids[source_name]]
@@ -673,9 +694,25 @@ def test_truncated_csv_and_tsv_rows_are_audited_partial(
         case_id=f"malformed-{case_name}", evidence_root="/evidence", db_dir=tmp_path
     )
     audit = AuditLog(tmp_path / f"malformed-{case_name}.audit.jsonl")
+    acquisition = AcquisitionIdentity(
+        acquisition_id="malformed-acquisition",
+        host_id="malformed-host",
+    )
     try:
         for source_name, raw in sources:
-            _register_source(db, source_name, raw)
+            _register_source(
+                db,
+                source_name,
+                raw,
+                source_path=(
+                    "/acquisitions/malformed/memory.raw"
+                    if source_name.startswith("volatility.")
+                    else None
+                ),
+                acquisition=(
+                    acquisition if source_name.startswith("volatility.") else None
+                ),
+            )
         context = MagicMock(db=db, audit=audit)
         with patch("mulder.server.tools.clock.get_ctx", return_value=context):
             result = _tool_dispatch_sync["analyze_anti_forensics_clock"]()
@@ -913,24 +950,29 @@ def test_process_file_correlation_rejects_another_acquisition_scope(tmp_path: Pa
     db = CaseDB.create(case_id="scope-case", evidence_root="/evidence", db_dir=tmp_path)
     audit = AuditLog(tmp_path / "scope.audit.jsonl")
     try:
+        host_a = AcquisitionIdentity(acquisition_id="acquisition-a", host_id="host-a")
+        host_b = AcquisitionIdentity(acquisition_id="acquisition-a", host_id="host-b")
         _register_source(
             db,
             "volatility.pslist.host-a",
             "PID\tImageFileName\tCreateTime\tExitTime\n"
             "42\tbad.exe\t2024-01-01T00:00:00Z\t\n",
             source_path="/acquisitions/host-a/memory.raw",
+            acquisition=host_a,
         )
         _register_source(
             db,
             "volatility.cmdline.host-a",
             "PID\tProcess\tArgs\n42\tbad.exe\tC:\\Temp\\bad.exe -x\n",
             source_path="/acquisitions/host-a/memory.raw",
+            acquisition=host_a,
         )
         _register_source(
             db,
             "tsk.filelist.host-b",
             "r/r * 44-1: C:/Temp/bad.exe\n",
             source_path="/acquisitions/host-b/disk.E01",
+            acquisition=host_b,
         )
         context = MagicMock(db=db, audit=audit)
         with patch("mulder.server.tools.clock.get_ctx", return_value=context):
@@ -944,7 +986,7 @@ def test_process_file_correlation_rejects_another_acquisition_scope(tmp_path: Pa
             item for item in result["coverage"] if item["family"] == "process_file_state"
         )
         assert process_coverage["outcome"]["status"] == "PARTIAL"
-        assert "acquisition scope" in process_coverage["outcome"]["reason"]
+        assert "acquisition identity" in process_coverage["outcome"]["reason"]
     finally:
         db.close()
 
@@ -958,12 +1000,17 @@ def test_process_file_correlation_requires_one_explicit_acquisition_identity(
     audit = AuditLog(tmp_path / "explicit-scope.audit.jsonl")
     try:
         suffix = ".host-a" if duplicate_tsk else ""
+        acquisition = AcquisitionIdentity(
+            acquisition_id="acquisition-shared",
+            host_id="host-a",
+        )
         _register_source(
             db,
             f"volatility.pslist{suffix}",
             "PID\tImageFileName\tCreateTime\tExitTime\n"
             "42\tbad.exe\t2024-01-01T00:00:00Z\t\n",
             source_path="/acquisitions/shared/memory.raw",
+            acquisition=acquisition if duplicate_tsk else None,
         )
         _register_source(
             db,
@@ -972,6 +1019,7 @@ def test_process_file_correlation_requires_one_explicit_acquisition_identity(
             + ("bad.exe" if duplicate_tsk else "renamed.exe")
             + "\n",
             source_path="/acquisitions/shared/memory.raw",
+            acquisition=acquisition if duplicate_tsk else None,
         )
         tsk_name = f"tsk.filelist{suffix}"
         _register_source(
@@ -979,6 +1027,7 @@ def test_process_file_correlation_requires_one_explicit_acquisition_identity(
             tsk_name,
             "r/r * 44-1: C:/Temp/bad.exe\n",
             source_path="/acquisitions/shared/disk.E01",
+            acquisition=acquisition if duplicate_tsk else None,
         )
         if duplicate_tsk:
             _register_source(
@@ -986,6 +1035,7 @@ def test_process_file_correlation_requires_one_explicit_acquisition_identity(
                 tsk_name,
                 "r/r * 45-1: C:/Temp/bad.exe\n",
                 source_path="/acquisitions/shared/disk-duplicate.E01",
+                acquisition=acquisition,
             )
         context = MagicMock(db=db, audit=audit)
         with patch("mulder.server.tools.clock.get_ctx", return_value=context):
@@ -1005,6 +1055,127 @@ def test_process_file_correlation_requires_one_explicit_acquisition_identity(
             assert "ambiguous" in reason
         else:
             assert "explicit" in reason
+    finally:
+        db.close()
+
+
+def test_process_file_correlation_supports_production_names_with_bound_identity(
+    tmp_path: Path,
+) -> None:
+    db = CaseDB.create(case_id="production-scope", evidence_root="/evidence", db_dir=tmp_path)
+    audit = AuditLog(tmp_path / "production-scope.audit.jsonl")
+    acquisition = AcquisitionIdentity(
+        acquisition_id="sha256:" + "c" * 64,
+        host_id="ws-01",
+    )
+    try:
+        context = MagicMock(db=db, audit=audit)
+        db.register_evidence_file(
+            "/collection/memory.raw", "sha256:memory", 128, acquisition=acquisition
+        )
+        db.register_evidence_file(
+            "/collection/disk.E01", "sha256:disk", 256, acquisition=acquisition
+        )
+        with patch("mulder.server.app.get_ctx", return_value=context):
+            extract_and_index(
+                "PID\tImageFileName\tCreateTime\tExitTime\n"
+                "42\tbad.exe\t2024-01-01T00:00:00Z\t\n",
+                "volatility.pslist",
+                "/collection/memory.raw",
+                "volatility3",
+            )
+            extract_and_index(
+                "PID\tProcess\tArgs\n42\tbad.exe\tC:\\Temp\\renamed.exe\n",
+                "volatility.cmdline",
+                "/collection/memory.raw",
+                "volatility3",
+            )
+            extract_and_index(
+                "r/r * 44-1: C:/Temp/bad.exe\n",
+                "tsk.filelist",
+                "/collection/disk.E01",
+                "sleuthkit",
+            )
+            extract_and_index(
+                "r/r 45-1: C:/Windows/System32/good.exe\n",
+                "tsk.filelist.p1",
+                "/collection/disk.E01",
+                "sleuthkit",
+            )
+        with patch("mulder.server.tools.clock.get_ctx", return_value=context):
+            result = _tool_dispatch_sync["analyze_anti_forensics_clock"]()
+
+        assert any(
+            item["finding_type"] == "process_file_mismatch"
+            for item in result["findings"]
+        )
+        process_coverage = next(
+            item for item in result["coverage"] if item["family"] == "process_file_state"
+        )
+        assert process_coverage["outcome"]["status"] == "SUCCESS_NONEMPTY"
+    finally:
+        db.close()
+
+
+def test_crafted_matching_display_suffix_cannot_cross_acquisitions(tmp_path: Path) -> None:
+    db = CaseDB.create(case_id="crafted-suffix", evidence_root="/evidence", db_dir=tmp_path)
+    audit = AuditLog(tmp_path / "crafted-suffix.audit.jsonl")
+    memory_identity = AcquisitionIdentity(
+        acquisition_id="sha256:" + "d" * 64,
+        host_id="same-host",
+    )
+    disk_identity = AcquisitionIdentity(
+        acquisition_id="sha256:" + "e" * 64,
+        host_id="same-host",
+    )
+    try:
+        context = MagicMock(db=db, audit=audit)
+        db.register_evidence_file(
+            "/acquisition-A/memory.raw",
+            "sha256:memory-a",
+            128,
+            acquisition=memory_identity,
+        )
+        db.register_evidence_file(
+            "/acquisition-B/disk.E01",
+            "sha256:disk-b",
+            256,
+            acquisition=disk_identity,
+        )
+        with patch("mulder.server.app.get_ctx", return_value=context):
+            extract_and_index(
+                "PID\tImageFileName\tCreateTime\tExitTime\n"
+                "42\tbad.exe\t2024-01-01T00:00:00Z\t\n",
+                "volatility.pslist.crafted",
+                "/acquisition-A/memory.raw",
+                "volatility3",
+            )
+            extract_and_index(
+                "PID\tProcess\tArgs\n42\tbad.exe\tC:\\Temp\\bad.exe\n",
+                "volatility.cmdline.crafted",
+                "/acquisition-A/memory.raw",
+                "volatility3",
+            )
+            extract_and_index(
+                "r/r * 44-1: C:/Temp/bad.exe\n",
+                "tsk.filelist.crafted",
+                "/acquisition-B/disk.E01",
+                "sleuthkit",
+            )
+        with patch("mulder.server.tools.clock.get_ctx", return_value=context):
+            result = _tool_dispatch_sync["analyze_anti_forensics_clock"]()
+
+        assert not any(
+            item["finding_type"] == "process_file_mismatch"
+            for item in result["findings"]
+        )
+        process_coverage = next(
+            item for item in result["coverage"] if item["family"] == "process_file_state"
+        )
+        assert process_coverage["outcome"]["status"] == "PARTIAL"
+        assert "matching tsk.filelist acquisition identity is unavailable" in (
+            process_coverage["outcome"]["reason"]
+        )
     finally:
         db.close()
 

@@ -14,6 +14,7 @@ import tarfile
 import tempfile
 import time
 from pathlib import Path
+from typing import cast
 
 from mulder.adapters import (
     IntakeError,
@@ -485,6 +486,33 @@ def _verify_intake_materialization(manifest: IntakeManifest, dest: Path) -> list
     return sorted(observed)
 
 
+def _register_intake_materialization(manifest: IntakeManifest, dest: Path) -> None:
+    """Bind verified materialized members to the intake acquisition identity."""
+    if not has_ctx() or manifest.acquisition_identity is None:
+        return
+    ctx = get_ctx()
+    registered = {
+        (
+            str(Path(str(row["file_path"])).expanduser().resolve(strict=False)),
+            str(row["sha256"]),
+            cast(int, row["size_bytes"]),
+        )
+        for row in ctx.db.get_evidence_registry()
+        if row["acquisition"] == manifest.acquisition_identity.model_dump(mode="json")
+    }
+    for entry in manifest.entries:
+        member = (dest / entry.relative_path).resolve(strict=False)
+        identity = (str(member), entry.sha256, entry.size_bytes)
+        if identity in registered:
+            continue
+        ctx.db.register_evidence_file(
+            str(member),
+            entry.sha256,
+            entry.size_bytes,
+            acquisition=manifest.acquisition_identity,
+        )
+
+
 def _extract_intake_zip(manifest: IntakeManifest, dest: Path) -> list[str]:
     """Materialize a bounded verified ZIP intake without a fallback extractor."""
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -601,6 +629,8 @@ def extract_archive(
                 (time.monotonic() - t0) * 1000,
                 error_type="intake_verification_failed",
             )
+        if intake_manifest is not None:
+            _register_intake_materialization(intake_manifest, dest)
         result: dict[str, object] = {
             "tool_call_id": tc_id,
             "status": "already_extracted",
@@ -675,6 +705,9 @@ def extract_archive(
             f"Extraction failed: {exc}",
             (time.monotonic() - t0) * 1000,
         )
+
+    if intake_manifest is not None:
+        _register_intake_materialization(intake_manifest, dest)
 
     from mulder.extractors.classifier import ClassifierConfig, EvidenceClassifier
 

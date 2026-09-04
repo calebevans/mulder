@@ -26,6 +26,7 @@ from typing import Literal, cast
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from mulder.db import CaseDB
+from mulder.models import AcquisitionIdentity
 
 INTAKE_SCHEMA: Literal["mulder.collection-intake"] = "mulder.collection-intake"
 INTAKE_VERSION: Literal[1] = 1
@@ -118,6 +119,16 @@ class IntakeManifest(_FrozenModel):
     collection_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     created_at: str
     integrity: dict[str, str]
+
+    @property
+    def acquisition_identity(self) -> AcquisitionIdentity | None:
+        """Return evidence-bound collection/host identity when both are available."""
+        if self.provenance.host is None:
+            return None
+        return AcquisitionIdentity(
+            acquisition_id=self.collection_digest,
+            host_id=self.provenance.host,
+        )
 
     @model_validator(mode="after")
     def _coherent_inventory(self) -> IntakeManifest:
@@ -1224,7 +1235,12 @@ def _register_evidence(manifest: IntakeManifest, db_dir: Path) -> tuple[bool, in
                     registrations.append((str(member), entry.sha256, actual_size))
         missing = [item for item in registrations if item not in existing]
         for file_path, digest, size in missing:
-            db.register_evidence_file(file_path, digest, size)
+            db.register_evidence_file(
+                file_path,
+                digest,
+                size,
+                acquisition=manifest.acquisition_identity,
+            )
     finally:
         db.close()
     return database_created, len(missing)

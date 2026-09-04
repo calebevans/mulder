@@ -165,12 +165,16 @@ The indexed-evidence Adapter supports these exact local contracts:
 - parsed `$LogFile` CSV under `ez.logfile*` or `ntfs.logfile*`, with LSN,
   timestamp, operation, and either a full path or filename/parent columns;
 - Mulder's python-evtx line format under `evtx.*`;
-- running-process correlation from tab-separated `volatility.pslist*` and its
-  suffix-matched `volatility.cmdline*`, with normalized volume-relative
-  deleted-file checks only against a `tsk.filelist*` source in the same named
-  non-empty acquisition scope, for example `volatility.pslist.host-01` and
-  `tsk.filelist.host-01.p1`. Unscoped sources are not correlated merely because
-  their files share a directory, and duplicate matching names are ambiguous;
+- running-process correlation from tab-separated `volatility.pslist*` and
+  `volatility.cmdline*`, with normalized volume-relative deleted-file checks
+  against `tsk.filelist*`. All participating sources must carry the same
+  immutable acquisition digest and collector-derived host identity registered
+  by collection intake; display-name suffixes and common parent directories
+  never establish identity. The production names `volatility.pslist`,
+  `volatility.cmdline`, `tsk.filelist`, and `tsk.filelist.pN` are supported.
+  Legacy sources without identity, multiple memory artifacts, multiple disk
+  artifacts, and duplicate source/partition registrations fail closed as
+  partial coverage;
 - libvshadow inventory under `vshadow.info*`, plus per-file VSS CSV under
   `vshadow.files*` with snapshot ID, file path, and file creation timestamp;
   and

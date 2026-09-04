@@ -121,6 +121,7 @@ def extract_and_index(
     from mulder.server.app import get_ctx
 
     ctx = get_ctx()
+    acquisition = ctx.db.get_evidence_acquisition(source_path)
 
     if not raw_output or not raw_output.strip():
         source_id = ctx.db.register_source(
@@ -129,6 +130,7 @@ def extract_and_index(
             source_hash="blake2b:empty",
             extractor=extractor_name,
             line_count=0,
+            acquisition=acquisition,
         )
         return {
             "source_name": source_name,
@@ -152,6 +154,7 @@ def extract_and_index(
         source_hash=content_hash,
         extractor=extractor_name,
         line_count=original_line_count,
+        acquisition=acquisition,
     )
 
     total_indexed = 0

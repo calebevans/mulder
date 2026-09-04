@@ -146,8 +146,8 @@ ANTI_FORENSICS_CLOCK_PACK = DomainPackManifest.model_validate(
             {
                 "fixture_id": "indexed-adapter",
                 "path": "indexed-adapter.json",
-                "sha256": "34536b903302eb699a9c0679d535961bdd64ce793cc3213714a341457f6eabf4",
-                "size_bytes": 2951,
+                "sha256": "a393fae0cf421627b4e11da2d427d992be1d7f9233102353bc91198a3c5d2841",
+                "size_bytes": 2911,
             },
             {
                 "fixture_id": "prompt-injected",

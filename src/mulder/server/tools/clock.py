@@ -1116,40 +1116,26 @@ def _partner_source(
     source: SourceRow,
     candidates: Sequence[SourceRow],
     *,
-    source_prefix: str,
     partner_prefix: str,
 ) -> tuple[SourceRow | None, str | None]:
-    suffix = source.source_name.removeprefix(source_prefix)
+    if source.acquisition is None:
+        return None, "explicit acquisition/host identity is unavailable"
     matches = [
         candidate
         for candidate in candidates
-        if candidate.source_name == f"{partner_prefix}{suffix}"
+        if candidate.acquisition == source.acquisition
+        and candidate.source_path == source.source_path
     ]
     if len(matches) == 1:
         return matches[0], None
     if not matches:
-        return None, f"matching {partner_prefix}{suffix} source is unavailable"
-    return None, f"matching {partner_prefix}{suffix} source is ambiguous"
+        return None, f"matching {partner_prefix} acquisition/source artifact is unavailable"
+    return None, f"matching {partner_prefix} acquisition/source artifact is ambiguous"
 
 
-def _named_acquisition_scope(source_name: str, prefix: str) -> str:
-    """Return the explicit suffix scope, ignoring TSK partition suffixes."""
-    suffix = source_name.removeprefix(prefix).removeprefix(".")
-    if prefix == "tsk.filelist":
-        parts = suffix.split(".") if suffix else []
-        if parts and re.fullmatch(r"p\d+", parts[-1]):
-            parts.pop()
-        suffix = ".".join(parts)
-    return suffix
-
-
-def _same_acquisition_scope(process_source: SourceRow, file_source: SourceRow) -> bool:
-    """Require the same non-empty acquisition identity in both source names."""
-    process_scope = _named_acquisition_scope(
-        process_source.source_name, "volatility.pslist"
-    )
-    file_scope = _named_acquisition_scope(file_source.source_name, "tsk.filelist")
-    return bool(process_scope) and process_scope == file_scope
+def _same_acquisition_identity(left: SourceRow, right: SourceRow) -> bool:
+    """Require the same complete acquisition/host identity on both sources."""
+    return left.acquisition is not None and left.acquisition == right.acquisition
 
 
 def _reference_catalog(
@@ -1550,23 +1536,19 @@ def _indexed_request() -> ClockEvidenceRequest:
         if limit_reason := limited_sources.get(source.source_id):
             source_evidence.append(_bounded_source_result(source, limit_reason))
             continue
-        acquisition_scope = _named_acquisition_scope(
-            source.source_name, "volatility.pslist"
-        )
         partner, reason = _partner_source(
             source,
             cmdline_sources,
-            source_prefix="volatility.pslist",
             partner_prefix="volatility.cmdline",
         )
-        if not acquisition_scope:
+        if source.acquisition is None:
             partner = None
             reason = (
                 (reason + "; " if reason else "")
                 + "explicit process/filesystem acquisition identity is unavailable"
             )
         elif sum(
-            candidate.source_name == source.source_name
+            _same_acquisition_identity(source, candidate)
             for candidate in pslist_sources
         ) > 1:
             partner = None
@@ -1578,24 +1560,26 @@ def _indexed_request() -> ClockEvidenceRequest:
             reason = limited_sources[partner.source_id]
             partner = None
         scoped_tsk_sources = [
-            item for item in tsk_sources if _same_acquisition_scope(source, item)
+            item for item in tsk_sources if _same_acquisition_identity(source, item)
         ]
-        ambiguous_tsk_names = {
-            item.source_name
+        duplicate_tsk_sources = {
+            (item.source_name, item.source_path)
             for item in scoped_tsk_sources
             if sum(
                 candidate.source_name == item.source_name
+                and candidate.source_path == item.source_path
                 for candidate in scoped_tsk_sources
-            )
-            > 1
+            ) > 1
         }
-        if not acquisition_scope:
+        tsk_artifacts = {item.source_path for item in scoped_tsk_sources}
+        ambiguous_tsk = len(tsk_artifacts) > 1 or bool(duplicate_tsk_sources)
+        if source.acquisition is None:
             scoped_tsk_sources = []
-        elif ambiguous_tsk_names:
+        elif ambiguous_tsk:
             reason = (
                 (reason + "; " if reason else "")
                 + "matching tsk.filelist acquisition identity is ambiguous: "
-                + ", ".join(sorted(ambiguous_tsk_names))
+                + ", ".join(sorted(tsk_artifacts))
             )
             scoped_tsk_sources = []
         bounded_tsk_reasons = [
@@ -1617,12 +1601,12 @@ def _indexed_request() -> ClockEvidenceRequest:
         if (
             tsk_sources
             and not scoped_tsk_sources
-            and acquisition_scope
-            and not ambiguous_tsk_names
+            and source.acquisition is not None
+            and not ambiguous_tsk
         ):
             reason = (
                 (reason + "; " if reason else "")
-                + "matching tsk.filelist acquisition scope is unavailable"
+                + "matching tsk.filelist acquisition identity is unavailable"
             )
         source_evidence.append(
             _process_file_evidence(

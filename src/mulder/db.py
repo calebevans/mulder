@@ -40,6 +40,7 @@ from sqlalchemy.pool import NullPool
 
 from mulder.graph import _define_graph_tables
 from mulder.models import (
+    AcquisitionIdentity,
     AtomicClaim,
     AtomicClaimInput,
     CaseMetadataRow,
@@ -95,6 +96,8 @@ sources_t = Table(
     Column("line_count", Integer, nullable=False),
     Column("ingested_at", Text, nullable=False),
     Column("windows_hash", Text, nullable=True),
+    Column("acquisition_id", Text, nullable=True),
+    Column("host_id", Text, nullable=True),
 )
 
 windows_t = Table(
@@ -265,6 +268,8 @@ evidence_registry_t = Table(
     Column("sha256", Text, nullable=False),
     Column("size_bytes", Integer, nullable=False),
     Column("registered_at", Text, nullable=False),
+    Column("acquisition_id", Text, nullable=True),
+    Column("host_id", Text, nullable=True),
 )
 
 bookmarks_t = Table(
@@ -409,6 +414,19 @@ def _migrate_add_windows_hash(conn: Connection) -> None:
     except Exception as exc:
         if "duplicate column" not in str(exc).lower():
             raise
+
+
+def _migrate_add_acquisition_identity(conn: Connection) -> None:
+    """Add nullable provenance columns without granting identity to legacy rows."""
+    for table_name in ("sources", "evidence_registry"):
+        for column_name in ("acquisition_id", "host_id"):
+            try:
+                conn.execute(
+                    text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} TEXT")
+                )
+            except Exception as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
 
 
 def _migrate_add_bookmarks(conn: Connection) -> None:
@@ -764,6 +782,7 @@ class CaseDB:
             _migrate_add_narrative(conn)
             _migrate_add_evidence_registry(conn)
             _migrate_add_windows_hash(conn)
+            _migrate_add_acquisition_identity(conn)
             _migrate_add_bookmarks(conn)
             _migrate_add_progress(conn)
             _migrate_add_kv_store(conn)
@@ -796,6 +815,8 @@ class CaseDB:
         source_hash: str,
         extractor: str,
         line_count: int,
+        *,
+        acquisition: AcquisitionIdentity | None = None,
     ) -> int:
         """Register a new evidence source; return its source_id."""
 
@@ -812,6 +833,10 @@ class CaseDB:
                         source_hash=source_hash,
                         extractor=extractor,
                         line_count=line_count,
+                        acquisition_id=(
+                            acquisition.acquisition_id if acquisition is not None else None
+                        ),
+                        host_id=acquisition.host_id if acquisition is not None else None,
                         ingested_at=now,
                     )
                 )
@@ -1313,6 +1338,15 @@ class CaseDB:
                 extractor=row.extractor,
                 line_count=row.line_count,
                 windows_hash=getattr(row, "windows_hash", None),
+                acquisition=(
+                    AcquisitionIdentity(
+                        acquisition_id=row.acquisition_id,
+                        host_id=row.host_id,
+                    )
+                    if getattr(row, "acquisition_id", None)
+                    and getattr(row, "host_id", None)
+                    else None
+                ),
             )
             for row in rows
         ]
@@ -2135,6 +2169,8 @@ class CaseDB:
         file_path: str,
         sha256: str,
         size_bytes: int,
+        *,
+        acquisition: AcquisitionIdentity | None = None,
     ) -> None:
         """Record an evidence file's SHA-256 hash for chain of custody."""
 
@@ -2148,6 +2184,10 @@ class CaseDB:
                         sha256=sha256,
                         size_bytes=size_bytes,
                         registered_at=now,
+                        acquisition_id=(
+                            acquisition.acquisition_id if acquisition is not None else None
+                        ),
+                        host_id=acquisition.host_id if acquisition is not None else None,
                     )
                 )
 
@@ -2164,9 +2204,41 @@ class CaseDB:
                 "sha256": row.sha256,
                 "size_bytes": row.size_bytes,
                 "registered_at": row.registered_at,
+                "acquisition": (
+                    {
+                        "acquisition_id": row.acquisition_id,
+                        "host_id": row.host_id,
+                    }
+                    if getattr(row, "acquisition_id", None)
+                    and getattr(row, "host_id", None)
+                    else None
+                ),
             }
             for row in rows
         ]
+
+    def get_evidence_acquisition(self, file_path: str) -> AcquisitionIdentity | None:
+        """Return one exact registered acquisition identity, failing closed on ambiguity."""
+        requested = str(Path(file_path).expanduser().resolve(strict=False))
+        matching = [
+            row
+            for row in self.get_evidence_registry()
+            if str(Path(str(row["file_path"])).expanduser().resolve(strict=False))
+            == requested
+        ]
+        if not matching or any(row["acquisition"] is None for row in matching):
+            return None
+        identities = {
+            (
+                str(cast(dict[str, object], row["acquisition"])["acquisition_id"]),
+                str(cast(dict[str, object], row["acquisition"])["host_id"]),
+            )
+            for row in matching
+        }
+        if len(identities) != 1:
+            return None
+        acquisition_id, host_id = identities.pop()
+        return AcquisitionIdentity(acquisition_id=acquisition_id, host_id=host_id)
 
     def add_bookmark(self, window_id: int, source_name: str, note: str) -> int:
         """Add a bookmark for a window and return its ID."""

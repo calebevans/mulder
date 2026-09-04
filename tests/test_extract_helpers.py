@@ -11,6 +11,7 @@ import pytest
 from mulder.audit import AuditLog
 from mulder.db import CaseDB
 from mulder.index.correlator import Correlator
+from mulder.models import AcquisitionIdentity
 from mulder.server.app import ServerContext
 from mulder.server.extract_helpers import (
     _WINDOW_CHAR_BUDGET,
@@ -76,6 +77,33 @@ class TestExtractAndIndex:
         assert result["windows_indexed"] is not None
         assert result["windows_indexed"] >= 1  # type: ignore[operator]
         assert result["line_count"] == 8
+
+    def test_registered_acquisition_is_bound_to_indexed_source(
+        self,
+        _mock_server_ctx: ServerContext,
+    ) -> None:
+        acquisition = AcquisitionIdentity(
+            acquisition_id="sha256:" + "a" * 64,
+            host_id="ws-01",
+        )
+        evidence_path = "/evidence/memory.raw"
+        _mock_server_ctx.db.register_evidence_file(
+            evidence_path,
+            "sha256:" + "b" * 64,
+            128,
+            acquisition=acquisition,
+        )
+
+        with self._patch_ctx(_mock_server_ctx):
+            extract_and_index(
+                raw_output="PID\tImageFileName\n4\tSystem\n",
+                source_name="volatility.pslist",
+                source_path=evidence_path,
+                extractor_name="volatility3",
+            )
+
+        [source] = _mock_server_ctx.db.get_sources()
+        assert source.acquisition == acquisition
 
     def test_empty_input(self, _mock_server_ctx: ServerContext) -> None:
         """Empty input produces zero windows."""

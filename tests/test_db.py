@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,13 @@ from mulder.db import (
     CaseDB,
     _sanitize_fts5_query,
 )
-from mulder.models import AtomicClaimInput, EvidenceAnchorInput, Finding, WindowRow
+from mulder.models import (
+    AcquisitionIdentity,
+    AtomicClaimInput,
+    EvidenceAnchorInput,
+    Finding,
+    WindowRow,
+)
 
 
 class TestCaseLifecycle:
@@ -37,15 +44,55 @@ class TestCaseLifecycle:
         with CaseDB.create(case_id="ctx", evidence_root="/ev", db_dir=tmp_path) as db:
             assert db.get_case_metadata().case_id == "ctx"
 
+    def test_open_migrates_nullable_acquisition_identity_columns(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        db = CaseDB.create(case_id="legacy", evidence_root="/ev", db_dir=tmp_path)
+        db.close()
+        path = tmp_path / "legacy.db"
+        with sqlite3.connect(path) as connection:
+            connection.execute("ALTER TABLE sources DROP COLUMN acquisition_id")
+            connection.execute("ALTER TABLE sources DROP COLUMN host_id")
+            connection.execute("ALTER TABLE evidence_registry DROP COLUMN acquisition_id")
+            connection.execute("ALTER TABLE evidence_registry DROP COLUMN host_id")
+
+        acquisition = AcquisitionIdentity(
+            acquisition_id="sha256:" + "f" * 64,
+            host_id="host-migrated",
+        )
+        with CaseDB.open("legacy", tmp_path) as migrated:
+            migrated.register_evidence_file(
+                "/evidence/disk.E01",
+                "sha256:disk",
+                10,
+                acquisition=acquisition,
+            )
+            migrated.register_source(
+                "tsk.filelist",
+                "/evidence/disk.E01",
+                "sha256:output",
+                "sleuthkit",
+                1,
+                acquisition=acquisition,
+            )
+            assert migrated.get_evidence_acquisition("/evidence/disk.E01") == acquisition
+            assert migrated.get_sources()[0].acquisition == acquisition
+
 
 class TestSources:
     def test_register_and_get_sources(self, tmp_case_db: CaseDB) -> None:
+        acquisition = AcquisitionIdentity(
+            acquisition_id="sha256:" + "a" * 64,
+            host_id="host-01",
+        )
         sid = tmp_case_db.register_source(
             source_name="volatility.pslist",
             source_path="/evidence/memdump.mem",
             source_hash="abc123",
             extractor="volatility",
             line_count=42,
+            acquisition=acquisition,
         )
         assert isinstance(sid, int)
 
@@ -53,6 +100,7 @@ class TestSources:
         assert len(sources) == 1
         assert sources[0].source_name == "volatility.pslist"
         assert sources[0].line_count == 42
+        assert sources[0].acquisition == acquisition
 
     def test_get_source_count(self, tmp_case_db: CaseDB) -> None:
         assert tmp_case_db.get_source_count() == 0
@@ -306,11 +354,34 @@ class TestEvidenceIntegrity:
         assert results[0]["status"] == "no_hash_recorded"
 
     def test_get_evidence_registry(self, tmp_case_db: CaseDB) -> None:
-        tmp_case_db.register_evidence_file("/a.dd", "hash_a", 100)
+        acquisition = AcquisitionIdentity(
+            acquisition_id="sha256:" + "b" * 64,
+            host_id="host-02",
+        )
+        tmp_case_db.register_evidence_file("/a.dd", "hash_a", 100, acquisition=acquisition)
         tmp_case_db.register_evidence_file("/b.dd", "hash_b", 200)
         reg = tmp_case_db.get_evidence_registry()
         assert len(reg) == 2
         assert reg[0]["file_path"] == "/a.dd"
+        assert reg[0]["acquisition"] == acquisition.model_dump(mode="json")
+        assert reg[1]["acquisition"] is None
+        assert tmp_case_db.get_evidence_acquisition("/a.dd") == acquisition
+        assert tmp_case_db.get_evidence_acquisition("/b.dd") is None
+
+    def test_conflicting_evidence_acquisition_bindings_fail_closed(
+        self,
+        tmp_case_db: CaseDB,
+    ) -> None:
+        first = AcquisitionIdentity(acquisition_id="acq-1", host_id="host")
+        second = AcquisitionIdentity(acquisition_id="acq-2", host_id="host")
+        tmp_case_db.register_evidence_file(
+            "/same/disk.E01", "sha256:first", 100, acquisition=first
+        )
+        tmp_case_db.register_evidence_file(
+            "/same/disk.E01", "sha256:second", 100, acquisition=second
+        )
+
+        assert tmp_case_db.get_evidence_acquisition("/same/disk.E01") is None
 
 
 class TestFtsBatchDeduplication:

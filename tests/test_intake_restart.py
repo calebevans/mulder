@@ -177,7 +177,12 @@ def test_kape_intake_is_content_bound_and_duplicate_import_is_idempotent(
         {"field": "host", "value": "examiner-host"}
     ]
     with CaseDB.open("case-1", db_dir) as database:
-        assert len(database.get_evidence_registry()) == 2
+        registry = database.get_evidence_registry()
+        assert len(registry) == 2
+        assert {item["acquisition"]["acquisition_id"] for item in registry} == {
+            manifest.collection_digest
+        }
+        assert {item["acquisition"]["host_id"] for item in registry} == {"ws-01"}
 
     (source / "C" / "Windows" / "System32" / "config" / "SYSTEM").write_bytes(
         b"changed registry fixture"

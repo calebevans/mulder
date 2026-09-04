@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal, TypeAlias
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ToolOutcomeStatus(str, Enum):
@@ -130,6 +130,23 @@ class WindowRow(BaseModel):
     raw_text: str
 
 
+class AcquisitionIdentity(BaseModel):
+    """Immutable collection and host identity bound by intake provenance."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    acquisition_id: str = Field(
+        min_length=1,
+        max_length=4096,
+        pattern=r"^\S(?:.*\S)?$",
+    )
+    host_id: str = Field(
+        min_length=1,
+        max_length=4096,
+        pattern=r"^\S(?:.*\S)?$",
+    )
+
+
 class SourceRow(BaseModel):
     """Metadata for a registered evidence source in the case database."""
 
@@ -141,6 +158,7 @@ class SourceRow(BaseModel):
     extractor: str
     line_count: int
     windows_hash: str | None = None
+    acquisition: AcquisitionIdentity | None = None
 
 
 class CaseMetadataRow(BaseModel):
