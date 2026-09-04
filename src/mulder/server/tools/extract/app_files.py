@@ -12,10 +12,10 @@ import fnmatch
 import logging
 import re
 import shutil
-import subprocess
 import time
-from typing import Any
+from typing import Any, cast
 
+from mulder.execution import safe_subprocess as subprocess
 from mulder.models import CoverageMetadata, ToolOutcome, ToolOutcomeStatus
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
@@ -203,7 +203,7 @@ def _extract_and_read_file(
     if _is_binary_content(proc.stdout):
         return None
 
-    return proc.stdout[:_MAX_TEXT_BYTES].decode("utf-8", errors="replace")
+    return cast(bytes, proc.stdout)[:_MAX_TEXT_BYTES].decode("utf-8", errors="replace")
 
 
 @mcp.tool()

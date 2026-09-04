@@ -5,11 +5,11 @@ from __future__ import annotations
 import email as email_lib
 import email.parser
 import logging
-import subprocess
 import tempfile
 import time
 from pathlib import Path
 
+from mulder.execution import safe_subprocess as subprocess
 from mulder.server.app import mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (

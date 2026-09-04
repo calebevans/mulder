@@ -11,10 +11,10 @@ import hashlib
 import logging
 import re
 import shutil
-import subprocess
 import threading
 import time
 
+from mulder.execution import safe_subprocess as subprocess
 from mulder.models import WindowRow
 from mulder.security.evidence_envelope import present_model_evidence
 from mulder.server import source_names as _sn

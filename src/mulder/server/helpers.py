@@ -12,7 +12,6 @@ import hashlib
 import json
 import re
 import shutil
-import subprocess
 import sys
 import time
 from collections import defaultdict
@@ -32,6 +31,7 @@ from mulder.execution import (
     PathAccess,
     PathArgument,
 )
+from mulder.execution import safe_subprocess as subprocess
 from mulder.models import CoverageMetadata, ToolOutcome, ToolOutcomeStatus
 from mulder.security.evidence_envelope import present_model_evidence
 from mulder.server.app import get_ctx, has_ctx
@@ -638,6 +638,32 @@ def error_response(
     if suggestion:
         result["suggestion"] = suggestion
     return result
+
+
+def parser_diagnostic_fields(
+    tool_name: str,
+    selector: str,
+    diagnostic: str,
+    *,
+    content_key: str = "error_message",
+) -> dict[str, object]:
+    """Project an untrusted parser diagnostic through the evidence envelope.
+
+    Parser stdout/stderr is evidence-controlled even when it looks like an
+    ordinary error.  This is the default construction seam for nested/batch
+    diagnostic objects that cannot use :func:`error_response` directly.
+    """
+    presentation = present_model_evidence(
+        diagnostic,
+        source_id=f"tool-diagnostic:{tool_name}",
+        source_name=tool_name,
+        selector=selector,
+        max_characters=max(1, len(diagnostic)),
+    )
+    return presentation.response_fields(
+        content_key=content_key,
+        metadata_key=f"{content_key.removesuffix('_message')}_evidence_envelope",
+    )
 
 
 _PID_RE = re.compile(r"(?:^|\t)(\d{1,6})(?:\t|$)", re.MULTILINE)

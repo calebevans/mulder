@@ -12,13 +12,13 @@ import io
 import logging
 import os
 import shutil
-import subprocess
 import tempfile
 import time
 from collections import Counter
 from pathlib import Path
 
 from mulder.assets.paths import asset_path, asset_search_summary
+from mulder.execution import safe_subprocess as subprocess
 from mulder.patterns import DISK_IMAGE_EXTS
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index

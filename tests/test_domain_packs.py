@@ -23,7 +23,7 @@ from mulder.packs import (
     domain_pack_schema,
     parse_pack_manifest,
 )
-from mulder.server.tool_access import Role, tool_access
+from mulder.server.tool_access import Role, ToolEffect, tool_access
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "domain_packs"
 
@@ -148,7 +148,7 @@ def test_activation_classifier_adds_new_artifact_without_core_edit() -> None:
 
 
 def test_default_resolver_uses_existing_tool_access_registry() -> None:
-    @tool_access(Role.EXTRACT_EXECUTOR)
+    @tool_access(Role.EXTRACT_EXECUTOR, effect=ToolEffect.FORENSIC_EXECUTION)
     def inspect_acme() -> None:
         return None
 

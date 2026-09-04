@@ -16,13 +16,13 @@ import plistlib
 import re
 import shutil
 import sqlite3
-import subprocess
 import tempfile
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from mulder.execution import safe_subprocess as subprocess
 from mulder.path_policy import PathPolicyError, resolve_allowed_path
 from mulder.security.evidence_envelope import present_model_evidence
 from mulder.server.app import get_cfg, get_ctx, mcp
@@ -155,7 +155,7 @@ def _find_inodes_by_pattern(pattern: str) -> list[tuple[str, str, int]]:
 
 
 @mcp.tool()
-@tool_access(Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR | Role.CROSS_ANALYST)
+@tool_access(Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR)
 def parse_browser_history() -> dict[str, object]:
     """Extract browser history from Chrome, Firefox, and Safari databases.
 

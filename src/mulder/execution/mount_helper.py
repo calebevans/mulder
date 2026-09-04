@@ -11,8 +11,9 @@ import argparse
 import json
 import re
 import shutil
-import subprocess
 from pathlib import Path
+
+from mulder.execution import safe_subprocess as subprocess
 
 _SECTOR_SIZE = 512
 _MMLS_ROW_RE = re.compile(r"^\d+:\d+\s+(\d+)\s+\d+\s+(\d+)\s+(.+)$", re.MULTILINE)

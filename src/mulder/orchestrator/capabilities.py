@@ -16,7 +16,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 
-from mulder.server.tool_access import Role, get_registered_tool_roles
+from mulder.server.tool_access import (
+    Role,
+    get_registered_tool_effect,
+    get_registered_tool_roles,
+)
 
 
 class Capability(str, Enum):
@@ -24,7 +28,8 @@ class Capability(str, Enum):
 
     CASE_READ = "case-read"
     FORENSIC_EXECUTION = "forensic-execution"
-    CASE_MUTATION = "case-mutation"
+    CASE_WRITE = "case-mutation"
+    CASE_MUTATION = "case-mutation"  # Backwards-compatible symbolic alias.
     JOB_CONTROL = "job-control"
     PUBLICATION = "publication"
     VERIFICATION = "verification"
@@ -48,49 +53,12 @@ DELEGATION_GRANT_ENV = "MULDER_TOOL_DELEGATION_GRANT"
 _DELEGATION_VERSION = 1
 
 
-_MUTATION_TOOLS = frozenset(
-    {
-        "bookmark_window",
-        "delete_finding",
-        "deduplicate_findings",
-        "record_claim_verification",
-        "record_coverage",
-        "submit_finding",
-        "submit_narrative",
-        "track_progress",
-        "update_finding",
-        "withdraw_finding",
-    }
-)
-_JOB_TOOLS = frozenset(
-    {
-        "check_extraction_status",
-        "get_completed_results",
-        "run_parallel",
-        "start_extraction_batch",
-        "wait",
-        "wait_all",
-    }
-)
-_PUBLICATION_TOOLS = frozenset({"finalize_report"})
-
-
-def tool_capability(tool_name: str, declared_roles: Role) -> Capability:
-    """Classify a registered tool by its strongest security-relevant effect."""
-    prefix = "mcp__mulder__"
-    name = tool_name[len(prefix) :] if tool_name.startswith(prefix) else tool_name
-    if name in _PUBLICATION_TOOLS:
-        return Capability.PUBLICATION
-    if name in _MUTATION_TOOLS:
-        return Capability.CASE_MUTATION
-    if name in _JOB_TOOLS:
-        return Capability.JOB_CONTROL
-
-    # Extraction-only tools launch or control forensic parsers.  Tools shared
-    # with analyst/correlation roles are read/query operations over stored data.
-    if declared_roles == Role.EXTRACT_EXECUTOR:
-        return Capability.FORENSIC_EXECUTION
-    return Capability.CASE_READ
+def tool_capability(tool_name: str) -> Capability:
+    """Return the registered tool's explicit security-relevant effect."""
+    effect = get_registered_tool_effect(tool_name)
+    if effect is None:
+        raise CapabilityViolation(f"unknown tool effect for {tool_name!r}")
+    return Capability(effect.value)
 
 
 def authorize_tool(identity: AgentIdentity, tool_name: str) -> None:
@@ -104,7 +72,7 @@ def authorize_tool(identity: AgentIdentity, tool_name: str) -> None:
         raise CapabilityViolation(
             f"identity {identity.name!r} is not assigned role for {tool_name!r}"
         )
-    required = tool_capability(tool_name, roles)
+    required = tool_capability(tool_name)
     if required not in identity.capabilities:
         raise CapabilityViolation(
             f"identity {identity.name!r} lacks {required.value!r} for {tool_name!r}"
@@ -193,7 +161,7 @@ def _decode_urlsafe(value: str) -> bytes:
 
 
 _READ = frozenset({Capability.CASE_READ})
-_READ_MUTATE = frozenset({Capability.CASE_READ, Capability.CASE_MUTATION})
+_READ_MUTATE = frozenset({Capability.CASE_READ, Capability.CASE_WRITE})
 
 IDENTITIES: dict[tuple[str, str], AgentIdentity] = {
     ("catalog", "single"): AgentIdentity(
@@ -206,11 +174,15 @@ IDENTITIES: dict[tuple[str, str], AgentIdentity] = {
         _READ | {Capability.FORENSIC_EXECUTION, Capability.JOB_CONTROL},
     ),
     ("extraction", "analyst"): AgentIdentity(
-        "extraction-analyst", Role.EXTRACT_ANALYST, _READ_MUTATE
+        "extraction-analyst",
+        Role.EXTRACT_ANALYST,
+        _READ_MUTATE | {Capability.FORENSIC_EXECUTION},
     ),
     ("cross_system", "planner"): AgentIdentity("cross-planner", Role.CROSS_PLANNER, _READ),
     ("cross_system", "executor"): AgentIdentity(
-        "cross-executor", Role.CROSS_EXECUTOR, _READ_MUTATE | {Capability.JOB_CONTROL}
+        "cross-executor",
+        Role.CROSS_EXECUTOR,
+        _READ_MUTATE | {Capability.FORENSIC_EXECUTION, Capability.JOB_CONTROL},
     ),
     ("cross_system", "analyst"): AgentIdentity(
         "cross-analyst", Role.CROSS_ANALYST, _READ_MUTATE
@@ -227,7 +199,7 @@ IDENTITIES: dict[tuple[str, str], AgentIdentity] = {
         "narrative-analyst", Role.NARRATIVE_ANALYST, _READ_MUTATE
     ),
     ("report", "single"): AgentIdentity(
-        "report", Role.REPORT, _READ | {Capability.CASE_MUTATION, Capability.PUBLICATION}
+        "report", Role.REPORT, _READ | {Capability.CASE_WRITE, Capability.PUBLICATION}
     ),
 }
 

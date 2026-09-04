@@ -25,7 +25,6 @@ from mulder.execution.policy import (
     CommandRequest,
     NetworkClass,
     PolicyDecision,
-    is_dangerous_environment_name,
 )
 
 
@@ -48,6 +47,10 @@ class NetworkIsolationPlan:
     argv: tuple[str, ...]
     reason_code: str
     message: str
+    executable_path: str | None = None
+    executable_sha256: str | None = None
+    executable_size: int | None = None
+    executable_mtime_ns: int | None = None
 
 
 class NetworkIsolationBackend(Protocol):
@@ -93,6 +96,10 @@ class BubblewrapNetworkIsolationBackend:
             argv=self._wrapped_argv(executable, argv),
             reason_code="network_isolation_enforced",
             message="Command is confined to a verified private network namespace",
+            executable_path=executable,
+            executable_sha256=(self._attested_identity[4] if self._attested_identity else None),
+            executable_size=(self._attested_identity[2] if self._attested_identity else None),
+            executable_mtime_ns=(self._attested_identity[3] if self._attested_identity else None),
         )
 
     @staticmethod
@@ -286,6 +293,10 @@ class CommandResult:
     output_sha256: str
     network_enforcement: str
     network_backend: str
+    network_backend_executable: str | None
+    network_backend_sha256: str | None
+    network_backend_size: int | None
+    network_backend_mtime_ns: int | None
     error: str | None = None
 
     @property
@@ -306,6 +317,10 @@ class ExecutionAuditEvent:
     network_class: str
     network_enforcement: str
     network_backend: str
+    network_backend_executable: str | None
+    network_backend_sha256: str | None
+    network_backend_size: int | None
+    network_backend_mtime_ns: int | None
     policy_decision: str
     reason_code: str
     status: str
@@ -325,6 +340,10 @@ class ExecutionAuditEvent:
             "network_class": self.network_class,
             "network_enforcement": self.network_enforcement,
             "network_backend": self.network_backend,
+            "network_backend_executable": self.network_backend_executable,
+            "network_backend_sha256": self.network_backend_sha256,
+            "network_backend_size": self.network_backend_size,
+            "network_backend_mtime_ns": self.network_backend_mtime_ns,
             "policy_decision": self.policy_decision,
             "reason_code": self.reason_code,
             "status": self.status,
@@ -380,11 +399,10 @@ def _output_digest(stdout: bytes, stderr: bytes) -> str:
 
 
 def _safe_environment(overrides: Mapping[str, str]) -> dict[str, str]:
-    environment = {
-        key: value for key, value in os.environ.items() if not is_dangerous_environment_name(key)
-    }
-    environment.update(overrides)
-    return environment
+    """Compatibility wrapper around the child-process environment seam."""
+    from mulder.execution.safe_subprocess import sanitized_environment
+
+    return sanitized_environment(overrides)
 
 
 def _resource_limiter(request: CommandRequest) -> Callable[[], None] | None:
@@ -603,6 +621,10 @@ class CommandRunner:
             output_sha256=_output_digest(stdout, stderr),
             network_enforcement=isolation.reason_code,
             network_backend=isolation.backend,
+            network_backend_executable=isolation.executable_path,
+            network_backend_sha256=isolation.executable_sha256,
+            network_backend_size=isolation.executable_size,
+            network_backend_mtime_ns=isolation.executable_mtime_ns,
             error=error,
         )
 
@@ -625,6 +647,10 @@ class CommandRunner:
                 network_class=request.network_class.value,
                 network_enforcement=result.network_enforcement,
                 network_backend=result.network_backend,
+                network_backend_executable=result.network_backend_executable,
+                network_backend_sha256=result.network_backend_sha256,
+                network_backend_size=result.network_backend_size,
+                network_backend_mtime_ns=result.network_backend_mtime_ns,
                 policy_decision="permit" if result.decision.permitted else "deny",
                 reason_code=result.decision.reason_code,
                 status=result.status.value,

@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import logging
-import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
 from concurrent.futures import TimeoutError as _FuturesTimeoutError
 from pathlib import Path
 from typing import Any
 
+from mulder.execution import safe_subprocess as subprocess
 from mulder.extractors.volatility import (
     _find_vol_binary,
     _plugin_short_name,
@@ -20,6 +20,7 @@ from mulder.server.helpers import (
     adaptive_timeout,
     error_response,
     make_tool_call_id,
+    parser_diagnostic_fields,
     sources_already_indexed,
     tool_response,
 )
@@ -162,12 +163,17 @@ def _run_single_vol_plugin(
                     return summary
 
         error_type = "plugin_unsupported" if _is_xp_unsupported_error(stderr_text) else "no_output"
+        diagnostic = stderr_text[:300]
         result: dict[str, object] = {
             "plugin": plugin,
             "status": "error",
             "error_type": error_type,
             "source_name": f"volatility.{short}",
-            "error_message": stderr_text[:300],
+            **parser_diagnostic_fields(
+                "run_volatility",
+                f"plugin_error:{plugin}",
+                diagnostic,
+            ),
         }
         if is_netscan:
             result["suggestion"] = (

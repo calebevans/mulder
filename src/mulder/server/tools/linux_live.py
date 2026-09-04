@@ -57,7 +57,7 @@ def _aggregate_outcome(result_statuses: list[str], result: CollectionResult) -> 
 
 
 @mcp.tool()
-@tool_access(Role.CATALOG | Role.EXTRACT_EXECUTOR)
+@tool_access(Role.EXTRACT_EXECUTOR)
 def collect_linux_live_state_bundle(
     host_id: str,
     checks: list[str],

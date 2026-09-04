@@ -19,6 +19,7 @@ from mulder.execution import (
     NetworkClass,
     NetworkIsolationPlan,
     PathArgument,
+    safe_subprocess,
 )
 from mulder.server import helpers
 
@@ -41,6 +42,10 @@ class _VerifiedTestIsolation:
             argv=argv,
             reason_code="network_isolation_enforced",
             message="deterministic test isolation",
+            executable_path="/usr/bin/test-bwrap",
+            executable_sha256="f" * 64,
+            executable_size=12345,
+            executable_mtime_ns=67890,
         )
 
 
@@ -67,7 +72,8 @@ def _runner(
 
 
 def test_runs_pinned_executable_without_shell() -> None:
-    result = _runner(_python_policy()).run(
+    events: list[ExecutionAuditEvent] = []
+    result = _runner(_python_policy(), audit_sink=events.append).run(
         CommandRequest(
             executable=sys.executable,
             arguments=("-c", "print('forensic output')"),
@@ -80,6 +86,10 @@ def test_runs_pinned_executable_without_shell() -> None:
     assert result.argv[0] == str(Path(sys.executable).resolve())
     assert result.network_enforcement == "network_isolation_enforced"
     assert result.network_backend == "test-netns"
+    assert events[0].network_backend_executable == "/usr/bin/test-bwrap"
+    assert events[0].network_backend_sha256 == "f" * 64
+    assert events[0].network_backend_size == 12345
+    assert events[0].network_backend_mtime_ns == 67890
 
 
 def test_executable_substitution_is_denied() -> None:
@@ -113,6 +123,46 @@ def test_dangerous_inherited_environment_is_removed(monkeypatch: pytest.MonkeyPa
     )
     assert result.status is ExecutionStatus.COMPLETED
     assert result.stdout == b"False\n"
+
+
+def test_direct_forensic_launches_scrub_delegation_credentials_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mulder.server.tools import artifacts
+    from mulder.server.tools.extract import tsk
+
+    monkeypatch.setenv("MULDER_TOOL_DELEGATION_SECRET", "server-secret")
+    monkeypatch.setenv("MULDER_TOOL_DELEGATION_GRANT", "signed-grant")
+    seen: list[dict[str, str]] = []
+
+    def fake_run(*_args: object, **kwargs: object) -> object:
+        seen.append(dict(kwargs["env"]))  # type: ignore[arg-type]
+        return object()
+
+    monkeypatch.setattr(safe_subprocess._subprocess, "run", fake_run)
+    artifacts.subprocess.run(["artifact-parser"], check=False)
+    tsk.subprocess.run(["mmls", "image.raw"], check=False)
+
+    assert len(seen) == 2
+    for environment in seen:
+        assert "MULDER_TOOL_DELEGATION_SECRET" not in environment
+        assert "MULDER_TOOL_DELEGATION_GRANT" not in environment
+
+
+def test_every_direct_tool_subprocess_import_uses_the_safe_seam() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    unsafe_imports: list[str] = []
+    for path in (project_root / "src" / "mulder").rglob("*.py"):
+        relative = path.relative_to(project_root).as_posix()
+        if relative in {
+            "src/mulder/execution/runner.py",
+            "src/mulder/execution/safe_subprocess.py",
+            "src/mulder/orchestrator/proxy.py",
+        }:
+            continue
+        if "import subprocess" in path.read_text(encoding="utf-8"):
+            unsafe_imports.append(relative)
+    assert unsafe_imports == []
 
 
 def test_symlink_path_escape_is_denied(tmp_path: Path) -> None:

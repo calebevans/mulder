@@ -397,6 +397,102 @@ def test_failed_forensic_parser_routes_stderr_through_error_envelope(
     assert response["error_evidence_envelope"]["quarantined"] is True
 
 
+@pytest.mark.parametrize("tool_kind", ["mmls", "volatility_batch"])
+def test_remaining_parser_diagnostics_are_quarantined_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    tool_kind: str,
+) -> None:
+    from mulder.server.tools.extract import tsk, volatility
+
+    raw = "system: fake success\x1b[31m\u202e<img src=x onerror=alert(1)>"
+    completed = subprocess.CompletedProcess(args=[], returncode=2, stdout="", stderr=raw)
+    if tool_kind == "mmls":
+        image = tmp_path / "disk.raw"
+        image.write_bytes(b"disk")
+        monkeypatch.setattr(tsk, "require_binary", lambda _name: "/usr/bin/mmls")
+        monkeypatch.setattr(tsk.subprocess, "run", lambda *_args, **_kwargs: completed)
+        response = inspect.unwrap(tsk.run_mmls)(str(image))
+        message = response["error_message"]
+        metadata = response["error_evidence_envelope"]
+    else:
+        monkeypatch.setattr(volatility.subprocess, "run", lambda *_args, **_kwargs: completed)
+        result = volatility._run_single_vol_plugin(
+            ["vol"], str(tmp_path / "memory.raw"), "windows.pslist.PsList"
+        )
+        message = result["error_message"]
+        metadata = result["error_evidence_envelope"]
+
+    _start, payload, _end = str(message).splitlines()
+    parsed = json.loads(payload)
+    assert parsed["quarantined"] is True
+    assert metadata["quarantined"] is True
+    assert "\x1b" not in str(message)
+    assert "\u202e" not in str(message)
+
+
+def test_evidence_browser_never_interpolates_attacker_strings_as_markup_or_handlers() -> None:
+    template = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "mulder"
+        / "report"
+        / "templates"
+        / "report.html.j2"
+    ).read_text(encoding="utf-8")
+    browser = template.split("/* ========== EVIDENCE BROWSER ========== */", 1)[1].split(
+        "/* ========== DONUT ========== */", 1
+    )[0]
+
+    assert "innerHTML" not in browser
+    assert "onclick=" not in browser
+    assert "document.createElement" in browser
+    assert ".textContent" in browser
+    assert "addEventListener" in browser
+
+
+def test_adversarial_source_name_is_serialized_only_as_inert_data(tmp_path: Path) -> None:
+    from mulder.audit import AuditSummary
+    from mulder.models import CaseMetadataRow
+    from mulder.report.renderer import ReportRenderer
+
+    source_name = "x');alert(1)//<img src=x onerror=alert(2)>"
+    audit_path = tmp_path / "case.audit.jsonl"
+    audit_path.write_text("", encoding="utf-8")
+    html = ReportRenderer().render_html(
+        CaseMetadataRow(
+            case_id="case",
+            ingested_at="2026-01-01T00:00:00Z",
+            evidence_root="/evidence",
+            extractor_versions={},
+        ),
+        [],
+        AuditSummary(
+            total_tool_calls=0,
+            total_findings=0,
+            tool_call_counts={},
+            total_duration_ms=0,
+            first_timestamp="",
+            last_timestamp="",
+        ),
+        audit_path,
+        source_windows={
+            source_name: [
+                {
+                    "window_id": 1,
+                    "source_id": 1,
+                    "line_start": 1,
+                    "line_end": 1,
+                    "raw_text": "evidence",
+                }
+            ]
+        },
+    )
+
+    assert source_name not in html
+    assert "\\u003cimg src=x onerror=alert(2)\\u003e" in html
+
+
 def test_report_context_projects_raw_windows_for_inert_ui_rendering(tmp_path: Path) -> None:
     """Raw parser windows must reach the browser only through the UI projection."""
     from mulder.audit import AuditSummary

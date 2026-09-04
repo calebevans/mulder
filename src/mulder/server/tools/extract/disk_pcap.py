@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import logging
 import re
-import subprocess
 import tempfile
 import time
 from pathlib import Path
 from typing import Any
 
+from mulder.execution import safe_subprocess as subprocess
 from mulder.models import CoverageMetadata, ToolOutcome, ToolOutcomeStatus
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index

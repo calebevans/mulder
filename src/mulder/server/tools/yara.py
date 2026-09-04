@@ -12,7 +12,6 @@ import logging
 import os
 import re
 import shutil
-import subprocess
 import tempfile
 import threading
 import time
@@ -20,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from mulder.assets.paths import asset_path, register_cache_clear
+from mulder.execution import safe_subprocess as subprocess
 from mulder.security.evidence_envelope import present_model_evidence
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index

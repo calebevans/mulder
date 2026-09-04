@@ -9,7 +9,6 @@ import hashlib
 import logging
 import os
 import shutil
-import subprocess
 import tarfile
 import tempfile
 import time
@@ -23,6 +22,7 @@ from mulder.adapters import (
     materialize_intake,
     verify_intake_source,
 )
+from mulder.execution import safe_subprocess as subprocess
 from mulder.server.app import (
     create_case,
     get_cfg,
@@ -527,7 +527,7 @@ def _extract_7z(archive: Path, dest: Path) -> list[str]:
 
 
 @mcp.tool()
-@tool_access(Role.CATALOG | Role.EXTRACT_EXECUTOR)
+@tool_access(Role.EXTRACT_EXECUTOR)
 def extract_archive(
     archive_path: str,
     extract_to: str | None = None,

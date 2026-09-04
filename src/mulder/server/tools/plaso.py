@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import logging
 import shutil
-import subprocess
 import time
 from collections.abc import Mapping
 from pathlib import Path
 
+from mulder.execution import safe_subprocess as subprocess
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
@@ -129,7 +129,7 @@ def get_plaso_stats() -> dict[str, object]:
 
 
 @mcp.tool()
-@tool_access(Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR | Role.CROSS_ANALYST)
+@tool_access(Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR)
 def filter_timeline(
     t_start: str,
     t_end: str,

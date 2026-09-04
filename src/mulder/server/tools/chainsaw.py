@@ -5,13 +5,13 @@ from __future__ import annotations
 import json
 import logging
 import os
-import subprocess
 import tempfile
 import time
 from pathlib import Path
 from typing import Any, Literal
 
 from mulder.assets.paths import asset_display_path, asset_path, asset_search_summary
+from mulder.execution import safe_subprocess as subprocess
 from mulder.patterns import DISK_IMAGE_EXTS
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index

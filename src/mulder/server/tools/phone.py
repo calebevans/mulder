@@ -14,14 +14,14 @@ import mmap
 import re as _re
 import shutil
 import sqlite3
-import subprocess
 import tempfile
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from mulder.assets.paths import asset_display_path, register_cache_clear
+from mulder.execution import safe_subprocess as subprocess
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
@@ -720,7 +720,7 @@ def _extract_strings_from_file(file_path: Path, min_length: int = 8) -> list[str
                 check=False,
             )
             if proc.stdout.strip():
-                return proc.stdout.strip().splitlines()[:200]
+                return cast(str, proc.stdout).strip().splitlines()[:200]
         except (subprocess.TimeoutExpired, OSError):
             pass
 

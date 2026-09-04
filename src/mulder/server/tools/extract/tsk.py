@@ -6,12 +6,13 @@ import contextlib
 import logging
 import re
 import shutil
-import subprocess
 import tempfile
 import threading
 import time
 from pathlib import Path
+from typing import cast
 
+from mulder.execution import safe_subprocess as subprocess
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
@@ -232,7 +233,7 @@ def _run_fls_inline(image_path: str) -> str:
         if proc.returncode == 0:
             ctx = get_ctx()
             ctx.db.set_kv(f"{_KV_OFFSET_PREFIX}{image_path}", str(offset))
-            return proc.stdout.decode("utf-8", errors="replace")
+            return cast(bytes, proc.stdout).decode("utf-8", errors="replace")
     except (subprocess.TimeoutExpired, OSError):
         pass
     return ""
@@ -545,6 +546,7 @@ def run_mmls(image_path: str) -> dict[str, object]:
             error_msg,
             error_type=error_type,
             suggestion=suggestion,
+            error_is_untrusted_evidence=True,
         )
 
     summary = extract_and_index(proc.stdout.strip(), "tsk.partitions", image_path, "sleuthkit")

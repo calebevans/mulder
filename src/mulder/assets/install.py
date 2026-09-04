@@ -15,7 +15,6 @@ import json
 import logging
 import os
 import shutil
-import subprocess
 import tarfile
 import zipfile
 from collections.abc import Callable, Iterable, Sequence
@@ -33,6 +32,7 @@ from mulder.assets.manifest import (
 )
 from mulder.assets.paths import asset_path, reset_asset_caches
 from mulder.assets.state import AssetRecord, AssetState
+from mulder.execution import safe_subprocess as subprocess
 
 try:
     import fcntl

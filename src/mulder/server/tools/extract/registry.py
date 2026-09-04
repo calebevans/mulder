@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import logging
 import re
-import subprocess
 import tempfile
 import time
 from pathlib import Path
 from typing import Any
 
+from mulder.execution import safe_subprocess as subprocess
 from mulder.server.app import mcp
 from mulder.server.extract_helpers import extract_and_index, mount_disk_image
 from mulder.server.helpers import (

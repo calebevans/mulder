@@ -5,11 +5,11 @@ from __future__ import annotations
 import contextlib
 import logging
 import shutil
-import subprocess
 import tempfile
 import time
 from pathlib import Path
 
+from mulder.execution import safe_subprocess as subprocess
 from mulder.server.app import get_cfg, get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (

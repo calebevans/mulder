@@ -31,7 +31,14 @@ from mulder.orchestrator.phases import (
     REPORT,
     PhaseConfig,
 )
-from mulder.server.tool_access import Role, get_registered_tool_roles
+from mulder.server.tool_access import (
+    Role,
+    ToolEffect,
+    get_registered_tool_effect,
+    get_registered_tool_effects,
+    get_registered_tool_roles,
+    tool_access,
+)
 
 
 def _seats(phase: PhaseConfig) -> list[tuple[str, list[str]]]:
@@ -108,6 +115,44 @@ def test_role_declaration_and_effect_capability_are_both_required() -> None:
 
     with pytest.raises(CapabilityViolation, match="lacks"):
         authorize_tool_list(underprivileged, [extraction_tool])
+
+
+def test_every_registered_tool_has_one_explicit_effect_declaration() -> None:
+    from mulder.server.tool_access import _registry
+
+    effects = get_registered_tool_effects()
+    assert set(effects) == set(_registry)
+    assert all(isinstance(effect, ToolEffect) for effect in effects.values())
+
+
+def test_raw_analyzers_and_persistent_reasoning_writers_have_strong_effects() -> None:
+    for name in (
+        "run_capa",
+        "run_hindsight",
+        "detect_steganography",
+        "get_file_metadata",
+        "parse_plist",
+        "query_sqlite_from_image",
+        "filter_timeline",
+        "export_timeline_slice",
+    ):
+        assert get_registered_tool_effect(name) is ToolEffect.FORENSIC_EXECUTION
+    for name in (
+        "create_hypothesis",
+        "record_hypothesis_test",
+        "record_contradiction",
+        "resolve_contradiction",
+        "record_review_verdict",
+    ):
+        assert get_registered_tool_effect(name) is ToolEffect.CASE_WRITE
+
+
+def test_registration_without_an_explicit_effect_fails_closed() -> None:
+    with pytest.raises(RuntimeError, match="no explicit effect declaration"):
+
+        @tool_access(Role.CATALOG)
+        def undeclared_test_tool() -> dict[str, object]:
+            return {}
 
 
 def test_unknown_tool_is_rejected_before_provider_startup() -> None:

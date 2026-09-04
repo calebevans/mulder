@@ -1747,6 +1747,12 @@ function syntaxHighlight(json) { return json.replace(/&/g,'&amp;').replace(/</g,
 /* ========== EVIDENCE BROWSER ========== */
 var evTreeBuilt = false;
 var currentEvSource = null;
+function decodeEscapedEvidenceText(text) {
+  /* The server emits a once-escaped UI projection. Decode exactly that layer,
+     then assign via textContent so the result can never become markup. */
+  return String(text).replace(/&quot;/g, '"').replace(/&#x27;/g, "'")
+    .replace(/&gt;/g, '>').replace(/&lt;/g, '<').replace(/&amp;/g, '&');
+}
 function buildEvSourceTree() {
   if (evTreeBuilt) return;
   var tree = document.getElementById('evSourceTree');
@@ -1757,24 +1763,54 @@ function buildEvSourceTree() {
     if (!groups[group]) groups[group] = [];
     groups[group].push(name);
   });
-  var html = '';
   Object.keys(groups).sort().forEach(function(g) {
-    html += '<div class="ev-tree-group"><div class="ev-tree-group-header" onclick="this.parentElement.classList.toggle(\'collapsed\')"><span class="chev">&#9660;</span> ' + g.charAt(0).toUpperCase()+g.slice(1) + ' <span style="opacity:0.5;font-size:0.6rem;">(' + groups[g].length + ')</span></div><div class="ev-tree-items">';
+    var groupNode = document.createElement('div');
+    groupNode.className = 'ev-tree-group';
+    var header = document.createElement('div');
+    header.className = 'ev-tree-group-header';
+    var chev = document.createElement('span');
+    chev.className = 'chev';
+    chev.textContent = '\u25bc';
+    header.appendChild(chev);
+    header.appendChild(document.createTextNode(' ' + g.charAt(0).toUpperCase()+g.slice(1) + ' '));
+    var count = document.createElement('span');
+    count.style.opacity = '0.5';
+    count.style.fontSize = '0.6rem';
+    count.textContent = '(' + groups[g].length + ')';
+    header.appendChild(count);
+    header.addEventListener('click', function() { groupNode.classList.toggle('collapsed'); });
+    groupNode.appendChild(header);
+    var items = document.createElement('div');
+    items.className = 'ev-tree-items';
     groups[g].sort().forEach(function(name) {
       var meta = SOURCES_META[name] || {};
-      html += '<div class="ev-tree-item" data-source="'+name+'" onclick="selectEvSource(\''+name+'\')">'+name+'<span class="line-count">'+(meta.line_count||'')+'</span></div>';
+      var item = document.createElement('div');
+      item.className = 'ev-tree-item';
+      item.dataset.source = name;
+      item.appendChild(document.createTextNode(name));
+      var lineCount = document.createElement('span');
+      lineCount.className = 'line-count';
+      lineCount.textContent = meta.line_count || '';
+      item.appendChild(lineCount);
+      item.addEventListener('click', function() { selectEvSource(name); });
+      items.appendChild(item);
     });
-    html += '</div></div>';
+    groupNode.appendChild(items);
+    tree.appendChild(groupNode);
   });
-  if (!html) html = '<div class="ev-empty">No evidence data embedded in this report.</div>';
-  tree.innerHTML = html;
+  if (!Object.keys(groups).length) {
+    var empty = document.createElement('div');
+    empty.className = 'ev-empty';
+    empty.textContent = 'No evidence data embedded in this report.';
+    tree.appendChild(empty);
+  }
   evTreeBuilt = true;
 }
 function selectEvSource(name) {
   buildEvSourceTree();
   currentEvSource = name;
   document.querySelectorAll('.ev-tree-item').forEach(function(i) { i.classList.toggle('active', i.dataset.source === name); });
-  var activeItem = document.querySelector('.ev-tree-item[data-source="'+name+'"]');
+  var activeItem = Array.from(document.querySelectorAll('.ev-tree-item')).find(function(i) { return i.dataset.source === name; });
   if (activeItem) {
     var group = activeItem.closest('.ev-tree-group');
     if (group) group.classList.remove('collapsed');
@@ -1785,20 +1821,39 @@ function selectEvSource(name) {
   document.getElementById('evMeta').textContent = (meta.extractor||'')+' \u2022 '+(meta.line_count||0)+' lines';
   var windows = SOURCE_WINDOWS[name] || [];
   var body = document.getElementById('evViewerBody');
-  if (!windows.length) { body.innerHTML = '<div class="ev-empty">No evidence data available for this source.</div>'; return; }
-  var html = '';
+  body.replaceChildren();
+  if (!windows.length) {
+    var empty = document.createElement('div');
+    empty.className = 'ev-empty';
+    empty.textContent = 'No evidence data available for this source.';
+    body.appendChild(empty);
+    return;
+  }
   var lineNum = 0;
   windows.forEach(function(w) {
     var lines = w.raw_text.split('\n');
     lines.forEach(function(line) {
       lineNum++;
-      html += '<div class="ev-line" data-ln="'+lineNum+'"><span class="ev-line-num">'+lineNum+'</span><span class="ev-line-text">'+line+'</span></div>';
+      var lineNode = document.createElement('div');
+      lineNode.className = 'ev-line';
+      lineNode.dataset.ln = String(lineNum);
+      var number = document.createElement('span');
+      number.className = 'ev-line-num';
+      number.textContent = String(lineNum);
+      var content = document.createElement('span');
+      content.className = 'ev-line-text';
+      content.textContent = decodeEscapedEvidenceText(line);
+      lineNode.appendChild(number);
+      lineNode.appendChild(content);
+      body.appendChild(lineNode);
     });
   });
   if (windows.length > 0 && windows[0].truncated) {
-    html += '<div class="ev-truncated">Showing first 500 windows of '+windows[0].total+' total. Full data available in the case database.</div>';
+    var truncated = document.createElement('div');
+    truncated.className = 'ev-truncated';
+    truncated.textContent = 'Showing first 500 windows of ' + windows[0].total + ' total. Full data available in the case database.';
+    body.appendChild(truncated);
   }
-  body.innerHTML = html;
   body.scrollTop = 0;
   document.getElementById('evSearchInput').value = '';
   window.location.hash = '#/evidence/' + encodeURIComponent(name);
@@ -1837,16 +1892,36 @@ function closeCmdPalette() { document.getElementById('cmdOverlay').classList.rem
 function cmdSearch() {
   var q = document.getElementById('cmdInput').value.toLowerCase();
   var results = cmdItems.filter(function(item) { return !q || item.label.toLowerCase().indexOf(q) !== -1; }).slice(0, 15);
-  var html = '';
+  var container = document.getElementById('cmdResults');
+  container.replaceChildren();
   results.forEach(function(r, i) {
-    var cls = 'cmd-result-item' + (i === cmdSelected ? ' selected' : '');
-    html += '<div class="'+cls+'" data-idx="'+i+'" onclick="cmdExec('+i+')" onmouseenter="cmdSelected='+i+';cmdHighlight()">';
-    html += '<span class="cmd-result-type t-'+r.type+'">'+r.type+'</span><span class="cmd-result-name">'+r.label+'</span>';
-    if (r.meta) html += '<span class="cmd-result-meta">'+r.meta+'</span>';
-    html += '</div>';
+    var row = document.createElement('div');
+    row.className = 'cmd-result-item' + (i === cmdSelected ? ' selected' : '');
+    row.dataset.idx = String(i);
+    row.addEventListener('click', function() { cmdExec(i); });
+    row.addEventListener('mouseenter', function() { cmdSelected=i; cmdHighlight(); });
+    var type = document.createElement('span');
+    type.className = 'cmd-result-type t-' + r.type;
+    type.textContent = r.type;
+    row.appendChild(type);
+    var label = document.createElement('span');
+    label.className = 'cmd-result-name';
+    label.textContent = r.label;
+    row.appendChild(label);
+    if (r.meta) {
+      var meta = document.createElement('span');
+      meta.className = 'cmd-result-meta';
+      meta.textContent = r.meta;
+      row.appendChild(meta);
+    }
+    container.appendChild(row);
   });
-  if (!results.length) html = '<div style="padding:1rem;text-align:center;color:var(--text-dim);font-size:0.85rem;">No results</div>';
-  document.getElementById('cmdResults').innerHTML = html;
+  if (!results.length) {
+    var empty = document.createElement('div');
+    empty.style.cssText = 'padding:1rem;text-align:center;color:var(--text-dim);font-size:0.85rem;';
+    empty.textContent = 'No results';
+    container.appendChild(empty);
+  }
   window._cmdFiltered = results;
 }
 function cmdHighlight() { document.querySelectorAll('.cmd-result-item').forEach(function(el,i){el.classList.toggle('selected',i===cmdSelected);}); }

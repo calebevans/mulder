@@ -6,13 +6,13 @@ import importlib.util
 import json
 import logging
 import re
-import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Any
 
 from mulder.assets.paths import asset_path, asset_search_summary
+from mulder.execution import safe_subprocess as subprocess
 from mulder.server.app import mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (

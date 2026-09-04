@@ -8,8 +8,8 @@ tool list maintenance.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from enum import Flag, auto
+from collections.abc import Callable, Mapping
+from enum import Enum, Flag, auto
 from typing import TypeVar
 
 F = TypeVar("F", bound=Callable[..., object])
@@ -37,9 +37,218 @@ ANALYSTS = Role.EXTRACT_ANALYST | Role.CROSS_ANALYST | Role.NARRATIVE_ANALYST
 ALL_ROLES = Role.CATALOG | PLANNERS | EXECUTORS | ANALYSTS | Role.REPORT
 
 _registry: dict[str, Role] = {}
+_effect_registry: dict[str, ToolEffect] = {}
 
 
-def tool_access(*roles: Role) -> Callable[[F], F]:
+class ToolEffect(str, Enum):
+    """Explicit security-relevant effect of a registered MCP tool."""
+
+    CASE_READ = "case-read"
+    FORENSIC_EXECUTION = "forensic-execution"
+    CASE_WRITE = "case-mutation"
+    CASE_MUTATION = "case-mutation"  # Backwards-compatible symbolic alias.
+    JOB_CONTROL = "job-control"
+    PUBLICATION = "publication"
+
+
+_TOOLS_BY_EFFECT: dict[ToolEffect, frozenset[str]] = {
+    ToolEffect.CASE_WRITE: frozenset(
+        {
+            "bookmark_window",
+            "create_hypothesis",
+            "deduplicate_findings",
+            "delete_finding",
+            "record_claim_verification",
+            "record_contradiction",
+            "record_coverage",
+            "record_hypothesis_test",
+            "record_review_verdict",
+            "remove_bookmark",
+            "resolve_contradiction",
+            "submit_finding",
+            "submit_narrative",
+            "track_progress",
+            "update_finding",
+            "withdraw_finding",
+        }
+    ),
+    ToolEffect.JOB_CONTROL: frozenset(
+        {
+            "check_extraction_status",
+            "get_completed_results",
+            "run_parallel",
+            "start_extraction_batch",
+            "wait",
+            "wait_all",
+        }
+    ),
+    ToolEffect.PUBLICATION: frozenset({"finalize_report"}),
+    ToolEffect.FORENSIC_EXECUTION: frozenset(
+        {
+            "analyze_disk_pcaps",
+            "analyze_office_document",
+            "analyze_pdf",
+            "carve_sqlite_from_raw",
+            "collect_linux_live_state_bundle",
+            "decrypt_app_data",
+            "detect_steganography",
+            "extract_archive",
+            "extract_file_by_inode",
+            "extract_steganography",
+            "export_timeline_slice",
+            "filter_timeline",
+            "get_file_metadata",
+            "index_app_files",
+            "index_evtx_file",
+            "parse_android_artifacts",
+            "parse_browser_history",
+            "parse_ios_artifacts",
+            "parse_plist",
+            "parse_pst",
+            "query_sqlite_from_image",
+            "run_aleapp",
+            "run_amcache_parser",
+            "run_bdeinfo",
+            "run_binwalk",
+            "run_bulk_extractor",
+            "run_capa",
+            "run_chainsaw",
+            "run_chkrootkit",
+            "run_clamav",
+            "run_detect_it_easy",
+            "run_dislocker",
+            "run_evtx_parser",
+            "run_exiftool",
+            "run_floss",
+            "run_fls",
+            "run_foremost",
+            "run_fsstat",
+            "run_fvdeinfo",
+            "run_hashdeep",
+            "run_hayabusa",
+            "run_hindsight",
+            "run_ileapp",
+            "run_mactime",
+            "run_mft_parser",
+            "run_mmls",
+            "run_mvt_android",
+            "run_mvt_ios",
+            "run_pasco",
+            "run_pcap_analysis",
+            "run_photorec",
+            "run_plaso",
+            "run_prefetch_parser",
+            "run_radare2",
+            "run_registry_parser",
+            "run_regripper",
+            "run_scalpel",
+            "run_shimcache_parser",
+            "run_ssdeep",
+            "run_strings",
+            "run_suricata",
+            "run_tcpflow",
+            "run_tcpxtract",
+            "run_volatility",
+            "run_volatility_batch",
+            "run_vshadow_info",
+            "run_zeek_analysis",
+            "run_zircolite",
+            "triage_binary",
+            "yara_scan_files",
+            "yara_scan_memory",
+            "yara_scan_with_volatility",
+        }
+    ),
+    ToolEffect.CASE_READ: frozenset(
+        {
+            "analyze_anti_forensics_clock",
+            "analyze_cloudtrail_pack",
+            "analyze_evtx_pack",
+            "analyze_execution_timeline",
+            "analyze_kubernetes_pack",
+            "assess_recovery",
+            "audit_evidence_coverage",
+            "audit_tool_coverage",
+            "check_finalize_readiness",
+            "correlate_across_sources",
+            "correlate_pcap_with_host",
+            "decode_payload",
+            "detect_timestomping",
+            "enrich_iocs",
+            "events_for_entity",
+            "extract_mft_timeline",
+            "find_data_exfiltration_indicators",
+            "find_defense_evasion",
+            "find_execution_evidence",
+            "find_file_staging",
+            "find_lateral_movement_indicators",
+            "find_persistence_mechanisms",
+            "find_suspicious_processes",
+            "get_amcache",
+            "get_bookmarks",
+            "get_carved_iocs",
+            "get_deleted_files",
+            "get_eventlog_anomalies",
+            "get_findings",
+            "get_fs_timeline",
+            "get_investigation_summary",
+            "get_ioc_summary",
+            "get_plaso_stats",
+            "get_process_environment",
+            "get_process_privileges",
+            "get_process_tree",
+            "get_raw_output",
+            "get_reasoning_review",
+            "get_source_stats",
+            "get_timeline",
+            "get_tool_guide",
+            "get_userassist",
+            "host_timeline",
+            "list_cases",
+            "list_directory",
+            "list_files",
+            "list_partitions",
+            "list_processes_from_memory",
+            "list_sources",
+            "lookup_attack_technique",
+            "neighbors",
+            "open_case",
+            "parse_amcache",
+            "parse_autoruns",
+            "parse_jump_lists",
+            "parse_lnk_files",
+            "parse_mft",
+            "parse_prefetch",
+            "parse_prefetch_detailed",
+            "parse_shellbags",
+            "parse_shimcache",
+            "parse_srum",
+            "parse_usn_journal",
+            "path_between",
+            "query_registry_value",
+            "read_evidence_file",
+            "reconstruct_execution_chains",
+            "scan_evidence",
+            "scan_files_in_memory",
+            "scan_hidden_processes",
+            "scan_kernel_modules",
+            "search",
+            "verify_evidence_integrity",
+        }
+    ),
+}
+
+_EFFECT_DECLARATIONS = {
+    name: effect for effect, names in _TOOLS_BY_EFFECT.items() for name in names
+}
+if sum(len(names) for names in _TOOLS_BY_EFFECT.values()) != len(_EFFECT_DECLARATIONS):
+    raise RuntimeError("tool effect declarations overlap")
+
+
+def tool_access(
+    *roles: Role,
+    effect: ToolEffect | None = None,
+) -> Callable[[F], F]:
     """Declare which pipeline roles may call this tool.
 
     Place this decorator BELOW ``@mcp.tool()`` so it runs first
@@ -57,7 +266,18 @@ def tool_access(*roles: Role) -> Callable[[F], F]:
         combined |= r
 
     def decorator(fn: F) -> F:
+        built_in_effect = _EFFECT_DECLARATIONS.get(fn.__name__)
+        registered_effect = effect or built_in_effect
+        if registered_effect is None:
+            raise RuntimeError(
+                f"registered tool {fn.__name__!r} has no explicit effect declaration"
+            )
+        if effect is not None and built_in_effect is not None and effect is not built_in_effect:
+            raise RuntimeError(
+                f"registered tool {fn.__name__!r} conflicts with its built-in effect declaration"
+            )
         _registry[fn.__name__] = combined
+        _effect_registry[fn.__name__] = registered_effect
         return fn
 
     return decorator
@@ -76,6 +296,16 @@ def get_registered_tool_roles(tool_name: str) -> Role | None:
     authorization fail-closed without exposing the mutable registry.
     """
     return get_tool_access(tool_name)
+
+
+def get_registered_tool_effect(tool_name: str) -> ToolEffect | None:
+    """Return the explicit registered effect for one short or qualified name."""
+    return _effect_registry.get(tool_name.removeprefix("mcp__mulder__"))
+
+
+def get_registered_tool_effects() -> Mapping[str, ToolEffect]:
+    """Return an immutable snapshot suitable for completeness validation."""
+    return dict(_effect_registry)
 
 
 def get_tool_access(tool_name: str) -> Role | None:
