@@ -215,6 +215,104 @@ def report(case_id: str, db_dir: str) -> None:
     click.echo("Done.")
 
 
+@cli.command("seal-case")
+@click.argument("case_id")
+@click.option(
+    "--db-dir",
+    default=DEFAULT_DB_DIR,
+    show_default=True,
+    help="Directory containing the case database, audit log, and standard reports.",
+)
+@click.option(
+    "--manifest",
+    "manifest_path",
+    default=None,
+    type=click.Path(path_type=Path, dir_okay=False),
+    help="Output path. Defaults to DB_DIR/CASE_ID.manifest.json.",
+)
+@click.option(
+    "--artifact",
+    "artifacts",
+    multiple=True,
+    type=click.Path(path_type=Path, dir_okay=False),
+    help="Additional generated report/export artifact to bind; repeat as needed.",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Replace an existing manifest after re-verifying every current artifact.",
+)
+def seal_case_cmd(
+    case_id: str,
+    db_dir: str,
+    manifest_path: Path | None,
+    artifacts: tuple[Path, ...],
+    force: bool,
+) -> None:
+    """Seal CASE_ID into a relocatable, unsigned case manifest.
+
+    This is a local operation. It reads the case database, audit log, original
+    evidence, and generated reports without starting MCP or calling a model.
+    """
+    from mulder.receipt import SealError, seal_case
+
+    try:
+        path = seal_case(
+            case_id,
+            Path(db_dir),
+            manifest_path=manifest_path,
+            report_artifacts=artifacts,
+            overwrite=force,
+        )
+    except (OSError, SealError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"Sealed case manifest: {path}")
+    click.echo("Signature: unsigned (examiner-controlled signing is not enabled)")
+
+
+@cli.command("verify-case")
+@click.argument(
+    "manifest_path",
+    type=click.Path(path_type=Path, dir_okay=False),
+)
+@click.option(
+    "--evidence-root",
+    default=None,
+    type=click.Path(path_type=Path),
+    help="Relocated evidence root; otherwise the manifest's relative locator is used.",
+)
+@click.option("--json", "json_output", is_flag=True, help="Emit machine-readable JSON.")
+def verify_case_cmd(
+    manifest_path: Path,
+    evidence_root: Path | None,
+    json_output: bool,
+) -> None:
+    """Verify MANIFEST_PATH entirely offline.
+
+    Exit status is 0 for a fully verified native case, 2 for intact but
+    cryptographically unverified legacy material, 3 for an unsupported
+    manifest schema, and 1 for corruption, mutation, or missing artifacts.
+    """
+    import json
+
+    from mulder.receipt import format_verification_result, verify_case
+
+    result = verify_case(manifest_path, evidence_root=evidence_root)
+    if json_output:
+        click.echo(json.dumps(result.as_dict(), indent=2, sort_keys=True))
+    else:
+        click.echo(format_verification_result(result))
+
+    exit_code = {
+        "verified": 0,
+        "legacy_unverified": 2,
+        "unsupported_manifest": 3,
+        "invalid": 1,
+    }[result.status]
+    if exit_code:
+        raise click.exceptions.Exit(exit_code)
+
+
 @cli.command()
 @click.argument("evidence_path")
 @click.argument("case_id")

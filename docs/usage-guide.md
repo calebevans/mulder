@@ -37,6 +37,8 @@ Try-it-out instructions for running Mulder, the forensic investigation platform.
     - [`mulder setup`](#mulder-setup)
     - [`mulder serve`](#mulder-serve)
     - [`mulder report`](#mulder-report)
+    - [`mulder seal-case`](#mulder-seal-case)
+    - [`mulder verify-case`](#mulder-verify-case)
     - [`mulder export-iocs`](#mulder-export-iocs)
     - [`mulder export-navigator`](#mulder-export-navigator)
   - [Understanding the Output](#understanding-the-output)
@@ -518,6 +520,46 @@ Regenerates reports (Markdown, HTML, PDF) offline from an existing case database
 |--------|---------|-------------|
 | `--db-dir` | `~/.mulder/cases` | Directory containing case databases |
 
+### `mulder seal-case`
+
+```
+mulder seal-case <case_id> [OPTIONS]
+```
+
+Creates `{case_id}.manifest.json`, a portable receipt over the case database's complete logical
+contents, the exact audit-chain head and entry count, registered original evidence, extractor and
+tool metadata, and standard report/export files found beside the database. Use `--artifact PATH`
+repeatedly to bind additional generated files. Existing manifests are preserved unless `--force`
+is explicit. Run this after the final report/export operation; any later database or audit event is
+correctly reported as a post-seal change and requires an explicit re-seal.
+
+The v1 receipt is deliberately marked **unsigned**. It detects changes relative to the retained
+manifest but does not establish an examiner identity; examiner-controlled signing is a separate
+trust layer. Sealing fails if registered evidence is missing or has already changed, or if the
+current audit chain is invalid.
+
+The `sqlite-logical-v1` database commitment includes every non-internal SQLite schema object and
+every typed value in every non-internal table, in deterministic value order. It intentionally
+excludes physical page layout, WAL/checkpoint layout, file timestamps, and SQLite-maintained
+`sqlite_*` implementation tables, so a byte-for-byte copy is not required for a logically identical
+case database. Table-level schema, row-count, and content commitments make failures diagnosable.
+
+### `mulder verify-case`
+
+```
+mulder verify-case <manifest_path> [--evidence-root PATH] [--json]
+```
+
+Verifies a copied case using only local file and SQLite reads: it does not start MCP, call a model,
+or use the network. Artifact locations are relative to the manifest, so moving the case and
+evidence directories together does not invalidate the receipt. Use `--evidence-root` when the
+evidence was moved independently. Diagnostics identify the exact missing/changed evidence,
+report, database table, or audit-chain property.
+
+Exit codes are `0` for a fully verified native case, `1` for mutation/corruption/missing material,
+`2` for intact but unchained legacy material, and `3` for an unsupported manifest schema. A legacy
+audit is reported as `LEGACY UNVERIFIED`, never as corrupt merely because it predates chaining.
+
 ### `mulder export-iocs`
 
 ```
@@ -553,6 +595,7 @@ After an investigation completes, all artifacts are written to the cases directo
 |------|-------------|
 | `{case_id}.db` | SQLite database with all indexed evidence, findings, and metadata |
 | `{case_id}.audit.jsonl` | Append-only audit log recording every tool invocation with parameters and timestamps |
+| `{case_id}.manifest.json` | Relocatable unsigned case receipt produced by `mulder seal-case` |
 
 ### Reports
 
