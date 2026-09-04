@@ -176,7 +176,6 @@ _HINT_CHAR_LIMIT = 200
 _DEFAULT_SEARCH_LIMIT = 50
 _FILE_LIST_CAP = 500
 
-_HASH_SIZE_THRESHOLD = 10000
 _HASH_PREFIX = "blake2b:"
 _HASH_DIGEST_SIZE = 32
 
@@ -186,25 +185,15 @@ def _blake2b_hex(data: bytes) -> str:
 
 
 def hash_output(output: object) -> str:
-    """Return a BLAKE2b fingerprint of *output* for audit purposes.
+    """Return a BLAKE2b commitment to the complete JSON form of *output*.
 
-    For small payloads, hashes the full JSON.  For large payloads
-    (>10KB serialized), hashes a compact summary to avoid expensive
-    serialization of data that's about to be serialized again for the
-    MCP response.
+    The previous large-value heuristic committed only a length, key set, or
+    short prefix.  That was useful as a cache fingerprint but unsuitable for
+    an audit record: different tool outputs could have the same digest.  The
+    existing algorithm and serialization remain stable for small values while
+    all values now commit their complete serialized content.
     """
-    if isinstance(output, list | dict):
-        if isinstance(output, list) and len(output) > 200:
-            return _blake2b_hex(f"list:len={len(output)}".encode())
-        if isinstance(output, dict) and len(output) > 100:
-            return _blake2b_hex(f"dict:keys={sorted(output.keys())}".encode())
-        probe = json.dumps(output, sort_keys=True, default=str)
-        if len(probe) > _HASH_SIZE_THRESHOLD:
-            return _blake2b_hex(f"large:{len(probe)}:{probe[:256]}".encode())
-        return _blake2b_hex(probe.encode())
     raw = json.dumps(output, sort_keys=True, default=str)
-    if len(raw) > _HASH_SIZE_THRESHOLD:
-        return _blake2b_hex(f"large:{len(raw)}:{raw[:256]}".encode())
     return _blake2b_hex(raw.encode())
 
 
