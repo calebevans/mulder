@@ -1180,6 +1180,79 @@ def test_crafted_matching_display_suffix_cannot_cross_acquisitions(tmp_path: Pat
         db.close()
 
 
+def test_conflicting_artifact_commitments_cannot_acquire_correlation_identity(
+    tmp_path: Path,
+) -> None:
+    db = CaseDB.create(case_id="conflicting-artifact", evidence_root="/evidence", db_dir=tmp_path)
+    audit = AuditLog(tmp_path / "conflicting-artifact.audit.jsonl")
+    acquisition = AcquisitionIdentity(
+        acquisition_id="sha256:" + "f" * 64,
+        host_id="same-host",
+    )
+    try:
+        context = MagicMock(db=db, audit=audit)
+        db.register_evidence_file(
+            "/collection/memory.raw",
+            "sha256:memory",
+            128,
+            acquisition=acquisition,
+        )
+        db.register_evidence_file(
+            "/collection/disk.E01",
+            "sha256:first-disk",
+            256,
+            acquisition=acquisition,
+        )
+        db.register_evidence_file(
+            "/collection/disk.E01",
+            "sha256:conflicting-disk",
+            512,
+            acquisition=acquisition,
+        )
+        with patch("mulder.server.app.get_ctx", return_value=context):
+            extract_and_index(
+                "PID\tImageFileName\tCreateTime\tExitTime\n"
+                "42\tbad.exe\t2024-01-01T00:00:00Z\t\n",
+                "volatility.pslist",
+                "/collection/memory.raw",
+                "volatility3",
+            )
+            extract_and_index(
+                "PID\tProcess\tArgs\n42\tbad.exe\tC:\\Temp\\bad.exe\n",
+                "volatility.cmdline",
+                "/collection/memory.raw",
+                "volatility3",
+            )
+            extract_and_index(
+                "r/r * 44-1: C:/Temp/bad.exe\n",
+                "tsk.filelist",
+                "/collection/disk.E01",
+                "sleuthkit",
+            )
+
+        tsk_source = next(
+            source for source in db.get_sources() if source.source_name == "tsk.filelist"
+        )
+        assert tsk_source.acquisition is None
+
+        with patch("mulder.server.tools.clock.get_ctx", return_value=context):
+            result = _tool_dispatch_sync["analyze_anti_forensics_clock"]()
+
+        assert not any(
+            item["finding_type"] == "process_file_mismatch"
+            for item in result["findings"]
+        )
+        process_coverage = next(
+            item for item in result["coverage"] if item["family"] == "process_file_state"
+        )
+        assert process_coverage["outcome"]["status"] == "PARTIAL"
+        assert "matching tsk.filelist acquisition identity is unavailable" in (
+            process_coverage["outcome"]["reason"]
+        )
+    finally:
+        db.close()
+
+
 def test_indexed_adapter_hard_bounds_preserve_partial_coverage(tmp_path: Path) -> None:
     db = CaseDB.create(case_id="bounded-case", evidence_root="/evidence", db_dir=tmp_path)
     audit = AuditLog(tmp_path / "bounded.audit.jsonl")

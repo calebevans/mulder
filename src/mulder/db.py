@@ -2228,16 +2228,27 @@ class CaseDB:
         ]
         if not matching or any(row["acquisition"] is None for row in matching):
             return None
-        identities = {
+        if any(
+            not isinstance(row["sha256"], str)
+            or not row["sha256"]
+            or not isinstance(row["size_bytes"], int)
+            or row["size_bytes"] < 0
+            for row in matching
+        ):
+            return None
+        commitments = {
             (
+                requested,
+                cast(str, row["sha256"]),
+                cast(int, row["size_bytes"]),
                 str(cast(dict[str, object], row["acquisition"])["acquisition_id"]),
                 str(cast(dict[str, object], row["acquisition"])["host_id"]),
             )
             for row in matching
         }
-        if len(identities) != 1:
+        if len(commitments) != 1:
             return None
-        acquisition_id, host_id = identities.pop()
+        _path, _digest, _size, acquisition_id, host_id = commitments.pop()
         return AcquisitionIdentity(acquisition_id=acquisition_id, host_id=host_id)
 
     def add_bookmark(self, window_id: int, source_name: str, note: str) -> int:
