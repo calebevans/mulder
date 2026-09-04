@@ -7,7 +7,14 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from mulder.models import JsonScalar, ToolOutcomeStatus
+from mulder.models import (
+    AtomicClaim,
+    ClaimVerification,
+    Finding,
+    FindingRevision,
+    JsonScalar,
+    ToolOutcomeStatus,
+)
 
 SCHEMA_VERSION: Literal[1] = 1
 METHODOLOGY_VERSION: Literal["1.0"] = "1.0"
@@ -245,16 +252,20 @@ class ClaimRevision(StrictModel):
     claim_id: str = Field(min_length=1)
     iteration: int = Field(ge=1)
     stage: str = Field(min_length=1)
+    source_revision_id: str | None = Field(default=None, min_length=1)
     before: ObservedClaim
-    after: ObservedClaim
+    after: ObservedClaim | None
+    tombstone: bool = False
     reason: str = Field(min_length=1)
 
     @model_validator(mode="after")
     def _check_revision(self) -> ClaimRevision:
-        if self.before.claim_id != self.claim_id or self.after.claim_id != self.claim_id:
+        if self.before.claim_id != self.claim_id:
             raise ValueError("revision before/after claim IDs must match claim_id")
-        if self.before == self.after:
-            raise ValueError("revision must change the claim")
+        if self.after is not None and self.after.claim_id != self.claim_id:
+            raise ValueError("revision before/after claim IDs must match claim_id")
+        if self.tombstone != (self.after is None):
+            raise ValueError("revision tombstone must agree with a missing after value")
         return self
 
 
@@ -301,11 +312,15 @@ class CaseRunResult(StrictModel):
             ):
                 raise ValueError("claim revision iterations must be contiguous from one")
             if any(
-                earlier.after != later.before
+                earlier.after is None or earlier.after != later.before
                 for earlier, later in zip(revisions, revisions[1:], strict=False)
             ):
                 raise ValueError("claim revision before/after values must form a chain")
-            if claim_id not in final_claims or revisions[-1].after != final_claims[claim_id]:
+            final_after = revisions[-1].after
+            if final_after is None:
+                if claim_id in final_claims:
+                    raise ValueError("a tombstoned claim cannot remain published")
+            elif claim_id not in final_claims or final_after != final_claims[claim_id]:
                 raise ValueError("the last claim revision must equal the published claim")
         if self.cell_status == "failed":
             if self.failure_reason is None:
@@ -389,40 +404,136 @@ class WorkflowStageTrace(StrictModel):
         return self
 
 
+class WorkflowCandidate(StrictModel):
+    """Real Mulder domain inputs for one bounded benchmark candidate."""
+
+    finding: Finding
+    claim: AtomicClaim
+    confidence_probability: float = Field(ge=0, le=1)
+    source_verifications: list[ClaimVerification] = Field(default_factory=list)
+    finding_revisions: list[FindingRevision] = Field(default_factory=list)
+    withdrawal_revision: FindingRevision | None = None
+
+    @model_validator(mode="after")
+    def _check_candidate(self) -> WorkflowCandidate:
+        if self.claim.finding_id != self.finding.finding_id:
+            raise ValueError("workflow claim and finding IDs must agree")
+        if self.claim.epistemic_state != "unverified":
+            raise ValueError("workflow candidates must start unverified")
+        if any(item.claim_id != self.claim.claim_id for item in self.source_verifications):
+            raise ValueError("workflow verification history belongs to a different claim")
+        verification_ids = [item.verification_id for item in self.source_verifications]
+        if len(set(verification_ids)) != len(verification_ids):
+            raise ValueError("workflow verification history IDs must be unique")
+        if any(item.finding_id != self.finding.finding_id for item in self.finding_revisions):
+            raise ValueError("workflow finding revision belongs to a different finding")
+        revision_ids = [item.revision_id for item in self.finding_revisions]
+        revision_numbers = [item.revision_number for item in self.finding_revisions]
+        if len(set(revision_ids)) != len(revision_ids):
+            raise ValueError("workflow finding revision IDs must be unique")
+        if revision_numbers != list(range(1, len(revision_numbers) + 1)):
+            raise ValueError("workflow finding revisions must be complete and ordered")
+        if self.finding_revisions:
+            if self.finding_revisions[0].parent_revision_id is not None:
+                raise ValueError("the first workflow finding revision cannot have a parent")
+            if self.finding_revisions[0].snapshot != self.finding:
+                raise ValueError("workflow finding must match the first immutable revision")
+            if any(item.tombstone for item in self.finding_revisions[:-1]):
+                raise ValueError("a workflow finding tombstone must be the final revision")
+        for previous, current in zip(
+            self.finding_revisions, self.finding_revisions[1:], strict=False
+        ):
+            if current.parent_revision_id != previous.revision_id:
+                raise ValueError("workflow finding revision ancestry must form a chain")
+        if self.withdrawal_revision is not None:
+            if self.withdrawal_revision.finding_id != self.finding.finding_id:
+                raise ValueError("workflow withdrawal belongs to a different finding")
+            if not self.withdrawal_revision.tombstone:
+                raise ValueError("workflow withdrawal revision must be a tombstone")
+            if (
+                not self.finding_revisions
+                or self.finding_revisions[-1] != self.withdrawal_revision
+            ):
+                raise ValueError("workflow withdrawal must be the final finding revision")
+        elif self.finding_revisions and self.finding_revisions[-1].tombstone:
+            raise ValueError("a workflow finding tombstone requires withdrawal_revision")
+        return self
+
+
+class WorkflowGateCheck(StrictModel):
+    """Bounded readiness input consumed by the real Alternative Narrative gate."""
+
+    name: str = Field(min_length=1)
+    passed: bool
+    detail: str = ""
+
+
+class AlternativeNarrativeWorkflowInput(StrictModel):
+    """Structured bounded inputs for :func:`validate_narrative`."""
+
+    checks: list[WorkflowGateCheck] = Field(min_length=1)
+    remaining_work: list[str] = Field(default_factory=list)
+
+
 class CaseWorkflowTrace(StrictModel):
     """Complete, ordered stage trace used only by the benchmark ablation engine."""
 
     case_id: str = Field(min_length=1)
-    input_claims: list[ObservedClaim]
-    stages: list[WorkflowStageTrace]
+    trace_version: Literal[1, 2] = 1
+    input_claims: list[ObservedClaim] = Field(default_factory=list)
+    stages: list[WorkflowStageTrace] = Field(default_factory=list)
+    candidates: list[WorkflowCandidate] = Field(default_factory=list)
+    coverage: list[ObservedCoverage] = Field(default_factory=list)
+    alternative_narrative: AlternativeNarrativeWorkflowInput | None = None
+    candidate_similarity_threshold: float = Field(default=0.4, ge=0, le=1)
+    failure_reason: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
     def _check_trace(self) -> CaseWorkflowTrace:
-        expected: list[str] = [
-            "candidate_filters",
-            "verifier",
-            "independence_gate",
-            "alternative_narrative",
-            "blind_reviewer",
-        ]
-        observed = [stage.stage for stage in self.stages]
-        if observed != expected:
-            raise ValueError(f"workflow stages must be complete and ordered: {expected!r}")
-        claim_ids = [claim.claim_id for claim in self.input_claims]
+        if self.trace_version == 1:
+            expected: list[str] = [
+                "candidate_filters",
+                "verifier",
+                "independence_gate",
+                "alternative_narrative",
+                "blind_reviewer",
+            ]
+            observed = [stage.stage for stage in self.stages]
+            if observed != expected:
+                raise ValueError(f"workflow stages must be complete and ordered: {expected!r}")
+            if self.candidates or self.coverage or self.alternative_narrative is not None:
+                raise ValueError("v1 traces cannot contain v2 execution inputs")
+        else:
+            if self.input_claims or self.stages:
+                raise ValueError("v2 traces cannot contain hand-authored workflow operations")
+            if self.failure_reason is not None and (
+                self.candidates or self.coverage or self.alternative_narrative is not None
+            ):
+                raise ValueError("failed workflow traces cannot contain executed case inputs")
+            if self.failure_reason is None and self.alternative_narrative is None:
+                raise ValueError("v2 traces require Alternative Narrative gate inputs")
+        claim_ids = (
+            [claim.claim_id for claim in self.input_claims]
+            if self.trace_version == 1
+            else [candidate.claim.claim_id for candidate in self.candidates]
+        )
         if len(set(claim_ids)) != len(claim_ids):
             raise ValueError("workflow input claim IDs must be unique")
         return self
 
 
 class AblationExecutionReceipt(StrictModel):
-    """Content-bound proof that benchmark stages were replayed or skipped."""
+    """Content-bound proof that benchmark stages were executed or skipped."""
 
-    receipt_version: Literal["mulder.benchmark.ablation/v1"] = (
-        "mulder.benchmark.ablation/v1"
-    )
+    receipt_version: Literal["mulder.benchmark.ablation/v1"] = "mulder.benchmark.ablation/v1"
     base_run_id: str = Field(min_length=1)
     base_matrix_cell: str = Field(min_length=1)
     base_result_sha256: Sha256 = Field(pattern=r"^[0-9a-f]{64}$")
+    base_runtime_ms: int | None = Field(default=None, ge=0)
+    base_input_tokens: int = Field(default=0, ge=0)
+    base_output_tokens: int = Field(default=0, ge=0)
+    base_unattributed_tokens: int = Field(default=0, ge=0)
+    base_cost_usd: float | None = Field(default=None, ge=0)
     workflow_sha256: Sha256 = Field(pattern=r"^[0-9a-f]{64}$")
     disabled: list[AblationTarget] = Field(min_length=1)
     executed_stages: list[BenchmarkStage]
@@ -725,8 +836,8 @@ class AggregateScore(StrictModel):
 class BenchmarkScoreDocument(StrictModel):
     """Deterministic comparison artifact emitted by the benchmark CLI."""
 
-    schema_version: Literal[1] = SCHEMA_VERSION
-    score_schema: Literal["mulder.benchmark.score/v1"] = "mulder.benchmark.score/v1"
+    schema_version: Literal[2] = 2
+    score_schema: Literal["mulder.benchmark.score/v2"] = "mulder.benchmark.score/v2"
     benchmark_id: str
     manifest_sha256: Sha256 = Field(pattern=r"^[0-9a-f]{64}$")
     methodology_version: SupportedMethodologyVersion = METHODOLOGY_VERSION

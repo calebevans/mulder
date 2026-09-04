@@ -1,0 +1,1220 @@
+{
+  "ablation_receipt": null,
+  "benchmark_id": "mulder-executable-ablation-v1",
+  "cases": [
+    {
+      "case_id": "staged-incident",
+      "cell_status": "completed",
+      "claims": [
+        {
+          "citations": [
+            "anchor:4ec06814020c40103e65284a01e12310335038f3266578b0e53a9043280eac83",
+            "anchor:b83785fc4f25a50a3d09021995bb0791a7a28b6d64007c4f87660fbb4540df46"
+          ],
+          "claim_id": "claim-good",
+          "confidence": 0.95,
+          "object_value": "cmd.exe",
+          "predicate": "image_name",
+          "qualifiers": {},
+          "severity": "high",
+          "subject": "process:412",
+          "verification_state": "verified"
+        }
+      ],
+      "coverage": [
+        {
+          "domain": "process_memory",
+          "status": "SUCCESS_NONEMPTY"
+        }
+      ],
+      "failure_reason": null,
+      "revisions": [
+        {
+          "after": {
+            "citations": [
+              "anchor:bf8fbfa2346485e83869825fcd05e3bbadbacb13349d2ca2b970e69c60c6e0aa"
+            ],
+            "claim_id": "claim-alternative",
+            "confidence": 0.7,
+            "object_value": "198.51.100.10",
+            "predicate": "ip_equals",
+            "qualifiers": {},
+            "severity": "high",
+            "subject": "connection:412:443",
+            "verification_state": "unverified"
+          },
+          "before": {
+            "citations": [
+              "anchor:bf8fbfa2346485e83869825fcd05e3bbadbacb13349d2ca2b970e69c60c6e0aa"
+            ],
+            "claim_id": "claim-alternative",
+            "confidence": 0.7,
+            "object_value": "198.51.100.10",
+            "predicate": "ip_equals",
+            "qualifiers": {},
+            "severity": "high",
+            "subject": "connection:412:443",
+            "verification_state": "unverified"
+          },
+          "claim_id": "claim-alternative",
+          "iteration": 1,
+          "reason": "finding_submitted",
+          "revision_id": "initial-finding-alternative:claim-alternative",
+          "source_revision_id": "initial-finding-alternative",
+          "stage": "source_finding_revision",
+          "tombstone": false
+        },
+        {
+          "after": {
+            "citations": [
+              "anchor:df574e54160adc0f8a27e8fff16f46b2f9a1be9ddf38f5a2b4f9254e4a94e167"
+            ],
+            "claim_id": "claim-blind",
+            "confidence": 0.75,
+            "object_value": "evil.exe",
+            "predicate": "image_name",
+            "qualifiers": {},
+            "severity": "high",
+            "subject": "process:777",
+            "verification_state": "unverified"
+          },
+          "before": {
+            "citations": [
+              "anchor:df574e54160adc0f8a27e8fff16f46b2f9a1be9ddf38f5a2b4f9254e4a94e167"
+            ],
+            "claim_id": "claim-blind",
+            "confidence": 0.75,
+            "object_value": "evil.exe",
+            "predicate": "image_name",
+            "qualifiers": {},
+            "severity": "high",
+            "subject": "process:777",
+            "verification_state": "unverified"
+          },
+          "claim_id": "claim-blind",
+          "iteration": 1,
+          "reason": "finding_submitted",
+          "revision_id": "initial-finding-blind:claim-blind",
+          "source_revision_id": "initial-finding-blind",
+          "stage": "source_finding_revision",
+          "tombstone": false
+        },
+        {
+          "after": {
+            "citations": [
+              "anchor:5245c537e4a9905f5fd3f241fcaeaf8e75d2e5e18108f43f963a604b3335de57",
+              "anchor:ec09d30e4a1a662e248854db1992fdb77c6ecd2ac99e745845a728f3309a3712"
+            ],
+            "claim_id": "claim-duplicate",
+            "confidence": 0.95,
+            "object_value": "cmd.exe",
+            "predicate": "image_name",
+            "qualifiers": {},
+            "severity": "high",
+            "subject": "process:412",
+            "verification_state": "unverified"
+          },
+          "before": {
+            "citations": [
+              "anchor:5245c537e4a9905f5fd3f241fcaeaf8e75d2e5e18108f43f963a604b3335de57",
+              "anchor:ec09d30e4a1a662e248854db1992fdb77c6ecd2ac99e745845a728f3309a3712"
+            ],
+            "claim_id": "claim-duplicate",
+            "confidence": 0.95,
+            "object_value": "cmd.exe",
+            "predicate": "image_name",
+            "qualifiers": {},
+            "severity": "high",
+            "subject": "process:412",
+            "verification_state": "unverified"
+          },
+          "claim_id": "claim-duplicate",
+          "iteration": 1,
+          "reason": "finding_submitted",
+          "revision_id": "initial-finding-duplicate:claim-duplicate",
+          "source_revision_id": "initial-finding-duplicate",
+          "stage": "source_finding_revision",
+          "tombstone": false
+        },
+        {
+          "after": {
+            "citations": [
+              "anchor:4ec06814020c40103e65284a01e12310335038f3266578b0e53a9043280eac83",
+              "anchor:b83785fc4f25a50a3d09021995bb0791a7a28b6d64007c4f87660fbb4540df46"
+            ],
+            "claim_id": "claim-good",
+            "confidence": 0.95,
+            "object_value": "cmd.exe",
+            "predicate": "image_name",
+            "qualifiers": {},
+            "severity": "high",
+            "subject": "process:412",
+            "verification_state": "unverified"
+          },
+          "before": {
+            "citations": [
+              "anchor:4ec06814020c40103e65284a01e12310335038f3266578b0e53a9043280eac83",
+              "anchor:b83785fc4f25a50a3d09021995bb0791a7a28b6d64007c4f87660fbb4540df46"
+            ],
+            "claim_id": "claim-good",
+            "confidence": 0.95,
+            "object_value": "cmd.exe",
+            "predicate": "image_name",
+            "qualifiers": {},
+            "severity": "high",
+            "subject": "process:412",
+            "verification_state": "unverified"
+          },
+          "claim_id": "claim-good",
+          "iteration": 1,
+          "reason": "finding_submitted",
+          "revision_id": "initial-finding-good:claim-good",
+          "source_revision_id": "initial-finding-good",
+          "stage": "source_finding_revision",
+          "tombstone": false
+        },
+        {
+          "after": {
+            "citations": [
+              "anchor:afe18e22e5a9792f9c18e30631016c67b8ac1f75cdc40baf55b8416726a941ab"
+            ],
+            "claim_id": "claim-weak",
+            "confidence": 0.8,
+            "object_value": "powershell.exe",
+            "predicate": "image_name",
+            "qualifiers": {},
+            "severity": "high",
+            "subject": "process:999",
+            "verification_state": "unverified"
+          },
+          "before": {
+            "citations": [
+              "anchor:afe18e22e5a9792f9c18e30631016c67b8ac1f75cdc40baf55b8416726a941ab"
+            ],
+            "claim_id": "claim-weak",
+            "confidence": 0.8,
+            "object_value": "powershell.exe",
+            "predicate": "image_name",
+            "qualifiers": {},
+            "severity": "high",
+            "subject": "process:999",
+            "verification_state": "unverified"
+          },
+          "claim_id": "claim-weak",
+          "iteration": 1,
+          "reason": "finding_submitted",
+          "revision_id": "initial-finding-weak:claim-weak",
+          "source_revision_id": "initial-finding-weak",
+          "stage": "source_finding_revision",
+          "tombstone": false
+        },
+        {
+          "after": null,
+          "before": {
+            "citations": [
+              "anchor:5245c537e4a9905f5fd3f241fcaeaf8e75d2e5e18108f43f963a604b3335de57",
+              "anchor:ec09d30e4a1a662e248854db1992fdb77c6ecd2ac99e745845a728f3309a3712"
+            ],
+            "claim_id": "claim-duplicate",
+            "confidence": 0.95,
+            "object_value": "cmd.exe",
+            "predicate": "image_name",
+            "qualifiers": {},
+            "severity": "high",
+            "subject": "process:412",
+            "verification_state": "unverified"
+          },
+          "claim_id": "claim-duplicate",
+          "iteration": 2,
+          "reason": "production_duplicate_candidate_policy",
+          "revision_id": "benchmark:candidate_filters:claim-duplicate:2",
+          "source_revision_id": null,
+          "stage": "candidate_filters",
+          "tombstone": true
+        },
+        {
+          "after": {
+            "citations": [
+              "anchor:bf8fbfa2346485e83869825fcd05e3bbadbacb13349d2ca2b970e69c60c6e0aa"
+            ],
+            "claim_id": "claim-alternative",
+            "confidence": 0.7,
+            "object_value": "198.51.100.10",
+            "predicate": "ip_equals",
+            "qualifiers": {},
+            "severity": "high",
+            "subject": "connection:412:443",
+            "verification_state": "verified"
+          },
+          "before": {
+            "citations": [
+              "anchor:bf8fbfa2346485e83869825fcd05e3bbadbacb13349d2ca2b970e69c60c6e0aa"
+            ],
+            "claim_id": "claim-alternative",
+            "confidence": 0.7,
+            "object_value": "198.51.100.10",
+            "predicate": "ip_equals",
+            "qualifiers": {},
+            "severity": "high",
+            "subject": "connection:412:443",
+            "verification_state": "unverified"
+          },
+          "claim_id": "claim-alternative",
+          "iteration": 2,
+          "reason": "all_supporting_anchors_matched",
+          "revision_id": "benchmark:verifier:claim-alternative:2",
+          "source_revision_id": null,
+          "stage": "verifier",
+          "tombstone": false
+        },
+        {
+          "after": {
+            "citations": [
+              "anchor:df574e54160adc0f8a27e8fff16f46b2f9a1be9ddf38f5a2b4f9254e4a94e167"
+            ],
+            "claim_id": "claim-blind",
+            "confidence": 0.75,
+            "object_value": "evil.exe",
+            "predicate": "image_name",
+            "qualifiers": {},
+            "severity": "high",
+            "subject": "process:777",
+            "verification_state": "verified"
+          },
+          "before": {
+            "citations": [
+              "anchor:df574e54160adc0f8a27e8fff16f46b2f9a1be9ddf38f5a2b4f9254e4a94e167"
+            ],
+            "claim_id": "claim-blind",
+            "confidence": 0.75,
+            "object_value": "evil.exe",
+            "predicate": "image_name",
+            "qualifiers": {},
+            "severity": "high",
+            "subject": "process:777",
+            "verification_state": "unverified"
+          },
+          "claim_id": "claim-blind",
+          "iteration": 2,
+          "reason": "all_supporting_anchors_matched",
+          "revision_id": "benchmark:verifier:claim-blind:2",
+          "source_revision_id": null,
+          "stage": "verifier",
+          "tombstone": false
+        },
+        {
+          "after": {
+            "citations": [
+              "anchor:4ec06814020c40103e65284a01e12310335038f3266578b0e53a9043280eac83",
+              "anchor:b83785fc4f25a50a3d09021995bb0791a7a28b6d64007c4f87660fbb4540df46"
+            ],
+            "claim_id": "claim-good",
+            "confidence": 0.95,
+            "object_value": "cmd.exe",
+            "predicate": "image_name",
+            "qualifiers": {},
+            "severity": "high",
+            "subject": "process:412",
+            "verification_state": "verified"
+          },
+          "before": {
+            "citations": [
+              "anchor:4ec06814020c40103e65284a01e12310335038f3266578b0e53a9043280eac83",
+              "anchor:b83785fc4f25a50a3d09021995bb0791a7a28b6d64007c4f87660fbb4540df46"
+            ],
+            "claim_id": "claim-good",
+            "confidence": 0.95,
+            "object_value": "cmd.exe",
+            "predicate": "image_name",
+            "qualifiers": {},
+            "severity": "high",
+            "subject": "process:412",
+            "verification_state": "unverified"
+          },
+          "claim_id": "claim-good",
+          "iteration": 2,
+          "reason": "all_supporting_anchors_matched",
+          "revision_id": "benchmark:verifier:claim-good:2",
+          "source_revision_id": null,
+          "stage": "verifier",
+          "tombstone": false
+        },
+        {
+          "after": {
+            "citations": [
+              "anchor:afe18e22e5a9792f9c18e30631016c67b8ac1f75cdc40baf55b8416726a941ab"
+            ],
+            "claim_id": "claim-weak",
+            "confidence": 0.8,
+            "object_value": "powershell.exe",
+            "predicate": "image_name",
+            "qualifiers": {},
+            "severity": "high",
+            "subject": "process:999",
+            "verification_state": "verified"
+          },
+          "before": {
+            "citations": [
+              "anchor:afe18e22e5a9792f9c18e30631016c67b8ac1f75cdc40baf55b8416726a941ab"
+            ],
+            "claim_id": "claim-weak",
+            "confidence": 0.8,
+            "object_value": "powershell.exe",
+            "predicate": "image_name",
+            "qualifiers": {},
+            "severity": "high",
+            "subject": "process:999",
+            "verification_state": "unverified"
+          },
+          "claim_id": "claim-weak",
+          "iteration": 2,
+          "reason": "all_supporting_anchors_matched",
+          "revision_id": "benchmark:verifier:claim-weak:2",
+          "source_revision_id": null,
+          "stage": "verifier",
+          "tombstone": false
+        },
+        {
+          "after": null,
+          "before": {
+            "citations": [
+              "anchor:afe18e22e5a9792f9c18e30631016c67b8ac1f75cdc40baf55b8416726a941ab"
+            ],
+            "claim_id": "claim-weak",
+            "confidence": 0.8,
+            "object_value": "powershell.exe",
+            "predicate": "image_name",
+            "qualifiers": {},
+            "severity": "high",
+            "subject": "process:999",
+            "verification_state": "verified"
+          },
+          "claim_id": "claim-weak",
+          "iteration": 3,
+          "reason": "insufficient_independent_sources",
+          "revision_id": "benchmark:independence_gate:claim-weak:3",
+          "source_revision_id": null,
+          "stage": "independence_gate",
+          "tombstone": true
+        },
+        {
+          "after": null,
+          "before": {
+            "citations": [
+              "anchor:bf8fbfa2346485e83869825fcd05e3bbadbacb13349d2ca2b970e69c60c6e0aa"
+            ],
+            "claim_id": "claim-alternative",
+            "confidence": 0.7,
+            "object_value": "198.51.100.10",
+            "predicate": "ip_equals",
+            "qualifiers": {},
+            "severity": "high",
+            "subject": "connection:412:443",
+            "verification_state": "verified"
+          },
+          "claim_id": "claim-alternative",
+          "iteration": 3,
+          "reason": "alternative_narrative_refuted",
+          "revision_id": "withdraw-finding-alternative:claim-alternative",
+          "source_revision_id": "withdraw-finding-alternative",
+          "stage": "alternative_narrative",
+          "tombstone": true
+        },
+        {
+          "after": null,
+          "before": {
+            "citations": [
+              "anchor:df574e54160adc0f8a27e8fff16f46b2f9a1be9ddf38f5a2b4f9254e4a94e167"
+            ],
+            "claim_id": "claim-blind",
+            "confidence": 0.75,
+            "object_value": "evil.exe",
+            "predicate": "image_name",
+            "qualifiers": {},
+            "severity": "high",
+            "subject": "process:777",
+            "verification_state": "verified"
+          },
+          "claim_id": "claim-blind",
+          "iteration": 3,
+          "reason": "blind_review_rejected",
+          "revision_id": "withdraw-finding-blind:claim-blind",
+          "source_revision_id": "withdraw-finding-blind",
+          "stage": "blind_reviewer",
+          "tombstone": true
+        }
+      ],
+      "verdict": "positive"
+    }
+  ],
+  "identity": {
+    "ablations": [],
+    "matrix_cell": "fixture/default",
+    "methodology_version": "1.1",
+    "models": {
+      "analyst": "bounded-offline-adapter"
+    },
+    "orchestrator_version": "fixture-2",
+    "prompt_set_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "repeat_index": 0,
+    "seed": 7,
+    "toolset_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "resources": {
+    "cost_usd": 0.0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "runtime_ms": 10,
+    "unattributed_tokens": 0
+  },
+  "run_id": "real-component-base",
+  "schema_version": 1,
+  "source_adjudication": null,
+  "system_name": "mulder-real-component-fixture",
+  "system_version": "1.1",
+  "workflow_traces": [
+    {
+      "alternative_narrative": {
+        "checks": [
+          {
+            "detail": "Bounded counter-analysis completed.",
+            "name": "counter_analysis_complete",
+            "passed": true
+          }
+        ],
+        "remaining_work": []
+      },
+      "candidate_similarity_threshold": 0.4,
+      "candidates": [
+        {
+          "claim": {
+            "anchors": [
+              {
+                "anchor_id": "anchor-good-1",
+                "artifact_family": "fixture",
+                "char_end": 7,
+                "char_start": 0,
+                "claim_id": "claim-good",
+                "exact_text": "cmd.exe",
+                "extractor_family": "fixture",
+                "independence_key": "source:good-1",
+                "line_end": 1,
+                "line_start": 1,
+                "normalized_value": null,
+                "role": "supports",
+                "source_hash": "sha256:good-1",
+                "source_id": 1,
+                "source_name": "good-1",
+                "tool_call_id": "tc-good-1",
+                "value_type": "text",
+                "window_id": 1
+              },
+              {
+                "anchor_id": "anchor-good-2",
+                "artifact_family": "fixture",
+                "char_end": 7,
+                "char_start": 0,
+                "claim_id": "claim-good",
+                "exact_text": "cmd.exe",
+                "extractor_family": "fixture",
+                "independence_key": "source:good-2",
+                "line_end": 1,
+                "line_start": 1,
+                "normalized_value": null,
+                "role": "supports",
+                "source_hash": "sha256:good-2",
+                "source_id": 2,
+                "source_name": "good-2",
+                "tool_call_id": "tc-good-2",
+                "value_type": "text",
+                "window_id": 2
+              }
+            ],
+            "claim_id": "claim-good",
+            "epistemic_state": "unverified",
+            "finding_id": "finding-good",
+            "object_value": "cmd.exe",
+            "ordinal": 0,
+            "predicate": "image_name",
+            "qualifiers": {},
+            "statement": "process:412 image_name cmd.exe",
+            "subject": "process:412"
+          },
+          "confidence_probability": 0.95,
+          "finding": {
+            "case_id": "staged-incident",
+            "confidence": "confirmed",
+            "description": "Detailed command process observation retained as representative.",
+            "event_time_end": null,
+            "event_time_start": null,
+            "evidence_refs": [
+              "tc-shared"
+            ],
+            "finding_id": "finding-good",
+            "mitre_attack_ids": [],
+            "negative_verdict": null,
+            "severity": "high",
+            "sources": [
+              "shared-source"
+            ],
+            "submitted_at": "2026-01-01T00:00:00Z",
+            "title": "Command process observed"
+          },
+          "finding_revisions": [
+            {
+              "actor_id": null,
+              "actor_kind": "investigator",
+              "changed_fields": [
+                "finding_id",
+                "case_id",
+                "title",
+                "description",
+                "severity",
+                "confidence",
+                "evidence_refs",
+                "sources",
+                "mitre_attack_ids",
+                "event_time_start",
+                "event_time_end",
+                "negative_verdict",
+                "submitted_at"
+              ],
+              "created_at": "2026-01-01T00:00:00Z",
+              "evidence_added": [],
+              "evidence_removed": [],
+              "finding_id": "finding-good",
+              "parent_revision_id": null,
+              "reason_code": "finding_submitted",
+              "revision_id": "initial-finding-good",
+              "revision_number": 1,
+              "snapshot": {
+                "case_id": "staged-incident",
+                "confidence": "confirmed",
+                "description": "Detailed command process observation retained as representative.",
+                "event_time_end": null,
+                "event_time_start": null,
+                "evidence_refs": [
+                  "tc-shared"
+                ],
+                "finding_id": "finding-good",
+                "mitre_attack_ids": [],
+                "negative_verdict": null,
+                "severity": "high",
+                "sources": [
+                  "shared-source"
+                ],
+                "submitted_at": "2026-01-01T00:00:00Z",
+                "title": "Command process observed"
+              },
+              "state": "confirmed",
+              "tombstone": false
+            }
+          ],
+          "source_verifications": [],
+          "withdrawal_revision": null
+        },
+        {
+          "claim": {
+            "anchors": [
+              {
+                "anchor_id": "anchor-duplicate-1",
+                "artifact_family": "fixture",
+                "char_end": 7,
+                "char_start": 0,
+                "claim_id": "claim-duplicate",
+                "exact_text": "cmd.exe",
+                "extractor_family": "fixture",
+                "independence_key": "source:duplicate-1",
+                "line_end": 1,
+                "line_start": 1,
+                "normalized_value": null,
+                "role": "supports",
+                "source_hash": "sha256:duplicate-1",
+                "source_id": 1,
+                "source_name": "duplicate-1",
+                "tool_call_id": "tc-duplicate-1",
+                "value_type": "text",
+                "window_id": 1
+              },
+              {
+                "anchor_id": "anchor-duplicate-2",
+                "artifact_family": "fixture",
+                "char_end": 7,
+                "char_start": 0,
+                "claim_id": "claim-duplicate",
+                "exact_text": "cmd.exe",
+                "extractor_family": "fixture",
+                "independence_key": "source:duplicate-2",
+                "line_end": 1,
+                "line_start": 1,
+                "normalized_value": null,
+                "role": "supports",
+                "source_hash": "sha256:duplicate-2",
+                "source_id": 2,
+                "source_name": "duplicate-2",
+                "tool_call_id": "tc-duplicate-2",
+                "value_type": "text",
+                "window_id": 2
+              }
+            ],
+            "claim_id": "claim-duplicate",
+            "epistemic_state": "unverified",
+            "finding_id": "finding-duplicate",
+            "object_value": "cmd.exe",
+            "ordinal": 0,
+            "predicate": "image_name",
+            "qualifiers": {},
+            "statement": "process:412 image_name cmd.exe",
+            "subject": "process:412"
+          },
+          "confidence_probability": 0.95,
+          "finding": {
+            "case_id": "staged-incident",
+            "confidence": "confirmed",
+            "description": "Duplicate.",
+            "event_time_end": null,
+            "event_time_start": null,
+            "evidence_refs": [
+              "tc-shared"
+            ],
+            "finding_id": "finding-duplicate",
+            "mitre_attack_ids": [],
+            "negative_verdict": null,
+            "severity": "high",
+            "sources": [
+              "shared-source"
+            ],
+            "submitted_at": "2026-01-01T00:00:00Z",
+            "title": "Duplicate process candidate"
+          },
+          "finding_revisions": [
+            {
+              "actor_id": null,
+              "actor_kind": "investigator",
+              "changed_fields": [
+                "finding_id",
+                "case_id",
+                "title",
+                "description",
+                "severity",
+                "confidence",
+                "evidence_refs",
+                "sources",
+                "mitre_attack_ids",
+                "event_time_start",
+                "event_time_end",
+                "negative_verdict",
+                "submitted_at"
+              ],
+              "created_at": "2026-01-01T00:00:00Z",
+              "evidence_added": [],
+              "evidence_removed": [],
+              "finding_id": "finding-duplicate",
+              "parent_revision_id": null,
+              "reason_code": "finding_submitted",
+              "revision_id": "initial-finding-duplicate",
+              "revision_number": 1,
+              "snapshot": {
+                "case_id": "staged-incident",
+                "confidence": "confirmed",
+                "description": "Duplicate.",
+                "event_time_end": null,
+                "event_time_start": null,
+                "evidence_refs": [
+                  "tc-shared"
+                ],
+                "finding_id": "finding-duplicate",
+                "mitre_attack_ids": [],
+                "negative_verdict": null,
+                "severity": "high",
+                "sources": [
+                  "shared-source"
+                ],
+                "submitted_at": "2026-01-01T00:00:00Z",
+                "title": "Duplicate process candidate"
+              },
+              "state": "confirmed",
+              "tombstone": false
+            }
+          ],
+          "source_verifications": [],
+          "withdrawal_revision": null
+        },
+        {
+          "claim": {
+            "anchors": [
+              {
+                "anchor_id": "anchor-weak-1",
+                "artifact_family": "fixture",
+                "char_end": 14,
+                "char_start": 0,
+                "claim_id": "claim-weak",
+                "exact_text": "powershell.exe",
+                "extractor_family": "fixture",
+                "independence_key": "source:weak-1",
+                "line_end": 1,
+                "line_start": 1,
+                "normalized_value": null,
+                "role": "supports",
+                "source_hash": "sha256:weak-1",
+                "source_id": 1,
+                "source_name": "weak-1",
+                "tool_call_id": "tc-weak-1",
+                "value_type": "text",
+                "window_id": 1
+              }
+            ],
+            "claim_id": "claim-weak",
+            "epistemic_state": "unverified",
+            "finding_id": "finding-weak",
+            "object_value": "powershell.exe",
+            "ordinal": 0,
+            "predicate": "image_name",
+            "qualifiers": {},
+            "statement": "process:999 image_name powershell.exe",
+            "subject": "process:999"
+          },
+          "confidence_probability": 0.8,
+          "finding": {
+            "case_id": "staged-incident",
+            "confidence": "confirmed",
+            "description": "One source only.",
+            "event_time_end": null,
+            "event_time_start": null,
+            "evidence_refs": [
+              "tc-weak"
+            ],
+            "finding_id": "finding-weak",
+            "mitre_attack_ids": [],
+            "negative_verdict": null,
+            "severity": "high",
+            "sources": [
+              "weak-source"
+            ],
+            "submitted_at": "2026-01-01T00:00:00Z",
+            "title": "Weak one-source assertion"
+          },
+          "finding_revisions": [
+            {
+              "actor_id": null,
+              "actor_kind": "investigator",
+              "changed_fields": [
+                "finding_id",
+                "case_id",
+                "title",
+                "description",
+                "severity",
+                "confidence",
+                "evidence_refs",
+                "sources",
+                "mitre_attack_ids",
+                "event_time_start",
+                "event_time_end",
+                "negative_verdict",
+                "submitted_at"
+              ],
+              "created_at": "2026-01-01T00:00:00Z",
+              "evidence_added": [],
+              "evidence_removed": [],
+              "finding_id": "finding-weak",
+              "parent_revision_id": null,
+              "reason_code": "finding_submitted",
+              "revision_id": "initial-finding-weak",
+              "revision_number": 1,
+              "snapshot": {
+                "case_id": "staged-incident",
+                "confidence": "confirmed",
+                "description": "One source only.",
+                "event_time_end": null,
+                "event_time_start": null,
+                "evidence_refs": [
+                  "tc-weak"
+                ],
+                "finding_id": "finding-weak",
+                "mitre_attack_ids": [],
+                "negative_verdict": null,
+                "severity": "high",
+                "sources": [
+                  "weak-source"
+                ],
+                "submitted_at": "2026-01-01T00:00:00Z",
+                "title": "Weak one-source assertion"
+              },
+              "state": "confirmed",
+              "tombstone": false
+            }
+          ],
+          "source_verifications": [],
+          "withdrawal_revision": null
+        },
+        {
+          "claim": {
+            "anchors": [
+              {
+                "anchor_id": "anchor-alternative-1",
+                "artifact_family": "fixture",
+                "char_end": 13,
+                "char_start": 0,
+                "claim_id": "claim-alternative",
+                "exact_text": "198.51.100.10",
+                "extractor_family": "fixture",
+                "independence_key": "source:alternative-1",
+                "line_end": 1,
+                "line_start": 1,
+                "normalized_value": null,
+                "role": "supports",
+                "source_hash": "sha256:alternative-1",
+                "source_id": 1,
+                "source_name": "alternative-1",
+                "tool_call_id": "tc-alternative-1",
+                "value_type": "text",
+                "window_id": 1
+              }
+            ],
+            "claim_id": "claim-alternative",
+            "epistemic_state": "unverified",
+            "finding_id": "finding-alternative",
+            "object_value": "198.51.100.10",
+            "ordinal": 0,
+            "predicate": "ip_equals",
+            "qualifiers": {},
+            "statement": "connection:412:443 ip_equals 198.51.100.10",
+            "subject": "connection:412:443"
+          },
+          "confidence_probability": 0.7,
+          "finding": {
+            "case_id": "staged-incident",
+            "confidence": "inference",
+            "description": "Counter-analysis refutes this destination.",
+            "event_time_end": null,
+            "event_time_start": null,
+            "evidence_refs": [
+              "tc-alternative"
+            ],
+            "finding_id": "finding-alternative",
+            "mitre_attack_ids": [],
+            "negative_verdict": null,
+            "severity": "high",
+            "sources": [
+              "alternative-source"
+            ],
+            "submitted_at": "2026-01-01T00:00:00Z",
+            "title": "Competing destination narrative"
+          },
+          "finding_revisions": [
+            {
+              "actor_id": null,
+              "actor_kind": "investigator",
+              "changed_fields": [
+                "finding_id",
+                "case_id",
+                "title",
+                "description",
+                "severity",
+                "confidence",
+                "evidence_refs",
+                "sources",
+                "mitre_attack_ids",
+                "event_time_start",
+                "event_time_end",
+                "negative_verdict",
+                "submitted_at"
+              ],
+              "created_at": "2026-01-01T00:00:00Z",
+              "evidence_added": [],
+              "evidence_removed": [],
+              "finding_id": "finding-alternative",
+              "parent_revision_id": null,
+              "reason_code": "finding_submitted",
+              "revision_id": "initial-finding-alternative",
+              "revision_number": 1,
+              "snapshot": {
+                "case_id": "staged-incident",
+                "confidence": "inference",
+                "description": "Counter-analysis refutes this destination.",
+                "event_time_end": null,
+                "event_time_start": null,
+                "evidence_refs": [
+                  "tc-alternative"
+                ],
+                "finding_id": "finding-alternative",
+                "mitre_attack_ids": [],
+                "negative_verdict": null,
+                "severity": "high",
+                "sources": [
+                  "alternative-source"
+                ],
+                "submitted_at": "2026-01-01T00:00:00Z",
+                "title": "Competing destination narrative"
+              },
+              "state": "indicated",
+              "tombstone": false
+            },
+            {
+              "actor_id": null,
+              "actor_kind": "investigator",
+              "changed_fields": [
+                "is_deleted"
+              ],
+              "created_at": "2026-01-01T00:05:00Z",
+              "evidence_added": [],
+              "evidence_removed": [],
+              "finding_id": "finding-alternative",
+              "parent_revision_id": "initial-finding-alternative",
+              "reason_code": "alternative_narrative_refuted",
+              "revision_id": "withdraw-finding-alternative",
+              "revision_number": 2,
+              "snapshot": {
+                "case_id": "staged-incident",
+                "confidence": "inference",
+                "description": "Counter-analysis refutes this destination.",
+                "event_time_end": null,
+                "event_time_start": null,
+                "evidence_refs": [
+                  "tc-alternative"
+                ],
+                "finding_id": "finding-alternative",
+                "mitre_attack_ids": [],
+                "negative_verdict": null,
+                "severity": "high",
+                "sources": [
+                  "alternative-source"
+                ],
+                "submitted_at": "2026-01-01T00:00:00Z",
+                "title": "Competing destination narrative"
+              },
+              "state": "withdrawn",
+              "tombstone": true
+            }
+          ],
+          "source_verifications": [],
+          "withdrawal_revision": {
+            "actor_id": null,
+            "actor_kind": "investigator",
+            "changed_fields": [
+              "is_deleted"
+            ],
+            "created_at": "2026-01-01T00:05:00Z",
+            "evidence_added": [],
+            "evidence_removed": [],
+            "finding_id": "finding-alternative",
+            "parent_revision_id": "initial-finding-alternative",
+            "reason_code": "alternative_narrative_refuted",
+            "revision_id": "withdraw-finding-alternative",
+            "revision_number": 2,
+            "snapshot": {
+              "case_id": "staged-incident",
+              "confidence": "inference",
+              "description": "Counter-analysis refutes this destination.",
+              "event_time_end": null,
+              "event_time_start": null,
+              "evidence_refs": [
+                "tc-alternative"
+              ],
+              "finding_id": "finding-alternative",
+              "mitre_attack_ids": [],
+              "negative_verdict": null,
+              "severity": "high",
+              "sources": [
+                "alternative-source"
+              ],
+              "submitted_at": "2026-01-01T00:00:00Z",
+              "title": "Competing destination narrative"
+            },
+            "state": "withdrawn",
+            "tombstone": true
+          }
+        },
+        {
+          "claim": {
+            "anchors": [
+              {
+                "anchor_id": "anchor-blind-1",
+                "artifact_family": "fixture",
+                "char_end": 8,
+                "char_start": 0,
+                "claim_id": "claim-blind",
+                "exact_text": "evil.exe",
+                "extractor_family": "fixture",
+                "independence_key": "source:blind-1",
+                "line_end": 1,
+                "line_start": 1,
+                "normalized_value": null,
+                "role": "supports",
+                "source_hash": "sha256:blind-1",
+                "source_id": 1,
+                "source_name": "blind-1",
+                "tool_call_id": "tc-blind-1",
+                "value_type": "text",
+                "window_id": 1
+              }
+            ],
+            "claim_id": "claim-blind",
+            "epistemic_state": "unverified",
+            "finding_id": "finding-blind",
+            "object_value": "evil.exe",
+            "ordinal": 0,
+            "predicate": "image_name",
+            "qualifiers": {},
+            "statement": "process:777 image_name evil.exe",
+            "subject": "process:777"
+          },
+          "confidence_probability": 0.75,
+          "finding": {
+            "case_id": "staged-incident",
+            "confidence": "inference",
+            "description": "Independent review rejects this process.",
+            "event_time_end": null,
+            "event_time_start": null,
+            "evidence_refs": [
+              "tc-blind"
+            ],
+            "finding_id": "finding-blind",
+            "mitre_attack_ids": [],
+            "negative_verdict": null,
+            "severity": "high",
+            "sources": [
+              "blind-source"
+            ],
+            "submitted_at": "2026-01-01T00:00:00Z",
+            "title": "Blind-review false positive"
+          },
+          "finding_revisions": [
+            {
+              "actor_id": null,
+              "actor_kind": "investigator",
+              "changed_fields": [
+                "finding_id",
+                "case_id",
+                "title",
+                "description",
+                "severity",
+                "confidence",
+                "evidence_refs",
+                "sources",
+                "mitre_attack_ids",
+                "event_time_start",
+                "event_time_end",
+                "negative_verdict",
+                "submitted_at"
+              ],
+              "created_at": "2026-01-01T00:00:00Z",
+              "evidence_added": [],
+              "evidence_removed": [],
+              "finding_id": "finding-blind",
+              "parent_revision_id": null,
+              "reason_code": "finding_submitted",
+              "revision_id": "initial-finding-blind",
+              "revision_number": 1,
+              "snapshot": {
+                "case_id": "staged-incident",
+                "confidence": "inference",
+                "description": "Independent review rejects this process.",
+                "event_time_end": null,
+                "event_time_start": null,
+                "evidence_refs": [
+                  "tc-blind"
+                ],
+                "finding_id": "finding-blind",
+                "mitre_attack_ids": [],
+                "negative_verdict": null,
+                "severity": "high",
+                "sources": [
+                  "blind-source"
+                ],
+                "submitted_at": "2026-01-01T00:00:00Z",
+                "title": "Blind-review false positive"
+              },
+              "state": "indicated",
+              "tombstone": false
+            },
+            {
+              "actor_id": null,
+              "actor_kind": "blind_reviewer",
+              "changed_fields": [
+                "is_deleted"
+              ],
+              "created_at": "2026-01-01T00:05:00Z",
+              "evidence_added": [],
+              "evidence_removed": [],
+              "finding_id": "finding-blind",
+              "parent_revision_id": "initial-finding-blind",
+              "reason_code": "blind_review_rejected",
+              "revision_id": "withdraw-finding-blind",
+              "revision_number": 2,
+              "snapshot": {
+                "case_id": "staged-incident",
+                "confidence": "inference",
+                "description": "Independent review rejects this process.",
+                "event_time_end": null,
+                "event_time_start": null,
+                "evidence_refs": [
+                  "tc-blind"
+                ],
+                "finding_id": "finding-blind",
+                "mitre_attack_ids": [],
+                "negative_verdict": null,
+                "severity": "high",
+                "sources": [
+                  "blind-source"
+                ],
+                "submitted_at": "2026-01-01T00:00:00Z",
+                "title": "Blind-review false positive"
+              },
+              "state": "withdrawn",
+              "tombstone": true
+            }
+          ],
+          "source_verifications": [],
+          "withdrawal_revision": {
+            "actor_id": null,
+            "actor_kind": "blind_reviewer",
+            "changed_fields": [
+              "is_deleted"
+            ],
+            "created_at": "2026-01-01T00:05:00Z",
+            "evidence_added": [],
+            "evidence_removed": [],
+            "finding_id": "finding-blind",
+            "parent_revision_id": "initial-finding-blind",
+            "reason_code": "blind_review_rejected",
+            "revision_id": "withdraw-finding-blind",
+            "revision_number": 2,
+            "snapshot": {
+              "case_id": "staged-incident",
+              "confidence": "inference",
+              "description": "Independent review rejects this process.",
+              "event_time_end": null,
+              "event_time_start": null,
+              "evidence_refs": [
+                "tc-blind"
+              ],
+              "finding_id": "finding-blind",
+              "mitre_attack_ids": [],
+              "negative_verdict": null,
+              "severity": "high",
+              "sources": [
+                "blind-source"
+              ],
+              "submitted_at": "2026-01-01T00:00:00Z",
+              "title": "Blind-review false positive"
+            },
+            "state": "withdrawn",
+            "tombstone": true
+          }
+        }
+      ],
+      "case_id": "staged-incident",
+      "coverage": [
+        {
+          "domain": "process_memory",
+          "status": "SUCCESS_NONEMPTY"
+        }
+      ],
+      "failure_reason": null,
+      "input_claims": [],
+      "stages": [],
+      "trace_version": 2
+    }
+  ]
+}

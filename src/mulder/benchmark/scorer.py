@@ -240,11 +240,10 @@ def _score_case(manifest_case: BenchmarkCase, run_case: CaseRunResult) -> _RawCa
         and (manifest_case.ground_truth_label == "nonempty" or not required_complete)
     )
 
-    confidence_samples = tuple(
-        (claim.confidence, int(_claim_key(claim) in expected_claims))
-        for claim in run_case.claims
-        if claim.confidence is not None
-    )
+    claims_by_key: dict[ClaimKey, list[ObservedClaim]] = {}
+    for claim in run_case.claims:
+        claims_by_key.setdefault(_claim_key(claim), []).append(claim)
+    confidence_samples_list: list[tuple[float, int]] = []
     severity_rank = {
         "informational": 0,
         "low": 1,
@@ -254,27 +253,47 @@ def _score_case(manifest_case: BenchmarkCase, run_case: CaseRunResult) -> _RawCa
     }
     severity_errors: list[int] = []
     unmatched_severity_predictions = 0
-    for claim in run_case.claims:
-        if claim.severity is None:
+    for claim_key, claims in claims_by_key.items():
+        confidences = {claim.confidence for claim in claims}
+        severities = {claim.severity for claim in claims}
+        if len(confidences) > 1:
+            raise ValueError("duplicate propositions have conflicting confidence values")
+        if len(severities) > 1:
+            raise ValueError("duplicate propositions have conflicting severity values")
+        confidence = confidences.pop()
+        if confidence is not None:
+            confidence_samples_list.append((confidence, int(claim_key in expected_claims)))
+        severity = severities.pop()
+        if severity is None:
             continue
-        expected = expected_by_key.get(_claim_key(claim))
+        expected = expected_by_key.get(claim_key)
         if expected is None or expected.severity is None:
             unmatched_severity_predictions += 1
             continue
-        severity_errors.append(
-            abs(severity_rank[claim.severity] - severity_rank[expected.severity])
-        )
+        severity_errors.append(abs(severity_rank[severity] - severity_rank[expected.severity]))
+    confidence_samples = tuple(confidence_samples_list)
 
     errors_fixed = errors_introduced = correct_preserved = errors_persisted = 0
     assertion_revisions = 0
     for revision in run_case.revisions:
         before_key = _claim_key(revision.before)
-        after_key = _claim_key(revision.after)
-        if before_key == after_key:
+        after_key = _claim_key(revision.after) if revision.after is not None else None
+        decision_changed = (
+            revision.after is None
+            or before_key != after_key
+            or revision.before.verification_state != revision.after.verification_state
+        )
+        if not decision_changed:
             continue
         assertion_revisions += 1
-        before_correct = before_key in expected_claims
-        after_correct = after_key in expected_claims
+        before_correct = (revision.before.verification_state == "verified") == (
+            before_key in expected_claims
+        )
+        after_correct = (
+            (revision.after.verification_state == "verified") == (after_key in expected_claims)
+            if revision.after is not None
+            else before_key not in expected_claims
+        )
         if not before_correct and after_correct:
             errors_fixed += 1
         elif before_correct and not after_correct:
@@ -570,8 +589,7 @@ def _aggregate_repeats(runs: list[RunScore]) -> list[AggregateScore]:
                 run.overall.confidence_calibration.brier_score for run in cell_runs
             ),
             "confidence_calibration.expected_calibration_error": _distribution(
-                run.overall.confidence_calibration.expected_calibration_error
-                for run in cell_runs
+                run.overall.confidence_calibration.expected_calibration_error for run in cell_runs
             ),
             "severity_calibration.exact_rate": _distribution(
                 run.overall.severity_calibration.exact_rate for run in cell_runs

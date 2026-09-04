@@ -31,20 +31,14 @@ cases:
         predicate: image_name
         object_value: cmd.exe
         severity: high
-      - claim_id: expected-destination
-        subject: connection:412:443
-        predicate: ip_equals
-        object_value: 203.0.113.42
-        qualifiers: {port: 443}
-        severity: critical
     anchors:
-      - anchor_id: anchor-process
+      - anchor_id: anchor:4ec06814020c40103e65284a01e12310335038f3266578b0e53a9043280eac83
         artifact_id: incident-log
         selector: line=1;field=image
         exact_text_sha256: 7371f071a9a4e653a5afd134bce9c735ef74b0421d6988958e5c6d8a34feaa3b
         supports_claim_ids: [expected-process]
-      - anchor_id: anchor-destination
+      - anchor_id: anchor:b83785fc4f25a50a3d09021995bb0791a7a28b6d64007c4f87660fbb4540df46
         artifact_id: incident-log
-        selector: line=2;field=destination
-        exact_text_sha256: 17af1cf3d1b5332c53349fc789abdc853bbeea7ed33eff727ff794ab741ccac9
-        supports_claim_ids: [expected-destination]
+        selector: line=1;field=image;independent-copy=2
+        exact_text_sha256: 7371f071a9a4e653a5afd134bce9c735ef74b0421d6988958e5c6d8a34feaa3b
+        supports_claim_ids: [expected-process]

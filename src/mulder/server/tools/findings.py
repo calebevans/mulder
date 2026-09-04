@@ -38,6 +38,7 @@ from mulder.models import (
 )
 from mulder.patterns import SEVERITY_ORDER, source_is_cited
 from mulder.report.renderer import ReportRenderer
+from mulder.review.candidates import group_duplicate_findings, representative_finding
 from mulder.review.model import ReviewQuery, query_case_review
 from mulder.server.app import get_ctx, get_job_store, mcp
 from mulder.server.helpers import error_response, hash_output, make_tool_call_id
@@ -1217,27 +1218,7 @@ def _group_duplicates(
         List of groups, where each group is a list of similar findings.
         Single-member groups (unique findings) are included.
     """
-    groups: list[list[Finding]] = []
-    assigned: set[str] = set()
-
-    for finding in findings:
-        if finding.finding_id in assigned:
-            continue
-        group = [finding]
-        assigned.add(finding.finding_id)
-
-        for candidate in findings:
-            if candidate.finding_id in assigned:
-                continue
-            for member in group:
-                if _compute_similarity(member, candidate) >= threshold:
-                    group.append(candidate)
-                    assigned.add(candidate.finding_id)
-                    break
-
-        groups.append(group)
-
-    return groups
+    return group_duplicate_findings(findings, threshold)
 
 
 def _consolidate_group(
@@ -1255,7 +1236,7 @@ def _consolidate_group(
     Returns:
         Tuple of (representative finding to keep, finding_ids to delete).
     """
-    best = max(group, key=lambda f: len(f.description))
+    best = representative_finding(group)
     to_delete: list[str] = []
 
     all_sources: set[str] = set()

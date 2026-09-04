@@ -8,12 +8,20 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
+from mulder.benchmark.ablations import execute_ablations
 from mulder.benchmark.extractor import (
     canonical_anchor_id,
     canonical_coverage_domain,
     extract_case_result,
+    extract_run_result,
 )
-from mulder.benchmark.models import BenchmarkManifest
+from mulder.benchmark.models import (
+    BenchmarkManifest,
+    BenchmarkRunResult,
+    ResourceUsage,
+    RunIdentity,
+)
+from mulder.benchmark.scorer import score_benchmark
 from mulder.cli import cli
 from mulder.db import CaseDB
 from mulder.models import (
@@ -77,6 +85,12 @@ def _case_database(tmp_path: Path, case_id: str = "db-case") -> Path:
         ],
     )
     db.verify_finding_claims("finding-1")
+    assert db.update_finding(
+        "finding-1",
+        actor_kind="investigator",
+        reason_code="severity_raised",
+        severity="high",
+    )
     db.record_coverage(
         CoverageKey(system_name="host/a", evidence_domain="process list", check_name="pslist"),
         ToolOutcome(
@@ -127,6 +141,7 @@ def _manifest(result_anchor: str) -> BenchmarkManifest:
                             "subject": "process:412",
                             "predicate": "image_name",
                             "object_value": "cmd.exe",
+                            "severity": "high",
                         }
                     ],
                     "anchors": [
@@ -151,6 +166,8 @@ def test_case_database_extraction_uses_stable_citations_and_coverage(tmp_path: P
     assert result.verdict == "positive"
     assert result.cell_status == "completed"
     assert result.claims[0].verification_state == "verified"
+    assert result.claims[0].confidence == 0.5
+    assert result.claims[0].severity == "high"
     assert result.claims[0].citations[0].startswith("anchor:")
     assert result.coverage[0].domain == "host%2Fa/process%20list/pslist"
 
@@ -158,6 +175,15 @@ def test_case_database_extraction_uses_stable_citations_and_coverage(tmp_path: P
     with CaseDB(db_path) as db:
         anchor = db.get_claims("finding-1")[0].anchors[0]
     assert result.claims[0].citations == [canonical_anchor_id(anchor)]
+    assert [revision.stage for revision in result.revisions] == [
+        "source_finding_revision",
+        "source_finding_revision",
+        "verifier",
+    ]
+    assert result.revisions[1].source_revision_id is not None
+    assert result.revisions[1].before.severity == "medium"
+    assert result.revisions[1].after is not None
+    assert result.revisions[1].after.severity == "high"
     assert hashlib.sha256(db_path.read_bytes()).hexdigest() == digest_before
 
 
@@ -201,8 +227,73 @@ def test_benchmark_export_cli_writes_stamped_normalized_result(tmp_path: Path) -
     assert result.exit_code == 0, result.output
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["cases"][0]["claims"][0]["verification_state"] == "verified"
+    assert payload["cases"][0]["claims"][0]["confidence"] == 0.5
+    assert payload["cases"][0]["claims"][0]["severity"] == "high"
+    assert payload["cases"][0]["revisions"]
+    trace = payload["workflow_traces"][0]
+    assert trace["trace_version"] == 2
+    assert trace["candidates"][0]["source_verifications"]
+    assert len(trace["candidates"][0]["finding_revisions"]) == 2
     assert payload["identity"]["models"] == {"analyst": "fixture-model"}
     assert payload["identity"]["seed"] == 42
+
+    normalized = BenchmarkRunResult.model_validate(payload)
+    score = score_benchmark(manifest, [normalized]).runs[0].overall
+    assert score.confidence_calibration.count == 1
+    assert score.confidence_calibration.brier_score == 0.25
+    assert score.severity_calibration.exact_rate == 1.0
+    assert score.revisions.errors_fixed == 1
+
+    ablated = execute_ablations(
+        normalized,
+        ["without-verifier"],
+        run_id="run-without-verifier",
+        matrix_cell="test/without-verifier",
+    )
+    assert ablated.cases[0].verdict == "no_verdict"
+    assert ablated.cases[0].claims[0].verification_state == "unverified"
+
+
+def test_withdrawn_case_db_reviewer_decision_feeds_real_ablation(tmp_path: Path) -> None:
+    db_path = _case_database(tmp_path)
+    with CaseDB(db_path) as db:
+        anchor_id = canonical_anchor_id(db.get_claims("finding-1")[0].anchors[0])
+        assert db.delete_finding(
+            "finding-1",
+            actor_kind="blind_reviewer",
+            reason_code="blind_review_rejected",
+        )
+    extracted = extract_case_result("db-case", db_path)
+    assert extracted.verdict == "no_evil_within_coverage"
+    assert extracted.claims == []
+    assert extracted.revisions[-1].stage == "blind_reviewer"
+    assert extracted.revisions[-1].tombstone is True
+
+    run = extract_run_result(
+        _manifest(anchor_id),
+        case_databases={"db-case": db_path},
+        failed_cases={},
+        run_id="withdrawn-base",
+        system_name="mulder",
+        system_version="test",
+        identity=RunIdentity(
+            matrix_cell="test/default",
+            models={"analyst": "fixture"},
+            prompt_set_sha256="a" * 64,
+            toolset_sha256="b" * 64,
+            orchestrator_version="test",
+            methodology_version="1.1",
+        ),
+        resources=ResourceUsage(),
+    )
+    restored = execute_ablations(
+        run,
+        ["without-blind-reviewer"],
+        run_id="without-blind",
+        matrix_cell="test/without-blind",
+    )
+    assert restored.cases[0].verdict == "positive"
+    assert restored.cases[0].claims[0].verification_state == "verified"
 
 
 def test_export_accepts_explicit_failed_cells_without_a_database(tmp_path: Path) -> None:

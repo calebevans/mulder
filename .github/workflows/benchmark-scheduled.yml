@@ -29,7 +29,12 @@ jobs:
       - name: Install locked dependencies
         run: uv sync --locked --extra dev
 
-      - name: Replay each auditable one-factor ablation
+      - name: Rebuild deterministic real-component input
+        run: |
+          uv run --locked --extra dev python benchmarks/ablation/build_fixture.py
+          git diff --exit-code -- benchmarks/ablation/result-real-base-v2.json
+
+      - name: Execute each auditable one-factor ablation
         run: |
           set -euo pipefail
           for target in \
@@ -40,7 +45,7 @@ jobs:
             without-blind-reviewer
           do
             uv run --locked --extra dev mulder benchmark-ablate \
-              benchmarks/ablation/result-base.json \
+              benchmarks/ablation/result-real-base-v2.json \
               --ablation "$target" \
               --run-id "scheduled-$target" \
               --matrix-cell "scheduled/$target" \
@@ -51,7 +56,7 @@ jobs:
         run: >-
           uv run --locked --extra dev mulder benchmark
           benchmarks/ablation/manifest-v1.yaml
-          benchmarks/ablation/result-base.json
+          benchmarks/ablation/result-real-base-v2.json
           without-candidate-filters.json
           without-verifier.json
           without-independence-gate.json
@@ -64,7 +69,7 @@ jobs:
           uv run --locked --extra dev pytest -q
           tests/test_benchmark_ablations.py
 
-      - name: Retain replayable inputs, receipts, and scores
+      - name: Retain executable inputs, receipts, and v2 scores
         uses: actions/upload-artifact@v6
         with:
           name: deterministic-benchmark-${{ github.run_id }}
@@ -72,6 +77,6 @@ jobs:
           retention-days: 30
           path: |
             benchmarks/ablation/manifest-v1.yaml
-            benchmarks/ablation/result-base.json
+            benchmarks/ablation/result-real-base-v2.json
             without-*.json
             benchmark-scheduled-score.json

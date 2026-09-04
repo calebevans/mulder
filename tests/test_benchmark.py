@@ -35,8 +35,10 @@ def test_fixture_evidence_hashes_match_manifest() -> None:
 def test_models_expose_versioned_json_schemas() -> None:
     manifest_schema = BenchmarkManifest.model_json_schema()
     result_schema = BenchmarkRunResult.model_json_schema()
+    score_schema = BenchmarkScoreDocument.model_json_schema()
     assert manifest_schema["properties"]["schema_version"]["const"] == 1
     assert result_schema["properties"]["schema_version"]["const"] == 1
+    assert score_schema["properties"]["schema_version"]["const"] == 2
     assert "EvidenceLicense" in manifest_schema["$defs"]
     assert manifest_schema["additionalProperties"] is False
     assert result_schema["additionalProperties"] is False
@@ -46,12 +48,25 @@ def test_committed_json_schemas_match_authoritative_models() -> None:
     models: dict[str, type[BaseModel]] = {
         "manifest-v1.schema.json": BenchmarkManifest,
         "result-v1.schema.json": BenchmarkRunResult,
-        "score-v1.schema.json": BenchmarkScoreDocument,
+        "score-v2.schema.json": BenchmarkScoreDocument,
     }
     schema_dir = FIXTURES.parent / "schemas"
     for filename, model in models.items():
         committed = json.loads((schema_dir / filename).read_text(encoding="utf-8"))
         assert committed == model.model_json_schema()
+
+
+def test_score_v1_contract_remains_available_for_existing_documents() -> None:
+    schema_dir = FIXTURES.parent / "schemas"
+    legacy = json.loads((schema_dir / "score-v1.schema.json").read_text(encoding="utf-8"))
+    current = json.loads((schema_dir / "score-v2.schema.json").read_text(encoding="utf-8"))
+
+    assert legacy["properties"]["schema_version"]["const"] == 1
+    assert legacy["properties"]["score_schema"]["const"] == "mulder.benchmark.score/v1"
+    assert current["properties"]["schema_version"]["const"] == 2
+    assert current["properties"]["score_schema"]["const"] == "mulder.benchmark.score/v2"
+    assert "confidence_calibration" not in legacy["$defs"]["ScoreSlice"]["properties"]
+    assert "confidence_calibration" in current["$defs"]["ScoreSlice"]["properties"]
 
 
 def test_reference_result_scores_exact_claims_citations_and_verdicts() -> None:

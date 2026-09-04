@@ -2,41 +2,26 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Literal
 from urllib.parse import quote
 
+from mulder.benchmark.ablations import execute_workflow_base
+from mulder.benchmark.anchors import canonical_anchor_id as canonical_anchor_id
 from mulder.benchmark.models import (
+    AlternativeNarrativeWorkflowInput,
     BenchmarkManifest,
     BenchmarkRunResult,
     CaseRunResult,
-    ObservedClaim,
+    CaseWorkflowTrace,
     ObservedCoverage,
     ResourceUsage,
     RunIdentity,
-    Verdict,
-    VerificationState,
+    WorkflowCandidate,
+    WorkflowGateCheck,
 )
 from mulder.db import CaseDB
-from mulder.models import AtomicClaim, EvidenceAnchor
-
-
-def canonical_anchor_id(anchor: EvidenceAnchor) -> str:
-    """Build a stable citation ID from immutable source coordinates and content."""
-    identity = {
-        "source_name": anchor.source_name,
-        "source_hash": anchor.source_hash,
-        "line_start": anchor.line_start,
-        "line_end": anchor.line_end,
-        "char_start": anchor.char_start,
-        "char_end": anchor.char_end,
-        "exact_text_sha256": hashlib.sha256(anchor.exact_text.encode("utf-8")).hexdigest(),
-    }
-    encoded = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return "anchor:" + hashlib.sha256(encoded).hexdigest()
+from mulder.models import ClaimVerification, FindingRevision
 
 
 def canonical_coverage_domain(system: str, domain: str, check: str) -> str:
@@ -44,33 +29,7 @@ def canonical_coverage_domain(system: str, domain: str, check: str) -> str:
     return "/".join(quote(part, safe="") for part in (system, domain, check))
 
 
-def _verification_states(db: CaseDB, finding_id: str) -> dict[str, VerificationState]:
-    latest = {item.claim_id: item for item in db.get_claim_verifications(finding_id)}
-    states: dict[str, VerificationState] = {}
-    for claim_id, decision in latest.items():
-        if decision.reason_code == "unsupported_predicate":
-            states[claim_id] = "unsupported"
-        else:
-            states[claim_id] = decision.result
-    return states
-
-
-def _observed_claim(claim: AtomicClaim, state: VerificationState) -> ObservedClaim:
-    return ObservedClaim(
-        claim_id=claim.claim_id,
-        subject=claim.subject,
-        predicate=claim.predicate,
-        object_value=claim.object_value,
-        qualifiers=claim.qualifiers,
-        verification_state=state,
-        citations=sorted(
-            canonical_anchor_id(anchor) for anchor in claim.anchors if anchor.role == "supports"
-        ),
-    )
-
-
-def extract_case_result(case_id: str, db_path: Path) -> CaseRunResult:
-    """Extract one normalized result cell without migrating or writing the DB."""
+def _extract_case_workflow(case_id: str, db_path: Path) -> tuple[CaseRunResult, CaseWorkflowTrace]:
     if not db_path.is_file():
         raise ValueError(f"case database does not exist: {db_path}")
     with CaseDB(db_path) as db:
@@ -79,25 +38,38 @@ def extract_case_result(case_id: str, db_path: Path) -> CaseRunResult:
             raise ValueError(
                 f"database case_id {metadata.case_id!r} does not match manifest case {case_id!r}"
             )
-        findings = db.get_findings()
-        observed_claims: list[ObservedClaim] = []
-        for finding in findings:
-            latest_states = _verification_states(db, finding.finding_id)
-            for claim in db.get_claims(finding.finding_id):
-                raw_state = latest_states.get(claim.claim_id, claim.epistemic_state)
-                state: VerificationState = (
-                    raw_state
-                    if raw_state
-                    in {
-                        "verified",
-                        "contradicted",
-                        "inconclusive",
-                        "unsupported",
-                        "unverified",
-                    }
-                    else "unverified"
+        active = {finding.finding_id: finding for finding in db.get_findings()}
+        histories: dict[str, list[FindingRevision]] = {}
+        for revision in db.get_all_finding_revisions():
+            histories.setdefault(revision.finding_id, []).append(revision)
+        candidates: list[WorkflowCandidate] = []
+        for finding_id in sorted(set(active) | set(histories)):
+            revisions = histories.get(finding_id, [])
+            finding = revisions[0].snapshot if revisions else active[finding_id]
+            current = active.get(finding_id) or next(
+                revision.snapshot for revision in reversed(revisions) if not revision.tombstone
+            )
+            withdrawal = next(
+                (revision for revision in reversed(revisions) if revision.tombstone),
+                None,
+            )
+            verifications = db.get_claim_verifications(finding_id)
+            by_claim: dict[str, list[ClaimVerification]] = {}
+            for verification in verifications:
+                by_claim.setdefault(verification.claim_id, []).append(verification)
+            for claim in db.get_claims(finding_id):
+                candidates.append(
+                    WorkflowCandidate(
+                        finding=finding,
+                        claim=claim.model_copy(update={"epistemic_state": "unverified"}),
+                        confidence_probability=(
+                            0.95 if current.confidence == "confirmed" else 0.5
+                        ),
+                        source_verifications=by_claim.get(claim.claim_id, []),
+                        finding_revisions=revisions,
+                        withdrawal_revision=withdrawal,
+                    )
                 )
-                observed_claims.append(_observed_claim(claim, state))
 
         coverage = [
             ObservedCoverage(
@@ -111,27 +83,28 @@ def extract_case_result(case_id: str, db_path: Path) -> CaseRunResult:
             for record in db.get_coverage()
         ]
 
-    positive = any(
-        not finding.title.startswith("[NEGATIVE]") and finding.negative_verdict is None
-        for finding in findings
-    )
-    scoped_negative = any(finding.negative_verdict is not None for finding in findings)
-    if positive:
-        verdict: Verdict = "positive"
-        cell_status: Literal["completed", "failed", "no_verdict"] = "completed"
-    elif scoped_negative:
-        verdict = "no_evil_within_coverage"
-        cell_status = "completed"
-    else:
-        verdict = "no_verdict"
-        cell_status = "no_verdict"
-    return CaseRunResult(
+    trace = CaseWorkflowTrace(
         case_id=case_id,
-        verdict=verdict,
-        cell_status=cell_status,
-        claims=sorted(observed_claims, key=lambda claim: claim.claim_id),
+        trace_version=2,
+        candidates=candidates,
         coverage=sorted(coverage, key=lambda item: item.domain),
+        alternative_narrative=AlternativeNarrativeWorkflowInput(
+            checks=[
+                WorkflowGateCheck(
+                    name="case_database_projection",
+                    passed=True,
+                    detail="Real CaseDB state was projected into the bounded workflow.",
+                )
+            ]
+        ),
     )
+    return execute_workflow_base(trace), trace
+
+
+def extract_case_result(case_id: str, db_path: Path) -> CaseRunResult:
+    """Execute the real bounded benchmark workflow over one read-only case DB."""
+    result, _ = _extract_case_workflow(case_id, db_path)
+    return result
 
 
 def extract_run_result(
@@ -157,6 +130,7 @@ def extract_run_result(
             f"missing={sorted(expected - supplied)!r}, unexpected={sorted(supplied - expected)!r}"
         )
     cases: list[CaseRunResult] = []
+    workflow_traces: list[CaseWorkflowTrace] = []
     for case_id in sorted(expected):
         if case_id in failed_cases:
             cases.append(
@@ -167,8 +141,17 @@ def extract_run_result(
                     failure_reason=failed_cases[case_id],
                 )
             )
+            workflow_traces.append(
+                CaseWorkflowTrace(
+                    case_id=case_id,
+                    trace_version=2,
+                    failure_reason=failed_cases[case_id],
+                )
+            )
         else:
-            cases.append(extract_case_result(case_id, case_databases[case_id]))
+            case, trace = _extract_case_workflow(case_id, case_databases[case_id])
+            cases.append(case)
+            workflow_traces.append(trace)
     return BenchmarkRunResult(
         benchmark_id=manifest.benchmark_id,
         run_id=run_id,
@@ -177,4 +160,5 @@ def extract_run_result(
         identity=identity,
         cases=cases,
         resources=resources,
+        workflow_traces=workflow_traces,
     )

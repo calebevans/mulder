@@ -39,13 +39,15 @@ A useful scheduled matrix starts with three or more repeats of the default
 configuration, then one-factor executable ablations. The five supported safety
 components are verifier, independence gate, Alternative Narrative, blind
 reviewer, and candidate filters. A label alone is not evidence: these components
-must be disabled through `mulder benchmark-ablate`, which requires a complete
-ordered trace and emits a replay-checked receipt. Unknown targets, duplicate
+must be disabled through `mulder benchmark-ablate`, which requires v2 bounded
+domain inputs and calls the same verifier, independence gate, candidate policy,
+Alternative Narrative gate, and persisted reviewer-decision semantics used by
+Mulder. It emits a content-bound execution receipt. Unknown targets, duplicate
 targets, incomplete traces, an already-ablated base, mixed legacy/executable
 labels, and trace/result disagreement fail closed.
 
-The repository's scheduled workflow deliberately uses the bounded synthetic
-fixture in `benchmarks/ablation/`. It produces one public-schema result for each
+The repository's scheduled workflow rebuilds and executes the bounded synthetic
+real-component fixture in `benchmarks/ablation/`. It produces one public-schema result for each
 one-factor ablation, scores them with the normal CLI, and retains input, output,
 and receipt artifacts. It makes no provider request and does not claim model
 quality; larger or nondeterministic studies may use the same contracts outside

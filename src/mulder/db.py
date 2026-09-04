@@ -1954,6 +1954,34 @@ class CaseDB:
             for row in rows
         ]
 
+    def get_all_finding_revisions(self) -> list[FindingRevision]:
+        """Return complete immutable finding history, including withdrawn findings."""
+        stmt = select(finding_revisions_t).order_by(
+            finding_revisions_t.c.finding_id,
+            finding_revisions_t.c.revision_number,
+        )
+        with self._engine.connect() as conn:
+            rows = conn.execute(stmt).fetchall()
+        return [
+            FindingRevision(
+                revision_id=row.revision_id,
+                finding_id=row.finding_id,
+                revision_number=row.revision_number,
+                parent_revision_id=row.parent_revision_id,
+                state=row.state,
+                snapshot=Finding.model_validate_json(row.snapshot),
+                actor_kind=row.actor_kind,
+                actor_id=row.actor_id,
+                reason_code=row.reason_code,
+                changed_fields=json.loads(row.changed_fields),
+                evidence_added=json.loads(row.evidence_added),
+                evidence_removed=json.loads(row.evidence_removed),
+                tombstone=bool(row.tombstone),
+                created_at=row.created_at,
+            )
+            for row in rows
+        ]
+
     def record_coverage(
         self,
         key: CoverageKey,

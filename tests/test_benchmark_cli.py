@@ -36,8 +36,8 @@ def test_benchmark_cli_emits_json_and_comparison_table(tmp_path: Path) -> None:
     assert "reference" in result.output
     assert f"JSON score: {output}" in result.output
     payload = json.loads(output.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == 1
-    assert payload["score_schema"] == "mulder.benchmark.score/v1"
+    assert payload["schema_version"] == 2
+    assert payload["score_schema"] == "mulder.benchmark.score/v2"
     assert len(payload["manifest_sha256"]) == 64
     assert [run["run_id"] for run in payload["runs"]] == [
         "duplicate-partial",

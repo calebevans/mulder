@@ -57,8 +57,9 @@ Output hashes bind the
 canonical semantic manifest and result objects, so JSON/YAML formatting changes
 do not create a new benchmark identity.
 
-Methodology `1.1` adds optional, backward-compatible calibration and revision
-inputs. `ObservedClaim.confidence` is a probability in `[0, 1]`; the scorer
+Methodology `1.1` adds optional calibration and revision inputs. Score output
+uses `mulder.benchmark.score/v2`; the unchanged v1 schema remains committed for
+existing score artifacts. `ObservedClaim.confidence` is a probability in `[0, 1]`; the scorer
 reports mean confidence, empirical exact-claim accuracy, Brier score, and a
 deterministic ten-bin expected calibration error. Optional expected and
 observed severities use the ordered scale `informational`, `low`, `medium`,
@@ -67,10 +68,14 @@ only for exactly matched claims with both labels. Predictions that cannot be
 severity-adjudicated are counted separately, never silently treated as correct.
 
 `CaseRunResult.revisions` records immutable before/after claims, an iteration,
-stage, and reason. The answer key—not a self-reported outcome—determines
+stage, reason, source revision ID, and an explicit removal tombstone. The answer
+key—not a self-reported outcome—determines
 `errors_fixed`, `errors_introduced`, preserved correct assertions, and persistent
-errors. Results written for methodology `1.0` remain valid; missing optional
-inputs produce explicit zero counts and `null` calibration rates.
+errors, including verification-state changes that retain the same proposition
+and removals whose `after` value is null. Duplicate propositions contribute one
+calibration sample; conflicting confidence or severity labels fail closed.
+Results written for methodology `1.0` remain valid; missing optional inputs
+produce explicit zero counts and `null` calibration rates.
 
 `mulder benchmark-export` normalizes current Mulder case databases without
 running an investigation or contacting a model or network service. Inputs must
@@ -89,7 +94,15 @@ mulder benchmark-export benchmarks/my-suite/manifest-v1.yaml \
   --repeat-index 2 --seed 1002 --output candidate-r2.json
 ```
 
-The extractor opens case databases without applying migrations. Citation IDs
+The extractor opens case databases without applying migrations and projects
+stored confidence/severity, complete finding and claim-verification histories,
+withdrawal tombstones, and coverage into a v2 executable workflow trace. It
+runs the bounded workflow through the current verifier, independence policy,
+candidate policy, Alternative Narrative gate, and stored reviewer decisions.
+Because the current case schema stores categorical confidence, export maps
+`confirmed` to `0.95` and `inference` to `0.50`; the trace retains the original
+finding snapshots so that conversion remains auditable.
+Citation IDs
 derive from source coordinates and evidence text rather than database UUIDs;
 coverage domains use URL-escaped `system/domain/check` components. This makes
 normalization stable, but the answer-key anchors must use those canonical IDs
@@ -102,7 +115,7 @@ Executable ablations use a complete typed workflow trace and the separate
 offline command:
 
 ```console
-mulder benchmark-ablate benchmarks/ablation/result-base.json \
+mulder benchmark-ablate benchmarks/ablation/result-real-base-v2.json \
   --ablation without-verifier \
   --run-id no-verifier-r0 --matrix-cell fixture/without-verifier \
   --output no-verifier-r0.json
@@ -110,11 +123,17 @@ mulder benchmark-ablate benchmarks/ablation/result-base.json \
 
 The supported switches are `without-verifier`, `without-independence-gate`,
 `without-alternative-narrative`, `without-blind-reviewer`, and
-`without-candidate-filters`. The engine first proves that executing every stage
-reproduces the base result, then replays it while skipping the selected stages.
+`without-candidate-filters`. New ablations require v2 domain inputs rather than
+hand-authored output transformations. The engine first proves that the current
+real Mulder components reproduce the base result, then executes them again while
+skipping the selected stage. Verdicts, claims, coverage, revisions, and resource
+measurements are recomputed; base runtime, token, and cost values are never
+cloned into a synthetic ablation.
 Its receipt binds the base run identity, base result and trace hashes,
 executed/skipped stages, and per-case operation counts. The scorer reconstructs
-the base, replays every received ablated result, and fails closed on tampering.
+the base, re-executes every received ablated result, and fails closed on tampering.
+Legacy v1 operation traces remain readable for old result verification but are
+rejected as inputs to new ablation runs.
 This facility changes normalized benchmark objects
 only; it has no production-runner import or production configuration switch.
 

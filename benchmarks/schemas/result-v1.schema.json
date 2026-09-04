@@ -2,12 +2,37 @@
   "$defs": {
     "AblationExecutionReceipt": {
       "additionalProperties": false,
-      "description": "Content-bound proof that benchmark stages were replayed or skipped.",
+      "description": "Content-bound proof that benchmark stages were executed or skipped.",
       "properties": {
+        "base_cost_usd": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Base Cost Usd"
+        },
+        "base_input_tokens": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Base Input Tokens",
+          "type": "integer"
+        },
         "base_matrix_cell": {
           "minLength": 1,
           "title": "Base Matrix Cell",
           "type": "string"
+        },
+        "base_output_tokens": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Base Output Tokens",
+          "type": "integer"
         },
         "base_result_sha256": {
           "pattern": "^[0-9a-f]{64}$",
@@ -18,6 +43,25 @@
           "minLength": 1,
           "title": "Base Run Id",
           "type": "string"
+        },
+        "base_runtime_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Base Runtime Ms"
+        },
+        "base_unattributed_tokens": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Base Unattributed Tokens",
+          "type": "integer"
         },
         "case_operation_counts": {
           "additionalProperties": {
@@ -107,6 +151,135 @@
       "title": "AblationExecutionReceipt",
       "type": "object"
     },
+    "AlternativeNarrativeWorkflowInput": {
+      "additionalProperties": false,
+      "description": "Structured bounded inputs for :func:`validate_narrative`.",
+      "properties": {
+        "checks": {
+          "items": {
+            "$ref": "#/$defs/WorkflowGateCheck"
+          },
+          "minItems": 1,
+          "title": "Checks",
+          "type": "array"
+        },
+        "remaining_work": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Remaining Work",
+          "type": "array"
+        }
+      },
+      "required": [
+        "checks"
+      ],
+      "title": "AlternativeNarrativeWorkflowInput",
+      "type": "object"
+    },
+    "AtomicClaim": {
+      "description": "Persisted atomic finding statement with resolved evidence anchors.",
+      "properties": {
+        "anchors": {
+          "items": {
+            "$ref": "#/$defs/EvidenceAnchor"
+          },
+          "title": "Anchors",
+          "type": "array"
+        },
+        "claim_id": {
+          "title": "Claim Id",
+          "type": "string"
+        },
+        "epistemic_state": {
+          "default": "unverified",
+          "enum": [
+            "legacy_unverified",
+            "unverified",
+            "verified",
+            "contradicted",
+            "inconclusive"
+          ],
+          "title": "Epistemic State",
+          "type": "string"
+        },
+        "finding_id": {
+          "title": "Finding Id",
+          "type": "string"
+        },
+        "object_value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Object Value"
+        },
+        "ordinal": {
+          "minimum": 0,
+          "title": "Ordinal",
+          "type": "integer"
+        },
+        "predicate": {
+          "title": "Predicate",
+          "type": "string"
+        },
+        "qualifiers": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Qualifiers",
+          "type": "object"
+        },
+        "statement": {
+          "title": "Statement",
+          "type": "string"
+        },
+        "subject": {
+          "title": "Subject",
+          "type": "string"
+        }
+      },
+      "required": [
+        "claim_id",
+        "finding_id",
+        "ordinal",
+        "statement",
+        "subject",
+        "predicate",
+        "object_value"
+      ],
+      "title": "AtomicClaim",
+      "type": "object"
+    },
     "CaseRunResult": {
       "additionalProperties": false,
       "description": "Normalized output for one case in an offline benchmark run.",
@@ -181,10 +354,55 @@
       "additionalProperties": false,
       "description": "Complete, ordered stage trace used only by the benchmark ablation engine.",
       "properties": {
+        "alternative_narrative": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AlternativeNarrativeWorkflowInput"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "candidate_similarity_threshold": {
+          "default": 0.4,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Candidate Similarity Threshold",
+          "type": "number"
+        },
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/WorkflowCandidate"
+          },
+          "title": "Candidates",
+          "type": "array"
+        },
         "case_id": {
           "minLength": 1,
           "title": "Case Id",
           "type": "string"
+        },
+        "coverage": {
+          "items": {
+            "$ref": "#/$defs/ObservedCoverage"
+          },
+          "title": "Coverage",
+          "type": "array"
+        },
+        "failure_reason": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failure Reason"
         },
         "input_claims": {
           "items": {
@@ -199,12 +417,19 @@
           },
           "title": "Stages",
           "type": "array"
+        },
+        "trace_version": {
+          "default": 1,
+          "enum": [
+            1,
+            2
+          ],
+          "title": "Trace Version",
+          "type": "integer"
         }
       },
       "required": [
-        "case_id",
-        "input_claims",
-        "stages"
+        "case_id"
       ],
       "title": "CaseWorkflowTrace",
       "type": "object"
@@ -214,7 +439,14 @@
       "description": "Auditable before/after assertion revision; correctness is scored externally.",
       "properties": {
         "after": {
-          "$ref": "#/$defs/ObservedClaim"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ObservedClaim"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "before": {
           "$ref": "#/$defs/ObservedClaim"
@@ -239,10 +471,28 @@
           "title": "Revision Id",
           "type": "string"
         },
+        "source_revision_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Revision Id"
+        },
         "stage": {
           "minLength": 1,
           "title": "Stage",
           "type": "string"
+        },
+        "tombstone": {
+          "default": false,
+          "title": "Tombstone",
+          "type": "boolean"
         }
       },
       "required": [
@@ -255,6 +505,453 @@
         "reason"
       ],
       "title": "ClaimRevision",
+      "type": "object"
+    },
+    "ClaimVerification": {
+      "description": "Append-only persisted execution of a deterministic claim verifier.",
+      "properties": {
+        "claim_id": {
+          "title": "Claim Id",
+          "type": "string"
+        },
+        "details": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Details",
+          "type": "object"
+        },
+        "reason_code": {
+          "title": "Reason Code",
+          "type": "string"
+        },
+        "result": {
+          "enum": [
+            "verified",
+            "contradicted",
+            "inconclusive"
+          ],
+          "title": "Result",
+          "type": "string"
+        },
+        "verification_id": {
+          "title": "Verification Id",
+          "type": "string"
+        },
+        "verified_at": {
+          "title": "Verified At",
+          "type": "string"
+        },
+        "verifier_name": {
+          "title": "Verifier Name",
+          "type": "string"
+        },
+        "verifier_version": {
+          "title": "Verifier Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "result",
+        "reason_code",
+        "verification_id",
+        "claim_id",
+        "verifier_name",
+        "verifier_version",
+        "verified_at"
+      ],
+      "title": "ClaimVerification",
+      "type": "object"
+    },
+    "CoverageKey": {
+      "description": "Stable coordinates for one evidence-domain coverage assertion.",
+      "properties": {
+        "check_name": {
+          "minLength": 1,
+          "title": "Check Name",
+          "type": "string"
+        },
+        "evidence_domain": {
+          "minLength": 1,
+          "title": "Evidence Domain",
+          "type": "string"
+        },
+        "system_name": {
+          "minLength": 1,
+          "title": "System Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "system_name",
+        "evidence_domain",
+        "check_name"
+      ],
+      "title": "CoverageKey",
+      "type": "object"
+    },
+    "EvidenceAnchor": {
+      "description": "Server-resolved immutable evidence locator for an atomic claim.",
+      "properties": {
+        "anchor_id": {
+          "title": "Anchor Id",
+          "type": "string"
+        },
+        "artifact_family": {
+          "title": "Artifact Family",
+          "type": "string"
+        },
+        "char_end": {
+          "title": "Char End",
+          "type": "integer"
+        },
+        "char_start": {
+          "title": "Char Start",
+          "type": "integer"
+        },
+        "claim_id": {
+          "title": "Claim Id",
+          "type": "string"
+        },
+        "exact_text": {
+          "title": "Exact Text",
+          "type": "string"
+        },
+        "extractor_family": {
+          "title": "Extractor Family",
+          "type": "string"
+        },
+        "independence_key": {
+          "title": "Independence Key",
+          "type": "string"
+        },
+        "line_end": {
+          "title": "Line End",
+          "type": "integer"
+        },
+        "line_start": {
+          "title": "Line Start",
+          "type": "integer"
+        },
+        "normalized_value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalized Value"
+        },
+        "role": {
+          "default": "supports",
+          "enum": [
+            "supports",
+            "contradicts"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "source_hash": {
+          "title": "Source Hash",
+          "type": "string"
+        },
+        "source_id": {
+          "title": "Source Id",
+          "type": "integer"
+        },
+        "source_name": {
+          "title": "Source Name",
+          "type": "string"
+        },
+        "tool_call_id": {
+          "title": "Tool Call Id",
+          "type": "string"
+        },
+        "value_type": {
+          "title": "Value Type",
+          "type": "string"
+        },
+        "window_id": {
+          "title": "Window Id",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "anchor_id",
+        "claim_id",
+        "tool_call_id",
+        "source_id",
+        "source_name",
+        "source_hash",
+        "window_id",
+        "line_start",
+        "line_end",
+        "char_start",
+        "char_end",
+        "exact_text",
+        "artifact_family",
+        "extractor_family",
+        "independence_key",
+        "value_type"
+      ],
+      "title": "EvidenceAnchor",
+      "type": "object"
+    },
+    "Finding": {
+      "description": "An investigative finding backed by evidence references.",
+      "properties": {
+        "case_id": {
+          "title": "Case Id",
+          "type": "string"
+        },
+        "confidence": {
+          "enum": [
+            "confirmed",
+            "inference"
+          ],
+          "title": "Confidence",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "event_time_end": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Event Time End"
+        },
+        "event_time_start": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Event Time Start"
+        },
+        "evidence_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "finding_id": {
+          "title": "Finding Id",
+          "type": "string"
+        },
+        "mitre_attack_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Mitre Attack Ids",
+          "type": "array"
+        },
+        "negative_verdict": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScopedNegativeVerdict"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "severity": {
+          "enum": [
+            "critical",
+            "high",
+            "medium",
+            "low",
+            "info"
+          ],
+          "title": "Severity",
+          "type": "string"
+        },
+        "sources": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Sources",
+          "type": "array"
+        },
+        "submitted_at": {
+          "title": "Submitted At",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "finding_id",
+        "case_id",
+        "title",
+        "description",
+        "severity",
+        "confidence",
+        "evidence_refs",
+        "sources",
+        "submitted_at"
+      ],
+      "title": "Finding",
+      "type": "object"
+    },
+    "FindingRevision": {
+      "description": "Immutable snapshot recording one visible change to a finding.",
+      "properties": {
+        "actor_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Actor Id"
+        },
+        "actor_kind": {
+          "enum": [
+            "investigator",
+            "deterministic_rule",
+            "blind_reviewer",
+            "human",
+            "system"
+          ],
+          "title": "Actor Kind",
+          "type": "string"
+        },
+        "changed_fields": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Changed Fields",
+          "type": "array"
+        },
+        "created_at": {
+          "title": "Created At",
+          "type": "string"
+        },
+        "evidence_added": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Added",
+          "type": "array"
+        },
+        "evidence_removed": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Removed",
+          "type": "array"
+        },
+        "finding_id": {
+          "title": "Finding Id",
+          "type": "string"
+        },
+        "parent_revision_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Revision Id"
+        },
+        "reason_code": {
+          "title": "Reason Code",
+          "type": "string"
+        },
+        "revision_id": {
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "revision_number": {
+          "minimum": 1,
+          "title": "Revision Number",
+          "type": "integer"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/Finding"
+        },
+        "state": {
+          "enum": [
+            "draft",
+            "indicated",
+            "confirmed",
+            "refuted",
+            "quarantined",
+            "unknown",
+            "withdrawn"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "tombstone": {
+          "default": false,
+          "title": "Tombstone",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "revision_id",
+        "finding_id",
+        "revision_number",
+        "state",
+        "snapshot",
+        "actor_kind",
+        "reason_code",
+        "created_at"
+      ],
+      "title": "FindingRevision",
       "type": "object"
     },
     "ObservedClaim": {
@@ -539,6 +1236,30 @@
       "title": "RunIdentity",
       "type": "object"
     },
+    "ScopedNegativeVerdict": {
+      "description": "A negative conclusion explicitly limited to completed coverage.",
+      "properties": {
+        "scope": {
+          "items": {
+            "$ref": "#/$defs/CoverageKey"
+          },
+          "minItems": 1,
+          "title": "Scope",
+          "type": "array"
+        },
+        "verdict": {
+          "const": "NO_EVIL_WITHIN_COVERAGE",
+          "default": "NO_EVIL_WITHIN_COVERAGE",
+          "title": "Verdict",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope"
+      ],
+      "title": "ScopedNegativeVerdict",
+      "type": "object"
+    },
     "SourceAdjudication": {
       "additionalProperties": false,
       "description": "Provenance envelope retaining a historical evaluation verbatim.",
@@ -654,6 +1375,82 @@
       ],
       "title": "ToolOutcomeStatus",
       "type": "string"
+    },
+    "WorkflowCandidate": {
+      "additionalProperties": false,
+      "description": "Real Mulder domain inputs for one bounded benchmark candidate.",
+      "properties": {
+        "claim": {
+          "$ref": "#/$defs/AtomicClaim"
+        },
+        "confidence_probability": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence Probability",
+          "type": "number"
+        },
+        "finding": {
+          "$ref": "#/$defs/Finding"
+        },
+        "finding_revisions": {
+          "items": {
+            "$ref": "#/$defs/FindingRevision"
+          },
+          "title": "Finding Revisions",
+          "type": "array"
+        },
+        "source_verifications": {
+          "items": {
+            "$ref": "#/$defs/ClaimVerification"
+          },
+          "title": "Source Verifications",
+          "type": "array"
+        },
+        "withdrawal_revision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FindingRevision"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "finding",
+        "claim",
+        "confidence_probability"
+      ],
+      "title": "WorkflowCandidate",
+      "type": "object"
+    },
+    "WorkflowGateCheck": {
+      "additionalProperties": false,
+      "description": "Bounded readiness input consumed by the real Alternative Narrative gate.",
+      "properties": {
+        "detail": {
+          "default": "",
+          "title": "Detail",
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "passed": {
+          "title": "Passed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "passed"
+      ],
+      "title": "WorkflowGateCheck",
+      "type": "object"
     },
     "WorkflowOperation": {
       "additionalProperties": false,

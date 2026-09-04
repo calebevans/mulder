@@ -56,6 +56,9 @@
         "citations": {
           "$ref": "#/$defs/CitationScore"
         },
+        "confidence_calibration": {
+          "$ref": "#/$defs/ConfidenceCalibrationScore"
+        },
         "coverage": {
           "$ref": "#/$defs/CoverageScore"
         },
@@ -86,6 +89,12 @@
         "predicates": {
           "$ref": "#/$defs/SetScore"
         },
+        "revisions": {
+          "$ref": "#/$defs/RevisionScore"
+        },
+        "severity_calibration": {
+          "$ref": "#/$defs/SeverityCalibrationScore"
+        },
         "verdicts": {
           "$ref": "#/$defs/VerdictScore"
         }
@@ -99,6 +108,9 @@
         "epistemic",
         "coverage",
         "verdicts",
+        "confidence_calibration",
+        "severity_calibration",
+        "revisions",
         "duplicate_claims",
         "duplicate_citations",
         "case_id",
@@ -178,6 +190,78 @@
         "claim_citation_rate"
       ],
       "title": "CitationScore",
+      "type": "object"
+    },
+    "ConfidenceCalibrationScore": {
+      "additionalProperties": false,
+      "description": "Calibration of declared claim probabilities against exact ground truth.",
+      "properties": {
+        "brier_score": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Brier Score"
+        },
+        "count": {
+          "minimum": 0,
+          "title": "Count",
+          "type": "integer"
+        },
+        "empirical_accuracy": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Empirical Accuracy"
+        },
+        "expected_calibration_error": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Calibration Error"
+        },
+        "mean_confidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mean Confidence"
+        }
+      },
+      "required": [
+        "count"
+      ],
+      "title": "ConfidenceCalibrationScore",
       "type": "object"
     },
     "CoverageScore": {
@@ -431,6 +515,63 @@
       "title": "ResourceUsage",
       "type": "object"
     },
+    "RevisionScore": {
+      "additionalProperties": false,
+      "description": "Externally adjudicated effects of auditable before/after revisions.",
+      "properties": {
+        "assertion_revisions": {
+          "minimum": 0,
+          "title": "Assertion Revisions",
+          "type": "integer"
+        },
+        "correct_preserved": {
+          "minimum": 0,
+          "title": "Correct Preserved",
+          "type": "integer"
+        },
+        "errors_fixed": {
+          "minimum": 0,
+          "title": "Errors Fixed",
+          "type": "integer"
+        },
+        "errors_introduced": {
+          "minimum": 0,
+          "title": "Errors Introduced",
+          "type": "integer"
+        },
+        "errors_persisted": {
+          "minimum": 0,
+          "title": "Errors Persisted",
+          "type": "integer"
+        },
+        "iterations_observed": {
+          "minimum": 0,
+          "title": "Iterations Observed",
+          "type": "integer"
+        },
+        "net_errors_fixed": {
+          "title": "Net Errors Fixed",
+          "type": "integer"
+        },
+        "revision_events": {
+          "minimum": 0,
+          "title": "Revision Events",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "revision_events",
+        "assertion_revisions",
+        "iterations_observed",
+        "errors_fixed",
+        "errors_introduced",
+        "correct_preserved",
+        "errors_persisted",
+        "net_errors_fixed"
+      ],
+      "title": "RevisionScore",
+      "type": "object"
+    },
     "RunIdentity": {
       "additionalProperties": false,
       "description": "Comparable run identity for repeats, matrices, and ablations.",
@@ -598,6 +739,9 @@
         "citations": {
           "$ref": "#/$defs/CitationScore"
         },
+        "confidence_calibration": {
+          "$ref": "#/$defs/ConfidenceCalibrationScore"
+        },
         "coverage": {
           "$ref": "#/$defs/CoverageScore"
         },
@@ -620,6 +764,12 @@
         "predicates": {
           "$ref": "#/$defs/SetScore"
         },
+        "revisions": {
+          "$ref": "#/$defs/RevisionScore"
+        },
+        "severity_calibration": {
+          "$ref": "#/$defs/SeverityCalibrationScore"
+        },
         "verdicts": {
           "$ref": "#/$defs/VerdictScore"
         }
@@ -633,6 +783,9 @@
         "epistemic",
         "coverage",
         "verdicts",
+        "confidence_calibration",
+        "severity_calibration",
+        "revisions",
         "duplicate_claims",
         "duplicate_citations"
       ],
@@ -686,6 +839,62 @@
         "f1"
       ],
       "title": "SetScore",
+      "type": "object"
+    },
+    "SeverityCalibrationScore": {
+      "additionalProperties": false,
+      "description": "Ordinal severity agreement for claims that exactly match ground truth.",
+      "properties": {
+        "count": {
+          "minimum": 0,
+          "title": "Count",
+          "type": "integer"
+        },
+        "exact_matches": {
+          "minimum": 0,
+          "title": "Exact Matches",
+          "type": "integer"
+        },
+        "exact_rate": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exact Rate"
+        },
+        "mean_absolute_error": {
+          "anyOf": [
+            {
+              "maximum": 4,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mean Absolute Error"
+        },
+        "unmatched_predictions": {
+          "minimum": 0,
+          "title": "Unmatched Predictions",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "count",
+        "exact_matches",
+        "unmatched_predictions"
+      ],
+      "title": "SeverityCalibrationScore",
       "type": "object"
     },
     "VerdictScore": {
@@ -788,8 +997,11 @@
       "type": "string"
     },
     "methodology_version": {
-      "const": "1.0",
       "default": "1.0",
+      "enum": [
+        "1.0",
+        "1.1"
+      ],
       "title": "Methodology Version",
       "type": "string"
     },
@@ -801,14 +1013,14 @@
       "type": "array"
     },
     "schema_version": {
-      "const": 1,
-      "default": 1,
+      "const": 2,
+      "default": 2,
       "title": "Schema Version",
       "type": "integer"
     },
     "score_schema": {
-      "const": "mulder.benchmark.score/v1",
-      "default": "mulder.benchmark.score/v1",
+      "const": "mulder.benchmark.score/v2",
+      "default": "mulder.benchmark.score/v2",
       "title": "Score Schema",
       "type": "string"
     }

@@ -25,7 +25,7 @@ def main() -> None:
     benchmark_schemas = {
         "manifest-v1.schema.json": BenchmarkManifest,
         "result-v1.schema.json": BenchmarkRunResult,
-        "score-v1.schema.json": BenchmarkScoreDocument,
+        "score-v2.schema.json": BenchmarkScoreDocument,
     }
     benchmark_dir = repo_root / "benchmarks" / "schemas"
     benchmark_dir.mkdir(parents=True, exist_ok=True)
