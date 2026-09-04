@@ -75,3 +75,18 @@ cases:
         selector: line=1;field=image
         exact_text_sha256: 7371f071a9a4e653a5afd134bce9c735ef74b0421d6988958e5c6d8a34feaa3b
         supports_claim_ids: [expected-process]
+      - anchor_id: anchor:3968c57ce0dfeb0de346c18abb2386d6fbd05783a1102f235f8874f4fb0117a2
+        artifact_id: acquisition-c-processes
+        selector: line=1;field=image
+        exact_text_sha256: f307e73a3447b10444e67233700c1aa5ca8e3673dd2f292084bf485583caad6f
+        supports_claim_ids: [expected-process]
+      - anchor_id: anchor:eb9d4a037381ec8f9780f2b901f68617af3b98cc9f3098dc02e0e6504a4c88a2
+        artifact_id: acquisition-d-network
+        selector: line=1;field=destination
+        exact_text_sha256: 562ae54e815169e4b68b8396ffb6989b3fc1abee6415d60a51bcf866a8c8b0f5
+        supports_claim_ids: [expected-process]
+      - anchor_id: anchor:f391c715269351abef8ce2613781b6fdbf1a159bbe4c9d9fcf9a85b5bd9ba85c
+        artifact_id: acquisition-e-processes
+        selector: line=1;field=image
+        exact_text_sha256: 6863b66a6b17e22c669b0c1f2f5e48c5a1881a5645749a08fc980adde75461c5
+        supports_claim_ids: [expected-process]

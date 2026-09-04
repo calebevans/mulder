@@ -22,7 +22,6 @@ TARGETS = (
     "without-candidate-filters",
     "without-verifier",
     "without-independence-gate",
-    "without-alternative-narrative",
     "without-blind-reviewer",
 )
 
@@ -215,6 +214,50 @@ def test_unattached_revision_history_is_rejected() -> None:
         type(result.cases[0]).model_validate(payload)
 
 
+def test_revision_history_must_be_supplied_in_chronological_order() -> None:
+    result = load_result(BASE_RESULT)
+    payload = result.cases[0].model_dump(mode="json")
+    claim_id = next(
+        revision.claim_id for revision in result.cases[0].revisions if revision.iteration == 2
+    )
+    positions = [
+        index
+        for index, revision in enumerate(payload["revisions"])
+        if revision["claim_id"] == claim_id
+    ]
+    first, second = positions[:2]
+    payload["revisions"][first], payload["revisions"][second] = (
+        payload["revisions"][second],
+        payload["revisions"][first],
+    )
+
+    with pytest.raises(ValueError, match="complete and ordered"):
+        type(result.cases[0]).model_validate(payload)
+
+
+def test_scorer_revalidates_revision_order_after_unchecked_model_copy() -> None:
+    base = load_result(BASE_RESULT)
+    case = base.cases[0]
+    claim_id = next(revision.claim_id for revision in case.revisions if revision.iteration == 2)
+    reordered = list(case.revisions)
+    positions = [
+        index for index, revision in enumerate(reordered) if revision.claim_id == claim_id
+    ]
+    first, second = positions[:2]
+    reordered[first], reordered[second] = reordered[second], reordered[first]
+    invalid_case = case.model_copy(update={"revisions": reordered})
+    invalid_result = base.model_copy(
+        update={
+            "cases": [invalid_case],
+            "identity": base.identity.model_copy(update={"methodology_version": "1.0"}),
+            "workflow_traces": [],
+        }
+    )
+
+    with pytest.raises(ValueError, match="complete and ordered"):
+        score_benchmark(_correction_manifest(), [invalid_result])
+
+
 def test_bounded_workflow_calls_real_mulder_components(monkeypatch: pytest.MonkeyPatch) -> None:
     trace = load_result(BASE_RESULT).workflow_traces[0]
     calls = {
@@ -293,11 +336,21 @@ def test_reviewer_stage_cannot_be_changed_by_relabelling_actor_kind() -> None:
 
     result = execute_workflow_base(relabelled)
     blind_claim_id = blind["claim"]["claim_id"]
-    assert blind_claim_id not in {claim.claim_id for claim in result.claims}
-    assert any(
+    assert blind_claim_id in {claim.claim_id for claim in result.claims}
+    assert not any(
         revision.stage == "blind_reviewer" and revision.claim_id == blind_claim_id
         for revision in result.revisions
     )
+
+
+def test_unsupported_alternative_narrative_ablation_is_rejected_honestly() -> None:
+    with pytest.raises(ValueError, match="unknown executable ablations"):
+        execute_ablations(
+            load_result(BASE_RESULT),
+            ["without-alternative-narrative"],
+            run_id="unsupported-alternative",
+            matrix_cell="fixture/unsupported-alternative",
+        )
 
 
 def test_nested_workflow_domain_models_reject_unknown_fields() -> None:
@@ -323,6 +376,23 @@ def test_scorer_rejects_tampered_anchor_binding_and_fake_independence() -> None:
     with pytest.raises(ValueError, match="answer-key binding"):
         score_benchmark(manifest, [BenchmarkRunResult.model_validate(tampered)])
 
+    unresolved_manifest = manifest.model_dump(mode="json")
+    unresolved_result = base.model_dump(mode="json")
+    expected = unresolved_manifest["cases"][0]["anchors"][0]
+    binding = next(
+        item
+        for item in unresolved_result["workflow_traces"][0]["evidence_bindings"]
+        if item["anchor_id"] == expected["anchor_id"]
+    )
+    expected["selector"] = "line=999;field=image"
+    binding["selector"] = "line=999;field=image"
+    with pytest.raises(ValueError, match="selector does not resolve"):
+        score_benchmark(
+            type(manifest).model_validate(unresolved_manifest),
+            [BenchmarkRunResult.model_validate(unresolved_result)],
+            evidence_root=FIXTURES,
+        )
+
     manifest_payload = manifest.model_dump(mode="json")
     manifest_payload["cases"][0]["evidence"][1]["root_acquisition_id"] = "acquisition-a"
     result_payload = base.model_dump(mode="json")
@@ -337,6 +407,7 @@ def test_scorer_rejects_tampered_anchor_binding_and_fake_independence() -> None:
         score_benchmark(
             type(manifest).model_validate(manifest_payload),
             [BenchmarkRunResult.model_validate(result_payload)],
+            evidence_root=FIXTURES,
         )
 
 
@@ -353,6 +424,8 @@ def test_each_ablation_actually_skips_its_stage_and_emits_a_receipt(target: str)
     receipt = result.ablation_receipt
     assert receipt is not None
     assert receipt.disabled == [target]
+    assert "alternative_narrative" not in receipt.executed_stages
+    assert "alternative_narrative" not in receipt.case_operation_counts["staged-incident"]
     assert len(receipt.skipped_stages) == 1
     skipped = receipt.skipped_stages[0]
     assert skipped not in receipt.executed_stages
@@ -398,10 +471,6 @@ def test_ablation_matrix_has_real_stage_specific_effects() -> None:
         retained_id,
         ids["finding-weak"],
     }
-    assert claim_ids("without-alternative-narrative") == {
-        retained_id,
-        ids["finding-alternative"],
-    }
     assert claim_ids("without-blind-reviewer") == {
         retained_id,
         ids["finding-blind"],
@@ -410,7 +479,6 @@ def test_ablation_matrix_has_real_stage_specific_effects() -> None:
     scores = {run.run_id: run.overall for run in score_benchmark(manifest, results.values()).runs}
     assert scores["fixture-without-verifier"].atomic_claims.recall == 0.0
     assert scores["fixture-without-independence-gate"].atomic_claims.false_positive == 1
-    assert scores["fixture-without-alternative-narrative"].atomic_claims.false_positive == 1
     assert scores["fixture-without-blind-reviewer"].atomic_claims.false_positive == 1
 
 
@@ -472,7 +540,7 @@ def test_benchmark_ablate_cli_writes_same_versioned_result_schema(tmp_path: Path
             "benchmark-ablate",
             str(BASE_RESULT),
             "--ablation",
-            "without-alternative-narrative",
+            "without-blind-reviewer",
             "--run-id",
             "cli-ablation",
             "--matrix-cell",
@@ -484,18 +552,23 @@ def test_benchmark_ablate_cli_writes_same_versioned_result_schema(tmp_path: Path
     assert invocation.exit_code == 0, invocation.output
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["schema_version"] == 1
-    assert payload["identity"]["ablations"] == ["without-alternative-narrative"]
-    assert payload["ablation_receipt"]["skipped_stages"] == ["alternative_narrative"]
+    assert payload["identity"]["ablations"] == ["without-blind-reviewer"]
+    assert payload["ablation_receipt"]["skipped_stages"] == ["blind_reviewer"]
 
 
-def test_export_refuses_to_stamp_an_executable_ablation_without_execution() -> None:
+@pytest.mark.parametrize(
+    "ablation", ["without-verifier", "without-alternative-narrative"]
+)
+def test_export_refuses_to_stamp_an_executable_ablation_without_execution(
+    ablation: str,
+) -> None:
     invocation = CliRunner().invoke(
         cli,
         [
             "benchmark-export",
             str(FIXTURES / "manifest-v1.yaml"),
             "--ablation",
-            "without-verifier",
+            ablation,
             "--run-id",
             "invalid",
             "--system-version",

@@ -42,14 +42,12 @@ STAGE_ORDER: tuple[BenchmarkStage, ...] = (
     "candidate_filters",
     "verifier",
     "independence_gate",
-    "alternative_narrative",
     "blind_reviewer",
 )
 TARGET_TO_STAGE: dict[AblationTarget, BenchmarkStage] = {
     "without-candidate-filters": "candidate_filters",
     "without-verifier": "verifier",
     "without-independence-gate": "independence_gate",
-    "without-alternative-narrative": "alternative_narrative",
     "without-blind-reviewer": "blind_reviewer",
 }
 ABLATION_CHOICES = tuple(TARGET_TO_STAGE)
@@ -400,7 +398,7 @@ def _real_case_execution(
 
 
 def execute_workflow_base(trace: CaseWorkflowTrace) -> CaseRunResult:
-    """Run every real workflow component for one normalized v2 case input."""
+    """Replay production components and persisted adjudications for a v2 case."""
     result, _ = _real_case_execution(trace, frozenset())
     return result
 
@@ -511,6 +509,12 @@ def validate_ablation_result(result: BenchmarkRunResult) -> None:
     receipt = result.ablation_receipt
     if receipt is None:
         return
+    unsupported = sorted(set(receipt.disabled) - set(TARGET_TO_STAGE))
+    if unsupported:
+        raise ValueError(
+            "ablation receipt references unsupported executable ablations: "
+            f"{unsupported!r}"
+        )
     disabled_stages = frozenset(TARGET_TO_STAGE[target] for target in receipt.disabled)
     expected_executed = [stage for stage in STAGE_ORDER if stage not in disabled_stages]
     expected_skipped = [stage for stage in STAGE_ORDER if stage in disabled_stages]

@@ -122,9 +122,15 @@ coverage domains use URL-escaped `system/domain/check` components. This makes
 normalization stable, but the answer-key anchors must use those canonical IDs
 for citations to resolve. See `MATRICES.md` for scheduled-run and aggregation
 rules, and `ndlc/README.md` for the conservative historical NDLC conversion.
+CaseDB export uses one materialized SQLite read snapshot and compares whole-DB
+logical commitments before returning. Every workflow anchor must have an
+answer-key selector that resolves to its exact text; export rechecks it after
+workflow execution, and scoring resolves it again against the current artifact
+bytes.
 
 `benchmark-export --ablation` retains historical free-form identity labels for
-old result compatibility, but the five safety-component names cannot be stamped.
+old result compatibility, but the four executable safety-component names and
+the retired Alternative Narrative label cannot be stamped.
 Executable ablations use a complete typed workflow trace and the separate
 offline command:
 
@@ -136,18 +142,24 @@ mulder benchmark-ablate benchmarks/ablation/result-real-base-v2.json \
 ```
 
 The supported switches are `without-verifier`, `without-independence-gate`,
-`without-alternative-narrative`, `without-blind-reviewer`, and
-`without-candidate-filters`. New ablations require v2 domain inputs rather than
-hand-authored output transformations. The committed fixture is built through a
+`without-blind-reviewer`, and `without-candidate-filters`. New ablations require
+v2 domain inputs rather than hand-authored output transformations. The committed
+fixture is built through a
 real CaseDB from five content-addressed evidence files; only clock and ID
 adapters are fixed to make its immutable history byte-reproducible. The engine first proves that the current
 real Mulder components reproduce the base result, then executes them again while
 skipping the selected stage. Verdicts, claims, coverage, revisions, and resource
 measurements are recomputed; base runtime, token, and cost values are never
 cloned into a synthetic ablation.
-Its receipt binds the base run identity, base result and trace hashes,
-executed/skipped stages, and per-case operation counts. The scorer reconstructs
-the base, re-executes every received ablated result, and fails closed on tampering.
+Persisted Alternative Narrative decisions still pass through the production
+adjudication seam during base replay. `without-alternative-narrative` is not an
+executable target because a CaseDB export does not contain the production
+finalize-readiness transcript consumed by `validate_narrative`; treating a
+reason-code relabel as that gate would overstate what the benchmark executes.
+Its receipt binds the base run identity, base result and trace hashes, the four
+supported executed/skipped stages, and per-case operation counts. The scorer
+reconstructs the base, re-executes every received ablated result, and fails
+closed on tampering.
 Legacy v1 operation traces remain readable for old result verification but are
 rejected as inputs to new ablation runs.
 This facility changes normalized benchmark objects

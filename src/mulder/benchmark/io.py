@@ -51,6 +51,7 @@ def load_manifest(path: Path) -> BenchmarkManifest:
     """Load and content-verify a local versioned benchmark manifest."""
     manifest = _load(path, BenchmarkManifest)
     _verify_manifest_evidence(path.parent, manifest)
+    manifest._evidence_root = path.parent.resolve()
     return manifest
 
 

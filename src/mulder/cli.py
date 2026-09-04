@@ -1964,7 +1964,9 @@ def benchmark_cmd(manifest: Path, results: tuple[Path, ...], output_path: Path) 
     try:
         benchmark_manifest = load_manifest(manifest)
         benchmark_results = [load_result(path) for path in results]
-        score = score_benchmark(benchmark_manifest, benchmark_results)
+        score = score_benchmark(
+            benchmark_manifest, benchmark_results, evidence_root=manifest.parent
+        )
         write_score(output_path, score)
     except (BenchmarkInputError, OSError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
@@ -1988,7 +1990,6 @@ def benchmark_cmd(manifest: Path, results: tuple[Path, ...], output_path: Path) 
             "without-candidate-filters",
             "without-verifier",
             "without-independence-gate",
-            "without-alternative-narrative",
             "without-blind-reviewer",
         ]
     ),
@@ -2136,9 +2137,9 @@ def benchmark_export_cmd(
     from mulder.benchmark.models import ResourceUsage, RunIdentity
 
     try:
-        from mulder.benchmark.models import EXECUTABLE_ABLATIONS
+        from mulder.benchmark.models import RESERVED_ABLATION_LABELS
 
-        executable_labels = sorted(set(ablations) & EXECUTABLE_ABLATIONS)
+        executable_labels = sorted(set(ablations) & RESERVED_ABLATION_LABELS)
         if executable_labels:
             raise ValueError(
                 "executable ablations cannot be stamped during export; export an unablated "

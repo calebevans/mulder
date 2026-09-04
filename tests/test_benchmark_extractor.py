@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
+import mulder.benchmark.extractor as benchmark_extractor
 from mulder.benchmark.ablations import execute_ablations
 from mulder.benchmark.extractor import (
     canonical_anchor_id,
@@ -20,6 +21,7 @@ from mulder.benchmark.extractor import (
 from mulder.benchmark.models import (
     BenchmarkManifest,
     BenchmarkRunResult,
+    CaseWorkflowTrace,
     ResourceUsage,
     RunIdentity,
 )
@@ -372,6 +374,168 @@ def test_run_export_rejects_case_source_path_that_is_not_the_bound_artifact(
             resources=ResourceUsage(),
             evidence_root=tmp_path,
         )
+
+
+def test_run_export_rejects_anchor_without_answer_key_selector(tmp_path: Path) -> None:
+    db_path = _case_database(tmp_path)
+    extracted = extract_case_result("db-case", db_path)
+    manifest = _manifest(extracted.claims[0].citations[0], tmp_path / "processes.txt")
+    case = manifest.cases[0].model_copy(update={"anchors": []})
+    manifest = manifest.model_copy(update={"cases": [case]})
+
+    with pytest.raises(ValueError, match="answer-key selector"):
+        extract_run_result(
+            manifest,
+            case_databases={"db-case": db_path},
+            failed_cases={},
+            run_id="missing-selector",
+            system_name="mulder",
+            system_version="test",
+            identity=RunIdentity(
+                matrix_cell="test/default",
+                models={"analyst": "fixture"},
+                prompt_set_sha256="a" * 64,
+                toolset_sha256="b" * 64,
+                orchestrator_version="test",
+                methodology_version=manifest.methodology_version,
+            ),
+            resources=ResourceUsage(),
+            evidence_root=tmp_path,
+        )
+
+
+def test_run_export_rejects_unresolved_answer_key_selector(tmp_path: Path) -> None:
+    db_path = _case_database(tmp_path)
+    extracted = extract_case_result("db-case", db_path)
+    manifest = _manifest(extracted.claims[0].citations[0], tmp_path / "processes.txt")
+    anchor = manifest.cases[0].anchors[0].model_copy(update={"selector": "line=99;field=image"})
+    case = manifest.cases[0].model_copy(update={"anchors": [anchor]})
+    manifest = manifest.model_copy(update={"cases": [case]})
+
+    with pytest.raises(ValueError, match="does not resolve|outside"):
+        extract_run_result(
+            manifest,
+            case_databases={"db-case": db_path},
+            failed_cases={},
+            run_id="unresolved-selector",
+            system_name="mulder",
+            system_version="test",
+            identity=RunIdentity(
+                matrix_cell="test/default",
+                models={"analyst": "fixture"},
+                prompt_set_sha256="a" * 64,
+                toolset_sha256="b" * 64,
+                orchestrator_version="test",
+                methodology_version=manifest.methodology_version,
+            ),
+            resources=ResourceUsage(),
+            evidence_root=tmp_path,
+        )
+
+
+def test_run_export_rejects_database_mutation_during_evaluation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = _case_database(tmp_path)
+    extracted = extract_case_result("db-case", db_path)
+    manifest = _manifest(extracted.claims[0].citations[0], tmp_path / "processes.txt")
+    execute = benchmark_extractor.execute_workflow_base
+
+    def mutate_after_evaluation(trace: CaseWorkflowTrace) -> object:
+        result = execute(trace)
+        with sqlite3.connect(db_path) as connection:
+            connection.execute("UPDATE windows SET raw_text = 'image=mutated.exe'")
+        return result
+
+    monkeypatch.setattr(benchmark_extractor, "execute_workflow_base", mutate_after_evaluation)
+    with pytest.raises(ValueError, match="changed during benchmark export"):
+        extract_run_result(
+            manifest,
+            case_databases={"db-case": db_path},
+            failed_cases={},
+            run_id="mutated-during-export",
+            system_name="mulder",
+            system_version="test",
+            identity=RunIdentity(
+                matrix_cell="test/default",
+                models={"analyst": "fixture"},
+                prompt_set_sha256="a" * 64,
+                toolset_sha256="b" * 64,
+                orchestrator_version="test",
+                methodology_version=manifest.methodology_version,
+            ),
+            resources=ResourceUsage(),
+            evidence_root=tmp_path,
+        )
+
+
+def test_run_export_rejects_artifact_mutation_during_evaluation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = _case_database(tmp_path)
+    extracted = extract_case_result("db-case", db_path)
+    evidence_path = tmp_path / "processes.txt"
+    manifest = _manifest(extracted.claims[0].citations[0], evidence_path)
+    execute = benchmark_extractor.execute_workflow_base
+
+    def mutate_after_evaluation(trace: CaseWorkflowTrace) -> object:
+        result = execute(trace)
+        evidence_path.write_text("image=mutated.exe\n", encoding="utf-8")
+        return result
+
+    monkeypatch.setattr(
+        benchmark_extractor, "execute_workflow_base", mutate_after_evaluation
+    )
+    with pytest.raises(ValueError, match="artifact bytes no longer match manifest"):
+        extract_run_result(
+            manifest,
+            case_databases={"db-case": db_path},
+            failed_cases={},
+            run_id="artifact-mutated-during-export",
+            system_name="mulder",
+            system_version="test",
+            identity=RunIdentity(
+                matrix_cell="test/default",
+                models={"analyst": "fixture"},
+                prompt_set_sha256="a" * 64,
+                toolset_sha256="b" * 64,
+                orchestrator_version="test",
+                methodology_version=manifest.methodology_version,
+            ),
+            resources=ResourceUsage(),
+            evidence_root=tmp_path,
+        )
+
+
+def test_scorer_rechecks_selector_against_current_artifact_bytes(tmp_path: Path) -> None:
+    db_path = _case_database(tmp_path)
+    extracted = extract_case_result("db-case", db_path)
+    evidence_path = tmp_path / "processes.txt"
+    manifest = _manifest(extracted.claims[0].citations[0], evidence_path).model_copy(
+        update={"methodology_version": "1.1"}
+    )
+    result = extract_run_result(
+        manifest,
+        case_databases={"db-case": db_path},
+        failed_cases={},
+        run_id="artifact-mutated-after-export",
+        system_name="mulder",
+        system_version="test",
+        identity=RunIdentity(
+            matrix_cell="test/default",
+            models={"analyst": "fixture"},
+            prompt_set_sha256="a" * 64,
+            toolset_sha256="b" * 64,
+            orchestrator_version="test",
+            methodology_version=manifest.methodology_version,
+        ),
+        resources=ResourceUsage(),
+        evidence_root=tmp_path,
+    )
+    evidence_path.write_text("image=mutated.exe\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="artifact bytes no longer match manifest"):
+        score_benchmark(manifest, [result], evidence_root=tmp_path)
 
 
 def test_withdrawn_case_db_reviewer_decision_feeds_real_ablation(tmp_path: Path) -> None:

@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping
+import sqlite3
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from urllib.parse import quote
 
 from mulder.benchmark.ablations import execute_workflow_base
 from mulder.benchmark.anchors import canonical_anchor_id as canonical_anchor_id
+from mulder.benchmark.io import BenchmarkInputError, resolve_text_selector
 from mulder.benchmark.models import (
     BenchmarkCase,
     BenchmarkManifest,
@@ -31,6 +35,41 @@ def canonical_coverage_domain(system: str, domain: str, check: str) -> str:
     return "/".join(quote(part, safe="") for part in (system, domain, check))
 
 
+def _database_commitment(connection: sqlite3.Connection) -> str:
+    """Commit to the complete logical SQLite state visible to this transaction."""
+    digest = hashlib.sha256()
+    for statement in connection.iterdump():
+        digest.update(statement.encode("utf-8"))
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+@contextmanager
+def _stable_case_snapshot(db_path: Path) -> Iterator[Path]:
+    """Yield one materialized read snapshot and reject concurrent mutations."""
+    source_uri = f"file:{quote(str(db_path.resolve()), safe='/')}?mode=ro"
+    source = sqlite3.connect(source_uri, uri=True)
+    try:
+        source.execute("PRAGMA query_only=ON")
+        source.execute("BEGIN")
+        initial_commitment = _database_commitment(source)
+        with TemporaryDirectory(prefix="mulder-benchmark-snapshot-") as temp_dir:
+            snapshot_path = Path(temp_dir) / "case.db"
+            with sqlite3.connect(snapshot_path) as snapshot:
+                source.backup(snapshot)
+            try:
+                yield snapshot_path
+            finally:
+                source.rollback()
+                source.execute("BEGIN")
+                final_commitment = _database_commitment(source)
+                source.rollback()
+            if final_commitment != initial_commitment:
+                raise ValueError("case database changed during benchmark export")
+    finally:
+        source.close()
+
+
 def _extract_case_workflow(
     case_id: str,
     db_path: Path,
@@ -40,11 +79,12 @@ def _extract_case_workflow(
 ) -> tuple[CaseRunResult, CaseWorkflowTrace]:
     if not db_path.is_file():
         raise ValueError(f"case database does not exist: {db_path}")
-    with CaseDB(db_path) as db:
+    with _stable_case_snapshot(db_path) as snapshot_path, CaseDB(snapshot_path) as db:
         metadata = db.get_case_metadata()
         if metadata.case_id != case_id:
             raise ValueError(
-                f"database case_id {metadata.case_id!r} does not match manifest case {case_id!r}"
+                f"database case_id {metadata.case_id!r} does not match manifest case "
+                f"{case_id!r}"
             )
         active = {finding.finding_id: finding for finding in db.get_findings()}
         histories: dict[str, list[FindingRevision]] = {}
@@ -94,14 +134,19 @@ def _extract_case_workflow(
         ]
         bindings = _evidence_bindings(db, candidates, manifest_case, evidence_root)
 
-    trace = CaseWorkflowTrace(
-        case_id=case_id,
-        trace_version=2,
-        candidates=candidates,
-        coverage=sorted(coverage, key=lambda item: item.domain),
-        evidence_bindings=bindings,
-    )
-    return execute_workflow_base(trace), trace
+        trace = CaseWorkflowTrace(
+            case_id=case_id,
+            trace_version=2,
+            candidates=candidates,
+            coverage=sorted(coverage, key=lambda item: item.domain),
+            evidence_bindings=bindings,
+        )
+        result = execute_workflow_base(trace)
+        if _evidence_bindings(
+            db, candidates, manifest_case, evidence_root
+        ) != bindings:
+            raise ValueError("evidence bindings changed during benchmark export")
+    return result, trace
 
 
 def extract_case_result(case_id: str, db_path: Path) -> CaseRunResult:
@@ -214,26 +259,38 @@ def _evidence_bindings(
                 )
             canonical_id = canonical_anchor_id(anchor)
             expected = expected_anchors.get(canonical_id)
-            selector = (
-                expected.selector
-                if expected is not None
-                else f"line={anchor.line_start};chars={anchor.char_start}:{anchor.char_end}"
-            )
+            if expected is None:
+                raise ValueError(f"anchor {canonical_id!r} has no answer-key selector")
+            if expected.artifact_id != artifact.artifact_id:
+                raise ValueError(
+                    f"anchor {canonical_id!r} answer-key artifact does not match source"
+                )
+            try:
+                resolved_text = resolve_text_selector(artifact_path, expected.selector)
+            except BenchmarkInputError as exc:
+                raise ValueError(str(exc)) from exc
+            resolved_hash = hashlib.sha256(resolved_text.encode("utf-8")).hexdigest()
+            if resolved_text != anchor.exact_text:
+                raise ValueError(
+                    f"anchor {canonical_id!r} selector does not resolve its exact text"
+                )
+            if resolved_hash != expected.exact_text_sha256:
+                raise ValueError(
+                    f"anchor {canonical_id!r} selector does not match answer-key exact text"
+                )
             root_id = artifact.root_acquisition_id
             if root_id is None:
                 raise ValueError(
                     f"artifact {artifact.artifact_id!r} lacks root acquisition identity"
                 )
             binding = WorkflowEvidenceBinding(
-                    anchor_id=canonical_id,
-                    artifact_id=artifact.artifact_id,
-                    artifact_sha256=artifact.sha256,
-                    selector=selector,
-                    exact_text_sha256=hashlib.sha256(
-                        anchor.exact_text.encode("utf-8")
-                    ).hexdigest(),
-                    root_acquisition_id=root_id,
-                )
+                anchor_id=canonical_id,
+                artifact_id=artifact.artifact_id,
+                artifact_sha256=artifact.sha256,
+                selector=expected.selector,
+                exact_text_sha256=resolved_hash,
+                root_acquisition_id=root_id,
+            )
             earlier = bindings.setdefault(canonical_id, binding)
             if earlier != binding:
                 raise ValueError(f"anchor {canonical_id!r} has conflicting artifact bindings")

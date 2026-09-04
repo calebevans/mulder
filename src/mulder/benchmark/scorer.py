@@ -8,9 +8,11 @@ import statistics
 from collections import Counter
 from collections.abc import Hashable, Iterable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal, TypeAlias, TypeVar
 
 from mulder.benchmark.anchors import canonical_anchor_id
+from mulder.benchmark.io import BenchmarkInputError, resolve_text_selector
 from mulder.benchmark.models import (
     AggregateScore,
     BenchmarkCase,
@@ -96,7 +98,9 @@ def _rate(numerator: int, denominator: int, *, empty: float = 0.0) -> float:
 
 
 def _validate_case_evidence_bindings(
-    manifest_case: BenchmarkCase, trace: CaseWorkflowTrace
+    manifest_case: BenchmarkCase,
+    trace: CaseWorkflowTrace,
+    evidence_root: Path | None,
 ) -> None:
     """Fail closed unless every workflow anchor is bound to exact manifest evidence."""
     if trace.failure_reason is not None:
@@ -126,7 +130,11 @@ def _validate_case_evidence_bindings(
         ):
             raise ValueError(f"workflow anchor {anchor_id!r} has inconsistent evidence binding")
         expected = expected_anchors.get(anchor_id)
-        if expected is not None and (
+        if expected is None:
+            raise ValueError(
+                f"workflow anchor {anchor_id!r} has no answer-key binding"
+            )
+        if (
             binding.artifact_id != expected.artifact_id
             or binding.selector != expected.selector
             or binding.exact_text_sha256 != expected.exact_text_sha256
@@ -134,6 +142,31 @@ def _validate_case_evidence_bindings(
             raise ValueError(
                 f"workflow anchor {anchor_id!r} does not match the answer-key binding"
             )
+        if evidence_root is None:
+            raise ValueError("methodology 1.1 scoring requires the manifest evidence root")
+        artifact_path = (evidence_root / artifact.path).resolve()
+        try:
+            current_bytes = artifact_path.read_bytes()
+        except OSError as exc:
+            raise ValueError(
+                f"workflow anchor {anchor_id!r} artifact cannot be read: {exc}"
+            ) from exc
+        if hashlib.sha256(current_bytes).hexdigest() != artifact.sha256:
+            raise ValueError(
+                f"workflow anchor {anchor_id!r} artifact bytes no longer match manifest"
+            )
+        try:
+            resolved_text = resolve_text_selector(artifact_path, binding.selector)
+        except BenchmarkInputError as exc:
+            raise ValueError(
+                f"workflow anchor {anchor_id!r} selector does not resolve: {exc}"
+            ) from exc
+        if (
+            resolved_text != anchor.exact_text
+            or hashlib.sha256(resolved_text.encode("utf-8")).hexdigest()
+            != binding.exact_text_sha256
+        ):
+            raise ValueError(f"workflow anchor {anchor_id!r} selector does not match exact text")
 
     for candidate in trace.candidates:
         by_independence: dict[str, set[tuple[str, str]]] = {}
@@ -721,16 +754,23 @@ def _case_score(raw: _RawCaseScore) -> CaseScore:
 
 
 def score_benchmark(
-    manifest: BenchmarkManifest, results: Iterable[BenchmarkRunResult]
+    manifest: BenchmarkManifest,
+    results: Iterable[BenchmarkRunResult],
+    *,
+    evidence_root: Path | None = None,
 ) -> BenchmarkScoreDocument:
     """Score complete result objects, rejecting incomparable case sets."""
+    resolved_evidence_root = (
+        evidence_root.resolve() if evidence_root is not None else manifest._evidence_root
+    )
     manifest_cases = {case.case_id: case for case in manifest.cases}
     expected_case_ids = set(manifest_cases)
     run_scores: list[RunScore] = []
     seen_run_ids: set[str] = set()
     seen_repeats: set[tuple[str, int]] = set()
     matrix_identities: dict[str, tuple[object, ...]] = {}
-    for result in results:
+    for supplied_result in results:
+        result = BenchmarkRunResult.model_validate(supplied_result.model_dump(mode="json"))
         if result.ablation_receipt is not None:
             from mulder.benchmark.ablations import validate_ablation_result
 
@@ -783,7 +823,9 @@ def score_benchmark(
                     f"run {result.run_id!r} methodology 1.1 requires complete workflow traces"
                 )
             for case_id, manifest_case in manifest_cases.items():
-                _validate_case_evidence_bindings(manifest_case, traces[case_id])
+                _validate_case_evidence_bindings(
+                    manifest_case, traces[case_id], resolved_evidence_root
+                )
                 if (
                     result.ablation_receipt is None
                     and execute_workflow_base(traces[case_id]) != result_cases[case_id]

@@ -43,4 +43,10 @@ def _applies(
         return False
     if revision.finding_id != finding.finding_id:
         raise ValueError("review withdrawal belongs to a different finding")
-    return withdrawal_stage(revision) == expected_stage
+    if withdrawal_stage(revision) != expected_stage:
+        return False
+    expected_actor = {
+        "alternative_narrative": "investigator",
+        "blind_reviewer": "blind_reviewer",
+    }.get(expected_stage)
+    return expected_actor is None or revision.actor_kind == expected_actor

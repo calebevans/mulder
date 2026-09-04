@@ -41,7 +41,6 @@ jobs:
             without-candidate-filters \
             without-verifier \
             without-independence-gate \
-            without-alternative-narrative \
             without-blind-reviewer
           do
             uv run --locked --extra dev mulder benchmark-ablate \
@@ -60,7 +59,6 @@ jobs:
           without-candidate-filters.json
           without-verifier.json
           without-independence-gate.json
-          without-alternative-narrative.json
           without-blind-reviewer.json
           --output benchmark-scheduled-score.json
 

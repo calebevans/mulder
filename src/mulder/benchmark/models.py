@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from collections import Counter
+from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 from mulder.benchmark.anchors import canonical_anchor_id
 from mulder.models import (
@@ -49,10 +50,10 @@ EXECUTABLE_ABLATIONS = frozenset(
         "without-candidate-filters",
         "without-verifier",
         "without-independence-gate",
-        "without-alternative-narrative",
         "without-blind-reviewer",
     }
 )
+RESERVED_ABLATION_LABELS = EXECUTABLE_ABLATIONS | {"without-alternative-narrative"}
 
 
 def _ground_truth_scalar_key(value: JsonScalar) -> tuple[str, str]:
@@ -225,6 +226,7 @@ class BenchmarkManifest(StrictModel):
     description: str = Field(min_length=1)
     methodology_version: SupportedMethodologyVersion = METHODOLOGY_VERSION
     cases: list[BenchmarkCase] = Field(min_length=1)
+    _evidence_root: Path | None = PrivateAttr(default=None)
 
     @model_validator(mode="after")
     def _check_case_ids(self) -> BenchmarkManifest:
@@ -321,11 +323,12 @@ class CaseRunResult(StrictModel):
         for revision in self.revisions:
             revisions_by_claim.setdefault(revision.claim_id, []).append(revision)
         for claim_id, revisions in revisions_by_claim.items():
-            revisions.sort(key=lambda revision: revision.iteration)
             if [revision.iteration for revision in revisions] != list(
                 range(1, len(revisions) + 1)
             ):
-                raise ValueError("claim revision iterations must be contiguous from one")
+                raise ValueError(
+                    "claim revision iterations must be complete and ordered from one"
+                )
             if any(
                 earlier.after is None or earlier.after != later.before
                 for earlier, later in zip(revisions, revisions[1:], strict=False)
@@ -698,19 +701,20 @@ class BenchmarkRunResult(StrictModel):
             raise ValueError("workflow trace case IDs must be unique")
         if trace_ids and set(trace_ids) != set(case_ids):
             raise ValueError("workflow traces must cover the result case set exactly")
-        executable = (
-            set(self.identity.ablations) & EXECUTABLE_ABLATIONS
+        reserved = (
+            set(self.identity.ablations) & RESERVED_ABLATION_LABELS
             if self.identity is not None
             else set()
         )
-        if executable and self.ablation_receipt is None:
-            raise ValueError("executable ablation labels require an execution receipt")
+        if reserved and self.ablation_receipt is None:
+            raise ValueError("reserved ablation labels require an execution receipt")
         if self.ablation_receipt is not None:
             if self.identity is None:
                 raise ValueError("an ablation receipt requires run identity")
-            if executable != set(self.identity.ablations):
-                raise ValueError("executable ablations cannot be mixed with legacy labels")
-            if executable != set(self.ablation_receipt.disabled):
+            receipt_labels = set(self.ablation_receipt.disabled)
+            if reserved != set(self.identity.ablations):
+                raise ValueError("reserved ablations cannot be mixed with legacy labels")
+            if reserved != receipt_labels:
                 raise ValueError("ablation identity and receipt disagree")
             if not self.workflow_traces:
                 raise ValueError("an ablation receipt requires complete workflow traces")

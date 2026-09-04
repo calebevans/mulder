@@ -1329,7 +1329,7 @@
           "artifact_sha256": "6d33c5f6afceb54d1bbc1b9b49ecbcfe48ae20cb7b8f2c30fccff2c2b884f96c",
           "exact_text_sha256": "f307e73a3447b10444e67233700c1aa5ca8e3673dd2f292084bf485583caad6f",
           "root_acquisition_id": "acquisition-c",
-          "selector": "line=1;chars=26:40"
+          "selector": "line=1;field=image"
         },
         {
           "anchor_id": "anchor:c0cd15d3cff72a2875aedc060bd1638c584ded0e26de384d3532b73bbba8e7d4",
@@ -1353,7 +1353,7 @@
           "artifact_sha256": "713c896185da46c28d2dd0ee7bbef002a243df378a9a036b7243603ec7967872",
           "exact_text_sha256": "562ae54e815169e4b68b8396ffb6989b3fc1abee6415d60a51bcf866a8c8b0f5",
           "root_acquisition_id": "acquisition-d",
-          "selector": "line=1;chars=12:25"
+          "selector": "line=1;field=destination"
         },
         {
           "anchor_id": "anchor:f391c715269351abef8ce2613781b6fdbf1a159bbe4c9d9fcf9a85b5bd9ba85c",
@@ -1361,7 +1361,7 @@
           "artifact_sha256": "e7b0438b6d82ccb8fee6ebe8e0540b386f10bfb24fc5685ee0518d099b483fe1",
           "exact_text_sha256": "6863b66a6b17e22c669b0c1f2f5e48c5a1881a5645749a08fc980adde75461c5",
           "root_acquisition_id": "acquisition-e",
-          "selector": "line=1;chars=6:14"
+          "selector": "line=1;field=image"
         }
       ],
       "failure_reason": null,
