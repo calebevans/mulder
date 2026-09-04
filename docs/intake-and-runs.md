@@ -30,8 +30,11 @@ Before Python's ZIP reader materializes the central directory, intake also
 enforces hard compressed-container, entry-count, and central-directory byte
 bounds (64 GiB, 200,000 entries, and 128 MiB by default). ZIP64 metadata is
 parsed for the same preflight and multi-disk containers are rejected. Members
-that happen to contain another archive remain inert evidence bytes; intake does
-not recursively expand nested containers.
+that happen to contain another archive remain inert evidence bytes during
+intake. If a nested ZIP is later scheduled through `extract_archive`, that tool
+reuses the same preflight, compression-ratio, file-count, member-size, and total
+materialization bounds; it cannot bypass intake limits by becoming a downstream
+task.
 The reviewed materializer has fixed 512 MiB/member and 8 GiB/collection caps,
 never invokes `7z`, and writes a read-only view. Re-importing identical evidence
 content is idempotent even if an examiner corrects a separate assertion.

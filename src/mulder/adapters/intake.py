@@ -353,18 +353,20 @@ def _preflight_zip_directory(
     ) = eocd
     eocd_offset = container_size - tail_size + eocd_index
     central_end = eocd_offset
-    zip64 = (
+    locator_offset = eocd_offset - 20
+    locator = b""
+    if locator_offset >= 0:
+        snapshot.seek(locator_offset)
+        locator = snapshot.read(20)
+    zip64 = locator.startswith(b"PK\x06\x07") or (
         entry_count == 0xFFFF
         or entries_on_disk == 0xFFFF
         or central_size == 0xFFFFFFFF
         or central_offset == 0xFFFFFFFF
     )
     if zip64:
-        locator_offset = eocd_offset - 20
-        if locator_offset < 0:
+        if locator_offset < 0 or not locator.startswith(b"PK\x06\x07"):
             raise IntakeError("ZIP64 collection lacks a locator record")
-        snapshot.seek(locator_offset)
-        locator = snapshot.read(20)
         if len(locator) != 20:
             raise IntakeError("ZIP64 collection has a truncated locator record")
         locator_signature, zip64_disk, zip64_offset, total_disks = struct.unpack(
@@ -388,7 +390,13 @@ def _preflight_zip_directory(
             central_size,
             central_offset,
         ) = struct.unpack("<4sQ2H2L4Q", record)
-        if zip64_signature != b"PK\x06\x06" or zip64_disk != 0 or total_disks != 1:
+        if (
+            zip64_signature != b"PK\x06\x06"
+            or _record_size < 44
+            or zip64_offset + 12 + _record_size != locator_offset
+        ):
+            raise IntakeError("ZIP64 end-of-central-directory record is invalid")
+        if zip64_disk != 0 or total_disks != 1:
             raise IntakeError("multi-disk ZIP collections are not accepted")
         central_end = zip64_offset
 

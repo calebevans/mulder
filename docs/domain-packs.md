@@ -168,16 +168,21 @@ The indexed-evidence Adapter supports these exact local contracts:
 - running-process correlation from tab-separated `volatility.pslist*` and its
   suffix-matched `volatility.cmdline*`, with normalized volume-relative
   deleted-file checks only against a `tsk.filelist*` source in the same named
-  acquisition scope (partition suffixes such as `.p1` stay within that scope),
-  or the same acquisition directory when names are unscoped;
+  non-empty acquisition scope, for example `volatility.pslist.host-01` and
+  `tsk.filelist.host-01.p1`. Unscoped sources are not correlated merely because
+  their files share a directory, and duplicate matching names are ambiguous;
 - libvshadow inventory under `vshadow.info*`, plus per-file VSS CSV under
   `vshadow.files*` with snapshot ID, file path, and file creation timestamp;
   and
 - independent calibration pairs under `clock.anchors*`, naming the target
   source, source/reference timestamps, an exact indexed `clock.reference.*`
-  source, and both uncertainties. Returned anchors retain separate provenance
-  for the calibration row and the resolved reference source; free-text clock
-  names are not treated as independent evidence.
+  source, a reference record ID, and both uncertainties. A reference source is
+  strict CSV with `SchemaVersion,ReferenceRecordId,Timestamp,UncertaintyMs`;
+  only schema version `1` is accepted, and the anchor's timestamp and
+  uncertainty must exactly match the selected record. Returned anchors retain
+  separate provenance for the calibration row and exact reference timestamp
+  row/value; free-text clock names or arbitrary source existence are not
+  treated as independent evidence.
 
 The Adapter calls a process running only when `pslist` has a typed creation
 time and no exit time. It reports a path mismatch only when the executable
@@ -201,9 +206,13 @@ preserved as handling metadata and cannot create a finding.
 The indexed Adapter inventories recognized sources in SQL before loading raw
 windows. It has hard bounds of 128 sources, 100,000 lines, 1,024 windows, and
 8 MiB per source, plus 64 MiB across loadable sources. A breached bound becomes
-typed `PARTIAL` coverage without materializing that source. Malformed MFT, USN,
-or clock-anchor rows likewise remain `PARTIAL`; valid observations and valid
-anchors from the same request are preserved.
+typed `PARTIAL` coverage without materializing that source. Inventory and raw
+windows are keyed by immutable source ID, so duplicate display names cannot
+merge bytes; name-based anchor bindings fail as ambiguous. Malformed MFT, USN,
+`$LogFile`, VSS, process/cmdline, reference, or clock-anchor rows likewise
+remain `PARTIAL`; valid observations and valid anchors from the same request
+are preserved. Windows paths normalize `/`, `..`, `\\?\\`, and `\\??\\` aliases
+before exact witness comparison.
 
 ## EVTX, Kubernetes, and CloudTrail pilots
 

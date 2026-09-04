@@ -178,6 +178,7 @@ class ClockAnchor(_StrictModel):
     source_id: str = Field(pattern=_ID_PATTERN)
     source_time: PreservedTime
     reference_time: PreservedTime
+    reference_record_id: str | None = Field(default=None, pattern=_ID_PATTERN)
     reference_provenance: TemporalProvenance
     calibration_provenance: TemporalProvenance | None = None
 
@@ -225,6 +226,7 @@ class SourceCoverage(_StrictModel):
 
     family: ArtifactFamily
     source_id: str | None = None
+    parser_id: str | None = Field(default=None, pattern=_ID_PATTERN)
     outcome: ToolOutcome
 
 
@@ -487,6 +489,7 @@ def _coverage(request: ClockEvidenceRequest) -> tuple[SourceCoverage, ...]:
         SourceCoverage(
             family=source.family,
             source_id=source.source_id,
+            parser_id=source.parser_id,
             outcome=ToolOutcome(
                 status=source.status,
                 coverage=CoverageMetadata(

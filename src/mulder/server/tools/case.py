@@ -13,14 +13,15 @@ import subprocess
 import tarfile
 import tempfile
 import time
-import zipfile
 from pathlib import Path
 
 from mulder.adapters import (
     IntakeError,
+    IntakeLimits,
     IntakeManifest,
     load_intake_manifest,
     materialize_intake,
+    scan_collection,
     verify_intake_source,
 )
 from mulder.server.app import (
@@ -40,6 +41,10 @@ logger = logging.getLogger(__name__)
 _EXTRACT_TIMEOUT = 600
 _INTAKE_EXTRACT_MAX_FILE_BYTES = 512 << 20
 _INTAKE_EXTRACT_MAX_TOTAL_BYTES = 8 << 30
+_NESTED_ZIP_LIMITS = IntakeLimits(
+    max_file_bytes=_INTAKE_EXTRACT_MAX_FILE_BYTES,
+    max_total_bytes=_INTAKE_EXTRACT_MAX_TOTAL_BYTES,
+)
 
 
 @mcp.tool()
@@ -420,23 +425,21 @@ def verify_evidence_integrity() -> dict[str, object]:
 
 
 def _extract_zip(archive: Path, dest: Path) -> list[str]:
-    """Extract a zip archive to *dest* and return paths relative to *dest*.
-
-    Falls back to the ``7z`` binary when Python's zipfile module cannot
-    handle the compression method (e.g. deflate64, LZMA).
-    """
-    try:
-        with zipfile.ZipFile(archive, "r") as zf:
-            for member in zf.namelist():
-                if member.startswith("/") or ".." in member:
-                    logger.warning("Skipping unsafe zip entry: %r", member)
-                    continue
-                zf.extract(member, dest)
-    except (NotImplementedError, zipfile.BadZipFile):
-        if not shutil.which("7z"):
-            raise
-        return _extract_7z(archive, dest)
-    return [str(f.relative_to(dest)) for f in dest.rglob("*") if f.is_file()]
+    """Extract a nested ZIP through the same bounded immutable intake seam."""
+    manifest = scan_collection(
+        archive,
+        "nested-archive",
+        collection_format="kape",
+        limits=_NESTED_ZIP_LIMITS,
+    )
+    return list(
+        materialize_intake(
+            manifest,
+            dest,
+            max_file_bytes=_INTAKE_EXTRACT_MAX_FILE_BYTES,
+            max_total_bytes=_INTAKE_EXTRACT_MAX_TOTAL_BYTES,
+        )
+    )
 
 
 def _intake_for_archive(archive: Path) -> IntakeManifest | None:

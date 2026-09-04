@@ -14,15 +14,15 @@
       "raw": "LSN,Timestamp,Operation,FileName,ParentPath,TransactionId\n500,2024-03-01T12:00:00.500Z,Create,payload.exe,C:\\Temp,0x2a\n"
     },
     {
-      "source_name": "volatility.pslist",
+      "source_name": "volatility.pslist.host-01",
       "raw": "PID\tPPID\tImageFileName\tOffset(V)\tThreads\tHandles\tSessionId\tWow64\tCreateTime\tExitTime\tFile output\n4242\t4\tsvchost.exe\t0x9d01\t8\t120\t1\tFalse\t2024-03-01T12:00:00Z\t\tDisabled\n"
     },
     {
-      "source_name": "volatility.cmdline",
+      "source_name": "volatility.cmdline.host-01",
       "raw": "PID\tProcess\tArgs\n4242\tsvchost.exe\tC:\\Temp\\payload.exe --service\n"
     },
     {
-      "source_name": "tsk.filelist",
+      "source_name": "tsk.filelist.host-01",
       "raw": "r/r 4-128-1: Windows/System32/notepad.exe\nr/r * 44-128-1: Temp/payload.exe\n"
     },
     {
@@ -31,11 +31,11 @@
     },
     {
       "source_name": "clock.reference.gps.host",
-      "raw": "reference-clock=gps.host\n"
+      "raw": "SchemaVersion,ReferenceRecordId,Timestamp,UncertaintyMs\n1,ref-jan,2024-01-01T00:00:01Z,500\n1,ref-feb,2024-02-01T00:00:01Z,500\n1,ref-mar,2024-03-01T00:00:01Z,500\n"
     },
     {
       "source_name": "clock.anchors",
-      "raw": "AnchorId,SourceName,SourceTimestamp,ReferenceTimestamp,ReferenceSource,SourceUncertaintyMs,ReferenceUncertaintyMs\nmft-1,ez.mft,2024-01-01T00:00:00Z,2024-01-01T00:00:01Z,clock.reference.gps.host,250,500\nmft-2,ez.mft,2024-03-01T00:00:00Z,2024-03-01T00:00:01Z,clock.reference.gps.host,250,500\nusn-1,ez.usnjrnl,2024-02-01T00:00:00Z,2024-02-01T00:00:01Z,clock.reference.gps.host,250,500\nusn-2,ez.usnjrnl,2024-03-01T00:00:00Z,2024-03-01T00:00:01Z,clock.reference.gps.host,250,500\nlogfile-1,ez.logfile,2024-02-01T00:00:00Z,2024-02-01T00:00:01Z,clock.reference.gps.host,250,500\nlogfile-2,ez.logfile,2024-03-01T00:00:00Z,2024-03-01T00:00:01Z,clock.reference.gps.host,250,500\nprocess-1,volatility.pslist,2024-02-01T00:00:00Z,2024-02-01T00:00:01Z,clock.reference.gps.host,250,500\nprocess-2,volatility.pslist,2024-03-01T00:00:00Z,2024-03-01T00:00:01Z,clock.reference.gps.host,250,500\nvss-1,vshadow.files,2024-02-01T00:00:00Z,2024-02-01T00:00:01Z,clock.reference.gps.host,250,500\nvss-2,vshadow.files,2024-03-01T00:00:00Z,2024-03-01T00:00:01Z,clock.reference.gps.host,250,500\n"
+      "raw": "AnchorId,SourceName,SourceTimestamp,ReferenceTimestamp,ReferenceSource,ReferenceRecordId,SourceUncertaintyMs,ReferenceUncertaintyMs\nmft-1,ez.mft,2024-01-01T00:00:00Z,2024-01-01T00:00:01Z,clock.reference.gps.host,ref-jan,250,500\nmft-2,ez.mft,2024-03-01T00:00:00Z,2024-03-01T00:00:01Z,clock.reference.gps.host,ref-mar,250,500\nusn-1,ez.usnjrnl,2024-02-01T00:00:00Z,2024-02-01T00:00:01Z,clock.reference.gps.host,ref-feb,250,500\nusn-2,ez.usnjrnl,2024-03-01T00:00:00Z,2024-03-01T00:00:01Z,clock.reference.gps.host,ref-mar,250,500\nlogfile-1,ez.logfile,2024-02-01T00:00:00Z,2024-02-01T00:00:01Z,clock.reference.gps.host,ref-feb,250,500\nlogfile-2,ez.logfile,2024-03-01T00:00:00Z,2024-03-01T00:00:01Z,clock.reference.gps.host,ref-mar,250,500\nprocess-1,volatility.pslist.host-01,2024-02-01T00:00:00Z,2024-02-01T00:00:01Z,clock.reference.gps.host,ref-feb,250,500\nprocess-2,volatility.pslist.host-01,2024-03-01T00:00:00Z,2024-03-01T00:00:01Z,clock.reference.gps.host,ref-mar,250,500\nvss-1,vshadow.files,2024-02-01T00:00:00Z,2024-02-01T00:00:01Z,clock.reference.gps.host,ref-feb,250,500\nvss-2,vshadow.files,2024-03-01T00:00:00Z,2024-03-01T00:00:01Z,clock.reference.gps.host,ref-mar,250,500\n"
     }
   ]
 }

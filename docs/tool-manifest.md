@@ -47,6 +47,9 @@ List all cases in the database directory.
 ### extract_archive
 
 Extract a compressed evidence archive to make its contents accessible.
+Nested ZIPs are preflighted and materialized through immutable intake limits;
+oversized containers/directories/members and unsafe expansion ratios fail
+before member extraction.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|

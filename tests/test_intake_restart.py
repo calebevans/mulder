@@ -49,6 +49,8 @@ from mulder.run_state import (
     forecast_health,
     hold_active_run_lease,
 )
+from mulder.server.app import _tool_dispatch_sync
+from mulder.server.tools import case as case_tools
 
 
 def _kape_collection(root: Path) -> Path:
@@ -351,6 +353,49 @@ def test_archive_container_and_central_directory_are_bounded_before_expansion(
     forged_archive.write_bytes(forged)
     with pytest.raises(IntakeError, match="entry count is inconsistent"):
         scan_collection(forged_archive, "case-forged-directory")
+
+
+def test_zip64_central_directory_obeys_preflight_bounds(tmp_path: Path) -> None:
+    archive = tmp_path / "zip64.zip"
+    with (
+        patch.object(zipfile, "ZIP_FILECOUNT_LIMIT", 1),
+        zipfile.ZipFile(archive, "w") as handle,
+    ):
+        handle.writestr("collection_context.json", "{}")
+        handle.writestr("payload", "x")
+    raw = archive.read_bytes()
+    assert b"PK\x06\x06" in raw
+    assert b"PK\x06\x07" in raw
+    assert scan_collection(archive, "case-zip64-valid").file_count == 2
+
+    with pytest.raises(IntakeError, match="max_archive_entries"):
+        scan_collection(
+            archive,
+            "case-zip64-entries",
+            limits=IntakeLimits(max_archive_entries=1),
+        )
+    with pytest.raises(IntakeError, match="max_central_directory_bytes"):
+        scan_collection(
+            archive,
+            "case-zip64-directory",
+            limits=IntakeLimits(max_central_directory_bytes=64),
+        )
+
+
+def test_downstream_nested_zip_inherits_intake_expansion_bounds(tmp_path: Path) -> None:
+    archive = tmp_path / "nested.zip"
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as handle:
+        handle.writestr("payload.bin", b"x" * (2 << 20))
+    assert archive.stat().st_size < 3 << 10
+
+    destination = tmp_path / "nested-output"
+    result = _tool_dispatch_sync[case_tools.extract_archive.__name__](
+        str(archive), str(destination)
+    )
+
+    assert result["status"] == "error"
+    assert "max_archive_ratio" in str(result["error_message"])
+    assert not (destination / "payload.bin").exists()
 
 
 @pytest.mark.parametrize("member", ["../escape", "/absolute", "dir\\file"])

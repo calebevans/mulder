@@ -507,13 +507,17 @@ def test_activated_pack_adapter_uses_real_indexed_cross_source_evidence(
         anchors = {item["anchor_id"]: item for item in result["clock_anchors"]}
         assert anchors["mft-1"]["source_id"] == source_ids["ez.mft"]
         assert anchors["mft-1"]["calibration_provenance"]["selector"] == (
-            "csv:row=2;anchor=mft-1;reference=clock.reference.gps.host"
+            "csv:row=2;anchor=mft-1;reference=clock.reference.gps.host;record=ref-jan"
         )
+        assert anchors["mft-1"]["reference_record_id"] == "ref-jan"
         assert anchors["mft-1"]["reference_provenance"]["source_id"] == (
             source_ids["clock.reference.gps.host"]
         )
         assert anchors["mft-1"]["reference_provenance"]["source_name"] == (
             "clock.reference.gps.host"
+        )
+        assert anchors["mft-1"]["reference_provenance"]["selector"].startswith(
+            "csv:row=2;record=ref-jan;column=Timestamp;value_sha256="
         )
         assert anchors["mft-1"]["source_time"]["uncertainty_ms"] == 250
         assert anchors["mft-1"]["reference_time"]["uncertainty_ms"] == 500
@@ -521,7 +525,7 @@ def test_activated_pack_adapter_uses_real_indexed_cross_source_evidence(
             "ez.mft",
             "ez.usnjrnl",
             "ez.logfile",
-            "volatility.pslist",
+            "volatility.pslist.host-01",
             "vshadow.files",
         ):
             model = clock_models[source_ids[source_name]]
@@ -613,6 +617,214 @@ def test_malformed_mft_and_usn_rows_are_partial_not_success_empty(tmp_path: Path
         db.close()
 
 
+@pytest.mark.parametrize(
+    ("case_name", "sources", "family"),
+    [
+        (
+            "logfile",
+            [("ez.logfile.bad", "LSN,Timestamp,Operation,FilePath\n1\n")],
+            "logfile",
+        ),
+        (
+            "vss",
+            [
+                (
+                    "vshadow.files.bad",
+                    "SnapshotId,FilePath,CreatedTimestamp,UncertaintyMs\nshadow-1\n",
+                )
+            ],
+            "vss",
+        ),
+        (
+            "pslist",
+            [
+                (
+                    "volatility.pslist.host-a",
+                    "PID\tImageFileName\tCreateTime\tExitTime\n42\n",
+                ),
+                (
+                    "volatility.cmdline.host-a",
+                    "PID\tProcess\tArgs\n42\tbad.exe\tC:\\Temp\\bad.exe\n",
+                ),
+            ],
+            "process_file_state",
+        ),
+        (
+            "cmdline",
+            [
+                (
+                    "volatility.pslist.host-b",
+                    "PID\tImageFileName\tCreateTime\tExitTime\n"
+                    "42\tbad.exe\t2024-01-01T00:00:00Z\t\n",
+                ),
+                ("volatility.cmdline.host-b", "PID\tProcess\tArgs\n42\n"),
+            ],
+            "process_file_state",
+        ),
+    ],
+)
+def test_truncated_csv_and_tsv_rows_are_audited_partial(
+    tmp_path: Path,
+    case_name: str,
+    sources: list[tuple[str, str]],
+    family: str,
+) -> None:
+    db = CaseDB.create(
+        case_id=f"malformed-{case_name}", evidence_root="/evidence", db_dir=tmp_path
+    )
+    audit = AuditLog(tmp_path / f"malformed-{case_name}.audit.jsonl")
+    try:
+        for source_name, raw in sources:
+            _register_source(db, source_name, raw)
+        context = MagicMock(db=db, audit=audit)
+        with patch("mulder.server.tools.clock.get_ctx", return_value=context):
+            result = _tool_dispatch_sync["analyze_anti_forensics_clock"]()
+
+        coverage = [item for item in result["coverage"] if item["family"] == family]
+        assert coverage
+        assert all(item["outcome"]["status"] == "PARTIAL" for item in coverage)
+        assert all(
+            "lacked required typed values" in item["outcome"]["reason"]
+            for item in coverage
+        )
+    finally:
+        db.close()
+
+
+def test_duplicate_source_names_keep_windows_separate_and_anchor_binding_ambiguous(
+    tmp_path: Path,
+) -> None:
+    db = CaseDB.create(case_id="duplicate-names", evidence_root="/evidence", db_dir=tmp_path)
+    audit = AuditLog(tmp_path / "duplicate-names.audit.jsonl")
+    try:
+        first_id = _register_source(
+            db,
+            "ez.mft.duplicate",
+            "FileName,ParentPath,Created0x10,Created0x30\n"
+            "first.exe,C:\\One,2024-01-01T00:00:00Z,2024-03-01T00:00:00Z\n",
+        )
+        second_id = _register_source(
+            db,
+            "ez.mft.duplicate",
+            "FileName,ParentPath,Created0x10,Created0x30\n"
+            "second.exe,C:\\Two,2024-01-01T00:00:00Z,2024-03-01T00:00:00Z\n",
+        )
+        _register_source(
+            db,
+            "clock.reference.gps.host",
+            "SchemaVersion,ReferenceRecordId,Timestamp,UncertaintyMs\n"
+            "1,ref-1,2024-01-01T00:00:01Z,500\n",
+        )
+        _register_source(
+            db,
+            "clock.anchors",
+            "AnchorId,SourceName,SourceTimestamp,ReferenceTimestamp,ReferenceSource,"
+            "ReferenceRecordId,SourceUncertaintyMs,ReferenceUncertaintyMs\n"
+            "ambiguous,ez.mft.duplicate,2024-01-01T00:00:00Z,"
+            "2024-01-01T00:00:01Z,clock.reference.gps.host,ref-1,250,500\n",
+        )
+        context = MagicMock(db=db, audit=audit)
+        with patch("mulder.server.tools.clock.get_ctx", return_value=context):
+            result = _tool_dispatch_sync["analyze_anti_forensics_clock"]()
+
+        by_source: dict[str, set[str]] = {}
+        for observation in result["observations"]:
+            if observation["kind"] not in {"mft_si_created", "mft_fn_created"}:
+                continue
+            by_source.setdefault(observation["provenance"]["source_id"], set()).add(
+                observation["subject"]
+            )
+        assert by_source == {
+            str(first_id): {"C:\\One\\first.exe"},
+            str(second_id): {"C:\\Two\\second.exe"},
+        }
+        assert result["clock_anchors"] == []
+        assert result["adapter_outcome"]["status"] == "PARTIAL"
+        assert "ambiguous" in result["adapter_outcome"]["reason"]
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize(
+    "reference_raw",
+    [
+        "reference-clock=gps.host\n",
+        (
+            "SchemaVersion,ReferenceRecordId,Timestamp,UncertaintyMs\n"
+            "1,ref-1,2024-01-01T00:00:02Z,500\n"
+        ),
+    ],
+)
+def test_clock_anchor_requires_versioned_exact_reference_record(
+    tmp_path: Path,
+    reference_raw: str,
+) -> None:
+    db = CaseDB.create(case_id="reference-schema", evidence_root="/evidence", db_dir=tmp_path)
+    audit = AuditLog(tmp_path / "reference-schema.audit.jsonl")
+    try:
+        _register_source(
+            db,
+            "ez.mft",
+            "FileName,ParentPath,Created0x10,Created0x30\n"
+            "payload.exe,C:\\Temp,2024-01-01T00:00:00Z,2024-03-01T00:00:00Z\n",
+        )
+        _register_source(db, "clock.reference.gps.host", reference_raw)
+        _register_source(
+            db,
+            "clock.anchors",
+            "AnchorId,SourceName,SourceTimestamp,ReferenceTimestamp,ReferenceSource,"
+            "ReferenceRecordId,SourceUncertaintyMs,ReferenceUncertaintyMs\n"
+            "anchor,ez.mft,2024-01-01T00:00:00Z,2024-01-01T00:00:01Z,"
+            "clock.reference.gps.host,ref-1,250,500\n",
+        )
+        context = MagicMock(db=db, audit=audit)
+        with patch("mulder.server.tools.clock.get_ctx", return_value=context):
+            result = _tool_dispatch_sync["analyze_anti_forensics_clock"]()
+
+        assert result["clock_anchors"] == []
+        assert result["adapter_outcome"]["status"] == "PARTIAL"
+        assert "reference" in result["adapter_outcome"]["reason"].casefold()
+        assert result["observations"]
+    finally:
+        db.close()
+
+
+def test_duplicate_reference_source_names_are_ambiguous(tmp_path: Path) -> None:
+    db = CaseDB.create(case_id="reference-duplicate", evidence_root="/evidence", db_dir=tmp_path)
+    audit = AuditLog(tmp_path / "reference-duplicate.audit.jsonl")
+    try:
+        _register_source(
+            db,
+            "ez.mft",
+            "FileName,ParentPath,Created0x10,Created0x30\n"
+            "payload.exe,C:\\Temp,2024-01-01T00:00:00Z,2024-03-01T00:00:00Z\n",
+        )
+        reference_raw = (
+            "SchemaVersion,ReferenceRecordId,Timestamp,UncertaintyMs\n"
+            "1,ref-1,2024-01-01T00:00:01Z,500\n"
+        )
+        _register_source(db, "clock.reference.gps.host", reference_raw)
+        _register_source(db, "clock.reference.gps.host", reference_raw)
+        _register_source(
+            db,
+            "clock.anchors",
+            "AnchorId,SourceName,SourceTimestamp,ReferenceTimestamp,ReferenceSource,"
+            "ReferenceRecordId,SourceUncertaintyMs,ReferenceUncertaintyMs\n"
+            "anchor,ez.mft,2024-01-01T00:00:00Z,2024-01-01T00:00:01Z,"
+            "clock.reference.gps.host,ref-1,250,500\n",
+        )
+        context = MagicMock(db=db, audit=audit)
+        with patch("mulder.server.tools.clock.get_ctx", return_value=context):
+            result = _tool_dispatch_sync["analyze_anti_forensics_clock"]()
+
+        assert result["clock_anchors"] == []
+        assert result["adapter_outcome"]["status"] == "PARTIAL"
+        assert "reference source" in result["adapter_outcome"]["reason"]
+        assert "ambiguous" in result["adapter_outcome"]["reason"]
+    finally:
+        db.close()
+
+
 def test_vss_forward_slash_path_is_canonicalized_for_witness_matching(tmp_path: Path) -> None:
     db = CaseDB.create(case_id="path-case", evidence_root="/evidence", db_dir=tmp_path)
     audit = AuditLog(tmp_path / "path.audit.jsonl")
@@ -643,6 +855,54 @@ def test_vss_forward_slash_path_is_canonicalized_for_witness_matching(tmp_path: 
         witness_id = timestomp["independent_witness_ids"][0]
         witness = next(
             item for item in result["observations"] if item["observation_id"] == witness_id
+        )
+        assert witness["subject"] == "C:\\Temp\\payload.exe"
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize(
+    "vss_path",
+    [
+        "C:\\Temp\\staging\\..\\payload.exe",
+        "\\\\?\\C:\\Temp\\payload.exe",
+        "\\??\\C:\\Temp\\payload.exe",
+    ],
+)
+def test_windows_path_aliases_are_canonicalized_for_witness_matching(
+    tmp_path: Path,
+    vss_path: str,
+) -> None:
+    db = CaseDB.create(case_id="path-alias", evidence_root="/evidence", db_dir=tmp_path)
+    audit = AuditLog(tmp_path / "path-alias.audit.jsonl")
+    try:
+        _register_source(
+            db,
+            "ez.mft",
+            "FileName,ParentPath,Created0x10,Created0x30,LastModified0x10\n"
+            "payload.exe,C:\\Temp,2024-01-01T00:00:00Z,"
+            "2024-03-01T00:00:00Z,2024-01-01T00:00:00Z\n",
+        )
+        _register_source(
+            db,
+            "vshadow.files",
+            "SnapshotId,FilePath,CreatedTimestamp\n"
+            f"shadow-1,{vss_path},2024-03-01T00:00:00Z\n",
+        )
+        context = MagicMock(db=db, audit=audit)
+        with patch("mulder.server.tools.clock.get_ctx", return_value=context):
+            result = _tool_dispatch_sync["analyze_anti_forensics_clock"]()
+
+        finding = next(
+            item
+            for item in result["findings"]
+            if item["rule_id"] == "ntfs-si-fn-backdate"
+        )
+        assert finding["state"] == "confirmed"
+        witness = next(
+            item
+            for item in result["observations"]
+            if item["observation_id"] in finding["independent_witness_ids"]
         )
         assert witness["subject"] == "C:\\Temp\\payload.exe"
     finally:
@@ -689,6 +949,66 @@ def test_process_file_correlation_rejects_another_acquisition_scope(tmp_path: Pa
         db.close()
 
 
+@pytest.mark.parametrize("duplicate_tsk", [False, True])
+def test_process_file_correlation_requires_one_explicit_acquisition_identity(
+    tmp_path: Path,
+    duplicate_tsk: bool,
+) -> None:
+    db = CaseDB.create(case_id="explicit-scope", evidence_root="/evidence", db_dir=tmp_path)
+    audit = AuditLog(tmp_path / "explicit-scope.audit.jsonl")
+    try:
+        suffix = ".host-a" if duplicate_tsk else ""
+        _register_source(
+            db,
+            f"volatility.pslist{suffix}",
+            "PID\tImageFileName\tCreateTime\tExitTime\n"
+            "42\tbad.exe\t2024-01-01T00:00:00Z\t\n",
+            source_path="/acquisitions/shared/memory.raw",
+        )
+        _register_source(
+            db,
+            f"volatility.cmdline{suffix}",
+            "PID\tProcess\tArgs\n42\tbad.exe\tC:\\Temp\\"
+            + ("bad.exe" if duplicate_tsk else "renamed.exe")
+            + "\n",
+            source_path="/acquisitions/shared/memory.raw",
+        )
+        tsk_name = f"tsk.filelist{suffix}"
+        _register_source(
+            db,
+            tsk_name,
+            "r/r * 44-1: C:/Temp/bad.exe\n",
+            source_path="/acquisitions/shared/disk.E01",
+        )
+        if duplicate_tsk:
+            _register_source(
+                db,
+                tsk_name,
+                "r/r * 45-1: C:/Temp/bad.exe\n",
+                source_path="/acquisitions/shared/disk-duplicate.E01",
+            )
+        context = MagicMock(db=db, audit=audit)
+        with patch("mulder.server.tools.clock.get_ctx", return_value=context):
+            result = _tool_dispatch_sync["analyze_anti_forensics_clock"]()
+
+        assert not any(
+            item["finding_type"] == "process_file_mismatch"
+            for item in result["findings"]
+        )
+        process_coverage = next(
+            item for item in result["coverage"] if item["family"] == "process_file_state"
+        )
+        assert process_coverage["outcome"]["status"] == "PARTIAL"
+        reason = process_coverage["outcome"]["reason"]
+        assert "acquisition" in reason
+        if duplicate_tsk:
+            assert "ambiguous" in reason
+        else:
+            assert "explicit" in reason
+    finally:
+        db.close()
+
+
 def test_indexed_adapter_hard_bounds_preserve_partial_coverage(tmp_path: Path) -> None:
     db = CaseDB.create(case_id="bounded-case", evidence_root="/evidence", db_dir=tmp_path)
     audit = AuditLog(tmp_path / "bounded.audit.jsonl")
@@ -711,6 +1031,7 @@ def test_indexed_adapter_hard_bounds_preserve_partial_coverage(tmp_path: Path) -
         assert any(
             item["outcome"]["status"] == "PARTIAL"
             and "row limit" in item["outcome"]["reason"]
+            and item["outcome"]["coverage"]["parser_version"] == "1.0"
             for item in limited.values()
         )
         assert any(
@@ -718,6 +1039,8 @@ def test_indexed_adapter_hard_bounds_preserve_partial_coverage(tmp_path: Path) -
             and "byte limit" in item["outcome"]["reason"]
             for item in limited.values()
         )
+        parsers = {item["parser_id"] for item in limited.values()}
+        assert {"mftecmd-si-fn", "ntfs-logfile-csv"} <= parsers
         assert result["adapter_outcome"]["status"] == "PARTIAL"
     finally:
         db.close()
@@ -749,6 +1072,7 @@ def test_indexed_adapter_source_bound_fails_partial_before_window_reads() -> Non
     assert result["adapter_outcome"]["status"] == "PARTIAL"
     assert "source limit" in result["adapter_outcome"]["reason"]
     db.get_capped_windows_by_sources.assert_not_called()
+    db.get_capped_windows_by_source_ids.assert_not_called()
     db.get_windows_by_source.assert_not_called()
 
 
@@ -768,16 +1092,18 @@ def test_malformed_clock_anchor_keeps_valid_source_results_and_anchors(
         reference_id = _register_source(
             db,
             "clock.reference.gps.host",
-            "reference-clock=gps.host\n",
+            "SchemaVersion,ReferenceRecordId,Timestamp,UncertaintyMs\n"
+            "1,good-ref,2024-01-01T00:00:01Z,1\n",
         )
         _register_source(
             db,
             "clock.anchors",
             "AnchorId,SourceName,SourceTimestamp,ReferenceTimestamp,ReferenceSource,"
-            "SourceUncertaintyMs,ReferenceUncertaintyMs\n"
+            "ReferenceRecordId,SourceUncertaintyMs,ReferenceUncertaintyMs\n"
             "good,ez.mft,2024-01-01T00:00:00Z,2024-01-01T00:00:01Z,"
-            "clock.reference.gps.host,1,1\n"
-            "bad,ez.mft,NOT-A-TIME,2024-01-02T00:00:01Z,missing.reference,1,1\n",
+            "clock.reference.gps.host,good-ref,1,1\n"
+            "bad,ez.mft,NOT-A-TIME,2024-01-02T00:00:01Z,"
+            "missing.reference,missing-ref,1,1\n",
         )
         context = MagicMock(db=db, audit=audit)
         with patch("mulder.server.tools.clock.get_ctx", return_value=context):

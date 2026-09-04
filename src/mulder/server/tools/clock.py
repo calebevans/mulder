@@ -5,12 +5,13 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import ntpath
 import re
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path, PureWindowsPath
+from pathlib import PureWindowsPath
 
 from mulder.db import CaseDB
 from mulder.models import CoverageMetadata, SourceRow, ToolOutcome, ToolOutcomeStatus, WindowRow
@@ -70,8 +71,13 @@ _ANCHOR_SOURCE = ("SourceName", "Source")
 _ANCHOR_SOURCE_TIME = ("SourceTimestamp", "SourceTime")
 _ANCHOR_REFERENCE_TIME = ("ReferenceTimestamp", "ReferenceTime")
 _ANCHOR_REFERENCE_SOURCE = ("ReferenceSource", "ReferenceClock")
+_ANCHOR_REFERENCE_RECORD = ("ReferenceRecordId", "ReferenceRecordID")
 _ANCHOR_SOURCE_UNCERTAINTY = ("SourceUncertaintyMs",)
 _ANCHOR_REFERENCE_UNCERTAINTY = ("ReferenceUncertaintyMs",)
+_REFERENCE_SCHEMA_VERSION = "SchemaVersion"
+_REFERENCE_RECORD_ID = "ReferenceRecordId"
+_REFERENCE_TIMESTAMP = "Timestamp"
+_REFERENCE_UNCERTAINTY = "UncertaintyMs"
 _FALSE_POSITIVE_PATHS = (
     "\\windows\\winsxs\\",
     "\\windows\\installer\\",
@@ -118,6 +124,53 @@ class _DeletedFileRecord:
 class _ClockAnchorAdapterResult:
     anchors: tuple[ClockAnchor, ...]
     outcome: ToolOutcome
+
+
+@dataclass(frozen=True)
+class _EvidenceDescriptor:
+    prefixes: tuple[str, ...]
+    family: ArtifactFamily
+    parser_id: str
+
+
+@dataclass(frozen=True)
+class _ReferenceRecord:
+    record_id: str
+    timestamp_raw: str
+    timestamp: PreservedTime
+    uncertainty_ms: int
+    provenance: TemporalProvenance
+
+
+@dataclass(frozen=True)
+class _ReferenceCatalog:
+    records: Mapping[str, tuple[_ReferenceRecord, ...]]
+    reason: str | None
+
+
+_EVIDENCE_DESCRIPTORS = (
+    _EvidenceDescriptor(("ez.mft",), ArtifactFamily.MFT, "mftecmd-si-fn"),
+    _EvidenceDescriptor(("ez.usnjrnl",), ArtifactFamily.USN, "mftecmd-usn-order"),
+    _EvidenceDescriptor(
+        ("ez.logfile", "ntfs.logfile"),
+        ArtifactFamily.LOGFILE,
+        "ntfs-logfile-csv",
+    ),
+    _EvidenceDescriptor(("evtx.",), ArtifactFamily.EVENT_LOG, "python-evtx-line"),
+    _EvidenceDescriptor(("vshadow.info",), ArtifactFamily.VSS, "libvshadow-info"),
+    _EvidenceDescriptor(("vshadow.files",), ArtifactFamily.VSS, "vshadow-file-csv"),
+    _EvidenceDescriptor(
+        ("volatility.pslist",),
+        ArtifactFamily.PROCESS_FILE_STATE,
+        "volatility-process-file-correlation",
+    ),
+)
+_DEPENDENCY_PREFIXES = (
+    "volatility.cmdline",
+    "tsk.filelist",
+    "clock.anchors",
+    "clock.reference.",
+)
 
 
 def _first(headers: Sequence[str], candidates: Sequence[str]) -> str | None:
@@ -209,14 +262,15 @@ def _source_result(
 
 def _bounded_source_result(
     source: SourceRow,
-    family: ArtifactFamily,
-    parser_id: str,
     reason: str,
 ) -> SourceEvidence:
+    descriptor = _evidence_descriptor(source)
+    if descriptor is None:
+        raise ValueError(f"source has no evidence descriptor: {source.source_name}")
     return _source_result(
         source,
-        family,
-        parser_id,
+        descriptor.family,
+        descriptor.parser_id,
         (),
         rows_examined=0,
         rows_total=max(source.line_count - 1, 0),
@@ -224,22 +278,27 @@ def _bounded_source_result(
     )
 
 
-def _is_indexed_clock_source(source: SourceRow) -> bool:
-    return source.source_name.startswith(
+def _evidence_descriptor(source: SourceRow) -> _EvidenceDescriptor | None:
+    return next(
         (
-            "ez.mft",
-            "ez.usnjrnl",
-            "ez.logfile",
-            "ntfs.logfile",
-            "evtx.",
-            "vshadow.info",
-            "vshadow.files",
-            "volatility.pslist",
-            "volatility.cmdline",
-            "tsk.filelist",
-            "clock.anchors",
-            "clock.reference.",
-        )
+            descriptor
+            for descriptor in _EVIDENCE_DESCRIPTORS
+            if source.source_name.startswith(descriptor.prefixes)
+        ),
+        None,
+    )
+
+
+def _required_evidence_descriptor(source: SourceRow) -> _EvidenceDescriptor:
+    descriptor = _evidence_descriptor(source)
+    if descriptor is None:
+        raise ValueError(f"source has no evidence descriptor: {source.source_name}")
+    return descriptor
+
+
+def _is_indexed_clock_source(source: SourceRow) -> bool:
+    return _evidence_descriptor(source) is not None or source.source_name.startswith(
+        _DEPENDENCY_PREFIXES
     )
 
 
@@ -274,12 +333,12 @@ def _bounded_source_windows(
         else:
             candidates.append(source)
 
-    inventory = db.get_window_inventory_by_sources(
-        [source.source_name for source in candidates]
+    inventory = db.get_window_inventory_by_source_ids(
+        [source.source_id for source in candidates]
     )
     total_bytes = sum(byte_count for _count, byte_count in inventory.values())
     for source in candidates:
-        window_count, byte_count = inventory[source.source_name]
+        window_count, byte_count = inventory[source.source_id]
         if window_count > _MAX_SOURCE_WINDOWS:
             limited[source.source_id] = (
                 f"source window limit exceeded: {window_count} > {_MAX_SOURCE_WINDOWS}"
@@ -294,12 +353,12 @@ def _bounded_source_windows(
             limited.setdefault(source.source_id, reason)
 
     loadable = [source for source in candidates if source.source_id not in limited]
-    capped = db.get_capped_windows_by_sources(
-        [source.source_name for source in loadable],
+    capped = db.get_capped_windows_by_source_ids(
+        [source.source_id for source in loadable],
         max_per_source=_MAX_SOURCE_WINDOWS,
     )
     windows = {
-        source.source_id: tuple(capped[source.source_name][0]) for source in loadable
+        source.source_id: tuple(capped[source.source_id][0]) for source in loadable
     }
     for source in recognized:
         windows.setdefault(source.source_id, ())
@@ -309,9 +368,9 @@ def _bounded_source_windows(
     reasons = sorted(set(limited.values()))
     reason = "; ".join(reasons)
     examined_bytes = sum(
-        inventory[source.source_name][1]
+        inventory[source.source_id][1]
         for source in loadable
-        if source.source_name in inventory
+        if source.source_id in inventory
     )
     return windows, limited, ToolOutcome(
         status=ToolOutcomeStatus.PARTIAL,
@@ -327,7 +386,8 @@ def _bounded_source_windows(
 
 
 def _mft_evidence(source: SourceRow, windows: Sequence[WindowRow]) -> SourceEvidence:
-    parser_id = "mftecmd-si-fn"
+    descriptor = _required_evidence_descriptor(source)
+    parser_id = descriptor.parser_id
     raw = _raw_source(windows)
     reader = csv.DictReader(io.StringIO(raw))
     headers = [header.strip() for header in (reader.fieldnames or []) if header]
@@ -339,7 +399,7 @@ def _mft_evidence(source: SourceRow, windows: Sequence[WindowRow]) -> SourceEvid
     if si_name is None or fn_name is None:
         return _source_result(
             source,
-            ArtifactFamily.MFT,
+            descriptor.family,
             parser_id,
             (),
             rows_examined=0,
@@ -399,7 +459,7 @@ def _mft_evidence(source: SourceRow, windows: Sequence[WindowRow]) -> SourceEvid
             )
     return _source_result(
         source,
-        ArtifactFamily.MFT,
+        descriptor.family,
         parser_id,
         observations,
         rows_examined=rows - malformed,
@@ -434,7 +494,8 @@ def _usn_evidence(
     windows: Sequence[WindowRow],
     candidate_subjects: set[str],
 ) -> SourceEvidence:
-    parser_id = "mftecmd-usn-order"
+    descriptor = _required_evidence_descriptor(source)
+    parser_id = descriptor.parser_id
     raw = _raw_source(windows)
     reader = csv.DictReader(io.StringIO(raw))
     headers = [header.strip() for header in (reader.fieldnames or []) if header]
@@ -446,7 +507,7 @@ def _usn_evidence(
     if sequence_name is None or timestamp_name is None or reason_name is None:
         return _source_result(
             source,
-            ArtifactFamily.USN,
+            descriptor.family,
             parser_id,
             (),
             rows_examined=0,
@@ -501,7 +562,7 @@ def _usn_evidence(
     observations = [item for item in parsed if item.observation_id in relevant_ids]
     return _source_result(
         source,
-        ArtifactFamily.USN,
+        descriptor.family,
         parser_id,
         observations,
         rows_examined=rows - malformed,
@@ -513,7 +574,8 @@ def _usn_evidence(
 
 
 def _logfile_evidence(source: SourceRow, windows: Sequence[WindowRow]) -> SourceEvidence:
-    parser_id = "ntfs-logfile-csv"
+    descriptor = _required_evidence_descriptor(source)
+    parser_id = descriptor.parser_id
     raw = _raw_source(windows)
     reader = csv.DictReader(io.StringIO(raw))
     headers = [header.strip() for header in (reader.fieldnames or []) if header]
@@ -531,7 +593,7 @@ def _logfile_evidence(source: SourceRow, windows: Sequence[WindowRow]) -> Source
     ):
         return _source_result(
             source,
-            ArtifactFamily.LOGFILE,
+            descriptor.family,
             parser_id,
             (),
             rows_examined=0,
@@ -547,11 +609,12 @@ def _logfile_evidence(source: SourceRow, windows: Sequence[WindowRow]) -> Source
     provenance = _provenance(source, raw, selector="csv:all", parser_id=parser_id)
     for row_number, row in enumerate(reader, start=2):
         rows += 1
-        sequence = _parse_sequence(row.get(sequence_name, ""))
+        sequence = _parse_sequence(_text_field(row, sequence_name))
         timestamp = preserve_time(
-            row.get(timestamp_name, ""), normalization_rule="ntfs-logfile-timestamp"
+            _text_field(row, timestamp_name),
+            normalization_rule="ntfs-logfile-timestamp",
         )
-        action = row.get(action_name, "").strip()
+        action = _text_field(row, action_name).strip()
         subject = _text_field(row, full_path_name).strip()
         if not subject:
             name = _text_field(row, file_name).strip()
@@ -562,7 +625,7 @@ def _logfile_evidence(source: SourceRow, windows: Sequence[WindowRow]) -> Source
             malformed += 1
             continue
         attributes: dict[str, str | int | float | bool | None] = {}
-        transaction_id = row.get("TransactionId", "").strip()
+        transaction_id = _text_field(row, "TransactionId").strip()
         if transaction_id:
             attributes["transaction_id"] = transaction_id
         observations.append(
@@ -583,7 +646,7 @@ def _logfile_evidence(source: SourceRow, windows: Sequence[WindowRow]) -> Source
         )
     return _source_result(
         source,
-        ArtifactFamily.LOGFILE,
+        descriptor.family,
         parser_id,
         observations,
         rows_examined=rows - malformed,
@@ -595,7 +658,8 @@ def _logfile_evidence(source: SourceRow, windows: Sequence[WindowRow]) -> Source
 
 
 def _event_log_evidence(source: SourceRow, windows: Sequence[WindowRow]) -> SourceEvidence:
-    parser_id = "python-evtx-line"
+    descriptor = _required_evidence_descriptor(source)
+    parser_id = descriptor.parser_id
     raw = _raw_source(windows)
     observations: list[TemporalObservation] = []
     malformed = 0
@@ -638,7 +702,7 @@ def _event_log_evidence(source: SourceRow, windows: Sequence[WindowRow]) -> Sour
         )
     return _source_result(
         source,
-        ArtifactFamily.EVENT_LOG,
+        descriptor.family,
         parser_id,
         observations,
         rows_examined=rows - malformed,
@@ -648,11 +712,13 @@ def _event_log_evidence(source: SourceRow, windows: Sequence[WindowRow]) -> Sour
 
 
 def _vss_evidence(source: SourceRow, windows: Sequence[WindowRow]) -> SourceEvidence:
-    parser_id = "libvshadow-info"
+    descriptor = _required_evidence_descriptor(source)
+    parser_id = descriptor.parser_id
     raw = _raw_source(windows)
     observations: list[TemporalObservation] = []
     provenance = _provenance(source, raw, selector="line:all", parser_id=parser_id)
     rows = 0
+    malformed = 0
     for row_number, line in enumerate(raw.splitlines(), start=1):
         if "creation time" not in line.casefold():
             continue
@@ -660,6 +726,7 @@ def _vss_evidence(source: SourceRow, windows: Sequence[WindowRow]) -> SourceEvid
         value = line.split(":", 1)[-1].strip()
         timestamp = preserve_time(value, normalization_rule="libvshadow-creation-time")
         if timestamp is None:
+            malformed += 1
             continue
         observations.append(
             TemporalObservation(
@@ -676,21 +743,36 @@ def _vss_evidence(source: SourceRow, windows: Sequence[WindowRow]) -> SourceEvid
         )
     return _source_result(
         source,
-        ArtifactFamily.VSS,
+        descriptor.family,
         parser_id,
         observations,
-        rows_examined=rows,
+        rows_examined=rows - malformed,
         rows_total=rows,
         partial_reason=(
-            "VSS inventory has no normalized per-file historical timestamps"
-            if raw.strip()
-            else None
+            "; ".join(
+                reason
+                for reason in (
+                    (
+                        f"{malformed} VSS inventory rows lacked required typed values"
+                        if malformed
+                        else None
+                    ),
+                    (
+                        "VSS inventory has no normalized per-file historical timestamps"
+                        if raw.strip()
+                        else None
+                    ),
+                )
+                if reason
+            )
+            or None
         ),
     )
 
 
 def _vss_file_evidence(source: SourceRow, windows: Sequence[WindowRow]) -> SourceEvidence:
-    parser_id = "vshadow-file-csv"
+    descriptor = _required_evidence_descriptor(source)
+    parser_id = descriptor.parser_id
     raw = _raw_source(windows)
     reader = csv.DictReader(io.StringIO(raw))
     headers = [header.strip() for header in (reader.fieldnames or []) if header]
@@ -702,7 +784,7 @@ def _vss_file_evidence(source: SourceRow, windows: Sequence[WindowRow]) -> Sourc
     if snapshot_id_name is None or path_name is None or created_name is None:
         return _source_result(
             source,
-            ArtifactFamily.VSS,
+            descriptor.family,
             parser_id,
             (),
             rows_examined=0,
@@ -718,14 +800,12 @@ def _vss_file_evidence(source: SourceRow, windows: Sequence[WindowRow]) -> Sourc
     provenance = _provenance(source, raw, selector="csv:all", parser_id=parser_id)
     for row_number, row in enumerate(reader, start=2):
         rows += 1
-        snapshot_id = row.get(snapshot_id_name, "").strip()
+        snapshot_id = _text_field(row, snapshot_id_name).strip()
         subject = _normalize_windows_path(_text_field(row, path_name))
-        uncertainty = _parse_uncertainty(
-            row.get(uncertainty_name, "") if uncertainty_name else ""
-        )
+        uncertainty = _parse_uncertainty(_text_field(row, uncertainty_name))
         created = (
             preserve_time(
-                row.get(created_name, ""),
+                _text_field(row, created_name),
                 default_uncertainty_ms=uncertainty,
                 normalization_rule="vshadow-file-created",
             )
@@ -756,7 +836,7 @@ def _vss_file_evidence(source: SourceRow, windows: Sequence[WindowRow]) -> Sourc
         )
         if snapshot_created_name and uncertainty is not None:
             snapshot_created = preserve_time(
-                row.get(snapshot_created_name, ""),
+                _text_field(row, snapshot_created_name),
                 default_uncertainty_ms=uncertainty,
                 normalization_rule="vshadow-snapshot-created",
             )
@@ -784,7 +864,7 @@ def _vss_file_evidence(source: SourceRow, windows: Sequence[WindowRow]) -> Sourc
                 )
     return _source_result(
         source,
-        ArtifactFamily.VSS,
+        descriptor.family,
         parser_id,
         observations,
         rows_examined=rows - malformed,
@@ -797,9 +877,14 @@ def _vss_file_evidence(source: SourceRow, windows: Sequence[WindowRow]) -> Sourc
 
 def _normalize_windows_path(value: str) -> str:
     normalized = value.strip().strip('"').replace("/", "\\")
-    if normalized.startswith("\\??\\"):
+    if normalized.startswith("\\\\?\\"):
         normalized = normalized[4:]
-    return str(PureWindowsPath(normalized)) if normalized else ""
+        if normalized.casefold().startswith("unc\\"):
+            normalized = "\\\\" + normalized[4:]
+    elif normalized.startswith("\\??\\"):
+        normalized = normalized[4:]
+    normalized = ntpath.normpath(normalized) if normalized else ""
+    return "" if normalized == "." else normalized
 
 
 def _filesystem_path_key(value: str) -> str:
@@ -831,7 +916,8 @@ def _process_file_evidence(
     *,
     dependency_reason: str | None = None,
 ) -> SourceEvidence:
-    parser_id = "volatility-process-file-correlation"
+    descriptor = _required_evidence_descriptor(source)
+    parser_id = descriptor.parser_id
     raw = _raw_source(windows)
     reader = csv.DictReader(io.StringIO(raw), delimiter="\t")
     headers = [header.strip() for header in (reader.fieldnames or []) if header]
@@ -842,7 +928,7 @@ def _process_file_evidence(
     if pid_name is None or image_name is None or created_name is None or exited_name is None:
         return _source_result(
             source,
-            ArtifactFamily.PROCESS_FILE_STATE,
+            descriptor.family,
             parser_id,
             (),
             rows_examined=0,
@@ -854,7 +940,7 @@ def _process_file_evidence(
     if cmdline_source is None:
         return _source_result(
             source,
-            ArtifactFamily.PROCESS_FILE_STATE,
+            descriptor.family,
             parser_id,
             (),
             rows_examined=0,
@@ -870,12 +956,13 @@ def _process_file_evidence(
     process_malformed = 0
     for row_number, row in enumerate(reader, start=2):
         process_rows += 1
-        pid = _parse_sequence(row.get(pid_name, ""))
-        image = row.get(image_name, "").strip()
+        pid = _parse_sequence(_text_field(row, pid_name))
+        image = _text_field(row, image_name).strip()
         created = preserve_time(
-            row.get(created_name, ""), normalization_rule="volatility-process-created"
+            _text_field(row, created_name),
+            normalization_rule="volatility-process-created",
         )
-        exited = row.get(exited_name, "").strip()
+        exited = _text_field(row, exited_name).strip()
         if pid is None or not image or created is None:
             process_malformed += 1
             continue
@@ -894,7 +981,7 @@ def _process_file_evidence(
     if cmd_pid_name is None or command_process_name is None or arguments_name is None:
         return _source_result(
             source,
-            ArtifactFamily.PROCESS_FILE_STATE,
+            descriptor.family,
             parser_id,
             (),
             rows_examined=0,
@@ -907,9 +994,9 @@ def _process_file_evidence(
     commands: dict[int, _CommandRecord] = {}
     malformed = process_malformed
     for row_number, row in enumerate(cmdline_reader, start=2):
-        pid = _parse_sequence(row.get(cmd_pid_name, ""))
-        process_name = row.get(command_process_name, "").strip()
-        image_path = _command_image_path(row.get(arguments_name, ""))
+        pid = _parse_sequence(_text_field(row, cmd_pid_name))
+        process_name = _text_field(row, command_process_name).strip()
+        image_path = _command_image_path(_text_field(row, arguments_name))
         if pid is None or not process_name or not image_path:
             malformed += 1
             continue
@@ -1016,7 +1103,7 @@ def _process_file_evidence(
         limitations.append(f"{malformed} process/cmdline rows lacked required typed values")
     return _source_result(
         source,
-        ArtifactFamily.PROCESS_FILE_STATE,
+        descriptor.family,
         parser_id,
         observations,
         rows_examined=process_rows - process_malformed,
@@ -1057,14 +1144,91 @@ def _named_acquisition_scope(source_name: str, prefix: str) -> str:
 
 
 def _same_acquisition_scope(process_source: SourceRow, file_source: SourceRow) -> bool:
-    """Require an explicit matching scope or a common acquisition directory."""
+    """Require the same non-empty acquisition identity in both source names."""
     process_scope = _named_acquisition_scope(
         process_source.source_name, "volatility.pslist"
     )
     file_scope = _named_acquisition_scope(file_source.source_name, "tsk.filelist")
-    if process_scope or file_scope:
-        return bool(process_scope) and process_scope == file_scope
-    return Path(process_source.source_path).parent == Path(file_source.source_path).parent
+    return bool(process_scope) and process_scope == file_scope
+
+
+def _reference_catalog(
+    source: SourceRow,
+    windows: Sequence[WindowRow],
+) -> _ReferenceCatalog:
+    """Parse one strict reference-clock CSV and bind timestamps to exact rows."""
+    raw = _raw_source(windows)
+    reader = csv.DictReader(io.StringIO(raw))
+    expected_headers = (
+        _REFERENCE_SCHEMA_VERSION,
+        _REFERENCE_RECORD_ID,
+        _REFERENCE_TIMESTAMP,
+        _REFERENCE_UNCERTAINTY,
+    )
+    if tuple(reader.fieldnames or ()) != expected_headers:
+        return _ReferenceCatalog(
+            records={},
+            reason=(
+                f"reference source {source.source_name!r} does not match "
+                "clock-reference-record schema version 1"
+            ),
+        )
+
+    records: dict[str, list[_ReferenceRecord]] = {}
+    malformed = 0
+    for row_number, row in enumerate(reader, start=2):
+        schema_version = _text_field(row, _REFERENCE_SCHEMA_VERSION).strip()
+        record_id = _text_field(row, _REFERENCE_RECORD_ID).strip()
+        timestamp_raw = _text_field(row, _REFERENCE_TIMESTAMP).strip()
+        uncertainty = _parse_sequence(_text_field(row, _REFERENCE_UNCERTAINTY))
+        timestamp = (
+            preserve_time(
+                timestamp_raw,
+                default_uncertainty_ms=uncertainty,
+                normalization_rule="clock-reference-record",
+            )
+            if uncertainty is not None
+            else None
+        )
+        if schema_version != "1" or not record_id or timestamp is None:
+            malformed += 1
+            continue
+        assert uncertainty is not None
+        value_digest = hashlib.sha256(timestamp_raw.encode("utf-8")).hexdigest()
+        record = _ReferenceRecord(
+            record_id=record_id,
+            timestamp_raw=timestamp_raw,
+            timestamp=timestamp,
+            uncertainty_ms=uncertainty,
+            provenance=_provenance(
+                source,
+                raw,
+                selector=(
+                    f"csv:row={row_number};record={record_id};column=Timestamp;"
+                    f"value_sha256={value_digest}"
+                ),
+                parser_id="clock-reference-record",
+            ),
+        )
+        records.setdefault(record_id, []).append(record)
+    duplicate_ids = sorted(
+        record_id for record_id, matches in records.items() if len(matches) != 1
+    )
+    reasons: list[str] = []
+    if malformed:
+        reasons.append(
+            f"reference source {source.source_name!r} has {malformed} malformed "
+            "or unsupported reference rows"
+        )
+    if duplicate_ids:
+        reasons.append(
+            f"reference source {source.source_name!r} has ambiguous record IDs: "
+            + ", ".join(duplicate_ids)
+        )
+    return _ReferenceCatalog(
+        records={key: tuple(value) for key, value in records.items()},
+        reason="; ".join(reasons) or None,
+    )
 
 
 def _clock_anchors(
@@ -1074,23 +1238,35 @@ def _clock_anchors(
     indexed_sources: Sequence[SourceRow],
     limited_sources: Mapping[int, str],
 ) -> _ClockAnchorAdapterResult:
-    targets_by_name: dict[str, SourceRow] = {}
     indexed_by_name: dict[str, list[SourceRow]] = {}
     for source in indexed_sources:
         indexed_by_name.setdefault(source.source_name, []).append(source)
     normalized_ids = {source.source_id for source in normalized_sources}
+    targets_by_name: dict[str, list[SourceRow]] = {}
     for source in indexed_sources:
         if str(source.source_id) not in normalized_ids:
             continue
-        if source.source_name in targets_by_name:
+        targets_by_name.setdefault(source.source_name, []).append(source)
+
+    reference_catalogs: dict[int, _ReferenceCatalog] = {}
+    reference_errors: list[str] = []
+    for source in indexed_sources:
+        if not source.source_name.startswith("clock.reference."):
             continue
-        targets_by_name[source.source_name] = source
+        if source.source_id in limited_sources:
+            reference_errors.append(limited_sources[source.source_id])
+            continue
+        catalog = _reference_catalog(source, source_windows[source.source_id])
+        reference_catalogs[source.source_id] = catalog
+        if catalog.reason:
+            reference_errors.append(catalog.reason)
 
     anchors: list[ClockAnchor] = []
     seen_anchor_ids: set[str] = set()
     rows_total = 0
     malformed = 0
-    schema_errors: list[str] = []
+    schema_errors: list[str] = list(reference_errors)
+    row_errors: list[str] = []
     for anchor_source in anchor_sources:
         if anchor_source.source_id in limited_sources:
             schema_errors.append(limited_sources[anchor_source.source_id])
@@ -1104,6 +1280,7 @@ def _clock_anchors(
         source_time_name = _first(headers, _ANCHOR_SOURCE_TIME)
         reference_time_name = _first(headers, _ANCHOR_REFERENCE_TIME)
         reference_source_name = _first(headers, _ANCHOR_REFERENCE_SOURCE)
+        reference_record_name = _first(headers, _ANCHOR_REFERENCE_RECORD)
         source_uncertainty_name = _first(headers, _ANCHOR_SOURCE_UNCERTAINTY)
         reference_uncertainty_name = _first(headers, _ANCHOR_REFERENCE_UNCERTAINTY)
         required = (
@@ -1112,6 +1289,7 @@ def _clock_anchors(
             source_time_name,
             reference_time_name,
             reference_source_name,
+            reference_record_name,
             source_uncertainty_name,
             reference_uncertainty_name,
         )
@@ -1127,6 +1305,7 @@ def _clock_anchors(
         assert source_time_name is not None
         assert reference_time_name is not None
         assert reference_source_name is not None
+        assert reference_record_name is not None
         assert source_uncertainty_name is not None
         assert reference_uncertainty_name is not None
         calibration_provenance = _provenance(
@@ -1140,22 +1319,67 @@ def _clock_anchors(
             anchor_id = _text_field(row, anchor_id_name).strip()
             target_name = _text_field(row, source_name).strip()
             reference_name = _text_field(row, reference_source_name).strip()
-            target = targets_by_name.get(target_name)
+            reference_record_id = _text_field(row, reference_record_name).strip()
+            targets = targets_by_name.get(target_name, [])
             references = indexed_by_name.get(reference_name, [])
-            reference = references[0] if len(references) == 1 else None
             source_uncertainty = _parse_sequence(
                 _text_field(row, source_uncertainty_name)
             )
             reference_uncertainty = _parse_sequence(
                 _text_field(row, reference_uncertainty_name)
             )
+            if not anchor_id or anchor_id in seen_anchor_ids:
+                row_errors.append(f"clock anchor row {row_number} has an invalid anchor ID")
+                malformed += 1
+                continue
+            if len(targets) != 1:
+                state = "ambiguous" if targets else "unavailable"
+                row_errors.append(
+                    f"clock anchor {anchor_id!r} target {target_name!r} is {state}"
+                )
+                malformed += 1
+                continue
+            target = targets[0]
+            if len(references) != 1:
+                state = "ambiguous" if references else "unavailable"
+                row_errors.append(
+                    f"clock anchor {anchor_id!r} reference source "
+                    f"{reference_name!r} is {state}"
+                )
+                malformed += 1
+                continue
+            reference = references[0]
+            if reference.source_id in limited_sources:
+                row_errors.append(limited_sources[reference.source_id])
+                malformed += 1
+                continue
+            reference_catalog = reference_catalogs.get(reference.source_id)
+            record_matches = (
+                reference_catalog.records.get(reference_record_id, ())
+                if reference_catalog
+                else ()
+            )
+            if len(record_matches) != 1:
+                row_errors.append(
+                    f"clock anchor {anchor_id!r} reference record "
+                    f"{reference_record_id!r} is unavailable or ambiguous"
+                )
+                malformed += 1
+                continue
+            record = record_matches[0]
+            reference_timestamp_raw = _text_field(row, reference_time_name).strip()
             if (
-                not anchor_id
-                or anchor_id in seen_anchor_ids
-                or target is None
-                or reference is None
-                or reference.source_id in limited_sources
-                or reference.source_id == target.source_id
+                reference_timestamp_raw != record.timestamp_raw
+                or reference_uncertainty != record.uncertainty_ms
+            ):
+                row_errors.append(
+                    f"clock anchor {anchor_id!r} reference timestamp/uncertainty "
+                    "does not match its bound reference record"
+                )
+                malformed += 1
+                continue
+            if (
+                reference.source_id == target.source_id
                 or reference.source_id == anchor_source.source_id
                 or reference.source_hash == target.source_hash
                 or reference.source_hash == anchor_source.source_hash
@@ -1163,6 +1387,9 @@ def _clock_anchors(
                 or source_uncertainty is None
                 or reference_uncertainty is None
             ):
+                row_errors.append(
+                    f"clock anchor {anchor_id!r} is not independent or has invalid uncertainty"
+                )
                 malformed += 1
                 continue
             source_time = preserve_time(
@@ -1170,31 +1397,23 @@ def _clock_anchors(
                 default_uncertainty_ms=source_uncertainty,
                 normalization_rule="clock-anchor-source-time",
             )
-            reference_time = preserve_time(
-                _text_field(row, reference_time_name),
-                default_uncertainty_ms=reference_uncertainty,
-                normalization_rule="clock-anchor-reference-time",
-            )
-            if source_time is None or reference_time is None:
+            if source_time is None:
+                row_errors.append(f"clock anchor {anchor_id!r} has an invalid source time")
                 malformed += 1
                 continue
             selector = (
-                f"csv:row={row_number};anchor={anchor_id};reference={reference_name}"
+                f"csv:row={row_number};anchor={anchor_id};reference={reference_name};"
+                f"record={reference_record_id}"
             )
             try:
-                reference_raw = _raw_source(source_windows[reference.source_id])
                 anchors.append(
                     ClockAnchor(
                         anchor_id=anchor_id,
                         source_id=str(target.source_id),
                         source_time=source_time,
-                        reference_time=reference_time,
-                        reference_provenance=_provenance(
-                            reference,
-                            reference_raw,
-                            selector="source:all",
-                            parser_id="clock-reference-source",
-                        ),
+                        reference_time=record.timestamp,
+                        reference_record_id=record.record_id,
+                        reference_provenance=record.provenance,
                         calibration_provenance=calibration_provenance.model_copy(
                             update={"selector": selector}
                         ),
@@ -1202,9 +1421,12 @@ def _clock_anchors(
                 )
                 seen_anchor_ids.add(anchor_id)
             except ValueError:
+                row_errors.append(
+                    f"clock anchor {anchor_id!r} violates the normalized schema"
+                )
                 malformed += 1
 
-    reasons = list(dict.fromkeys(schema_errors))
+    reasons = list(dict.fromkeys([*schema_errors, *row_errors]))
     if malformed:
         reasons.append(
             f"{malformed}/{rows_total} clock anchor rows were malformed or unresolvable"
@@ -1212,7 +1434,7 @@ def _clock_anchors(
     if reasons:
         status = (
             ToolOutcomeStatus.PARTIAL
-            if anchors or malformed
+            if anchors or malformed or reference_errors
             else ToolOutcomeStatus.UNSUPPORTED_VERSION
         )
         reason = "; ".join(reasons)
@@ -1276,11 +1498,7 @@ def _indexed_request() -> ClockEvidenceRequest:
     mft_rows = [source for source in sources if source.source_name.startswith("ez.mft")]
     for source in mft_rows:
         if reason := limited_sources.get(source.source_id):
-            source_evidence.append(
-                _bounded_source_result(
-                    source, ArtifactFamily.MFT, "mftecmd-si-fn", reason
-                )
-            )
+            source_evidence.append(_bounded_source_result(source, reason))
         else:
             source_evidence.append(
                 _mft_evidence(source, windows_by_source[source.source_id])
@@ -1295,47 +1513,27 @@ def _indexed_request() -> ClockEvidenceRequest:
         windows = windows_by_source[source.source_id]
         if source.source_name.startswith("ez.usnjrnl"):
             if reason := limited_sources.get(source.source_id):
-                source_evidence.append(
-                    _bounded_source_result(
-                        source, ArtifactFamily.USN, "mftecmd-usn", reason
-                    )
-                )
+                source_evidence.append(_bounded_source_result(source, reason))
             else:
                 source_evidence.append(_usn_evidence(source, windows, candidate_subjects))
         elif source.source_name.startswith(("ez.logfile", "ntfs.logfile")):
             if reason := limited_sources.get(source.source_id):
-                source_evidence.append(
-                    _bounded_source_result(
-                        source, ArtifactFamily.LOGFILE, "logfile-csv", reason
-                    )
-                )
+                source_evidence.append(_bounded_source_result(source, reason))
             else:
                 source_evidence.append(_logfile_evidence(source, windows))
         elif source.source_name.startswith("evtx."):
             if reason := limited_sources.get(source.source_id):
-                source_evidence.append(
-                    _bounded_source_result(
-                        source, ArtifactFamily.EVENT_LOG, "python-evtx-lines", reason
-                    )
-                )
+                source_evidence.append(_bounded_source_result(source, reason))
             else:
                 source_evidence.append(_event_log_evidence(source, windows))
         elif source.source_name.startswith("vshadow.info"):
             if reason := limited_sources.get(source.source_id):
-                source_evidence.append(
-                    _bounded_source_result(
-                        source, ArtifactFamily.VSS, "vshadowinfo-csv", reason
-                    )
-                )
+                source_evidence.append(_bounded_source_result(source, reason))
             else:
                 source_evidence.append(_vss_evidence(source, windows))
         elif source.source_name.startswith("vshadow.files"):
             if reason := limited_sources.get(source.source_id):
-                source_evidence.append(
-                    _bounded_source_result(
-                        source, ArtifactFamily.VSS, "vshadow-files-csv", reason
-                    )
-                )
+                source_evidence.append(_bounded_source_result(source, reason))
             else:
                 source_evidence.append(_vss_file_evidence(source, windows))
 
@@ -1350,27 +1548,56 @@ def _indexed_request() -> ClockEvidenceRequest:
     ]
     for source in pslist_sources:
         if limit_reason := limited_sources.get(source.source_id):
-            source_evidence.append(
-                _bounded_source_result(
-                    source,
-                    ArtifactFamily.PROCESS_FILE_STATE,
-                    "volatility-process-file-correlation",
-                    limit_reason,
-                )
-            )
+            source_evidence.append(_bounded_source_result(source, limit_reason))
             continue
+        acquisition_scope = _named_acquisition_scope(
+            source.source_name, "volatility.pslist"
+        )
         partner, reason = _partner_source(
             source,
             cmdline_sources,
             source_prefix="volatility.pslist",
             partner_prefix="volatility.cmdline",
         )
+        if not acquisition_scope:
+            partner = None
+            reason = (
+                (reason + "; " if reason else "")
+                + "explicit process/filesystem acquisition identity is unavailable"
+            )
+        elif sum(
+            candidate.source_name == source.source_name
+            for candidate in pslist_sources
+        ) > 1:
+            partner = None
+            reason = (
+                (reason + "; " if reason else "")
+                + "process acquisition identity is ambiguous"
+            )
         if partner is not None and partner.source_id in limited_sources:
             reason = limited_sources[partner.source_id]
             partner = None
         scoped_tsk_sources = [
             item for item in tsk_sources if _same_acquisition_scope(source, item)
         ]
+        ambiguous_tsk_names = {
+            item.source_name
+            for item in scoped_tsk_sources
+            if sum(
+                candidate.source_name == item.source_name
+                for candidate in scoped_tsk_sources
+            )
+            > 1
+        }
+        if not acquisition_scope:
+            scoped_tsk_sources = []
+        elif ambiguous_tsk_names:
+            reason = (
+                (reason + "; " if reason else "")
+                + "matching tsk.filelist acquisition identity is ambiguous: "
+                + ", ".join(sorted(ambiguous_tsk_names))
+            )
+            scoped_tsk_sources = []
         bounded_tsk_reasons = [
             limited_sources[item.source_id]
             for item in scoped_tsk_sources
@@ -1387,7 +1614,12 @@ def _indexed_request() -> ClockEvidenceRequest:
                 (reason + "; " if reason else "")
                 + "; ".join(sorted(set(bounded_tsk_reasons)))
             )
-        if tsk_sources and not scoped_tsk_sources:
+        if (
+            tsk_sources
+            and not scoped_tsk_sources
+            and acquisition_scope
+            and not ambiguous_tsk_names
+        ):
             reason = (
                 (reason + "; " if reason else "")
                 + "matching tsk.filelist acquisition scope is unavailable"

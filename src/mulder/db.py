@@ -1134,29 +1134,72 @@ class CaseDB:
 
         return result
 
-    def get_window_inventory_by_sources(
+    def get_capped_windows_by_source_ids(
         self,
-        source_names: list[str],
-    ) -> dict[str, tuple[int, int]]:
-        """Return exact window counts and UTF-8 byte totals without materializing text."""
-        if not source_names:
+        source_ids: list[int],
+        max_per_source: int = 50,
+    ) -> dict[int, tuple[list[WindowRow], int]]:
+        """Fetch bounded windows without collapsing duplicate source names."""
+        if not source_ids:
             return {}
-        placeholders = ", ".join(f":sn{i}" for i in range(len(source_names)))
-        params = {f"sn{i}": name for i, name in enumerate(source_names)}
+        placeholders = ", ".join(f":sid{i}" for i in range(len(source_ids)))
+        params: dict[str, object] = {
+            f"sid{i}": source_id for i, source_id in enumerate(source_ids)
+        }
+        params["cap"] = max_per_source
         query = text(
-            "SELECT s.source_name, COUNT(w.window_id) AS window_count, "
+            "WITH ranked AS ("
+            "  SELECT w.*,"
+            "    ROW_NUMBER() OVER (PARTITION BY w.source_id ORDER BY w.window_id) AS rn,"
+            "    COUNT(*) OVER (PARTITION BY w.source_id) AS total_count"
+            "  FROM windows w"
+            f"  WHERE w.source_id IN ({placeholders})"
+            ") SELECT * FROM ranked WHERE rn <= :cap ORDER BY source_id, window_id"
+        )
+        result: dict[int, tuple[list[WindowRow], int]] = {}
+        with self._engine.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        for row in rows:
+            source_id = int(row.source_id)
+            if source_id not in result:
+                result[source_id] = ([], int(row.total_count))
+            result[source_id][0].append(
+                WindowRow(
+                    window_id=row.window_id,
+                    source_id=source_id,
+                    line_start=row.line_start,
+                    line_end=row.line_end,
+                    event_time=row.event_time,
+                    raw_text=row.raw_text,
+                )
+            )
+        for source_id in source_ids:
+            result.setdefault(source_id, ([], 0))
+        return result
+
+    def get_window_inventory_by_source_ids(
+        self,
+        source_ids: list[int],
+    ) -> dict[int, tuple[int, int]]:
+        """Return exact per-source window/byte totals without materializing text."""
+        if not source_ids:
+            return {}
+        placeholders = ", ".join(f":sid{i}" for i in range(len(source_ids)))
+        params = {f"sid{i}": source_id for i, source_id in enumerate(source_ids)}
+        query = text(
+            "SELECT s.source_id, COUNT(w.window_id) AS window_count, "
             "COALESCE(SUM(length(CAST(w.raw_text AS BLOB))), 0) AS byte_count "
             "FROM sources s LEFT JOIN windows w ON w.source_id = s.source_id "
-            f"WHERE s.source_name IN ({placeholders}) GROUP BY s.source_id, s.source_name"
+            f"WHERE s.source_id IN ({placeholders}) GROUP BY s.source_id"
         )
         with self._engine.connect() as conn:
             rows = conn.execute(query, params).fetchall()
         inventory = {
-            str(row.source_name): (int(row.window_count), int(row.byte_count))
+            int(row.source_id): (int(row.window_count), int(row.byte_count))
             for row in rows
         }
-        for name in source_names:
-            inventory.setdefault(name, (0, 0))
+        for source_id in source_ids:
+            inventory.setdefault(source_id, (0, 0))
         return inventory
 
     def get_windows_by_source_prefix(
