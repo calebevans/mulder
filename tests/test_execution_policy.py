@@ -209,7 +209,7 @@ def test_compatibility_runner_rejects_unbound_declared_path(tmp_path: Path) -> N
 _DOCUMENTED_SUBPROCESS_EXCEPTIONS = {
     "src/mulder/assets/install.py",
     "src/mulder/execution/runner.py",
-    "src/mulder/extractors/disk.py",
+    "src/mulder/execution/mount_helper.py",
     "src/mulder/orchestrator/proxy.py",
     "src/mulder/server/tools/artifacts.py",
     "src/mulder/server/tools/binary.py",

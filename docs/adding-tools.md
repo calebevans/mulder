@@ -128,6 +128,13 @@ Combine roles with `|` or use the pre-defined shorthands:
 
 Start with the narrowest set of roles that makes sense. You can always expand later.
 
+Role registration is only the first authorization layer. Session identities in
+`src/mulder/orchestrator/capabilities.py` also constrain security-relevant tool
+effects. A new extraction-only tool requires `forensic-execution`; case writes,
+job control, and report publication require their corresponding capabilities.
+Add a focused authorization test when introducing a new effect category rather
+than broadening an identity implicitly.
+
 ## 3. Index Output into the Database
 
 ### `extract_and_index()`

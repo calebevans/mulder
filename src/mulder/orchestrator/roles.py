@@ -14,6 +14,11 @@ import re
 from typing import Any
 from uuid import uuid4
 
+from mulder.orchestrator.capabilities import (
+    JSON_REPAIR_IDENTITY,
+    AgentIdentity,
+    identity_for_phase,
+)
 from mulder.orchestrator.display import InvestigationDashboard
 from mulder.orchestrator.models import ModelConfig
 from mulder.orchestrator.phases import PhaseConfig
@@ -161,6 +166,7 @@ class RoleRunner:
             max_turns=phase.planner_max_turns,
             max_budget=phase.planner_max_budget_usd,
             log_prefix=log_prefix,
+            identity=identity_for_phase(phase.name, "planner"),
         )
 
         plan_json = extract_json_plan(result.messages)
@@ -222,6 +228,7 @@ class RoleRunner:
             max_budget=phase.executor_max_budget_usd,
             log_prefix=log_prefix,
             task_system=task_system,
+            identity=identity_for_phase(phase.name, "executor"),
         )
 
         extra_turns = await self.compaction_loop(
@@ -243,6 +250,7 @@ class RoleRunner:
             role_label="Executor",
             log_prefix=log_prefix,
             task_system=task_system,
+            identity=identity_for_phase(phase.name, "executor"),
         )
         total_turns = result.turns_used + extra_turns
 
@@ -332,6 +340,7 @@ class RoleRunner:
             max_budget=phase.analyst_max_budget_usd,
             log_prefix=log_prefix,
             task_system=task_system,
+            identity=identity_for_phase(phase.name, "analyst"),
         )
 
         extra_turns = await self.compaction_loop(
@@ -350,6 +359,7 @@ class RoleRunner:
             ),
             role_label="Analyst",
             log_prefix=log_prefix,
+            identity=identity_for_phase(phase.name, "analyst"),
         )
         total_turns = result.turns_used + extra_turns
 
@@ -432,6 +442,7 @@ class RoleRunner:
         role_label: str = "",
         log_prefix: str = "",
         task_system: str = "",
+        identity: AgentIdentity | None = None,
     ) -> int:
         """Run compaction retries when a session exhausts its context window.
 
@@ -451,6 +462,7 @@ class RoleRunner:
             role_label: Role name for dashboard messages (e.g. "Executor").
             log_prefix: Prefix for SDK query log lines.
             task_system: Task panel system name for tool tracking.
+            identity: Identity retained across continuation sessions.
 
         Returns:
             Additional turns consumed across all compaction attempts.
@@ -472,6 +484,7 @@ class RoleRunner:
                 max_budget=max_budget,
                 log_prefix=log_prefix,
                 task_system=task_system,
+                identity=identity,
             )
             additional_turns += continuation.turns_used
             result.messages.extend(continuation.messages)
@@ -528,6 +541,7 @@ class RoleRunner:
             disallowed_tools=["Bash", "Shell"],
             max_turns=1,
             max_budget=0.50,
+            identity=JSON_REPAIR_IDENTITY,
         )
 
         repaired = extract_json_plan(repair_result.messages)
@@ -562,5 +576,5 @@ class RoleRunner:
 
         allowed_set = frozenset(fallback_allowed)
         safe_plan_tools = plan_tools & allowed_set
-        dynamic = safe_plan_tools | _EXECUTOR_CONTROL_TOOLS
+        dynamic = safe_plan_tools | (_EXECUTOR_CONTROL_TOOLS & allowed_set)
         return sorted(dynamic)
