@@ -23,6 +23,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from mulder.path_policy import PathPolicyError, resolve_allowed_path
 from mulder.server.app import get_cfg, get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import hash_output, make_tool_call_id
@@ -48,21 +49,15 @@ def _readonly_authorizer(
     return sqlite3.SQLITE_DENY
 
 
-def _validate_path_access(target: Path) -> str | None:
-    """Return an error message if the path is not under an allowed root, else None."""
-    try:
-        resolved = target.resolve()
-    except OSError:
-        return f"Cannot resolve path: {target}"
+def _resolve_artifact_path(target: Path) -> Path:
+    """Resolve *target* within the active evidence or case-storage root."""
     cfg = get_cfg()
-    allowed_roots = [Path(cfg.db_dir).resolve()]
+    allowed_roots = [Path(cfg.db_dir)]
     ctx = get_ctx()
     meta = ctx.db.get_case_metadata()
     if meta and meta.evidence_root:
-        allowed_roots.append(Path(meta.evidence_root).resolve())
-    if not any(str(resolved).startswith(str(root)) for root in allowed_roots):
-        return "Access denied: path is outside allowed directories"
-    return None
+        allowed_roots.append(Path(meta.evidence_root))
+    return resolve_allowed_path(target, allowed_roots)
 
 
 _TOOL_TIMEOUT = 120
@@ -454,13 +449,13 @@ def list_directory(
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
-    target = Path(path)
-    path_err = _validate_path_access(target)
-    if path_err:
+    try:
+        target = _resolve_artifact_path(Path(path))
+    except PathPolicyError as exc:
         return {
             "tool_call_id": tc_id,
             "status": "error",
-            "error_message": path_err,
+            "error_message": str(exc),
             "results": [],
             "result_count": 0,
         }
@@ -550,13 +545,13 @@ def read_evidence_file(
     t0 = time.monotonic()
     params = {"file_path": file_path, "max_bytes": max_bytes}
 
-    target = Path(file_path)
-    path_err = _validate_path_access(target)
-    if path_err:
+    try:
+        target = _resolve_artifact_path(Path(file_path))
+    except PathPolicyError as exc:
         return {
             "tool_call_id": tc_id,
             "status": "error",
-            "error_message": path_err,
+            "error_message": str(exc),
         }
     if not target.exists():
         elapsed = (time.monotonic() - t0) * 1000
