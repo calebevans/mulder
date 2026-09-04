@@ -1,0 +1,46 @@
+{
+  "schema": "mulder.anti-forensics-clock",
+  "schema_version": 1,
+  "case_id": "malicious-clock-fixture",
+  "sources": [
+    {
+      "source_id":"mft-mal","family":"mft","parser_id":"fixture-mft","parser_version":"1.0","status":"SUCCESS_NONEMPTY","rows_examined":1,"rows_total":1,
+      "observations":[
+        {"observation_id":"mft-si-created","kind":"mft_si_created","subject":"C:\\Temp\\payload.exe","time":{"original":"2024-01-01 00:00:00","normalized_utc":"2024-01-01T00:00:00Z","basis":"source_declared","uncertainty_ms":1000,"normalization_rule":"fixture-iso","normalization_version":"1.0"},"provenance":{"source_id":"mft-mal","source_name":"ez.mft","selector":"row:2;si","raw_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","parser_id":"fixture-mft","parser_version":"1.0","independence_key":"fixture:mft","evidence_flags":[]}},
+        {"observation_id":"mft-fn-created","kind":"mft_fn_created","subject":"C:\\Temp\\payload.exe","time":{"original":"2024-03-01 12:00:00","normalized_utc":"2024-03-01T12:00:00Z","basis":"source_declared","uncertainty_ms":1000,"normalization_rule":"fixture-iso","normalization_version":"1.0"},"provenance":{"source_id":"mft-mal","source_name":"ez.mft","selector":"row:2;fn","raw_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","parser_id":"fixture-mft","parser_version":"1.0","independence_key":"fixture:mft","evidence_flags":[]}}
+      ]
+    },
+    {
+      "source_id":"usn-mal","family":"usn","parser_id":"fixture-usn","parser_version":"1.0","status":"SUCCESS_NONEMPTY","rows_examined":2,"rows_total":2,
+      "observations":[
+        {"observation_id":"usn-create","kind":"usn_change","subject":"C:\\Temp\\payload.exe","time":{"original":"2024-03-01T12:00:01Z","normalized_utc":"2024-03-01T12:00:01Z","basis":"explicit_utc","uncertainty_ms":1000,"normalization_rule":"fixture-iso","normalization_version":"1.0"},"provenance":{"source_id":"usn-mal","source_name":"ez.usnjrnl","selector":"usn:100","raw_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","parser_id":"fixture-usn","parser_version":"1.0","independence_key":"fixture:usn","evidence_flags":[]},"sequence_number":100,"action":"FILE_CREATE"},
+        {"observation_id":"usn-backwards","kind":"usn_change","subject":"C:\\Temp\\other.tmp","time":{"original":"2024-02-28T11:00:00Z","normalized_utc":"2024-02-28T11:00:00Z","basis":"explicit_utc","uncertainty_ms":1000,"normalization_rule":"fixture-iso","normalization_version":"1.0"},"provenance":{"source_id":"usn-mal","source_name":"ez.usnjrnl","selector":"usn:101","raw_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","parser_id":"fixture-usn","parser_version":"1.0","independence_key":"fixture:usn","evidence_flags":[]},"sequence_number":101,"action":"CLOSE"}
+      ]
+    },
+    {
+      "source_id":"logfile-mal","family":"logfile","parser_id":"fixture-logfile","parser_version":"1.0","status":"SUCCESS_NONEMPTY","rows_examined":1,"rows_total":1,
+      "observations":[
+        {"observation_id":"logfile-create","kind":"logfile_change","subject":"C:\\Temp\\payload.exe","time":{"original":"2024-03-01T12:00:00.500Z","normalized_utc":"2024-03-01T12:00:00.500Z","basis":"explicit_utc","uncertainty_ms":500,"normalization_rule":"fixture-iso","normalization_version":"1.0"},"provenance":{"source_id":"logfile-mal","source_name":"fixture.logfile","selector":"lsn:500","raw_digest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","parser_id":"fixture-logfile","parser_version":"1.0","independence_key":"fixture:logfile","evidence_flags":[]},"sequence_number":500,"action":"CREATE"}
+      ]
+    },
+    {
+      "source_id":"event-mal","family":"event_log","parser_id":"fixture-evtx","parser_version":"1.0","status":"SUCCESS_NONEMPTY","rows_examined":1,"rows_total":1,
+      "observations":[
+        {"observation_id":"event-clear","kind":"event_log_clear","subject":"Security","time":{"original":"2024-03-01T12:05:00Z","normalized_utc":"2024-03-01T12:05:00Z","basis":"explicit_utc","uncertainty_ms":1000,"normalization_rule":"fixture-iso","normalization_version":"1.0"},"provenance":{"source_id":"event-mal","source_name":"evtx.security","selector":"event:1102","raw_digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","parser_id":"fixture-evtx","parser_version":"1.0","independence_key":"fixture:evtx","evidence_flags":[]},"action":"security_log_cleared","attributes":{"event_id":1102}}
+      ]
+    },
+    {
+      "source_id":"process-mal","family":"process_file_state","parser_id":"fixture-process","parser_version":"1.0","status":"SUCCESS_NONEMPTY","rows_examined":1,"rows_total":1,
+      "observations":[
+        {"observation_id":"process-mismatch","kind":"process_file_mismatch","subject":"pid:4242","time":{"original":"2024-03-01T12:03:00Z","normalized_utc":"2024-03-01T12:03:00Z","basis":"explicit_utc","uncertainty_ms":1000,"normalization_rule":"fixture-iso","normalization_version":"1.0"},"provenance":{"source_id":"process-mal","source_name":"fixture.process-state","selector":"pid:4242","raw_digest":"sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","parser_id":"fixture-process","parser_version":"1.0","independence_key":"fixture:process","evidence_flags":[]},"action":"running_image_deleted","attributes":{"running_path":"C:\\Temp\\payload.exe","file_state":"deleted"}}
+      ]
+    },
+    {
+      "source_id":"vss-mal","family":"vss","parser_id":"fixture-vss","parser_version":"1.0","status":"SUCCESS_NONEMPTY","rows_examined":1,"rows_total":1,
+      "observations":[
+        {"observation_id":"vss-file","kind":"vss_file","subject":"C:\\Temp\\payload.exe","time":{"original":"2024-03-01T12:00:00Z","normalized_utc":"2024-03-01T12:00:00Z","basis":"explicit_utc","uncertainty_ms":1000,"normalization_rule":"fixture-iso","normalization_version":"1.0"},"provenance":{"source_id":"vss-mal","source_name":"fixture.vss-file","selector":"snapshot:7;path:C:\\Temp\\payload.exe","raw_digest":"sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","parser_id":"fixture-vss","parser_version":"1.0","independence_key":"fixture:vss","evidence_flags":[]}}
+      ]
+    }
+  ],
+  "clock_anchors": []
+}

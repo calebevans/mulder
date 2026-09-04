@@ -6,8 +6,9 @@ tools, hunts, completion gates, benchmark fixtures, and replay commitments
 through one registry Interface. Mulder does not search for, import, or execute
 code named by a pack manifest.
 
-There are no specialist packs in the core distribution yet. The contract is
-the stable Seam on which those packs can be built.
+The core distribution includes one explicitly registered specialist pack:
+`anti-forensics.clock`. The contract remains the stable Seam on which further
+reviewed packs can be built.
 
 ## Contract
 
@@ -108,3 +109,60 @@ benchmark expectation remain the source of those semantics.
 
 The public Interface is exported from `mulder.packs`; implementation details
 remain local to `mulder.packs.base`.
+
+## Built-in anti-forensics and clock pack
+
+Built-ins are trusted static declarations, but they are not silently enabled.
+Register and preflight the shipped pack through the same registry Interface:
+
+```python
+from mulder.packs import (
+    DomainPackRegistry,
+    PackRuntimeInventory,
+    anti_forensics_fixture_root,
+    register_builtin_packs,
+)
+
+registry = DomainPackRegistry()
+register_builtin_packs(registry)
+result = registry.enable(
+    ["anti-forensics.clock"],
+    PackRuntimeInventory(
+        available_capabilities=("forensic.local-read",),
+        parser_versions={
+            "anti-forensics-clock": "1.0",
+            "mftecmd-si-fn": "1.0",
+        },
+        fixture_root=anti_forensics_fixture_root(),
+    ),
+)
+```
+
+The pack retains the existing MFTECmd SI/FN detector and adds a strict
+`mulder.anti-forensics-clock` normalized-evidence Interface. Its workflow
+correlates:
+
+- `$STANDARD_INFORMATION` and `$FILE_NAME` creation times;
+- USN sequence/time order and file-change witnesses;
+- normalized `$LogFile` sequence observations when supplied by a supported
+  Adapter;
+- Windows event 104/1102 log clears;
+- normalized running/deleted/image-path mismatches;
+- VSS snapshots and normalized per-file historical witnesses; and
+- source-clock anchors, offset, drift, and uncertainty.
+
+Every time keeps its original representation beside normalized UTC, its
+normalization rule/version, declared uncertainty, and source selector/digest.
+A SI/FN backdate is only `confirmed` with a witness whose provenance has a
+different independence key. The sole no-witness exception is the versioned
+`ntfs-si-after-modified` rule at version `1.0`; other SI/FN differences remain
+`indicated`.
+
+The indexed-evidence Adapter supports the MFTECmd MFT/USN CSV and Mulder's
+python-evtx line formats. It inventories VSS creation times but cannot produce
+per-file VSS witnesses. Mulder does not currently include a raw `$LogFile`
+parser or a process/file-state normalizer. Those cells are reported as
+`UNSUPPORTED_VERSION`; absent MFT, USN, event-log, or VSS sources are
+`UNAVAILABLE`. Either state makes the aggregate result `PARTIAL`, never a
+clean result. Evidence-envelope flags are preserved as handling metadata and
+cannot create a finding.

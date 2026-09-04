@@ -1138,7 +1138,12 @@ def _analyze_mft_windows_for_timestomping(
 
 
 @mcp.tool()
-@tool_access(Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR | Role.NARRATIVE_EXECUTOR)
+@tool_access(
+    Role.EXTRACT_EXECUTOR
+    | Role.EXTRACT_ANALYST
+    | Role.CROSS_EXECUTOR
+    | Role.NARRATIVE_EXECUTOR
+)
 def detect_timestomping() -> dict[str, object]:
     """Analyze MFT data for files with manipulated timestamps (timestomping).
 

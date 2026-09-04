@@ -7,6 +7,7 @@ from mulder.server.tools import (  # noqa: F401  # noqa: F401
     bulk,
     case,
     chainsaw,
+    clock,
     composite,
     core,
     documents,

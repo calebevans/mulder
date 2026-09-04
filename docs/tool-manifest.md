@@ -1532,7 +1532,22 @@ Reads the indexed `ez.mft` source (MFTECmd output) and compares $STANDARD_INFORM
 
 **Returns:** `results[]` (file_path, si_created, fn_created, delta_hours, reason), `total_suspicious`, `false_positive_filtered`
 
-**Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR` `NARRATIVE_EXECUTOR`
+**Roles:** `EXTRACT_EXECUTOR` `EXTRACT_ANALYST` `CROSS_EXECUTOR` `NARRATIVE_EXECUTOR`
+
+### analyze_anti_forensics_clock
+
+Normalize indexed timestamp evidence and apply the built-in, versioned
+anti-forensics clock rules. Reads supported `ez.mft*`, `ez.usnjrnl*`,
+`evtx.*`, and `vshadow.info*` sources locally. Missing and unsupported evidence
+families remain explicit coverage outcomes; instruction-shaped evidence text
+is retained as inert provenance metadata.
+
+*No parameters.*
+
+**Returns:** `outcome`, `coverage[]`, `clock_models[]`, `observations[]`,
+`findings[]`
+
+**Roles:** `EXTRACT_EXECUTOR` `CROSS_EXECUTOR` `NARRATIVE_EXECUTOR`
 
 ---
 

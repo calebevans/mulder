@@ -1,0 +1,14 @@
+{
+  "schema": "mulder.anti-forensics-clock",
+  "schema_version": 1,
+  "case_id": "clean-clock-fixture",
+  "sources": [
+    {"source_id":"mft-clean","family":"mft","parser_id":"fixture-mft","parser_version":"1.0","status":"SUCCESS_EMPTY","rows_examined":2,"rows_total":2,"observations":[]},
+    {"source_id":"usn-clean","family":"usn","parser_id":"fixture-usn","parser_version":"1.0","status":"SUCCESS_EMPTY","rows_examined":2,"rows_total":2,"observations":[]},
+    {"source_id":"logfile-clean","family":"logfile","parser_id":"fixture-logfile","parser_version":"1.0","status":"SUCCESS_EMPTY","rows_examined":2,"rows_total":2,"observations":[]},
+    {"source_id":"event-clean","family":"event_log","parser_id":"fixture-evtx","parser_version":"1.0","status":"SUCCESS_EMPTY","rows_examined":2,"rows_total":2,"observations":[]},
+    {"source_id":"process-clean","family":"process_file_state","parser_id":"fixture-process","parser_version":"1.0","status":"SUCCESS_EMPTY","rows_examined":2,"rows_total":2,"observations":[]},
+    {"source_id":"vss-clean","family":"vss","parser_id":"fixture-vss","parser_version":"1.0","status":"SUCCESS_EMPTY","rows_examined":2,"rows_total":2,"observations":[]}
+  ],
+  "clock_anchors": []
+}

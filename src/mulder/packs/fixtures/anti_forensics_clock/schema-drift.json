@@ -1,0 +1,8 @@
+{
+  "schema": "mulder.anti-forensics-clock",
+  "schema_version": 1,
+  "case_id": "schema-drift-fixture",
+  "sources": [],
+  "clock_anchors": [],
+  "future_clock_policy": "silently-trust-everything"
+}
