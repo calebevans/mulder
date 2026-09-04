@@ -147,6 +147,7 @@ Each investigation produces:
 - **Append-only audit log** - JSONL recording every tool invocation with BLAKE2b output hashes
 - **Optional exports** - STIX 2.1 IOC bundle, CSV IOC list, and MITRE ATT&CK Navigator layer via `mulder export-iocs` and `mulder export-navigator`
 - **Portable case receipts** - seal evidence, logical database state, audit head, claims, tool versions, and reports with optional examiner-owned Ed25519 signing; verify relocation, signature state, and replay drift entirely offline
+- **Read-only case review** - inspect active/withdrawn revisions, bounded claim and anchor detail, coverage, receipt, costs, and explicit future-work placeholders through one CLI/report fact projection
 
 ## Documentation
 

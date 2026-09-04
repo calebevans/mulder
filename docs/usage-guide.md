@@ -37,6 +37,7 @@ Try-it-out instructions for running Mulder, the forensic investigation platform.
     - [`mulder setup`](#mulder-setup)
     - [`mulder serve`](#mulder-serve)
     - [`mulder report`](#mulder-report)
+    - [`mulder review`](#mulder-review)
     - [`mulder seal-case`](#mulder-seal-case)
     - [`mulder verify-case`](#mulder-verify-case)
     - [`mulder export-iocs`](#mulder-export-iocs)
@@ -565,6 +566,29 @@ Regenerates reports (Markdown, HTML, PDF) offline from an existing case database
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--db-dir` | `~/.mulder/cases` | Directory containing case databases |
+
+The static report consumes the same versioned case-review calculation as `mulder review` for
+proof cards, receipt/audit/replay state, costs, coverage, and observed phase state.
+
+### `mulder review`
+
+```
+mulder review <case_id> [--json] [PAGINATION OPTIONS]
+```
+
+Projects the authoritative SQLite database, audit log, receipt, and model-usage sidecar into one
+transport-neutral, read-only `mulder.case-review` document. Text output is intended for terminals;
+`--json` exposes the same bounded facts for automation. The command neither runs migrations nor
+starts MCP, a model, a web server, or a network client.
+
+Finding rows, exact evidence anchors, and immutable revision snapshots have independent
+offset/limit controls. Defaults are 100 findings, 200 anchors, and 200 revisions; enforced maxima
+are 500, 1000, and 1000. Page metadata always reports returned and total counts. Legacy missing
+tables and unavailable contradiction/follow-up/graph projections are explicit states, never empty
+facts interpreted as a completed or clean investigation.
+
+The database must be quiescent: a non-empty SQLite WAL or rollback journal is rejected. Review
+uses immutable read mode so it cannot migrate the schema or create SQLite sidecars.
 
 ### `mulder seal-case`
 
