@@ -32,6 +32,13 @@ from mulder.report.renderer import (
     _extract_iocs,
     _format_duration,
 )
+from mulder.security.provider_policy import (
+    OutboundField,
+    OutboundManifest,
+    OutboundRequest,
+    ProviderPolicy,
+    resolve_provider_route,
+)
 
 
 def _make_finding(**overrides: Any) -> Finding:
@@ -333,6 +340,43 @@ class TestRenderSmoke:
         assert "typed-value@1.2" in markdown
         assert "Proof Card" in html
         assert "sha256:key" in html
+
+    def test_render_reports_outbound_policy_status(self, tmp_path: Path) -> None:
+        renderer = ReportRenderer()
+        meta = CaseMetadataRow(
+            case_id="policy-case",
+            ingested_at="2025-01-01T00:00:00Z",
+            evidence_root="/evidence",
+            extractor_versions={},
+        )
+        summary = AuditSummary(
+            total_tool_calls=0,
+            total_findings=0,
+            tool_call_counts={},
+            total_duration_ms=0,
+            first_timestamp="",
+            last_timestamp="",
+        )
+        audit_path = tmp_path / "policy-case.audit.jsonl"
+        audit_path.write_text("")
+        ProviderPolicy(
+            manifest=OutboundManifest(tmp_path / "policy-case.outbound.jsonl")
+        ).authorize(
+            OutboundRequest(
+                case_id="policy-case",
+                route=resolve_provider_route("ollama/qwen3"),
+                fields=(OutboundField("prompt", "local question"),),
+            )
+        )
+
+        markdown, html, _pdf = renderer.render_all(meta, [], summary, audit_path)
+
+        assert "Provider-Bound Data Policy" in markdown
+        assert "1 (1 allowed, 0 denied)" in markdown
+        assert "ollama/qwen3" in markdown
+        assert "Provider-Bound Data Policy" in html
+        assert "local question" not in markdown
+        assert "local question" not in html
 
 
 class TestRenderNarrativeTemplate:

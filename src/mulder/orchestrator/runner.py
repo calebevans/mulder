@@ -13,6 +13,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +48,13 @@ from mulder.orchestrator.types import (
     extract_catalog_result,
 )
 from mulder.patterns import DEFAULT_DB_DIR, DEFAULT_WORKSPACE_DIR
+from mulder.security.provider_policy import (
+    OutboundManifest,
+    ProviderPolicy,
+    ProviderPolicyError,
+    preflight_zero_egress,
+    zero_egress_environment,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +82,7 @@ class Orchestrator:
         parallel_extractions: int = 3,
         proxy_config: str | None = None,
         case_id: str = "",
+        db_dir: str | Path = DEFAULT_DB_DIR,
     ) -> None:
         """Initialize the orchestrator.
 
@@ -90,6 +99,7 @@ class Orchestrator:
                 custom model routing.
             case_id: Case identifier used for the database filename and
                 referenced by all phases.
+            db_dir: Case sidecar directory for outbound manifest records.
         """
         self.evidence_path = evidence_path
         self.cwd = str(cwd)
@@ -97,8 +107,12 @@ class Orchestrator:
         self.effort = effort
         self.env = env or {}
         self._case_id: str = case_id
+        self._db_dir = Path(db_dir).expanduser()
         if self._case_id:
             self.env["MULDER_CASE_ID"] = self._case_id
+        self.env["MULDER_DATA_POLICY"] = self.model_config.data_policy.value
+        if self.model_config.zero_egress:
+            self.env.update(zero_egress_environment())
         self._last_session_id: str = ""
         self._parallel_extractions = max(1, parallel_extractions)
         self._phase_counter = 0
@@ -111,6 +125,11 @@ class Orchestrator:
         self._active_systems: list[str] = []
         self._cached_catalog_data: dict[str, Any] | None = None
         self.dashboard = InvestigationDashboard()
+        self._provider_policy = ProviderPolicy(
+            self.model_config.data_policy,
+            zero_egress=self.model_config.zero_egress,
+            manifest=OutboundManifest(self._db_dir / f"{self._case_id}.outbound.jsonl"),
+        )
         self._session = SessionExecutor(
             dashboard=self.dashboard,
             model_config=self.model_config,
@@ -118,6 +137,8 @@ class Orchestrator:
             env=self.env,
             effort=self.effort,
             using_proxy=self._using_proxy,
+            provider_policy=self._provider_policy,
+            case_id=self._case_id,
         )
         self._roles = RoleRunner(
             session=self._session,
@@ -131,7 +152,7 @@ class Orchestrator:
         self._server = ServerBridge(case_id=self._case_id)
         self._log_tailer = LogTailer(
             dashboard=self.dashboard,
-            log_path=Path(DEFAULT_DB_DIR).expanduser() / "mulder.log",
+            log_path=self._db_dir / "mulder.log",
         )
 
     async def run(self) -> InvestigationResult:
@@ -148,6 +169,7 @@ class Orchestrator:
         self._total_phases = 5
         self._phase_counter = 0
 
+        self._preflight_provider_routes()
         self._start_proxy_if_needed()
         self._running = True
         self._log_tailer.start(is_running=lambda: self._running)
@@ -181,6 +203,7 @@ class Orchestrator:
         self._proxy = ProxyManager(
             models=proxy_models,
             config_path=self._proxy_config,
+            process_env=self.env,
         )
         self._proxy.start()
         self._using_proxy = True
@@ -191,6 +214,18 @@ class Orchestrator:
             len(proxy_models),
             self._proxy.port,
         )
+
+    def _preflight_provider_routes(self) -> None:
+        """Reject unverifiable airgap routes before starting an adapter."""
+        if not self.model_config.zero_egress:
+            return
+        violations = preflight_zero_egress(
+            models=self.model_config.all_models,
+            env={**os.environ, **self.env},
+            proxy_config=self._proxy_config,
+        )
+        if violations:
+            raise ProviderPolicyError("zero-egress preflight failed: " + "; ".join(violations))
 
     def _stop_proxy(self) -> None:
         """Stop the LiteLLM proxy if one was started."""
@@ -816,8 +851,7 @@ class Orchestrator:
         if not model_data or not self._case_id:
             return
 
-        db_dir = Path("~/.mulder/cases").expanduser()
-        usage_path = db_dir / f"{self._case_id}.model_usage.json"
+        usage_path = self._db_dir / f"{self._case_id}.model_usage.json"
         try:
             entries = []
             for model_name, counts in sorted(model_data.items()):

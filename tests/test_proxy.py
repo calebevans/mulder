@@ -102,6 +102,25 @@ class TestProxyManager:
         assert pm._process is mock_proc
 
     @patch("shutil.which", return_value="/usr/local/bin/litellm")
+    @patch("mulder.orchestrator.proxy._wait_for_health", return_value=True)
+    @patch("subprocess.Popen")
+    def test_process_environment_disables_proxy_telemetry(
+        self, mock_popen: MagicMock, _mock_health: MagicMock, _mock_which: MagicMock
+    ) -> None:
+        mock_popen.return_value = MagicMock()
+        pm = ProxyManager(
+            models=["ollama/qwen3"],
+            port=4000,
+            process_env={"OTEL_SDK_DISABLED": "true", "DO_NOT_TRACK": "1"},
+        )
+
+        pm.start()
+
+        process_env = mock_popen.call_args.kwargs["env"]
+        assert process_env["OTEL_SDK_DISABLED"] == "true"
+        assert process_env["DO_NOT_TRACK"] == "1"
+
+    @patch("shutil.which", return_value="/usr/local/bin/litellm")
     @patch("mulder.orchestrator.proxy._wait_for_health", return_value=False)
     @patch("subprocess.Popen")
     def test_start_health_check_fails(

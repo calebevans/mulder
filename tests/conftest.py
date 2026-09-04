@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Generator
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import ModuleType
 from unittest.mock import MagicMock
@@ -25,7 +26,15 @@ def _install_sdk_stub() -> None:
     sdk.query = MagicMock  # type: ignore[attr-defined]
 
     types_mod = ModuleType("claude_agent_sdk.types")
+
+    @dataclass
+    class HookMatcher:
+        matcher: str | None = None
+        hooks: list[object] = field(default_factory=list)
+        timeout: float | None = None
+
     types_mod.AssistantMessage = MagicMock  # type: ignore[attr-defined]
+    types_mod.HookMatcher = HookMatcher  # type: ignore[attr-defined]
     types_mod.ResultMessage = MagicMock  # type: ignore[attr-defined]
     types_mod.TextBlock = MagicMock  # type: ignore[attr-defined]
     types_mod.ToolUseBlock = MagicMock  # type: ignore[attr-defined]

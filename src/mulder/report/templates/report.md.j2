@@ -218,6 +218,23 @@ These hypotheses were explicitly tested and no supporting evidence was found.
 | Estimated output tokens | {{ estimated_output_tokens | tokformat }} |
 {% endif %}| Audit log | {{ audit_log_path }} |
 
+### Provider-Bound Data Policy
+
+| Metric | Value |
+|--------|-------|
+| Manifest status | `{{ outbound_policy.status }}` |
+| Case policy | `{{ outbound_policy.policy }}` |
+| Zero egress | {{ "enabled" if outbound_policy.zero_egress else "disabled" }} |
+| Provider requests | {{ outbound_policy.request_count }} ({{ outbound_policy.allowed_count }} allowed, {{ outbound_policy.denied_count }} denied) |
+| Allowed outbound bytes | {{ outbound_policy.allowed_byte_size }} |
+| Providers | {{ outbound_policy.providers | join(", ") or "not recorded" }} |
+| Models | {{ outbound_policy.models | join(", ") or "not recorded" }} |
+| Fields sent | {{ outbound_policy.field_names | join(", ") or "none recorded" }} |
+| Denied fields (not sent) | {{ outbound_policy.denied_field_names | join(", ") or "none" }} |
+
+The append-only outbound manifest records content hashes and byte/count
+accounting, never provider-bound field values.
+
 {% if model_token_breakdown %}
 ### Token Usage by Model
 

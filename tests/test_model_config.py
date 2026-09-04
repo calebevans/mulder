@@ -12,6 +12,7 @@ from mulder.orchestrator.models import (
     _BUILT_IN_DEFAULTS,
     ModelConfig,
 )
+from mulder.security.provider_policy import CaseDataPolicy
 
 
 class TestResolveRoleDefault:
@@ -181,3 +182,38 @@ class TestRequiresProxy:
         )
         config = ModelConfig.from_args(config_path=str(config_file))
         assert config.requires_proxy is True
+
+
+class TestProviderPolicyConfig:
+    """Case data policy defaults and YAML/CLI precedence."""
+
+    def test_compatibility_default_is_sensitive_approved(self) -> None:
+        config = ModelConfig.from_args()
+        assert config.data_policy is CaseDataPolicy.SENSITIVE_APPROVED
+        assert config.zero_egress is False
+
+    def test_yaml_policy_and_zero_egress(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(yaml.dump({"data_policy": "local-only", "zero_egress": True}))
+        config = ModelConfig.from_args(config_path=str(config_file))
+        assert config.data_policy is CaseDataPolicy.LOCAL_ONLY
+        assert config.zero_egress is True
+
+    def test_cli_policy_and_airgap_override_yaml(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(yaml.dump({"data_policy": "metadata-only", "zero_egress": True}))
+        config = ModelConfig.from_args(
+            config_path=str(config_file),
+            data_policy="sensitive-approved",
+            zero_egress=False,
+        )
+        assert config.data_policy is CaseDataPolicy.SENSITIVE_APPROVED
+        assert config.zero_egress is False
+
+    def test_invalid_policy_rejected(self, tmp_path: Path) -> None:
+        import click
+
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(yaml.dump({"data_policy": "upload-everything"}))
+        with pytest.raises(click.ClickException, match="Invalid data_policy"):
+            ModelConfig.from_args(config_path=str(config_file))

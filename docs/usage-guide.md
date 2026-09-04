@@ -387,6 +387,40 @@ mulder investigate /evidence my-case \
 
 See the [LiteLLM documentation](https://docs.litellm.ai/docs/proxy/configs) for config file format details.
 
+### Provider-bound data policy and airgap mode
+
+Every model request is authorized before the provider adapter is constructed.
+Mulder appends a `<case-id>.outbound.jsonl` record containing field names,
+counts, UTF-8 byte sizes, SHA-256 content hashes, provider/model, and the
+permit/deny reason. Initial prompt/system fields and dynamic MCP tool-response
+fields are recorded at their respective pre-serialization hooks. Field values
+and secrets are never written to this manifest.
+
+Choose one case policy:
+
+- `sensitive-approved` preserves the previous provider behavior and permits
+  evidence content, including content marked sensitive by the evidence envelope.
+- `metadata-only` permits only fields explicitly classified as metadata on
+  non-local routes. Normal investigation prompts are content and are denied.
+- `local-only` permits model content only on a local route and also disables
+  external threat-intelligence calls.
+
+For a zero-egress run, every configured model must use a local `ollama/` route:
+
+```bash
+mulder investigate /evidence my-case \
+  --model ollama/qwen3 \
+  --data-policy local-only \
+  --airgap
+```
+
+Airgap preflight rejects cloud routes and fallbacks, remote Ollama endpoints,
+custom proxy configurations, configured telemetry endpoints, and declared
+egress adapters before starting a provider adapter. It also disables telemetry
+in the SDK, local LiteLLM proxy, and MCP subprocess, and blocks external threat
+intelligence before an HTTP client is constructed. The same settings can be
+stored in YAML as `data_policy: local-only` and `zero_egress: true`.
+
 ## Case Briefing
 
 You can provide investigation context by placing a `MULDER.md` file in the root of your evidence directory. This is optional but recommended when you have background knowledge about the case.
@@ -465,6 +499,8 @@ Runs a full multi-phase forensic investigation.
 | `--db-dir` | `~/.mulder/cases` | Case database directory |
 | `--cwd` | `~/.mulder/workspace` | Working directory for agent sessions. Also settable via `MULDER_CWD`; the container sets it to `/mulder-investigation`. Created on first use, along with a default `.mcp.json` |
 | `--proxy-config` | None | LiteLLM config YAML for custom model routing |
+| `--data-policy` | `sensitive-approved` | Provider-bound case policy: `local-only`, `metadata-only`, or `sensitive-approved` |
+| `--airgap` | off | Require verified local model routes and disable all known runtime egress paths |
 
 ### `mulder setup`
 
@@ -507,6 +543,7 @@ Starts the MCP server standalone. Normally invoked automatically by the orchestr
 | `--workers` | `8` | Concurrent tool execution threads |
 | `--mem-limit` | `90` | Memory usage % threshold (0 to disable) |
 | `--cpu-limit` | `90` | CPU usage % threshold (0 to disable) |
+| `--airgap` | off | Disable external threat intelligence and telemetry-capable egress paths |
 
 ### `mulder report`
 

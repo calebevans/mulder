@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from unittest.mock import patch
+
 from click.testing import CliRunner
 
 from mulder.cli import cli
@@ -58,6 +61,29 @@ class TestCliInvestigate:
         result = runner.invoke(cli, ["investigate", "--help"])
         assert result.exit_code == 0
         assert "EVIDENCE_PATH" in result.output
+        assert "--data-policy" in result.output
+        assert "--airgap" in result.output
+
+    def test_airgap_preflight_rejects_default_cloud_models(self, tmp_path: Path) -> None:
+        """CLI fails before constructing an orchestrator for cloud routes."""
+        runner = CliRunner()
+        with patch("mulder.orchestrator.runner.Orchestrator") as orchestrator:
+            result = runner.invoke(
+                cli,
+                [
+                    "investigate",
+                    "/evidence",
+                    "case-42",
+                    "--airgap",
+                    "--cwd",
+                    str(tmp_path / "workspace"),
+                    "--db-dir",
+                    str(tmp_path / "cases"),
+                ],
+            )
+        assert result.exit_code != 0
+        assert "zero-egress preflight failed" in result.output
+        orchestrator.assert_not_called()
 
 
 class TestCliExportCommands:

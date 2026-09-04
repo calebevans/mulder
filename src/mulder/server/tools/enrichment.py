@@ -18,6 +18,10 @@ from typing import Any, Literal
 
 import httpx
 
+from mulder.security.provider_policy import (
+    EgressCapability,
+    require_capability_disabled,
+)
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import hash_output, make_tool_call_id
@@ -533,6 +537,9 @@ async def enrich_iocs(
         List of enrichment dicts, one per IOC, containing source
         results and an aggregate threat score.
     """
+    # This check deliberately precedes AsyncClient construction so zero-egress
+    # cases never hand IOC or credential values to a network adapter.
+    require_capability_disabled(EgressCapability.EXTERNAL_THREAT_INTELLIGENCE)
     ctx = get_ctx()
     tc_id = make_tool_call_id()
     t0 = time.monotonic()

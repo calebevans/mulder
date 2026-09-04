@@ -11,11 +11,12 @@ import json
 import logging
 import os
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from claude_agent_sdk import ClaudeAgentOptions, query
 from claude_agent_sdk.types import (
     AssistantMessage,
+    HookMatcher,
     ResultMessage,
     TextBlock,
     ToolUseBlock,
@@ -25,6 +26,23 @@ from mulder.orchestrator.display import InvestigationDashboard
 from mulder.orchestrator.errors import AuthenticationError, ModelNotAvailableError
 from mulder.orchestrator.models import ModelConfig
 from mulder.orchestrator.types import EffortLevel, PhaseResult, extract_json_from_text
+from mulder.security.provider_policy import (
+    DataClassification,
+    OutboundField,
+    OutboundRequest,
+    ProviderPolicy,
+    ProviderRoute,
+    resolve_provider_route,
+)
+
+if TYPE_CHECKING:
+    from claude_agent_sdk.types import (
+        HookContext,
+        HookEvent,
+        HookInput,
+        HookJSONOutput,
+        PostToolUseHookInput,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +173,8 @@ class SessionExecutor:
         env: dict[str, str],
         effort: EffortLevel,
         using_proxy: bool = False,
+        provider_policy: ProviderPolicy | None = None,
+        case_id: str = "",
     ) -> None:
         """Initialize the session executor.
 
@@ -166,6 +186,9 @@ class SessionExecutor:
             effort: Effort level for agent sessions (max, xhigh, high, low).
             using_proxy: Whether a LiteLLM proxy is active (disables
                 per-message token tracking to avoid double counting).
+            provider_policy: Provider-bound data policy. The compatibility
+                default permits sensitive data and records no manifest.
+            case_id: Case identity written to outbound manifest entries.
         """
         self._dashboard = dashboard
         self._model_config = model_config
@@ -173,6 +196,8 @@ class SessionExecutor:
         self._env = env
         self._effort = effort
         self._using_proxy = using_proxy
+        self._provider_policy = provider_policy or ProviderPolicy()
+        self._case_id = case_id
 
     async def execute(
         self,
@@ -208,6 +233,11 @@ class SessionExecutor:
         Returns:
             PhaseResult with collected messages and usage information.
         """
+        provider_route = self._authorize_model_request(
+            model=model,
+            prompt=prompt,
+            system_prompt=system_prompt,
+        )
         options = ClaudeAgentOptions(
             system_prompt=system_prompt,
             model=model,
@@ -221,6 +251,7 @@ class SessionExecutor:
             env=self._env,
             stderr=self._dashboard.suppress_stderr,
             max_buffer_size=_MAX_BUFFER_SIZE_BYTES,
+            hooks=self._provider_policy_hooks(provider_route),
         )
 
         messages: list[str] = []
@@ -595,6 +626,11 @@ class SessionExecutor:
         """
         utility_model = self._model_config.resolve("utility", "planner")
 
+        provider_route = self._authorize_model_request(
+            model=utility_model,
+            prompt=prompt,
+            system_prompt="",
+        )
         options = ClaudeAgentOptions(
             model=utility_model,
             max_turns=max_turns,
@@ -605,6 +641,7 @@ class SessionExecutor:
             effort="low",
             env=self._env,
             stderr=self._dashboard.suppress_stderr,
+            hooks=self._provider_policy_hooks(provider_route),
         )
 
         collected_text: list[str] = []
@@ -652,6 +689,74 @@ class SessionExecutor:
         full_text = "\n".join(collected_text)
         parsed = extract_json_from_text(full_text)
         return parsed if parsed else None
+
+    def _authorize_model_request(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        system_prompt: str,
+    ) -> ProviderRoute:
+        """Authorize declared SDK fields before constructing SDK options.
+
+        Field values are available only to the policy decision in process.
+        Manifest serialization contains hashes and accounting metadata only.
+        """
+        fields = [
+            OutboundField("prompt", prompt, DataClassification.CONTENT),
+        ]
+        if system_prompt:
+            fields.insert(
+                0,
+                OutboundField("system_prompt", system_prompt, DataClassification.CONTENT),
+            )
+        route = resolve_provider_route(model, {**os.environ, **self._env})
+        self._provider_policy.authorize(
+            OutboundRequest(
+                case_id=self._case_id,
+                route=route,
+                fields=tuple(fields),
+            )
+        )
+        return route
+
+    def _provider_policy_hooks(self, route: ProviderRoute) -> dict[HookEvent, list[HookMatcher]]:
+        """Authorize dynamic tool results before the SDK sends another turn."""
+
+        async def authorize_tool_response(
+            hook_input: HookInput,
+            _tool_use_id: str | None,
+            _context: HookContext,
+        ) -> HookJSONOutput:
+            post_tool_input = cast("PostToolUseHookInput", hook_input)
+            response = post_tool_input.get("tool_response")
+            if isinstance(response, (str, bytes)):
+                outbound_value = response
+            else:
+                outbound_value = json.dumps(
+                    response,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    default=str,
+                )
+            tool_name = str(post_tool_input.get("tool_name", "unknown"))
+            self._provider_policy.authorize(
+                OutboundRequest(
+                    case_id=self._case_id,
+                    route=route,
+                    fields=(
+                        OutboundField(
+                            f"tool_response:{tool_name}",
+                            outbound_value,
+                            DataClassification.CONTENT,
+                        ),
+                    ),
+                )
+            )
+            return {}
+
+        return {"PostToolUse": [HookMatcher(hooks=[authorize_tool_response])]}
 
     def _track_utility_tokens(self, result: ResultMessage, label: str) -> None:
         """Extract token usage from a utility query's ResultMessage.

@@ -17,6 +17,7 @@ import click
 import yaml
 
 from mulder.orchestrator.proxy import is_proxy_model
+from mulder.security.provider_policy import CaseDataPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,8 @@ _KNOWN_CONFIG_KEYS: frozenset[str] = frozenset(
         "phases",
         "effort",
         "workers",
+        "data_policy",
+        "zero_egress",
     }
 )
 
@@ -52,6 +55,8 @@ class ModelConfig:
     executor: str = _BUILT_IN_DEFAULTS["executor"]
     analyst: str = _BUILT_IN_DEFAULTS["analyst"]
     phase_overrides: dict[str, dict[str, str]] = field(default_factory=dict)
+    data_policy: CaseDataPolicy = CaseDataPolicy.SENSITIVE_APPROVED
+    zero_egress: bool = False
 
     def resolve(self, phase: str, role: str) -> str:
         """Return the model identifier for a given phase and role.
@@ -87,6 +92,14 @@ class ModelConfig:
             role_models.extend(overrides.values())
         return any(is_proxy_model(m) for m in role_models)
 
+    @property
+    def all_models(self) -> tuple[str, ...]:
+        """Return every configured route, including per-phase overrides."""
+        models = [self.planner, self.executor, self.analyst]
+        for overrides in self.phase_overrides.values():
+            models.extend(overrides.values())
+        return tuple(dict.fromkeys(models))
+
     @classmethod
     def from_args(
         cls,
@@ -95,6 +108,8 @@ class ModelConfig:
         executor_model: str | None = None,
         analyst_model: str | None = None,
         config_path: str | None = None,
+        data_policy: str | None = None,
+        zero_egress: bool | None = None,
     ) -> ModelConfig:
         """Construct a ModelConfig from CLI arguments and optional YAML config.
 
@@ -111,6 +126,8 @@ class ModelConfig:
             executor_model: Explicit executor model from CLI.
             analyst_model: Explicit analyst model from CLI.
             config_path: Path to a YAML configuration file.
+            data_policy: Explicit provider-bound case policy.
+            zero_egress: Whether to require local-only runtime routes.
 
         Returns:
             Fully resolved ModelConfig instance.
@@ -153,11 +170,27 @@ class ModelConfig:
             or _BUILT_IN_DEFAULTS["analyst"]
         )
 
+        configured_policy = data_policy or str(
+            file_config.get("data_policy", CaseDataPolicy.SENSITIVE_APPROVED.value)
+        )
+        try:
+            resolved_policy = CaseDataPolicy(configured_policy)
+        except ValueError as exc:
+            choices = ", ".join(policy.value for policy in CaseDataPolicy)
+            raise click.ClickException(
+                f"Invalid data_policy {configured_policy!r}; choose one of: {choices}"
+            ) from exc
+        file_zero_egress = file_config.get("zero_egress", False)
+        if not isinstance(file_zero_egress, bool):
+            raise click.ClickException("Config key zero_egress must be true or false")
+
         return cls(
             planner=planner,
             executor=executor,
             analyst=analyst,
             phase_overrides=phase_overrides,
+            data_policy=resolved_policy,
+            zero_egress=file_zero_egress if zero_egress is None else zero_egress,
         )
 
 
