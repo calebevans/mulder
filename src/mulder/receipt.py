@@ -707,6 +707,7 @@ def seal_case(
     overwrite: bool = False,
     key_provider: ExaminerKeyProvider | None = None,
     require_approval: bool = False,
+    require_resolved_contradictions: bool = False,
 ) -> Path:
     """Create a versioned manifest binding one complete case snapshot.
 
@@ -715,7 +716,9 @@ def seal_case(
     command refuses stale registry entries and invalid audit chains so a newly
     created receipt verifies at the moment it is written. When approval is
     required, the signed/hashed manifest embeds the exact approved claim-set
-    and audit-head commitments.
+    and audit-head commitments. Set
+    ``require_resolved_contradictions`` to opt into a policy that refuses a
+    seal while an append-only material contradiction lacks a resolution.
     """
     db_dir = Path(db_dir).expanduser().resolve(strict=False)
     db_path = db_dir / f"{case_id}.db"
@@ -738,6 +741,21 @@ def seal_case(
             approval = ReviewWorkflow(case_id, db_dir).require_approved_state().as_mapping()
         except ReviewWorkflowError as exc:
             raise SealError(f"Approval gate failed: {exc}") from exc
+
+    reasoning_assessment = None
+    if require_resolved_contradictions:
+        from mulder.reasoning import assess_reasoning_seal
+
+        reasoning_assessment = assess_reasoning_seal(
+            db_path,
+            require_resolved_contradictions=True,
+        )
+        if not reasoning_assessment.allowed:
+            unresolved = ", ".join(reasoning_assessment.unresolved_material_contradiction_ids)
+            raise SealError(
+                "Unresolved material contradictions block sealing under the "
+                f"requested policy: {unresolved}"
+            )
 
     _assert_quiescent_database(db_path)
     database = _snapshot_database(db_path)
@@ -888,6 +906,10 @@ def seal_case(
     }
     if approval is not None:
         manifest["review_approval"] = approval
+    if reasoning_assessment is not None:
+        cast(dict[str, object], manifest["methodology"])["reasoning_seal_gate"] = (
+            reasoning_assessment.model_dump(mode="json")
+        )
     if key_provider is not None:
         cast(dict[str, object], manifest["integrity"])["signature"] = create_signature_block(
             manifest, key_provider

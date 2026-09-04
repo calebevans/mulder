@@ -121,6 +121,49 @@ Superseded and refuted relations are labelled explicitly when included.
 {% endfor %}
 {% endif %}
 
+{% if has_reasoning_review %}
+---
+
+## Competing Hypotheses and Specialist Review
+
+Hypothesis checks and reviewer verdicts are advisory records. They remain
+separate and do not vote an atomic claim into a verified state.
+
+{% if reasoning_review.unresolved_material_contradiction_ids %}
+**Unresolved material contradictions:** {% for contradiction_id in reasoning_review.unresolved_material_contradiction_ids %}`{{ contradiction_id }}`{% if not loop.last %}, {% endif %}{% endfor %}
+{% endif %}
+
+{% for hypothesis in reasoning_review.hypotheses %}
+### {{ hypothesis.title }}
+
+- ID: `{{ hypothesis.hypothesis_id }}`; competing group: `{{ hypothesis.competing_group }}`
+- Statement: {{ hypothesis.statement }}
+{% for discriminator in hypothesis.discriminators %}
+- **Expected observation {{ discriminator.ordinal }}:** {{ discriminator.expected_observation }}
+  - Falsifier: {{ discriminator.falsifier }}
+  - Estimated cost: {{ discriminator.estimated_cost.amount }} {{ discriminator.estimated_cost.unit }}{% if discriminator.estimated_cost.basis %} ({{ discriminator.estimated_cost.basis }}){% endif %}
+{% if discriminator.test_results %}{% for result in discriminator.test_results %}  - Test `{{ result.outcome }}`: {{ result.summary }}{% if result.claim_ids %} — claims {% for claim_id in result.claim_ids %}`{{ claim_id }}`{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}
+{% endfor %}{% else %}  - No test result recorded.
+{% endif %}{% endfor %}
+{% endfor %}
+
+{% if reasoning_review.contradictions %}
+### Contradictions
+
+{% for contradiction in reasoning_review.contradictions %}- {% if contradiction.material and not contradiction.resolution %}**UNRESOLVED MATERIAL**{% elif contradiction.resolution %}`{{ contradiction.resolution.disposition }}`{% else %}unresolved non-material{% endif %} `{{ contradiction.contradiction_id }}`: {{ contradiction.description }}{% if contradiction.resolution %} — {{ contradiction.resolution.rationale }}{% endif %}
+{% endfor %}
+{% endif %}
+
+### Independent Reviewer Seats
+
+{% for seat in reasoning_review.review_seats %}#### {{ seat.seat | replace('_', ' ') | title }}
+
+{% if seat.verdicts %}{% for verdict in seat.verdicts %}- `{{ verdict.verdict }}` on {{ verdict.target_kind }} `{{ verdict.target_id }}`{% if verdict.material %} (material){% endif %}: {{ verdict.rationale }} — {{ verdict.reviewer_id }}
+{% endfor %}{% else %}No verdict recorded.
+{% endif %}
+{% endfor %}
+{% endif %}
+
 {% if negative_findings %}
 ---
 

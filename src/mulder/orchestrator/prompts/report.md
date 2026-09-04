@@ -8,6 +8,8 @@ REQUIRED ACTIONS:
    - Call get_ioc_summary for a consolidated view of indicators of compromise.
    - Call get_bookmarks for analyst-flagged evidence windows.
    - Call get_source_stats to confirm evidence coverage and source counts.
+   - Call get_reasoning_review to retrieve competing hypotheses, discriminator
+     tests, unresolved contradictions, and each independent reviewer seat.
 3. RECONCILIATION CHECK (mandatory before writing):
    Review all findings returned by get_findings. These represent the
    AUTHORITATIVE final state of the investigation. Your narrative MUST
@@ -21,6 +23,9 @@ REQUIRED ACTIONS:
      current assessment, not the original.
    The findings database is ground truth. The narrative serves the
    findings, not the other way around.
+   Reviewer verdicts remain separate advisory assessments: do not use a
+   majority vote to turn any unverified, contradicted, or inconclusive atomic
+   claim into verified fact. Surface unresolved material contradictions.
 4. Write a comprehensive investigation narrative using submit_narrative.
 
    When citing numeric totals in the narrative (finding counts, source

@@ -572,6 +572,10 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
       <span class="nav-icon">&#9678;</span> Entity Graph
       <span class="nav-badge">{{ graph_visualizations | length }}</span>
     </a>{% endif %}
+    {% if has_reasoning_review %}<a class="nav-item" onclick="navigate('reasoning')" data-page="reasoning">
+      <span class="nav-icon">&#8644;</span> Hypotheses
+      {% if reasoning_review.unresolved_material_contradiction_ids %}<span class="nav-badge">{{ reasoning_review.unresolved_material_contradiction_ids | length }}</span>{% endif %}
+    </a>{% endif %}
     <div class="nav-section-label">Appendices</div>
     <a class="nav-item" onclick="navigate('findings')" data-page="findings">
       <span class="nav-icon">&#9888;</span> Findings
@@ -840,6 +844,69 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
     <div class="card-body">{{ visualization.svg }}</div>
   </div>
   {% endfor %}
+</div>
+{% endif %}
+
+{% if has_reasoning_review %}
+<!-- ==================== COMPETING HYPOTHESES ==================== -->
+<div class="page" id="page-reasoning">
+  <div class="page-header">
+    <h2>Competing Hypotheses and Specialist Review</h2>
+    <div class="subtitle">Append-only observations and independent reviewer seats; no majority-vote truth</div>
+  </div>
+  {% if reasoning_review.unresolved_material_contradiction_ids %}
+  <div class="card" style="border-color:var(--critical-border);margin-bottom:1rem;">
+    <div class="card-header" style="color:var(--critical);">Unresolved Material Contradictions</div>
+    <div class="card-body">
+      {% for contradiction_id in reasoning_review.unresolved_material_contradiction_ids %}<code>{{ contradiction_id }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+    </div>
+  </div>
+  {% endif %}
+  {% for hypothesis in reasoning_review.hypotheses %}
+  <div class="card" style="margin-bottom:1rem;">
+    <div class="card-header">{{ hypothesis.title }} <code>{{ hypothesis.hypothesis_id }}</code></div>
+    <div class="card-body">
+      <div class="text-muted" style="margin-bottom:0.75rem;">Competing group <code>{{ hypothesis.competing_group }}</code></div>
+      <p>{{ hypothesis.statement }}</p>
+      {% for discriminator in hypothesis.discriminators %}
+      <div class="ev-item" style="display:block;cursor:default;margin-top:0.65rem;">
+        <strong>Expected observation {{ discriminator.ordinal }}</strong>: {{ discriminator.expected_observation }}
+        <div style="margin-top:0.35rem;"><strong>Falsifier:</strong> {{ discriminator.falsifier }}</div>
+        <div style="margin-top:0.35rem;"><strong>Estimated cost:</strong> {{ discriminator.estimated_cost.amount }} {{ discriminator.estimated_cost.unit }}{% if discriminator.estimated_cost.basis %} ({{ discriminator.estimated_cost.basis }}){% endif %}</div>
+        {% if discriminator.test_results %}
+        {% for result in discriminator.test_results %}<div style="margin-top:0.45rem;"><span class="badge badge-info">{{ result.outcome }}</span> {{ result.summary }}{% if result.claim_ids %}<br><span class="text-dim">Claims: {% for claim_id in result.claim_ids %}<code>{{ claim_id }}</code>{% if not loop.last %}, {% endif %}{% endfor %}</span>{% endif %}</div>{% endfor %}
+        {% else %}<div class="text-dim" style="margin-top:0.45rem;">No test result recorded.</div>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+  {% if reasoning_review.contradictions %}
+  <div class="card" style="margin-bottom:1rem;">
+    <div class="card-header">Contradictions</div>
+    <div class="card-body">
+      {% for contradiction in reasoning_review.contradictions %}
+      <div class="ev-item" style="display:block;cursor:default;">
+        {% if contradiction.material and not contradiction.resolution %}<span class="badge badge-critical">unresolved material</span>{% elif contradiction.resolution %}<span class="badge badge-low">{{ contradiction.resolution.disposition }}</span>{% else %}<span class="badge badge-info">unresolved non-material</span>{% endif %}
+        <code>{{ contradiction.contradiction_id }}</code> &mdash; {{ contradiction.description }}
+        {% if contradiction.resolution %}<div class="text-muted" style="margin-top:0.35rem;">{{ contradiction.resolution.rationale }}</div>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+  <div class="card">
+    <div class="card-header">Independent Reviewer Seats</div>
+    <div class="card-body">
+      <p class="text-muted">Verdicts stay separate and cannot change atomic-claim verification state.</p>
+      {% for seat in reasoning_review.review_seats %}
+      <h3 style="margin-top:1rem;">{{ seat.seat | replace('_', ' ') | title }}</h3>
+      {% if seat.verdicts %}{% for verdict in seat.verdicts %}
+      <div class="ev-item" style="display:block;cursor:default;"><span class="badge badge-info">{{ verdict.verdict }}</span> {{ verdict.target_kind }} <code>{{ verdict.target_id }}</code>{% if verdict.material %} <span class="badge badge-critical">material</span>{% endif %}<div style="margin-top:0.35rem;">{{ verdict.rationale }}</div><div class="text-dim">Reviewer: {{ verdict.reviewer_id }}</div></div>
+      {% endfor %}{% else %}<div class="text-dim">No verdict recorded.</div>{% endif %}
+      {% endfor %}
+    </div>
+  </div>
 </div>
 {% endif %}
 

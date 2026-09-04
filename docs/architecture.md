@@ -159,7 +159,7 @@ flowchart TD
     retryR --> report
 ```
 
-The Alternative Narrative phase (Phase 4) combines counter-analysis with audit responsibilities (evidence coverage, tool coverage, deduplication). Its gate checks finalize readiness before proceeding to the report phase.
+The Alternative Narrative phase (Phase 4) combines counter-analysis with audit responsibilities (evidence coverage, tool coverage, deduplication). Competing hypotheses are stored with expected observations, falsifiers, estimated cost, and append-only test outcomes. Citation, tool-semantics, contradiction, inference, and scope reviewer seats remain independent advisory records rather than a majority-vote truth mechanism. Its normal gate checks finalize readiness before proceeding to the report phase; deployments can separately opt into `seal-case --require-resolved-contradictions` so unresolved material contradictions prevent sealing without changing the default workflow.
 
 ### Phase Configuration
 

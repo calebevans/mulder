@@ -41,7 +41,7 @@ Each gate validates structural criteria (minimum sources indexed, findings submi
 
 **Anti-hallucination at the API boundary.** Every finding must cite `evidence_refs` that are real `tool_call_id` values from the append-only audit log. The MCP server validates these references at submission time and rejects findings that cite nonexistent tool calls. Timestamps are validated as ISO-8601 and auto-nullified when they appear fabricated. This is enforced architecturally, not by prompting.
 
-**Adversarial self-review.** Phase 4 explicitly challenges the primary narrative before report generation. It formulates counter-hypotheses, searches for disconfirming evidence, and runs coverage audits to identify which tools were applicable but never invoked and which evidence sources were indexed but never cited.
+**Adversarial self-review.** Phase 4 explicitly challenges the primary narrative before report generation. It persists competing hypotheses with expected observations, falsifiers, estimated checking cost, and append-only test results. Citation, tool-semantics, contradiction, inference, and scope reviewers retain separate verdicts; no reviewer vote changes an atomic claim's verification state. Coverage audits identify which tools were applicable but never invoked and which evidence sources were indexed but never cited.
 
 **Token efficiency.** The SRL-2018 investigation (11 systems, 120 GB, 1,508 tool calls across 336 minutes) consumed 698K tokens. For cost optimization, the three pipeline roles (planner, executor, analyst) can be assigned to different models - routing mechanical tool-calling to a cheaper model while preserving reasoning quality for analysis.
 

@@ -54,10 +54,16 @@ from mulder.models import (
     ToolOutcomeStatus,
     WindowRow,
 )
+from mulder.reasoning import _define_reasoning_tables
 
 if TYPE_CHECKING:
     from mulder.graph import EdgeProvenance, GraphBuildResult, GraphSnapshot
     from mulder.graph_query import GraphQueryRequest, GraphQueryResult
+    from mulder.reasoning import (
+        ReasoningCommand,
+        ReasoningReviewProjection,
+        ReasoningWriteResult,
+    )
 
 _T = TypeVar("_T")
 
@@ -237,6 +243,14 @@ graph_aliases_t = _graph_tables.aliases
 graph_relations_t = _graph_tables.relations
 graph_events_t = _graph_tables.events
 graph_edge_anchors_t = _graph_tables.edge_anchors
+
+_reasoning_tables = _define_reasoning_tables(metadata)
+hypotheses_t = _reasoning_tables.hypotheses
+hypothesis_discriminators_t = _reasoning_tables.discriminators
+hypothesis_test_results_t = _reasoning_tables.test_results
+hypothesis_contradictions_t = _reasoning_tables.contradictions
+contradiction_resolutions_t = _reasoning_tables.contradiction_resolutions
+review_verdicts_t = _reasoning_tables.review_verdicts
 
 evidence_registry_t = Table(
     "evidence_registry",
@@ -452,6 +466,16 @@ def _migrate_add_entity_graph(conn: Connection) -> None:
     graph_relations_t.create(conn, checkfirst=True)
     graph_events_t.create(conn, checkfirst=True)
     graph_edge_anchors_t.create(conn, checkfirst=True)
+
+
+def _migrate_add_reasoning_review(conn: Connection) -> None:
+    """Create additive competing-hypothesis and reviewer tables."""
+    hypotheses_t.create(conn, checkfirst=True)
+    hypothesis_discriminators_t.create(conn, checkfirst=True)
+    hypothesis_test_results_t.create(conn, checkfirst=True)
+    hypothesis_contradictions_t.create(conn, checkfirst=True)
+    contradiction_resolutions_t.create(conn, checkfirst=True)
+    review_verdicts_t.create(conn, checkfirst=True)
 
 
 def _migrate_add_coverage_register(conn: Connection) -> None:
@@ -738,6 +762,7 @@ class CaseDB:
             _migrate_add_negative_verdict(conn)
             _migrate_add_finding_revisions(conn)
             _migrate_add_entity_graph(conn)
+            _migrate_add_reasoning_review(conn)
         return db
 
     def close(self) -> None:
@@ -1669,6 +1694,25 @@ class CaseDB:
                 return _query_graph(conn, case_id, request)
 
         return self._wq.submit(_do_query)
+
+    def record_reasoning(self, command: ReasoningCommand) -> ReasoningWriteResult:
+        """Apply one typed append-only hypothesis or specialist-review command."""
+        from mulder.reasoning import _record_command
+
+        case_id = self._get_case_id()
+
+        def _do_record() -> ReasoningWriteResult:
+            with self._engine.begin() as conn:
+                return _record_command(conn, case_id, command)
+
+        return self._wq.submit(_do_record)
+
+    def get_reasoning_review(self) -> ReasoningReviewProjection:
+        """Return the case-local reasoning projection with reviewer seats separate."""
+        from mulder.reasoning import _read_review_projection
+
+        with self._engine.connect() as conn:
+            return _read_review_projection(conn, self._get_case_id())
 
     def update_finding(
         self,

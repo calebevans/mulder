@@ -197,6 +197,7 @@ def report(case_id: str, db_dir: str) -> None:
         coverage_records = [cell.record for cell in review.coverage.matrix]
         proof_cards = review.proof_cards()
         review_data = review.model_dump(mode="json", by_alias=True)
+        reasoning_review = case_db.get_reasoning_review()
 
         audit = AuditLog(audit_path)
         audit_summary = audit.summary()
@@ -216,6 +217,7 @@ def report(case_id: str, db_dir: str) -> None:
             coverage_records=coverage_records,
             proof_cards=proof_cards,
             case_review=review_data,
+            reasoning_review=reasoning_review,
         )
         md_path.write_text(md_text, encoding="utf-8")
         click.echo(f"  Markdown: {md_path}")
@@ -250,6 +252,7 @@ def report(case_id: str, db_dir: str) -> None:
                 coverage_records=coverage_records,
                 proof_cards=proof_cards,
                 case_review=review_data,
+                reasoning_review=reasoning_review,
             )
             html_path.write_text(html_text, encoding="utf-8")
             click.echo(f"  HTML:     {html_path}")
@@ -636,6 +639,11 @@ def review_console_cmd(
     is_flag=True,
     help="Seal only an approval bound to the current claims and an audit-chain ancestor.",
 )
+@click.option(
+    "--require-resolved-contradictions",
+    is_flag=True,
+    help="Refuse sealing while any material contradiction remains unresolved.",
+)
 def seal_case_cmd(
     case_id: str,
     db_dir: str,
@@ -646,6 +654,7 @@ def seal_case_cmd(
     examiner: str | None,
     key_id: str | None,
     require_approval: bool,
+    require_resolved_contradictions: bool,
 ) -> None:
     """Seal CASE_ID into a relocatable, optionally signed case manifest.
 
@@ -675,6 +684,7 @@ def seal_case_cmd(
             overwrite=force,
             key_provider=provider,
             require_approval=require_approval,
+            require_resolved_contradictions=require_resolved_contradictions,
         )
     except (OSError, SealError) as exc:
         raise click.ClickException(str(exc)) from exc

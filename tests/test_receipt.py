@@ -30,6 +30,15 @@ from mulder.models import (
     ToolOutcomeStatus,
     WindowRow,
 )
+from mulder.reasoning import (
+    Contradiction,
+    CreateHypothesis,
+    EstimatedCost,
+    Hypothesis,
+    HypothesisDiscriminatorInput,
+    RecordContradiction,
+    ResolveContradiction,
+)
 from mulder.receipt import (
     CaseVerificationResult,
     ReplayInventory,
@@ -191,6 +200,76 @@ def _sign_fixture(sealed: SealedFixture, key_path: Path) -> None:
             key_path, examiner="Examiner assertion", key_id="lab-key-7"
         ),
     )
+
+
+def test_optional_reasoning_gate_blocks_only_unresolved_material_contradictions(
+    tmp_path: Path,
+) -> None:
+    sealed = _build_sealed_case(tmp_path)
+    sealed.manifest.unlink()
+    db = CaseDB.open("fixture", sealed.case_dir)
+    hypothesis = db.record_reasoning(
+        CreateHypothesis(
+            competing_group="process-origin",
+            title="Malicious process",
+            statement="The process was launched by an intruder.",
+            discriminators=(
+                HypothesisDiscriminatorInput(
+                    expected_observation="An unapproved parent process is present.",
+                    falsifier="The parent belongs to an approved automation service.",
+                    estimated_cost=EstimatedCost(amount=1, unit="tool_calls"),
+                ),
+            ),
+            author_id="counter-analyst",
+        )
+    )
+    assert isinstance(hypothesis, Hypothesis)
+    contradiction = db.record_reasoning(
+        RecordContradiction(
+            hypothesis_id=hypothesis.hypothesis_id,
+            description="The parent process is absent from truncated evidence.",
+            material=True,
+            author_id="contradiction-reviewer",
+        )
+    )
+    assert isinstance(contradiction, Contradiction)
+    db.close()
+
+    # Default behavior remains permissive for backward compatibility.
+    default_manifest = seal_case("fixture", sealed.case_dir)
+    assert default_manifest.is_file()
+    default_manifest.unlink()
+
+    with pytest.raises(SealError, match="Unresolved material contradictions"):
+        seal_case(
+            "fixture",
+            sealed.case_dir,
+            require_resolved_contradictions=True,
+        )
+
+    db = CaseDB.open("fixture", sealed.case_dir)
+    db.record_reasoning(
+        ResolveContradiction(
+            contradiction_id=contradiction.contradiction_id,
+            disposition="accepted_risk",
+            rationale="Evidence boundary is explicit in the final report.",
+            actor_id="lead-reviewer",
+        )
+    )
+    db.close()
+    with sqlite3.connect(sealed.database) as checkpoint:
+        checkpoint.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    gated_manifest = seal_case(
+        "fixture",
+        sealed.case_dir,
+        require_resolved_contradictions=True,
+    )
+    manifest_data = json.loads(gated_manifest.read_text(encoding="utf-8"))
+    assert manifest_data["methodology"]["reasoning_seal_gate"] == {
+        "allowed": True,
+        "enforced": True,
+        "unresolved_material_contradiction_ids": [],
+    }
 
 
 def test_clean_case_verifies_and_binds_claims_tools_and_reports(tmp_path: Path) -> None:

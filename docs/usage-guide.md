@@ -680,6 +680,11 @@ manifest then includes the approved claim-set and pre-report audit-head
 commitments; the approved head must remain an ancestor of the current verified
 audit chain.
 
+Pass `--require-resolved-contradictions` to opt into a stricter local seal policy: any material
+contradiction without an appended resolution blocks manifest creation. The flag is off by default
+for backward compatibility. Non-material contradictions and independent reviewer concerns remain
+visible in the report but do not change deterministic atomic-claim verification.
+
 The `sqlite-logical-v1` database commitment includes every non-internal SQLite schema object and
 every typed value in every non-internal table, in deterministic value order. It intentionally
 excludes physical page layout, WAL/checkpoint layout, file timestamps, and SQLite-maintained

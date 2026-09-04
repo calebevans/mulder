@@ -924,6 +924,7 @@ def finalize_report() -> dict[str, object]:
     proof_cards = review.proof_cards()
     review_data = review.model_dump(mode="json", by_alias=True)
     renderer = ReportRenderer()
+    reasoning_review = ctx.db.get_reasoning_review()
 
     _MAX_WINDOWS_PER_SOURCE = 50
     source_names = [s.source_name for s in sources_list]
@@ -960,6 +961,7 @@ def finalize_report() -> dict[str, object]:
             coverage_records=coverage_records,
             proof_cards=proof_cards,
             case_review=review_data,
+            reasoning_review=reasoning_review,
         )
     except Exception as exc:
         logger.warning(
@@ -976,6 +978,7 @@ def finalize_report() -> dict[str, object]:
             coverage_records=coverage_records,
             proof_cards=proof_cards,
             case_review=review_data,
+            reasoning_review=reasoning_review,
         )
         html_text = ""
         html_warning: str | None = f"HTML report generation failed: {exc}"
