@@ -9,6 +9,7 @@ from mulder.review.decisions import (
     ReviewWorkflowError,
 )
 from mulder.review.model import CaseReviewModel, ReviewQuery, query_case_review
+from mulder.review.publication import PublicationError, PublicationManager
 
 __all__ = [
     "ApprovalDecision",
@@ -19,5 +20,7 @@ __all__ = [
     "ReviewQuery",
     "ReviewWorkflow",
     "ReviewWorkflowError",
+    "PublicationError",
+    "PublicationManager",
     "query_case_review",
 ]

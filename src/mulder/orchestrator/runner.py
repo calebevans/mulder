@@ -384,15 +384,15 @@ class Orchestrator:
         if self._approval_before_report:
             from mulder.review.decisions import ReviewWorkflow, ReviewWorkflowError
 
-            workflow = ReviewWorkflow(self._case_id, self._db_dir)
-            status = workflow.status()
+            review_workflow = ReviewWorkflow(self._case_id, self._db_dir)
+            status = review_workflow.status()
             if status.state != "approved":
                 try:
-                    request = workflow.request_approval(requested_by="orchestrator")
+                    request = review_workflow.request_approval(requested_by="orchestrator")
                 except ReviewWorkflowError:
                     # A rejected unchanged snapshot remains rejected; it must
                     # change before a fresh request can be created.
-                    result.review_state = workflow.status().state
+                    result.review_state = review_workflow.status().state
                     result.success = False
                     return result
                 result.review_state = "awaiting_review"
