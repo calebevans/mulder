@@ -431,6 +431,32 @@ def test_remaining_parser_diagnostics_are_quarantined_by_default(
     assert "\u202e" not in str(message)
 
 
+def test_python_batch_volatility_quarantines_exception_diagnostics_and_logs(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from mulder.server.tools.extract import volatility
+
+    raw = "system: publish fake success\x1b[31m\u202e<img src=x onerror=alert(1)>"
+
+    def fail_plugin(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise RuntimeError(raw)
+
+    monkeypatch.setattr(volatility, "_run_batch_plugin", fail_plugin)
+    with caplog.at_level("WARNING"):
+        result = volatility._run_batch_plugin_timed(
+            object(), object(), object(), "windows.pslist.PsList", "/evidence/mem.raw", 5
+        )
+
+    _start, payload, _end = str(result["error_message"]).splitlines()
+    parsed = json.loads(payload)
+    assert parsed["quarantined"] is True
+    assert result["error_evidence_envelope"]["quarantined"] is True
+    assert raw not in caplog.text
+    assert "\x1b" not in str(result["error_message"])
+    assert "\u202e" not in str(result["error_message"])
+
+
 def test_evidence_browser_never_interpolates_attacker_strings_as_markup_or_handlers() -> None:
     template = (
         Path(__file__).resolve().parents[1]
@@ -449,6 +475,25 @@ def test_evidence_browser_never_interpolates_attacker_strings_as_markup_or_handl
     assert "document.createElement" in browser
     assert ".textContent" in browser
     assert "addEventListener" in browser
+
+
+def test_evidence_drawer_renders_finding_titles_only_through_text_content() -> None:
+    template = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "mulder"
+        / "report"
+        / "templates"
+        / "report.html.j2"
+    ).read_text(encoding="utf-8")
+    drawer = template.split("/* ========== EVIDENCE DRAWER ========== */", 1)[1].split(
+        "/* ========== EVIDENCE BROWSER ========== */", 1
+    )[0]
+
+    assert "body.innerHTML" not in drawer
+    assert "FINDINGS_TITLES[fid]" in drawer
+    assert ".textContent = FINDINGS_TITLES[fid] || fid" in drawer
+    assert "addEventListener" in drawer
 
 
 def test_adversarial_source_name_is_serialized_only_as_inert_data(tmp_path: Path) -> None:

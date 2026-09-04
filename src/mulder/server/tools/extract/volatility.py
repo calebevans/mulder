@@ -526,6 +526,24 @@ def _run_batch_plugin_timed(
             "source_name": f"volatility.{short}",
             "error_message": (f"{plugin_name} timed out after {timeout}s (Python API)"),
         }
+    except Exception as exc:
+        diagnostic = str(exc)[:300]
+        logger.warning(
+            "Batch plugin %s failed (Python API); diagnostic quarantined",
+            plugin_name,
+        )
+        return {
+            "plugin": plugin_name,
+            "status": "error",
+            "error_type": "exception",
+            "source_name": f"volatility.{short}",
+            "_unsupported_plugin": _is_xp_unsupported_error(diagnostic),
+            **parser_diagnostic_fields(
+                "run_volatility_batch",
+                f"plugin_exception:{plugin_name}",
+                diagnostic,
+            ),
+        }
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
 
@@ -733,9 +751,17 @@ def run_volatility_batch(
             continue
 
         try:
-            results[plugin_name] = _run_batch_plugin_timed(
+            timed_result = _run_batch_plugin_timed(
                 ctx, automagics, plugin_class, full_name, memory_path, timeout
             )
+            unsupported = bool(timed_result.pop("_unsupported_plugin", False))
+            if short == "netscan" and unsupported:
+                fallback = _run_netscan_fallback_batch(
+                    ctx, automagics, memory_path, plugin_list, full_name
+                )
+                results[plugin_name] = fallback or timed_result
+            else:
+                results[plugin_name] = timed_result
         except Exception as exc:
             err_msg = str(exc)[:300]
             is_netscan = short == "netscan"

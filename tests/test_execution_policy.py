@@ -383,6 +383,38 @@ def test_compatibility_runner_rejects_unbound_declared_path(tmp_path: Path) -> N
     assert result == "Failed to run command: a declared path is not bound to argv"
 
 
+def test_child_environment_is_a_minimal_allowlist_not_a_secret_denylist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inherited = {
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "HOME": "/home/examiner",
+        "OPENAI_API_KEY": "provider-secret",
+        "AWS_SECRET_ACCESS_KEY": "cloud-secret",
+        "UNKNOWN_FUTURE_CREDENTIAL": "future-secret",
+        "RUBYOPT": "-rshell",
+        "JAVA_TOOL_OPTIONS": "-javaagent:/tmp/evil.jar",
+        "LUA_INIT": "@/tmp/evil.lua",
+    }
+    for name, value in inherited.items():
+        monkeypatch.setenv(name, value)
+
+    child = safe_subprocess.sanitized_environment()
+
+    assert child["PATH"] == inherited["PATH"]
+    assert child["LANG"] == inherited["LANG"]
+    assert child["HOME"] == inherited["HOME"]
+    assert {
+        "OPENAI_API_KEY",
+        "AWS_SECRET_ACCESS_KEY",
+        "UNKNOWN_FUTURE_CREDENTIAL",
+        "RUBYOPT",
+        "JAVA_TOOL_OPTIONS",
+        "LUA_INIT",
+    }.isdisjoint(child)
+
+
 # Direct subprocess sites that predate the centralized seam.  Each is a
 # deliberate migration backlog category (installer, long-lived model proxy,
 # legacy extractor, or tool wrapper).  A new source module cannot introduce a
@@ -391,7 +423,6 @@ _DOCUMENTED_SUBPROCESS_EXCEPTIONS = {
     "src/mulder/assets/install.py",
     "src/mulder/execution/runner.py",
     "src/mulder/execution/mount_helper.py",
-    "src/mulder/orchestrator/proxy.py",
     "src/mulder/server/tools/artifacts.py",
     "src/mulder/server/tools/binary.py",
     "src/mulder/server/tools/case.py",

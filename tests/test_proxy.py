@@ -121,6 +121,36 @@ class TestProxyManager:
         assert process_env["DO_NOT_TRACK"] == "1"
 
     @patch("shutil.which", return_value="/usr/local/bin/litellm")
+    @patch("mulder.orchestrator.proxy._wait_for_health", return_value=True)
+    @patch("subprocess.Popen")
+    def test_process_environment_never_receives_delegation_or_runtime_injection(
+        self,
+        mock_popen: MagicMock,
+        _mock_health: MagicMock,
+        _mock_which: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        mock_popen.return_value = MagicMock()
+        hostile = {
+            "MULDER_TOOL_DELEGATION_SECRET": "server-only-secret",
+            "MULDER_TOOL_DELEGATION_GRANT": "server-only-grant",
+            "RUBYOPT": "-rshell",
+            "JAVA_TOOL_OPTIONS": "-javaagent:/tmp/evil.jar",
+            "LUA_INIT": "@/tmp/evil.lua",
+        }
+        for name, value in hostile.items():
+            monkeypatch.setenv(name, value)
+
+        ProxyManager(
+            models=["ollama/qwen3"],
+            port=4000,
+            process_env=hostile,
+        ).start()
+
+        process_env = mock_popen.call_args.kwargs["env"]
+        assert hostile.keys().isdisjoint(process_env)
+
+    @patch("shutil.which", return_value="/usr/local/bin/litellm")
     @patch("mulder.orchestrator.proxy._wait_for_health", return_value=False)
     @patch("subprocess.Popen")
     def test_start_health_check_fails(

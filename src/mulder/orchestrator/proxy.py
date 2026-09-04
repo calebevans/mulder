@@ -9,16 +9,25 @@ as a subprocess and stopped when the orchestrator completes.
 from __future__ import annotations
 
 import logging
-import subprocess
 import tempfile
 import time
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, cast
 
 import yaml
 
+from mulder.execution.safe_subprocess import DEVNULL, TimeoutExpired, popen
+
 logger = logging.getLogger(__name__)
+
+
+class _ManagedProcess(Protocol):
+    def terminate(self) -> None: ...
+
+    def kill(self) -> None: ...
+
+    def wait(self, timeout: float | None = None) -> int: ...
 
 _LITELLM_PREFIXES: tuple[str, ...] = (
     "bedrock/",
@@ -163,7 +172,7 @@ class ProxyManager:
         self._port = port or int(os.environ.get("MULDER_PROXY_PORT", _DEFAULT_PORT))
         self._config_path = config_path
         self._process_env = dict(process_env or {})
-        self._process: subprocess.Popen[bytes] | None = None
+        self._process: _ManagedProcess | None = None
         self._temp_config: Path | None = None
 
     @property
@@ -238,14 +247,15 @@ class ProxyManager:
             self._models,
         )
 
-        proxy_env = os.environ.copy()
-        proxy_env.update(self._process_env)
-
-        self._process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            env=proxy_env,
+        self._process = cast(
+            _ManagedProcess,
+            popen(
+                cmd,
+                stdout=DEVNULL,
+                stderr=DEVNULL,
+                env=self._process_env,
+                provider_process=True,
+            ),
         )
 
         if not _wait_for_health(self._port):
@@ -263,7 +273,7 @@ class ProxyManager:
             self._process.terminate()
             try:
                 self._process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
+            except TimeoutExpired:
                 self._process.kill()
                 self._process.wait(timeout=3)
             self._process = None

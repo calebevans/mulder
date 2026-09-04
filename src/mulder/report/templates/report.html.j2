@@ -1724,19 +1724,51 @@ function showToast(msg) { var t=document.getElementById('copyToast'); t.textCont
 function copyText(text) { if(navigator.clipboard)navigator.clipboard.writeText(text); showToast('Copied: '+text.substring(0,30)+(text.length>30?'...':'')); }
 
 /* ========== EVIDENCE DRAWER ========== */
+function appendDrawerSection(body, title) {
+  var section = document.createElement('div');
+  section.className = 'drawer-section';
+  var heading = document.createElement('div');
+  heading.className = 'drawer-section-title';
+  heading.textContent = title;
+  section.appendChild(heading);
+  body.appendChild(section);
+  return section;
+}
+function appendDrawerText(section, text, className, styleText) {
+  var value = document.createElement('div');
+  if (className) value.className = className;
+  if (styleText) value.style.cssText = styleText;
+  value.textContent = String(text);
+  section.appendChild(value);
+  return value;
+}
 function openDrawer(tcId) {
   var entry = AUDIT_INDEX[tcId]; if (!entry) return;
   document.getElementById('drawerTitle').textContent = entry.tool_name;
-  var body = document.getElementById('drawerBody'), html = '';
-  html += '<div class="drawer-section"><div class="drawer-section-title">Tool Call ID</div><div class="mono" style="font-size:0.8rem;color:var(--accent);">'+tcId+'</div></div>';
-  html += '<div class="drawer-section"><div class="drawer-section-title">Duration</div><div class="mono" style="font-size:0.9rem;">'+(entry.duration_ms/1000).toFixed(1)+'s ('+Math.round(entry.duration_ms)+'ms)</div></div>';
-  if (entry.timestamp) html += '<div class="drawer-section"><div class="drawer-section-title">Timestamp</div><div class="mono" style="font-size:0.8rem;">'+entry.timestamp.substring(0,19)+'</div></div>';
-  html += '<div class="drawer-section"><div class="drawer-section-title">Parameters</div><div class="drawer-json">'+syntaxHighlight(JSON.stringify(entry.params||{},null,2))+'</div></div>';
-  if (entry.output_hash) html += '<div class="drawer-section"><div class="drawer-section-title">Output Hash</div><div class="mono" style="font-size:0.72rem;color:var(--text-dim);word-break:break-all;">'+entry.output_hash+'</div></div>';
+  var body = document.getElementById('drawerBody');
+  body.replaceChildren();
+  appendDrawerText(appendDrawerSection(body, 'Tool Call ID'), tcId, 'mono', 'font-size:0.8rem;color:var(--accent);');
+  appendDrawerText(appendDrawerSection(body, 'Duration'), (entry.duration_ms/1000).toFixed(1)+'s ('+Math.round(entry.duration_ms)+'ms)', 'mono', 'font-size:0.9rem;');
+  if (entry.timestamp) appendDrawerText(appendDrawerSection(body, 'Timestamp'), entry.timestamp.substring(0,19), 'mono', 'font-size:0.8rem;');
+  appendDrawerText(appendDrawerSection(body, 'Parameters'), JSON.stringify(entry.params||{},null,2), 'drawer-json', '');
+  if (entry.output_hash) appendDrawerText(appendDrawerSection(body, 'Output Hash'), entry.output_hash, 'mono', 'font-size:0.72rem;color:var(--text-dim);word-break:break-all;');
   var rf = TC_TO_FINDINGS[tcId] || [];
-  if (rf.length) { html += '<div class="drawer-section"><div class="drawer-section-title">Referenced by Findings ('+rf.length+')</div>'; rf.forEach(function(fid){ html += '<a class="drawer-finding-link" onclick="closeDrawer();navigateToFinding(\''+fid+'\')">'+(FINDINGS_TITLES[fid]||fid)+'</a>'; }); html += '</div>'; }
-  html += '<div class="drawer-section"><button class="btn-sm" onclick="copyDrawerJson(\''+tcId+'\')">Copy as JSON</button></div>';
-  body.innerHTML = html;
+  if (rf.length) {
+    var references = appendDrawerSection(body, 'Referenced by Findings ('+rf.length+')');
+    rf.forEach(function(fid) {
+      var link = document.createElement('a');
+      link.className = 'drawer-finding-link';
+      link.textContent = FINDINGS_TITLES[fid] || fid;
+      link.addEventListener('click', function() { closeDrawer(); navigateToFinding(fid); });
+      references.appendChild(link);
+    });
+  }
+  var actions = appendDrawerSection(body, 'Actions');
+  var copyButton = document.createElement('button');
+  copyButton.className = 'btn-sm';
+  copyButton.textContent = 'Copy as JSON';
+  copyButton.addEventListener('click', function() { copyDrawerJson(tcId); });
+  actions.appendChild(copyButton);
   document.getElementById('drawerOverlay').classList.add('open');
   document.getElementById('evidenceDrawer').classList.add('open');
 }
