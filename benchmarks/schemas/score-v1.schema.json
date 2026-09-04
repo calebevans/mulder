@@ -1,0 +1,574 @@
+{
+  "$defs": {
+    "CaseScore": {
+      "additionalProperties": false,
+      "description": "Detailed score for a single benchmark case.",
+      "properties": {
+        "atomic_claims": {
+          "$ref": "#/$defs/SetScore"
+        },
+        "case_count": {
+          "minimum": 0,
+          "title": "Case Count",
+          "type": "integer"
+        },
+        "case_id": {
+          "title": "Case Id",
+          "type": "string"
+        },
+        "citations": {
+          "$ref": "#/$defs/CitationScore"
+        },
+        "coverage": {
+          "$ref": "#/$defs/CoverageScore"
+        },
+        "duplicate_citations": {
+          "minimum": 0,
+          "title": "Duplicate Citations",
+          "type": "integer"
+        },
+        "duplicate_claims": {
+          "minimum": 0,
+          "title": "Duplicate Claims",
+          "type": "integer"
+        },
+        "entities": {
+          "$ref": "#/$defs/SetScore"
+        },
+        "epistemic": {
+          "$ref": "#/$defs/EpistemicScore"
+        },
+        "ground_truth_label": {
+          "enum": [
+            "clean",
+            "nonempty"
+          ],
+          "title": "Ground Truth Label",
+          "type": "string"
+        },
+        "predicates": {
+          "$ref": "#/$defs/SetScore"
+        },
+        "verdicts": {
+          "$ref": "#/$defs/VerdictScore"
+        }
+      },
+      "required": [
+        "case_count",
+        "atomic_claims",
+        "entities",
+        "predicates",
+        "citations",
+        "epistemic",
+        "coverage",
+        "verdicts",
+        "duplicate_claims",
+        "duplicate_citations",
+        "case_id",
+        "ground_truth_label"
+      ],
+      "title": "CaseScore",
+      "type": "object"
+    },
+    "CitationScore": {
+      "additionalProperties": false,
+      "description": "Citation resolution and claim-support validity counts.",
+      "properties": {
+        "claim_citation_rate": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Claim Citation Rate",
+          "type": "number"
+        },
+        "claims_with_valid_citation": {
+          "minimum": 0,
+          "title": "Claims With Valid Citation",
+          "type": "integer"
+        },
+        "resolution_rate": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Resolution Rate",
+          "type": "number"
+        },
+        "resolved": {
+          "minimum": 0,
+          "title": "Resolved",
+          "type": "integer"
+        },
+        "total": {
+          "minimum": 0,
+          "title": "Total",
+          "type": "integer"
+        },
+        "uncited_verified_claims": {
+          "minimum": 0,
+          "title": "Uncited Verified Claims",
+          "type": "integer"
+        },
+        "unresolved": {
+          "minimum": 0,
+          "title": "Unresolved",
+          "type": "integer"
+        },
+        "valid": {
+          "minimum": 0,
+          "title": "Valid",
+          "type": "integer"
+        },
+        "validity_rate": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Validity Rate",
+          "type": "number"
+        },
+        "verified_claims": {
+          "minimum": 0,
+          "title": "Verified Claims",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "total",
+        "resolved",
+        "valid",
+        "unresolved",
+        "verified_claims",
+        "claims_with_valid_citation",
+        "uncited_verified_claims",
+        "resolution_rate",
+        "validity_rate",
+        "claim_citation_rate"
+      ],
+      "title": "CitationScore",
+      "type": "object"
+    },
+    "CoverageScore": {
+      "additionalProperties": false,
+      "description": "Exact expected-outcome coverage score.",
+      "properties": {
+        "completed_required_domains": {
+          "minimum": 0,
+          "title": "Completed Required Domains",
+          "type": "integer"
+        },
+        "expectation_accuracy": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Expectation Accuracy",
+          "type": "number"
+        },
+        "expected_domains": {
+          "minimum": 0,
+          "title": "Expected Domains",
+          "type": "integer"
+        },
+        "matched_expected_outcomes": {
+          "minimum": 0,
+          "title": "Matched Expected Outcomes",
+          "type": "integer"
+        },
+        "required_completeness": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Required Completeness",
+          "type": "number"
+        },
+        "required_domains": {
+          "minimum": 0,
+          "title": "Required Domains",
+          "type": "integer"
+        },
+        "unexpected_domains": {
+          "minimum": 0,
+          "title": "Unexpected Domains",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "expected_domains",
+        "matched_expected_outcomes",
+        "required_domains",
+        "completed_required_domains",
+        "unexpected_domains",
+        "expectation_accuracy",
+        "required_completeness"
+      ],
+      "title": "CoverageScore",
+      "type": "object"
+    },
+    "EpistemicScore": {
+      "additionalProperties": false,
+      "description": "Distribution of claim verification states before assertion filtering.",
+      "properties": {
+        "contradicted": {
+          "minimum": 0,
+          "title": "Contradicted",
+          "type": "integer"
+        },
+        "contradicted_rate": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Contradicted Rate",
+          "type": "number"
+        },
+        "inconclusive": {
+          "minimum": 0,
+          "title": "Inconclusive",
+          "type": "integer"
+        },
+        "inconclusive_rate": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Inconclusive Rate",
+          "type": "number"
+        },
+        "total_claims": {
+          "minimum": 0,
+          "title": "Total Claims",
+          "type": "integer"
+        },
+        "unsupported": {
+          "minimum": 0,
+          "title": "Unsupported",
+          "type": "integer"
+        },
+        "unsupported_rate": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Unsupported Rate",
+          "type": "number"
+        },
+        "unverified": {
+          "minimum": 0,
+          "title": "Unverified",
+          "type": "integer"
+        },
+        "verified": {
+          "minimum": 0,
+          "title": "Verified",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "total_claims",
+        "verified",
+        "contradicted",
+        "inconclusive",
+        "unsupported",
+        "unverified",
+        "contradicted_rate",
+        "inconclusive_rate",
+        "unsupported_rate"
+      ],
+      "title": "EpistemicScore",
+      "type": "object"
+    },
+    "ResourceUsage": {
+      "additionalProperties": false,
+      "description": "Measured resources for one complete benchmark run.",
+      "properties": {
+        "cost_usd": {
+          "minimum": 0,
+          "title": "Cost Usd",
+          "type": "number"
+        },
+        "input_tokens": {
+          "minimum": 0,
+          "title": "Input Tokens",
+          "type": "integer"
+        },
+        "output_tokens": {
+          "minimum": 0,
+          "title": "Output Tokens",
+          "type": "integer"
+        },
+        "runtime_ms": {
+          "minimum": 0,
+          "title": "Runtime Ms",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "runtime_ms",
+        "input_tokens",
+        "output_tokens",
+        "cost_usd"
+      ],
+      "title": "ResourceUsage",
+      "type": "object"
+    },
+    "RunScore": {
+      "additionalProperties": false,
+      "description": "One scored system run and its resource measurements.",
+      "properties": {
+        "cases": {
+          "items": {
+            "$ref": "#/$defs/CaseScore"
+          },
+          "title": "Cases",
+          "type": "array"
+        },
+        "clean": {
+          "$ref": "#/$defs/ScoreSlice"
+        },
+        "nonempty": {
+          "$ref": "#/$defs/ScoreSlice"
+        },
+        "overall": {
+          "$ref": "#/$defs/ScoreSlice"
+        },
+        "resources": {
+          "$ref": "#/$defs/ResourceUsage"
+        },
+        "result_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Result Sha256",
+          "type": "string"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "system_name": {
+          "title": "System Name",
+          "type": "string"
+        },
+        "system_version": {
+          "title": "System Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "system_name",
+        "system_version",
+        "result_sha256",
+        "overall",
+        "clean",
+        "nonempty",
+        "cases",
+        "resources"
+      ],
+      "title": "RunScore",
+      "type": "object"
+    },
+    "ScoreSlice": {
+      "additionalProperties": false,
+      "description": "Scores for all cases or one clean/nonempty subset.",
+      "properties": {
+        "atomic_claims": {
+          "$ref": "#/$defs/SetScore"
+        },
+        "case_count": {
+          "minimum": 0,
+          "title": "Case Count",
+          "type": "integer"
+        },
+        "citations": {
+          "$ref": "#/$defs/CitationScore"
+        },
+        "coverage": {
+          "$ref": "#/$defs/CoverageScore"
+        },
+        "duplicate_citations": {
+          "minimum": 0,
+          "title": "Duplicate Citations",
+          "type": "integer"
+        },
+        "duplicate_claims": {
+          "minimum": 0,
+          "title": "Duplicate Claims",
+          "type": "integer"
+        },
+        "entities": {
+          "$ref": "#/$defs/SetScore"
+        },
+        "epistemic": {
+          "$ref": "#/$defs/EpistemicScore"
+        },
+        "predicates": {
+          "$ref": "#/$defs/SetScore"
+        },
+        "verdicts": {
+          "$ref": "#/$defs/VerdictScore"
+        }
+      },
+      "required": [
+        "case_count",
+        "atomic_claims",
+        "entities",
+        "predicates",
+        "citations",
+        "epistemic",
+        "coverage",
+        "verdicts",
+        "duplicate_claims",
+        "duplicate_citations"
+      ],
+      "title": "ScoreSlice",
+      "type": "object"
+    },
+    "SetScore": {
+      "additionalProperties": false,
+      "description": "Micro-averaged set comparison with explicit confusion counts.",
+      "properties": {
+        "f1": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "F1",
+          "type": "number"
+        },
+        "false_negative": {
+          "minimum": 0,
+          "title": "False Negative",
+          "type": "integer"
+        },
+        "false_positive": {
+          "minimum": 0,
+          "title": "False Positive",
+          "type": "integer"
+        },
+        "precision": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Precision",
+          "type": "number"
+        },
+        "recall": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Recall",
+          "type": "number"
+        },
+        "true_positive": {
+          "minimum": 0,
+          "title": "True Positive",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "true_positive",
+        "false_positive",
+        "false_negative",
+        "precision",
+        "recall",
+        "f1"
+      ],
+      "title": "SetScore",
+      "type": "object"
+    },
+    "VerdictScore": {
+      "additionalProperties": false,
+      "description": "Verdict accuracy and abstention/unsafe-clean behavior.",
+      "properties": {
+        "accuracy": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Accuracy",
+          "type": "number"
+        },
+        "correct": {
+          "minimum": 0,
+          "title": "Correct",
+          "type": "integer"
+        },
+        "correct_no_verdict": {
+          "minimum": 0,
+          "title": "Correct No Verdict",
+          "type": "integer"
+        },
+        "expected_no_verdict": {
+          "minimum": 0,
+          "title": "Expected No Verdict",
+          "type": "integer"
+        },
+        "no_verdict": {
+          "minimum": 0,
+          "title": "No Verdict",
+          "type": "integer"
+        },
+        "no_verdict_rate": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "No Verdict Rate",
+          "type": "number"
+        },
+        "no_verdict_recall": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "No Verdict Recall",
+          "type": "number"
+        },
+        "total_cases": {
+          "minimum": 0,
+          "title": "Total Cases",
+          "type": "integer"
+        },
+        "unsafe_clean_verdicts": {
+          "minimum": 0,
+          "title": "Unsafe Clean Verdicts",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "total_cases",
+        "correct",
+        "no_verdict",
+        "expected_no_verdict",
+        "correct_no_verdict",
+        "unsafe_clean_verdicts",
+        "accuracy",
+        "no_verdict_rate",
+        "no_verdict_recall"
+      ],
+      "title": "VerdictScore",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Deterministic comparison artifact emitted by the benchmark CLI.",
+  "properties": {
+    "benchmark_id": {
+      "title": "Benchmark Id",
+      "type": "string"
+    },
+    "manifest_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Manifest Sha256",
+      "type": "string"
+    },
+    "methodology_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Methodology Version",
+      "type": "string"
+    },
+    "runs": {
+      "items": {
+        "$ref": "#/$defs/RunScore"
+      },
+      "title": "Runs",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "score_schema": {
+      "const": "mulder.benchmark.score/v1",
+      "default": "mulder.benchmark.score/v1",
+      "title": "Score Schema",
+      "type": "string"
+    }
+  },
+  "required": [
+    "benchmark_id",
+    "manifest_sha256",
+    "runs"
+  ],
+  "title": "BenchmarkScoreDocument",
+  "type": "object"
+}

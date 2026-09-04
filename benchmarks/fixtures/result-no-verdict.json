@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "benchmark_id": "mulder-fixture-v1",
+  "run_id": "all-no-verdict",
+  "system_name": "fixture-agent",
+  "system_version": "0.8",
+  "cases": [
+    {
+      "case_id": "incident-nonempty",
+      "verdict": "no_verdict",
+      "claims": [],
+      "coverage": [{"domain": "process_memory", "status": "PARTIAL"}]
+    },
+    {
+      "case_id": "clean-control",
+      "verdict": "no_verdict",
+      "claims": [],
+      "coverage": [{"domain": "process_memory", "status": "SUCCESS_EMPTY"}]
+    },
+    {
+      "case_id": "unsupported-no-verdict",
+      "verdict": "no_verdict",
+      "claims": [],
+      "coverage": [{"domain": "vendor_x_log", "status": "UNSUPPORTED_VERSION"}]
+    }
+  ],
+  "resources": {
+    "runtime_ms": 600,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cost_usd": 0.0
+  }
+}

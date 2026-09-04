@@ -1,0 +1,80 @@
+schema_version: 1
+benchmark_id: mulder-fixture-v1
+run_id: duplicate-partial
+system_name: fixture-agent
+system_version: "0.9"
+cases:
+  - case_id: incident-nonempty
+    verdict: positive
+    claims:
+      - claim_id: process-1
+        subject: process:412
+        predicate: image_name
+        object_value: cmd.exe
+        qualifiers: {}
+        verification_state: verified
+        citations: [anchor-process-image, anchor-process-image]
+      - claim_id: process-duplicate
+        subject: PROCESS:412
+        predicate: IMAGE_NAME
+        object_value: CMD.EXE
+        qualifiers: {}
+        verification_state: verified
+        citations: [anchor-process-image]
+      - claim_id: destination-partial
+        subject: connection:412:443
+        predicate: ip_equals
+        object_value: 203.0.113.43
+        qualifiers: {port: 443}
+        verification_state: verified
+        citations: [anchor-destination-ip]
+      - claim_id: contradicted-parent
+        subject: process:412
+        predicate: parent_equals
+        object_value: powershell.exe
+        qualifiers: {}
+        verification_state: contradicted
+        citations: []
+      - claim_id: unsupported-attribution
+        subject: campaign:unknown
+        predicate: attributed_to
+        object_value: Example Group
+        qualifiers: {}
+        verification_state: unsupported
+        citations: []
+      - claim_id: inconclusive-owner
+        subject: process:412
+        predicate: owned_by
+        object_value: alice
+        qualifiers: {}
+        verification_state: inconclusive
+        citations: []
+    coverage:
+      - domain: process_memory
+        status: PARTIAL
+      - domain: undeclared_domain
+        status: SUCCESS_NONEMPTY
+  - case_id: clean-control
+    verdict: positive
+    claims:
+      - claim_id: clean-false-positive
+        subject: process:884
+        predicate: image_name
+        object_value: malware.exe
+        qualifiers: {}
+        verification_state: verified
+        citations: []
+    coverage:
+      - domain: process_memory
+        status: PARTIAL
+  - case_id: unsupported-no-verdict
+    verdict: no_evil_within_coverage
+    claims: []
+    coverage:
+      - domain: vendor_x_log
+        status: UNSUPPORTED_VERSION
+resources:
+  runtime_ms: 900
+  input_tokens: 80
+  output_tokens: 40
+  cost_usd: 0.01

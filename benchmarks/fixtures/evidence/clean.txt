@@ -1,0 +1,2 @@
+host=workstation-22 image=explorer.exe pid=884 parent=userinit.exe
+status=normal

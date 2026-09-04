@@ -1,0 +1,14 @@
+{
+  "schema_version": 2,
+  "benchmark_id": "mulder-fixture-v1",
+  "run_id": "invalid",
+  "system_name": "fixture-agent",
+  "system_version": "0",
+  "cases": [],
+  "resources": {
+    "runtime_ms": -1,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cost_usd": -1
+  }
+}

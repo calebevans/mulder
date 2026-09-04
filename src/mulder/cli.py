@@ -801,6 +801,47 @@ def export_iocs_cmd(case_id: str, fmt: str, output_dir: str | None, db_dir: str)
     click.echo("Done.")
 
 
+@cli.command("benchmark")
+@click.argument(
+    "manifest",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.argument(
+    "results",
+    nargs=-1,
+    required=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--output",
+    "output_path",
+    required=True,
+    type=click.Path(dir_okay=False, path_type=Path),
+    help="Write the versioned JSON score document to this path.",
+)
+def benchmark_cmd(manifest: Path, results: tuple[Path, ...], output_path: Path) -> None:
+    """Score committed JSON/YAML RESULTS against a MANIFEST, entirely offline."""
+    from mulder.benchmark.io import (
+        BenchmarkInputError,
+        load_manifest,
+        load_result,
+        render_comparison_table,
+        write_score,
+    )
+    from mulder.benchmark.scorer import score_benchmark
+
+    try:
+        benchmark_manifest = load_manifest(manifest)
+        benchmark_results = [load_result(path) for path in results]
+        score = score_benchmark(benchmark_manifest, benchmark_results)
+        write_score(output_path, score)
+    except (BenchmarkInputError, OSError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    click.echo(render_comparison_table(score))
+    click.echo(f"\nJSON score: {output_path}")
+
+
 @cli.command("export-navigator")
 @click.argument("case_id")
 @click.option(

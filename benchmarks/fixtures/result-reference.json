@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "benchmark_id": "mulder-fixture-v1",
+  "run_id": "reference",
+  "system_name": "fixture-agent",
+  "system_version": "1.0",
+  "cases": [
+    {
+      "case_id": "incident-nonempty",
+      "verdict": "positive",
+      "claims": [
+        {
+          "claim_id": "observed-process-image",
+          "subject": "process:412",
+          "predicate": "image_name",
+          "object_value": "cmd.exe",
+          "qualifiers": {},
+          "verification_state": "verified",
+          "citations": ["anchor-process-image"]
+        },
+        {
+          "claim_id": "observed-destination-ip",
+          "subject": "connection:412:443",
+          "predicate": "ip_equals",
+          "object_value": "203.0.113.42",
+          "qualifiers": {"port": 443},
+          "verification_state": "verified",
+          "citations": ["anchor-destination-ip"]
+        }
+      ],
+      "coverage": [{"domain": "process_memory", "status": "SUCCESS_NONEMPTY"}]
+    },
+    {
+      "case_id": "clean-control",
+      "verdict": "no_evil_within_coverage",
+      "claims": [],
+      "coverage": [{"domain": "process_memory", "status": "SUCCESS_EMPTY"}]
+    },
+    {
+      "case_id": "unsupported-no-verdict",
+      "verdict": "no_verdict",
+      "claims": [],
+      "coverage": [{"domain": "vendor_x_log", "status": "UNSUPPORTED_VERSION"}]
+    }
+  ],
+  "resources": {
+    "runtime_ms": 1200,
+    "input_tokens": 100,
+    "output_tokens": 50,
+    "cost_usd": 0.0125
+  }
+}
