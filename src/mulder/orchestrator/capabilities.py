@@ -11,6 +11,8 @@ import base64
 import hashlib
 import hmac
 import json
+import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 
@@ -42,6 +44,7 @@ class CapabilityViolation(ValueError):
 
 
 DELEGATION_SECRET_ENV = "MULDER_TOOL_DELEGATION_SECRET"
+DELEGATION_GRANT_ENV = "MULDER_TOOL_DELEGATION_GRANT"
 _DELEGATION_VERSION = 1
 
 
@@ -163,6 +166,25 @@ def identity_from_delegation_grant(grant: str, secret: str) -> AgentIdentity:
         )
     except (KeyError, TypeError, ValueError, UnicodeError, json.JSONDecodeError) as exc:
         raise CapabilityViolation("invalid nested-tool delegation grant") from exc
+
+
+def identity_from_bound_environment(
+    environment: Mapping[str, str] | None = None,
+) -> AgentIdentity | None:
+    """Verify the identity bound to an MCP server process, when configured.
+
+    An entirely unbound environment preserves standalone administrative use.
+    A partially bound environment is always a configuration error and fails
+    closed before any registered tool body runs.
+    """
+    values = os.environ if environment is None else environment
+    secret = values.get(DELEGATION_SECRET_ENV, "")
+    grant = values.get(DELEGATION_GRANT_ENV, "")
+    if not secret and not grant:
+        return None
+    if not secret or not grant:
+        raise CapabilityViolation("incomplete MCP session identity binding")
+    return identity_from_delegation_grant(grant, secret)
 
 
 def _decode_urlsafe(value: str) -> bytes:

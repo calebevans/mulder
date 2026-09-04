@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import os
 import sys
 from pathlib import Path
 
@@ -253,6 +254,51 @@ def test_production_none_network_namespace_denies_outbound_socket_attempt() -> N
     else:
         assert result.status is ExecutionStatus.COMPLETED
         assert result.stdout == b"network-denied\n"
+        assert result.network_enforcement == "network_isolation_enforced"
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="bubblewrap is Linux-only")
+def test_network_backend_ignores_path_spoof_and_parent_verifies_namespace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = tmp_path / "bwrap"
+    fake.write_text(
+        f"""#!{sys.executable}
+import os
+import sys
+
+args = sys.argv[1:]
+command = args[args.index("--") + 1:]
+if any("readlink('/proc/self/ns/net')" in value for value in command):
+    print("net:[attacker-controlled]")
+    raise SystemExit(0)
+os.execv(command[0], command)
+"""
+    )
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ.get('PATH', '')}")
+    parent_namespace = os.stat("/proc/self/ns/net").st_ino
+
+    result = CommandRunner(
+        _python_policy(),
+        network_isolation=BubblewrapNetworkIsolationBackend(),
+    ).run(
+        CommandRequest(
+            executable=sys.executable,
+            arguments=(
+                "-I",
+                "-c",
+                "import os; print(os.stat('/proc/self/ns/net').st_ino)",
+            ),
+            timeout_seconds=2,
+        )
+    )
+
+    if result.status is ExecutionStatus.DENIED:
+        assert result.decision.reason_code == "network_isolation_unavailable"
+    else:
+        assert result.status is ExecutionStatus.COMPLETED
+        assert int(result.stdout) != parent_namespace
         assert result.network_enforcement == "network_isolation_enforced"
 
 

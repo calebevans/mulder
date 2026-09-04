@@ -63,7 +63,10 @@ def _get_tool_limiter() -> anyio.CapacityLimiter:
     return _tool_limiter
 
 
-def _wrap_sync_tool(fn: Callable[_P, _R]) -> Callable[_P, Awaitable[_R]]:
+def _wrap_sync_tool(
+    fn: Callable[_P, _R],
+    tool_name: str,
+) -> Callable[_P, Awaitable[_R]]:
     """Return an async wrapper that runs *fn* in a worker thread.
 
     Resource throttling happens on the event loop via
@@ -72,11 +75,10 @@ def _wrap_sync_tool(fn: Callable[_P, _R]) -> Callable[_P, Awaitable[_R]]:
     the tool waits for CPU/memory pressure to subside.  The actual
     tool execution then runs in a worker thread.
     """
-    tool_name = getattr(fn, "__name__", "unknown")
-
     @functools.wraps(fn)
     async def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
         """Async bridge that throttles then dispatches *fn* in a thread."""
+        _authorize_bound_tool(tool_name)
         await async_wait_for_resources(tool_name)
         return await anyio.to_thread.run_sync(
             functools.partial(fn, *args, **kwargs),
@@ -86,11 +88,30 @@ def _wrap_sync_tool(fn: Callable[_P, _R]) -> Callable[_P, Awaitable[_R]]:
     return wrapper
 
 
-def _guard_sync_tool(fn: Callable[_P, _R]) -> Callable[_P, _R]:
+def _authorize_bound_tool(tool_name: str) -> None:
+    """Enforce the signed process identity before an ordinary MCP dispatch."""
+    from mulder.orchestrator.capabilities import (
+        authorize_tool,
+        identity_from_bound_environment,
+    )
+
+    identity = identity_from_bound_environment()
+    if identity is not None:
+        authorize_tool(identity, tool_name)
+
+
+def _guard_sync_tool(
+    fn: Callable[_P, _R],
+    tool_name: str | None = None,
+) -> Callable[_P, _R]:
     """Fence a synchronous tool body against cancellation or run takeover."""
+    resolved_tool_name = (
+        tool_name if tool_name is not None else str(getattr(fn, "__name__", "unknown"))
+    )
 
     @functools.wraps(fn)
     def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        _authorize_bound_tool(resolved_tool_name)
         with _active_run_tool_lease():
             return fn(*args, **kwargs)
 
@@ -99,13 +120,17 @@ def _guard_sync_tool(fn: Callable[_P, _R]) -> Callable[_P, _R]:
 
 def _guard_async_tool(
     fn: Callable[_P, Awaitable[_R]],
+    tool_name: str | None = None,
 ) -> Callable[_P, Awaitable[_R]]:
     """Throttle and fence an asynchronous tool body at its execution boundary."""
-    tool_name = getattr(fn, "__name__", "unknown")
+    resolved_tool_name = (
+        tool_name if tool_name is not None else str(getattr(fn, "__name__", "unknown"))
+    )
 
     @functools.wraps(fn)
     async def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
-        await async_wait_for_resources(tool_name)
+        _authorize_bound_tool(resolved_tool_name)
+        await async_wait_for_resources(resolved_tool_name)
         with _active_run_tool_lease():
             return await fn(*args, **kwargs)
 
@@ -129,11 +154,11 @@ def _concurrent_tool(**kwargs: Any) -> Callable[..., Any]:
             # handlers out makes submission fail before a coroutine can be
             # mistaken for a completed extraction result.
             _tool_dispatch_sync.pop(tool_name, None)
-            registered = _guard_async_tool(fn)
+            registered = _guard_async_tool(fn, tool_name)
         else:
-            guarded_sync = _guard_sync_tool(fn)
+            guarded_sync = _guard_sync_tool(fn, tool_name)
             _tool_dispatch_sync[tool_name] = guarded_sync
-            registered = _wrap_sync_tool(guarded_sync)
+            registered = _wrap_sync_tool(guarded_sync, tool_name)
         _tool_dispatch[tool_name] = registered
         return original_decorator(registered)
 

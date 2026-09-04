@@ -63,9 +63,18 @@ def _plaso_error(
     params: Mapping[str, object],
     error: str,
     t0: float,
+    *,
+    error_is_untrusted_evidence: bool = False,
 ) -> dict[str, object]:
     """Build an audited plaso error response with empty results metadata."""
-    resp = error_response(tc_id, tool_name, params, error, (time.monotonic() - t0) * 1000)
+    resp = error_response(
+        tc_id,
+        tool_name,
+        params,
+        error,
+        (time.monotonic() - t0) * 1000,
+        error_is_untrusted_evidence=error_is_untrusted_evidence,
+    )
     resp.update({"results": [], "source": _SRC_PLASO_TIMELINE, "result_count": 0})
     return resp
 
@@ -166,6 +175,7 @@ def filter_timeline(
             params,
             f"psort exited {proc.returncode}: {stderr_preview}",
             t0,
+            error_is_untrusted_evidence=True,
         )
 
     result_count = 0
@@ -255,6 +265,7 @@ def export_timeline_slice(timestamp: str) -> dict[str, object]:
             params,
             f"psort exited {proc.returncode}: {stderr_preview}",
             t0,
+            error_is_untrusted_evidence=True,
         )
 
     result_count = 0

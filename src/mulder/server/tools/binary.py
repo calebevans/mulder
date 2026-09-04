@@ -925,6 +925,7 @@ def run_capa(
             params,
             f"CAPA exited with code {proc.returncode}: {stderr}",
             (time.monotonic() - t0) * 1000,
+            error_is_untrusted_evidence=True,
         )
 
     try:
@@ -1062,6 +1063,7 @@ def run_floss(
             params,
             f"FLOSS exited with code {proc.returncode}: {stderr}",
             (time.monotonic() - t0) * 1000,
+            error_is_untrusted_evidence=True,
         )
 
     try:
@@ -1193,6 +1195,7 @@ def run_detect_it_easy(
             params,
             f"diec exited with code {proc.returncode}: {stderr}",
             (time.monotonic() - t0) * 1000,
+            error_is_untrusted_evidence=True,
         )
 
     try:

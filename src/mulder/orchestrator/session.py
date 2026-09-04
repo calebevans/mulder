@@ -24,6 +24,7 @@ from claude_agent_sdk.types import (
 )
 
 from mulder.orchestrator.capabilities import (
+    DELEGATION_GRANT_ENV,
     DELEGATION_SECRET_ENV,
     UTILITY_IDENTITY,
     AgentIdentity,
@@ -252,6 +253,10 @@ class SessionExecutor:
         delegation_secret = secrets.token_urlsafe(48) if identity is not None else None
         if delegation_secret is not None:
             session_env[DELEGATION_SECRET_ENV] = delegation_secret
+            assert identity is not None
+            session_env[DELEGATION_GRANT_ENV] = create_delegation_grant(
+                identity, delegation_secret
+            )
         provider_route = self._authorize_model_request(
             model=model,
             prompt=prompt,
@@ -652,6 +657,9 @@ class SessionExecutor:
         session_env = dict(self._env)
         delegation_secret = secrets.token_urlsafe(48)
         session_env[DELEGATION_SECRET_ENV] = delegation_secret
+        session_env[DELEGATION_GRANT_ENV] = create_delegation_grant(
+            UTILITY_IDENTITY, delegation_secret
+        )
 
         provider_route = self._authorize_model_request(
             model=utility_model,

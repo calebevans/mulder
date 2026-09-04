@@ -23,9 +23,14 @@ so a caller can distinguish a policy declaration from OS enforcement.
 ## No-network backend
 
 `NetworkClass.NONE` is enforced below the caller declaration. On Linux,
-`BubblewrapNetworkIsolationBackend` resolves `bwrap`, proves that it can create
-a network namespace distinct from the parent, and only then launches the
-command with `--unshare-net`. Finding the executable is not considered proof.
+`BubblewrapNetworkIsolationBackend` pins `/usr/bin/bwrap` (or an explicitly
+configured absolute path), requires a root-owned executable and root-controlled
+path, and records its full SHA-256/metadata identity. The parent process then
+inspects the probe process tree through `/proc` and proves that the actual
+payload process occupies a network namespace distinct from its own before
+launching the command with `--unshare-net`.
+Neither `PATH` resolution nor wrapper-controlled stdout is considered proof;
+replacement of the attested executable invalidates the cached verification.
 If the probe fails, the host prohibits user/network namespaces, `bwrap` is
 missing, or the platform is not Linux, the command is denied with
 `network_isolation_unavailable`; it is never launched without isolation.

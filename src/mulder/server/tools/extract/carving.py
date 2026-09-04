@@ -356,6 +356,7 @@ def run_bulk_extractor(
                 params,
                 f"bulk_extractor exited {proc.returncode}: {stderr_hint}",
                 error_type="extraction_failed",
+                error_is_untrusted_evidence=True,
             )
 
         results = _stream_and_index_features(tmpdir, features, image_path)

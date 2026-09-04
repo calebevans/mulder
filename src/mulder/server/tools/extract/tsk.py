@@ -652,6 +652,7 @@ def run_fls(
             f"Run run_mmls first to find the correct NTFS partition offset, then retry "
             f"run_fls with that offset. stderr: {stderr_hint}",
             error_type="extraction_failed",
+            error_is_untrusted_evidence=True,
         )
 
     ctx = get_ctx()

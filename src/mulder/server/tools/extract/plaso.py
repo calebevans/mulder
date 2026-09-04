@@ -122,7 +122,13 @@ def run_plaso(
 
         if proc.returncode != 0 and not plaso_file.exists():
             stderr = (proc.stderr or "")[:_PREVIEW_CHAR_LIMIT]
-            return error_response(tc_id, "run_plaso", params, f"log2timeline failed: {stderr}")
+            return error_response(
+                tc_id,
+                "run_plaso",
+                params,
+                f"log2timeline failed: {stderr}",
+                error_is_untrusted_evidence=True,
+            )
 
         persistent_plaso = cfg.db_dir / f"{ctx.case_id}.plaso"
         with contextlib.suppress(OSError):

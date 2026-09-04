@@ -16,6 +16,7 @@ import threading
 import time
 
 from mulder.models import WindowRow
+from mulder.security.evidence_envelope import present_model_evidence
 from mulder.server import source_names as _sn
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
@@ -476,6 +477,14 @@ def extract_file_by_inode(
     if proc.returncode != 0:
         error_msg = f"icat exited {proc.returncode}"
         stderr_text = (proc.stderr or b"").decode("utf-8", errors="replace")[:_PREVIEW_CHAR_LIMIT]
+        diagnostic = f"{error_msg}: {stderr_text}".rstrip(": ")
+        presentation = present_model_evidence(
+            diagnostic,
+            source_id="tool-diagnostic:extract_file_by_inode",
+            source_name="extract_file_by_inode",
+            selector=f"tool_error:{tc_id}",
+            max_characters=max(1, len(diagnostic)),
+        )
         elapsed = (time.monotonic() - t0) * 1000
         ctx.audit.log_tool_call(
             tool_call_id=tc_id,
@@ -487,7 +496,10 @@ def extract_file_by_inode(
         return {
             "tool_call_id": tc_id,
             "status": "error",
-            "error_message": f"{error_msg}: {stderr_text}".rstrip(": "),
+            **presentation.response_fields(
+                content_key="error_message",
+                metadata_key="error_evidence_envelope",
+            ),
             "results": [],
             "source": _SRC_ICAT,
             "result_count": 0,
@@ -612,6 +624,14 @@ def get_file_metadata(
     if proc.returncode != 0:
         error_msg = f"istat exited {proc.returncode}"
         stderr_text = (proc.stderr or "")[:_PREVIEW_CHAR_LIMIT]
+        diagnostic = f"{error_msg}: {stderr_text}".rstrip(": ")
+        presentation = present_model_evidence(
+            diagnostic,
+            source_id="tool-diagnostic:get_file_metadata",
+            source_name="get_file_metadata",
+            selector=f"tool_error:{tc_id}",
+            max_characters=max(1, len(diagnostic)),
+        )
         elapsed = (time.monotonic() - t0) * 1000
         ctx.audit.log_tool_call(
             tool_call_id=tc_id,
@@ -623,7 +643,10 @@ def get_file_metadata(
         return {
             "tool_call_id": tc_id,
             "status": "error",
-            "error_message": f"{error_msg}: {stderr_text}".rstrip(": "),
+            **presentation.response_fields(
+                content_key="error_message",
+                metadata_key="error_evidence_envelope",
+            ),
             "results": [],
             "source": _SRC_ISTAT,
             "result_count": 0,

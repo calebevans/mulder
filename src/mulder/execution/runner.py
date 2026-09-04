@@ -5,14 +5,15 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 from collections.abc import Callable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum
@@ -60,9 +61,10 @@ class NetworkIsolationBackend(Protocol):
 class BubblewrapNetworkIsolationBackend:
     """Linux network-namespace enforcement using a verified bubblewrap binary.
 
-    The probe compares the child and parent network namespace identifiers.
-    Merely finding a binary on ``PATH`` is not sufficient: hosts that prohibit
-    user namespaces therefore fail closed before the forensic command starts.
+    The binary is pinned to a root-controlled system path and attested before
+    use. The parent then inspects the launched process tree through ``/proc``
+    to prove a distinct child namespace; wrapper-controlled stdout is never
+    accepted as proof.
     """
 
     backend_name = "bubblewrap-netns-v1"
@@ -71,6 +73,7 @@ class BubblewrapNetworkIsolationBackend:
         self._configured_executable = executable
         self._probe_timeout = probe_timeout
         self._probe_result: tuple[bool, str, str | None] | None = None
+        self._attested_identity: tuple[int, int, int, int, str] | None = None
         self._probe_lock = threading.Lock()
 
     def prepare(self, argv: tuple[str, ...]) -> NetworkIsolationPlan:
@@ -115,6 +118,15 @@ class BubblewrapNetworkIsolationBackend:
     def _verified_backend(self) -> tuple[bool, str, str | None]:
         with self._probe_lock:
             if self._probe_result is not None:
+                executable = self._probe_result[2]
+                if executable is not None:
+                    attested, _message = self._attest_executable(Path(executable))
+                    if attested != self._attested_identity:
+                        return (
+                            False,
+                            "The attested bubblewrap executable changed after verification",
+                            None,
+                        )
                 return self._probe_result
             self._probe_result = self._probe()
             return self._probe_result
@@ -122,22 +134,31 @@ class BubblewrapNetworkIsolationBackend:
     def _probe(self) -> tuple[bool, str, str | None]:
         if not sys.platform.startswith("linux"):
             return False, "No supported no-network isolation backend exists on this platform", None
-        located = self._configured_executable or shutil.which("bwrap")
-        if located is None:
-            return False, "bubblewrap is required for commands declaring network=none", None
+        configured = self._configured_executable
+        located = Path(configured) if configured is not None else Path("/usr/bin/bwrap")
+        if configured is not None and not located.is_absolute():
+            return False, "Configured bubblewrap path must be absolute", None
         try:
             executable = str(Path(located).resolve(strict=True))
-            parent_namespace = os.readlink("/proc/self/ns/net")
         except (OSError, RuntimeError) as exc:
             return False, f"Could not resolve the network isolation backend: {exc}", None
+        identity, attestation_error = self._attest_executable(Path(executable))
+        if identity is None:
+            return False, attestation_error, None
+        self._attested_identity = identity
+        try:
+            parent_namespace = self._namespace_identity(os.getpid())
+        except OSError as exc:
+            return False, f"Could not inspect the parent network namespace: {exc}", None
 
+        probe_program = "import time; time.sleep(30)"
         probe_argv = self._wrapped_argv(
             executable,
             (
                 sys.executable,
                 "-I",
                 "-c",
-                "import os; print(os.readlink('/proc/self/ns/net'))",
+                probe_program,
             ),
         )
         probe: subprocess.Popen[bytes] | None = None
@@ -146,26 +167,104 @@ class BubblewrapNetworkIsolationBackend:
                 probe_argv,
                 env=_safe_environment({}),
                 stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
                 shell=False,
                 start_new_session=True,
             )
-            stdout, stderr = probe.communicate(timeout=self._probe_timeout)
-        except subprocess.TimeoutExpired:
-            if probe is not None:
-                probe.kill()
-                probe.wait()
+            deadline = time.monotonic() + self._probe_timeout
+            while time.monotonic() < deadline:
+                for pid in self._process_tree(probe.pid):
+                    try:
+                        if self._is_probe_payload(pid, probe_program) and (
+                            self._namespace_identity(pid) != parent_namespace
+                        ):
+                            self._terminate_probe(probe)
+                            return True, "Verified private network namespace", executable
+                    except OSError:
+                        continue
+                if probe.poll() is not None:
+                    detail = (probe.stderr.read() if probe.stderr is not None else b"").decode(
+                        "utf-8", errors="replace"
+                    ).strip()
+                    return (
+                        False,
+                        f"bubblewrap network namespace probe was denied: {detail}",
+                        None,
+                    )
+                time.sleep(0.01)
+            self._terminate_probe(probe)
             return False, "bubblewrap network namespace probe timed out", None
         except (OSError, subprocess.SubprocessError) as exc:
+            if probe is not None:
+                self._terminate_probe(probe)
             return False, f"bubblewrap network namespace probe failed: {exc}", None
-        child_namespace = stdout.decode("utf-8", errors="replace").strip()
-        if probe.returncode != 0:
-            detail = stderr.decode("utf-8", errors="replace").strip()
-            return False, f"bubblewrap network namespace probe was denied: {detail}", None
-        if not child_namespace or child_namespace == parent_namespace:
-            return False, "bubblewrap did not create a distinct network namespace", None
-        return True, "Verified private network namespace", executable
+
+    @staticmethod
+    def _namespace_identity(pid: int) -> tuple[int, int]:
+        namespace = os.stat(f"/proc/{pid}/ns/net")
+        return namespace.st_dev, namespace.st_ino
+
+    @staticmethod
+    def _process_tree(root_pid: int) -> tuple[int, ...]:
+        discovered: list[int] = []
+        pending = [root_pid]
+        while pending:
+            pid = pending.pop()
+            if pid in discovered:
+                continue
+            discovered.append(pid)
+            try:
+                children = Path(f"/proc/{pid}/task/{pid}/children").read_text().split()
+            except OSError:
+                continue
+            pending.extend(int(child) for child in children)
+        return tuple(discovered)
+
+    @staticmethod
+    def _is_probe_payload(pid: int, probe_program: str) -> bool:
+        try:
+            executable = Path(os.readlink(f"/proc/{pid}/exe")).resolve()
+            command = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+        except OSError:
+            return False
+        return executable == Path(sys.executable).resolve() and (
+            probe_program.encode("utf-8") in command
+        )
+
+    @staticmethod
+    def _terminate_probe(probe: subprocess.Popen[bytes]) -> None:
+        if probe.poll() is None:
+            with suppress(ProcessLookupError):
+                os.killpg(probe.pid, signal.SIGKILL)
+        probe.wait()
+
+    @staticmethod
+    def _attest_executable(
+        executable: Path,
+    ) -> tuple[tuple[int, int, int, int, str] | None, str]:
+        try:
+            executable_stat = executable.stat()
+            if not stat.S_ISREG(executable_stat.st_mode):
+                return None, "bubblewrap executable is not a regular file"
+            if executable_stat.st_uid != 0 or executable_stat.st_mode & 0o022:
+                return None, "bubblewrap executable is not root-owned and immutable to other users"
+            if not os.access(executable, os.X_OK):
+                return None, "bubblewrap executable is not executable"
+            for parent in executable.parents:
+                parent_stat = parent.stat()
+                if parent_stat.st_uid != 0 or parent_stat.st_mode & 0o022:
+                    return None, "bubblewrap path is not rooted in trusted directories"
+            digest = hashlib.sha256(executable.read_bytes()).hexdigest()
+        except OSError as exc:
+            return None, f"Could not attest the bubblewrap executable: {exc}"
+        return (
+            executable_stat.st_dev,
+            executable_stat.st_ino,
+            executable_stat.st_size,
+            executable_stat.st_mtime_ns,
+            digest,
+        ), ""
 
 
 _DEFAULT_NETWORK_ISOLATION_BACKEND = BubblewrapNetworkIsolationBackend()

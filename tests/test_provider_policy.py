@@ -10,6 +10,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from mulder.orchestrator.capabilities import (
+    DELEGATION_GRANT_ENV,
+    DELEGATION_SECRET_ENV,
     identity_for_phase,
     identity_from_delegation_grant,
 )
@@ -232,6 +234,38 @@ async def test_allowed_request_manifest_matches_fields_at_sdk_seam(tmp_path: Pat
         "policy": "sensitive-approved",
         "zero_egress": False,
     }
+
+
+@pytest.mark.asyncio()
+async def test_sdk_session_environment_binds_signed_direct_dispatch_identity() -> None:
+    session = _session(ProviderPolicy())
+    identity = identity_for_phase("alternative_narrative", "executor")
+
+    async def empty_query(**_kwargs: object):  # type: ignore[no-untyped-def]
+        if False:
+            yield None
+
+    with (
+        patch("mulder.orchestrator.session.ClaudeAgentOptions", return_value=object()) as options,
+        patch("mulder.orchestrator.session.query", empty_query),
+    ):
+        await session.execute(
+            system_prompt="system",
+            prompt="question",
+            model="claude-test",
+            allowed_tools=["search"],
+            disallowed_tools=[],
+            max_turns=1,
+            max_budget=1.0,
+            identity=identity,
+        )
+
+    session_env = options.call_args.kwargs["env"]
+    secret = session_env[DELEGATION_SECRET_ENV]
+    assert (
+        identity_from_delegation_grant(session_env[DELEGATION_GRANT_ENV], secret)
+        == identity
+    )
 
 
 @pytest.mark.asyncio()

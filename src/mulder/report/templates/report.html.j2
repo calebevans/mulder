@@ -1792,8 +1792,7 @@ function selectEvSource(name) {
     var lines = w.raw_text.split('\n');
     lines.forEach(function(line) {
       lineNum++;
-      var escaped = line.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      html += '<div class="ev-line" data-ln="'+lineNum+'"><span class="ev-line-num">'+lineNum+'</span><span class="ev-line-text">'+escaped+'</span></div>';
+      html += '<div class="ev-line" data-ln="'+lineNum+'"><span class="ev-line-num">'+lineNum+'</span><span class="ev-line-text">'+line+'</span></div>';
     });
   });
   if (windows.length > 0 && windows[0].truncated) {

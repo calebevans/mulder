@@ -225,14 +225,15 @@ escalations fail before provider options are constructed. Continuation
 sessions retain the same identity; JSON repair and the deterministic verifier
 receive no MCP tool authority.
 
-`run_parallel` is not an authorization shortcut. Each model session receives a
-fresh secret, and a `PreToolUse` hook binds a signed, session-scoped identity
-grant to the parallel request. The MCP server verifies that grant and runs the
-same single-tool role/capability authorization for every nested task before it
-looks up a dispatcher. Invalid or absent grants fail closed. Consequently a
-Narrative Executor can parallelize its valid query/mutation tools but cannot
-dispatch extraction-only tools. The delegation secret is removed from every
-forensic child-process environment.
+Each model session receives a fresh secret and signed, session-scoped identity
+grant in the MCP server environment. Every registered direct MCP handler
+verifies that binding and applies the same role/capability authorization before
+its body runs. A `PreToolUse` hook also attaches the grant to `run_parallel`,
+which reauthorizes every nested task before looking up a dispatcher. Invalid,
+partial, absent nested, or underprivileged bindings fail closed. Consequently
+a Narrative Executor cannot dispatch extraction-only tools by calling them
+directly or through `run_parallel`. Both identity variables are removed from
+every forensic child-process environment.
 
 ### The `@tool_access` Decorator
 
@@ -533,9 +534,11 @@ packet's content field; the digest still commits to the selected full value.
 
 The same Interface is used by paginated raw reads, search, timeline,
 correlation, standard window helpers, direct evidence-file reads, review/EZ
-samples, and composite evidence excerpts. UI consumers use the corresponding
-HTML-escaped representation. Evidence flags are handling signals, never a
-maliciousness verdict.
+samples, composite evidence excerpts, parser diagnostics, and the report source
+browser. Model-facing diagnostics use delimited evidence packets with a generic
+trusted outcome reason; browser windows use the corresponding UI projection so
+controls are visible and markup is inert. Evidence flags are handling signals,
+never a maliciousness verdict.
 
 ## Evidence Reference Validation
 

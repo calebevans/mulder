@@ -954,6 +954,8 @@ def finalize_report() -> dict[str, object]:
     for sname, (windows, total) in bulk_windows.items():
         source_windows[sname] = [
             {
+                "window_id": w.window_id,
+                "source_id": w.source_id,
                 "line_start": w.line_start,
                 "line_end": w.line_end,
                 "event_time": w.event_time,

@@ -207,6 +207,32 @@ class ModelEvidencePresentation:
         return {content_key: self.packet, metadata_key: self.metadata}
 
 
+@dataclass(frozen=True)
+class UIEvidencePresentation:
+    """One immutable projection for every browser-facing evidence value."""
+
+    envelope: EvidenceEnvelope
+
+    @property
+    def content(self) -> str:
+        """Return inert HTML-escaped visible evidence text."""
+        return self.envelope.for_ui().content
+
+    @property
+    def metadata(self) -> dict[str, object]:
+        """Return UI projection metadata without duplicating evidence content."""
+        return self.envelope.for_ui().model_dump(mode="json", exclude={"content"})
+
+    def response_fields(
+        self,
+        *,
+        content_key: str = "raw_text",
+        metadata_key: str = "evidence_envelope",
+    ) -> dict[str, object]:
+        """Return the inseparable escaped-content/metadata pair."""
+        return {content_key: self.content, metadata_key: self.metadata}
+
+
 _ANSI_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
 _ROLE_MARKER_RE = re.compile(
     r"(?im)(?:^|\n)\s*(?:"
@@ -373,6 +399,34 @@ def present_model_evidence(
     )
 
 
+def present_ui_evidence(
+    raw: str | bytes,
+    *,
+    source_id: str,
+    selector: str,
+    source_name: str | None = None,
+    source_record_ids: Sequence[int] = (),
+    encoding: str | None = None,
+    max_characters: int = 100_000,
+    trust_label: TrustLabel = TrustLabel.UNTRUSTED_EVIDENCE,
+    sensitivity_hooks: Sequence[SensitivityHook] = (common_sensitivity_hook,),
+) -> UIEvidencePresentation:
+    """Build the sole supported projection of evidence into browser responses."""
+    return UIEvidencePresentation(
+        envelope_evidence(
+            raw,
+            source_id=source_id,
+            selector=selector,
+            source_name=source_name,
+            source_record_ids=source_record_ids,
+            encoding=encoding,
+            max_characters=max_characters,
+            trust_label=trust_label,
+            sensitivity_hooks=sensitivity_hooks,
+        )
+    )
+
+
 def _decode(raw: str | bytes, requested_encoding: str | None) -> tuple[bytes, str, str]:
     if isinstance(raw, str):
         raw_bytes = raw.encode(requested_encoding or "utf-8", errors="surrogatepass")
@@ -516,11 +570,15 @@ __all__ = [
     "EvidenceFlag",
     "EvidenceProvenance",
     "EvidenceRepresentation",
+    "ModelEvidencePresentation",
     "SensitivityHook",
     "TruncationMetadata",
     "TrustLabel",
+    "UIEvidencePresentation",
     "common_sensitivity_hook",
     "envelope_evidence",
     "escape_report_markdown",
+    "present_model_evidence",
+    "present_ui_evidence",
     "render_safe_markdown",
 ]

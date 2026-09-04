@@ -11,6 +11,8 @@ from pathlib import Path
 import pytest
 
 from mulder.orchestrator.capabilities import (
+    DELEGATION_GRANT_ENV,
+    DELEGATION_SECRET_ENV,
     VERIFIER_IDENTITY,
     AgentIdentity,
     Capability,
@@ -141,6 +143,44 @@ def test_delegation_grant_is_tamper_evident() -> None:
     assert identity_from_delegation_grant(grant, "session-secret") == identity
     with pytest.raises(CapabilityViolation, match="invalid nested-tool"):
         identity_from_delegation_grant(grant + "x", "session-secret")
+
+
+def test_direct_registered_dispatch_enforces_bound_session_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mulder.server import app
+
+    secret = "direct-dispatch-session-secret"
+    narrative = identity_for_phase("alternative_narrative", "executor")
+    monkeypatch.setenv(DELEGATION_SECRET_ENV, secret)
+    monkeypatch.delenv(DELEGATION_GRANT_ENV, raising=False)
+    with pytest.raises(CapabilityViolation, match="incomplete"):
+        app._tool_dispatch_sync["search"]("case", "needle")
+
+    monkeypatch.setenv(DELEGATION_GRANT_ENV, create_delegation_grant(narrative, secret))
+
+    with pytest.raises(CapabilityViolation):
+        app._tool_dispatch_sync["run_volatility"]("pslist", "/does-not-exist")
+
+    extraction = identity_for_phase("extraction", "executor")
+    monkeypatch.setenv(DELEGATION_GRANT_ENV, create_delegation_grant(extraction, secret))
+    response = app._tool_dispatch_sync["run_volatility"]("pslist", "/does-not-exist")
+    assert response["error_type"] == "file_not_found"
+
+
+@pytest.mark.asyncio()
+async def test_mcp_transport_dispatch_authorizes_before_resource_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mulder.server import app
+
+    secret = "transport-session-secret"
+    narrative = identity_for_phase("alternative_narrative", "executor")
+    monkeypatch.setenv(DELEGATION_SECRET_ENV, secret)
+    monkeypatch.setenv(DELEGATION_GRANT_ENV, create_delegation_grant(narrative, secret))
+
+    with pytest.raises(CapabilityViolation):
+        await app._tool_dispatch["run_volatility"]("pslist", "/does-not-exist")
 
 
 @pytest.mark.asyncio()

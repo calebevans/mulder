@@ -575,6 +575,7 @@ def error_response(
     suggestion: str | None = None,
     outcome_status: ToolOutcomeStatus | None = None,
     coverage: CoverageMetadata | None = None,
+    error_is_untrusted_evidence: bool = False,
 ) -> dict[str, object]:
     """Build an audited error response and log the tool call.
 
@@ -593,10 +594,27 @@ def error_response(
             outcome_status = ToolOutcomeStatus.UNAVAILABLE
         else:
             outcome_status = ToolOutcomeStatus.FAILED
+    presented_error = error
+    error_envelope: dict[str, object] | None = None
+    outcome_reason = error
+    if error_is_untrusted_evidence:
+        presentation = present_model_evidence(
+            error,
+            source_id=f"tool-diagnostic:{tool_name}",
+            source_name=tool_name,
+            selector=f"tool_error:{tc_id}",
+            max_characters=max(1, len(error)),
+        )
+        presented_error = presentation.packet
+        error_envelope = presentation.metadata
+        outcome_reason = (
+            "Tool emitted an untrusted diagnostic; inspect its evidence envelope."
+        )
+
     outcome = ToolOutcome(
         status=outcome_status,
         coverage=coverage or CoverageMetadata(),
-        reason=error,
+        reason=outcome_reason,
     )
     if has_ctx():
         ctx = get_ctx()
@@ -613,8 +631,10 @@ def error_response(
         "status": "error",
         "outcome": outcome.model_dump(mode="json"),
         "error_type": error_type,
-        "error_message": error,
+        "error_message": presented_error,
     }
+    if error_envelope is not None:
+        result["error_evidence_envelope"] = error_envelope
     if suggestion:
         result["suggestion"] = suggestion
     return result

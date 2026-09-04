@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from mulder.assets.paths import asset_path, register_cache_clear
+from mulder.security.evidence_envelope import present_model_evidence
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
@@ -425,6 +426,8 @@ def _yara_error(
     source: str,
     error_msg: str,
     t0: float,
+    *,
+    error_is_untrusted_evidence: bool = False,
 ) -> dict[str, object]:
     """Build a standardized YARA error response with audit logging."""
     elapsed = (time.monotonic() - t0) * 1000
@@ -435,14 +438,26 @@ def _yara_error(
         output_hash=hash_output({"error": error_msg}),
         duration_ms=elapsed,
     )
-    return {
+    error_fields: dict[str, object] = {"error_message": error_msg}
+    if error_is_untrusted_evidence:
+        presentation = present_model_evidence(
+            error_msg,
+            source_id=f"tool-diagnostic:{tool_name}",
+            source_name=tool_name,
+            selector=f"tool_error:{tc_id}",
+            max_characters=max(1, len(error_msg)),
+        )
+        error_fields = presentation.response_fields(
+            content_key="error_message",
+            metadata_key="error_evidence_envelope",
+        )
+    response = {
         "tool_call_id": tc_id,
         "status": "error",
-        "error_message": error_msg,
-        "results": [],
-        "source": source,
-        "result_count": 0,
+        **error_fields,
     }
+    response.update({"results": [], "source": source, "result_count": 0})
+    return response
 
 
 _NOISE_FAMILY_THRESHOLD = 4
@@ -555,6 +570,7 @@ def _run_yara_scan(
             source_name,
             f"yara exited {proc.returncode}: {stderr_text}".rstrip(": "),
             t0,
+            error_is_untrusted_evidence=True,
         )
 
     results = _parse_yara_output(proc.stdout)

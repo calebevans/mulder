@@ -301,6 +301,7 @@ def run_hayabusa(
                 params,
                 f"Hayabusa exited {proc.returncode}: {stderr_preview}",
                 elapsed_ms=(time.monotonic() - t0) * 1000,
+                error_is_untrusted_evidence=True,
             )
 
         try:

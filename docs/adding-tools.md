@@ -135,16 +135,18 @@ job control, and report publication require their corresponding capabilities.
 Add a focused authorization test when introducing a new effect category rather
 than broadening an identity implicitly.
 
-Nested dispatch through `run_parallel` is reauthorized one task at a time with
-the initiating session's signed identity. Tool implementations must not accept
-or manufacture delegation grants, and callers must not treat the parallel
-dispatcher as a second allowlist.
+Every registered direct dispatch and every nested task through `run_parallel`
+is reauthorized with the initiating session's signed identity. Tool
+implementations must not accept or manufacture delegation grants, and callers
+must not treat the parallel dispatcher as a second allowlist.
 
 Any response field derived from evidence bytes or a `WindowRow.raw_text` value
 must use `present_model_evidence`, `project_window_evidence`,
 `project_window_collection`, or `serialize_windows`. Do not return a manually
 sliced plaintext preview: the shared projection keeps the complete-value
 digest and exact selector inseparable from the model packet.
+Parser-controlled diagnostics must opt in to the untrusted-error projection in
+`error_response`; report/browser code must use `present_ui_evidence`.
 
 ## 3. Index Output into the Database
 

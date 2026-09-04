@@ -673,6 +673,7 @@ def analyze_office_document(
             params,
             f"Failed to execute olevba: {exc}",
             (time.monotonic() - t0) * 1000,
+            error_is_untrusted_evidence=True,
         )
 
     risk = _assess_office_risk(macros, has_vba)

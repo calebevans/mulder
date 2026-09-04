@@ -1266,6 +1266,7 @@ def _run_dislocker_decrypt_mode(
             "run_dislocker",
             params,
             f"dislocker-fuse failed: {proc.stderr.strip()[:_PREVIEW_CHAR_LIMIT]}",
+            error_is_untrusted_evidence=True,
         )
 
     with _dislocker_lock:

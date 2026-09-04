@@ -31,7 +31,11 @@ from mulder.patterns import (
     is_external_ip,
 )
 from mulder.reasoning import ReasoningReviewProjection
-from mulder.security.evidence_envelope import escape_report_markdown, render_safe_markdown
+from mulder.security.evidence_envelope import (
+    escape_report_markdown,
+    present_ui_evidence,
+    render_safe_markdown,
+)
 from mulder.security.provider_policy import summarize_outbound_manifest
 
 logger = logging.getLogger(__name__)
@@ -70,6 +74,43 @@ def _normalize_coverage(c: CoverageRecord | dict[str, Any]) -> CoverageRecord:
     if isinstance(c, CoverageRecord):
         return c
     return CoverageRecord(**c)
+
+
+def _present_source_windows_for_ui(
+    source_windows: Mapping[str, Sequence[Mapping[str, Any]]] | None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Project every parser-controlled source window for safe browser insertion."""
+    projected: dict[str, list[dict[str, Any]]] = {}
+    for source_name, windows in (source_windows or {}).items():
+        projected_windows: list[dict[str, Any]] = []
+        for ordinal, window in enumerate(windows):
+            window_data = dict(window)
+            raw_text = str(window_data.get("raw_text", ""))
+            record_id = window_data.get("window_id")
+            record_ids = [record_id] if isinstance(record_id, int) else []
+            source_id = str(window_data.get("source_id", source_name))
+            selector = json.dumps(
+                {
+                    "line_end": window_data.get("line_end"),
+                    "line_start": window_data.get("line_start"),
+                    "source_name": source_name,
+                    "window_id": record_id if record_id is not None else ordinal,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            presentation = present_ui_evidence(
+                raw_text,
+                source_id=source_id,
+                source_name=source_name,
+                source_record_ids=record_ids,
+                selector=selector,
+                max_characters=max(1, len(raw_text)),
+            )
+            window_data.update(presentation.response_fields())
+            projected_windows.append(window_data)
+        projected[source_name] = projected_windows
+    return projected
 
 
 def _format_coverage_scope(record: CoverageRecord) -> str:
@@ -1275,7 +1316,7 @@ class ReportRenderer:
             "mitre_techniques": mitre_techniques,
             "mitre_all_tactics": all_tactics,
             "mitre_tactic_groups": active_tactic_groups,
-            "source_windows": source_windows or {},
+            "source_windows": _present_source_windows_for_ui(source_windows),
             "coverage_records": coverage_data,
             "proof_cards": proof_card_data,
             "proof_cards_by_id": proof_cards_by_id,
