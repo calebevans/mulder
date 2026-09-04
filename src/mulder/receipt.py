@@ -696,13 +696,16 @@ def seal_case(
     report_artifacts: Sequence[Path] = (),
     overwrite: bool = False,
     key_provider: ExaminerKeyProvider | None = None,
+    require_approval: bool = False,
 ) -> Path:
     """Create a versioned manifest binding one complete case snapshot.
 
     Standard Mulder report/export files are discovered next to the case DB.
     ``report_artifacts`` adds explicitly named artifacts outside that set.  The
     command refuses stale registry entries and invalid audit chains so a newly
-    created receipt verifies at the moment it is written.
+    created receipt verifies at the moment it is written. When approval is
+    required, the signed/hashed manifest embeds the exact approved claim-set
+    and audit-head commitments.
     """
     db_dir = Path(db_dir).expanduser().resolve(strict=False)
     db_path = db_dir / f"{case_id}.db"
@@ -716,6 +719,15 @@ def seal_case(
         raise SealError(f"Case database not found: {db_path}")
     if not audit_path.is_file():
         raise SealError(f"Case audit log not found: {audit_path}")
+
+    approval: dict[str, object] | None = None
+    if require_approval:
+        from mulder.review.decisions import ReviewWorkflow, ReviewWorkflowError
+
+        try:
+            approval = ReviewWorkflow(case_id, db_dir).require_approved_state().as_mapping()
+        except ReviewWorkflowError as exc:
+            raise SealError(f"Approval gate failed: {exc}") from exc
 
     _assert_quiescent_database(db_path)
     database = _snapshot_database(db_path)
@@ -864,6 +876,8 @@ def seal_case(
             "signature": {"status": "unsigned"},
         },
     }
+    if approval is not None:
+        manifest["review_approval"] = approval
     if key_provider is not None:
         cast(dict[str, object], manifest["integrity"])["signature"] = create_signature_block(
             manifest, key_provider

@@ -574,6 +574,18 @@ All roles inherit from `--model` if not specified individually. Model IDs are pa
 
 ## Audit and Provenance
 
+### Durable Review and Approval
+
+`ReviewWorkflow` owns append-only review events, approval requests, and
+decisions in the case database. SQLite triggers reject row updates/deletes.
+Approval requests commit a canonical active claim/evidence snapshot and the
+verified audit head; a decision can only be appended while both still match.
+After approval, report audit events may extend that head, but it must remain in
+the verified chain and the claim-set digest must stay unchanged. The optional
+orchestrator checkpoint exits before report and a report-only resume validates
+the persisted approval, making interruption/restart explicit without replaying
+earlier evidence extraction.
+
 Each case has an append-only JSONL file (`{case_id}.audit.jsonl`) recording:
 
 1. **tool_call**: Every MCP tool invocation with `tool_call_id`, parameters, SHA-256 hash of output, timestamp, duration, and optional `batch_id`

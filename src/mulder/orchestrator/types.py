@@ -143,11 +143,15 @@ class InvestigationResult:
         phases: Results from each completed phase.
         total_turns: Sum of turns across all phases.
         success: Whether the full investigation succeeded.
+        review_state: Optional durable approval checkpoint state.
+        approval_request_id: Request to approve before a report-only resume.
     """
 
     phases: list[PhaseResult] = field(default_factory=list)
     total_turns: int = 0
     success: bool = False
+    review_state: str = "not_required"
+    approval_request_id: str | None = None
 
 
 def extract_json_plan(messages: list[str]) -> dict[str, Any] | None:
