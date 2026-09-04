@@ -61,6 +61,12 @@ def write_score(path: Path, score: BenchmarkScoreDocument) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def write_result(path: Path, result: BenchmarkRunResult) -> None:
+    """Write a stable normalized benchmark result document."""
+    payload = result.model_dump(mode="json")
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def render_comparison_table(score: BenchmarkScoreDocument) -> str:
     """Render a compact human comparison table from the same score document."""
     headers = (
@@ -73,6 +79,7 @@ def render_comparison_table(score: BenchmarkScoreDocument) -> str:
         "Verdict",
         "U/C/I",
         "No verdict",
+        "Failed",
         "Runtime",
         "Tokens",
         "Cost USD",
@@ -96,9 +103,10 @@ def render_comparison_table(score: BenchmarkScoreDocument) -> str:
                 f"{overall.epistemic.contradicted_rate:.3f}/"
                 f"{overall.epistemic.inconclusive_rate:.3f}",
                 f"{overall.verdicts.no_verdict_rate:.3f}",
-                str(resources.runtime_ms),
+                f"{overall.verdicts.failed_cases}/{overall.verdicts.total_cases}",
+                str(resources.runtime_ms) if resources.runtime_ms is not None else "unknown",
                 str(resources.total_tokens),
-                f"{resources.cost_usd:.6f}",
+                f"{resources.cost_usd:.6f}" if resources.cost_usd is not None else "unknown",
             )
         )
     widths = [
@@ -110,4 +118,38 @@ def render_comparison_table(score: BenchmarkScoreDocument) -> str:
         return " | ".join(value.ljust(widths[index]) for index, value in enumerate(row))
 
     separator = "-+-".join("-" * width for width in widths)
-    return "\n".join((format_row(headers), separator, *(format_row(row) for row in rows)))
+    sections = [format_row(headers), separator, *(format_row(row) for row in rows)]
+    if len(score.runs) > 1:
+        aggregate_headers = ("Matrix cell", "Runs", "Claim F1 mean +/- sd", "Verdict mean +/- sd")
+        aggregate_rows: list[tuple[str, ...]] = []
+        for aggregate in score.aggregates:
+            claim = aggregate.metrics["atomic_claims.f1"]
+            verdict = aggregate.metrics["verdicts.accuracy"]
+            aggregate_rows.append(
+                (
+                    aggregate.matrix_cell,
+                    str(aggregate.repeat_count),
+                    f"{claim.mean:.3f} +/- {claim.population_stddev:.3f}",
+                    f"{verdict.mean:.3f} +/- {verdict.population_stddev:.3f}",
+                )
+            )
+        aggregate_widths = [
+            max(len(header), *(len(row[index]) for row in aggregate_rows))
+            for index, header in enumerate(aggregate_headers)
+        ]
+
+        def format_aggregate(row: tuple[str, ...]) -> str:
+            return " | ".join(
+                value.ljust(aggregate_widths[index]) for index, value in enumerate(row)
+            )
+
+        sections.extend(
+            (
+                "",
+                "Repeat aggregates",
+                format_aggregate(aggregate_headers),
+                "-+-".join("-" * width for width in aggregate_widths),
+                *(format_aggregate(row) for row in aggregate_rows),
+            )
+        )
+    return "\n".join(sections)

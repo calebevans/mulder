@@ -7,12 +7,14 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import BaseModel
 
 from mulder.benchmark.io import BenchmarkInputError, load_manifest, load_result
 from mulder.benchmark.models import (
     BenchmarkManifest,
     BenchmarkRunResult,
     BenchmarkScoreDocument,
+    RunIdentity,
 )
 from mulder.benchmark.scorer import score_benchmark
 
@@ -21,11 +23,7 @@ FIXTURES = Path(__file__).parents[1] / "benchmarks" / "fixtures"
 
 def test_fixture_evidence_hashes_match_manifest() -> None:
     manifest = load_manifest(FIXTURES / "manifest-v1.yaml")
-    artifacts = {
-        artifact.path: artifact
-        for case in manifest.cases
-        for artifact in case.evidence
-    }
+    artifacts = {artifact.path: artifact for case in manifest.cases for artifact in case.evidence}
     for relative_path, artifact in artifacts.items():
         evidence_path = FIXTURES / relative_path
         assert hashlib.sha256(evidence_path.read_bytes()).hexdigest() == artifact.sha256
@@ -45,7 +43,7 @@ def test_models_expose_versioned_json_schemas() -> None:
 
 
 def test_committed_json_schemas_match_authoritative_models() -> None:
-    models = {
+    models: dict[str, type[BaseModel]] = {
         "manifest-v1.schema.json": BenchmarkManifest,
         "result-v1.schema.json": BenchmarkRunResult,
         "score-v1.schema.json": BenchmarkScoreDocument,
@@ -135,6 +133,101 @@ def test_scoring_is_independent_of_result_file_order() -> None:
     reverse = score_benchmark(manifest, [partial, reference])
     assert forward == reverse
     assert [run.run_id for run in forward.runs] == ["duplicate-partial", "reference"]
+
+
+def test_comparable_repeats_publish_population_variance() -> None:
+    manifest = load_manifest(FIXTURES / "manifest-v1.yaml")
+    reference = load_result(FIXTURES / "result-reference.json").model_copy(
+        update={
+            "run_id": "repeat-0",
+            "identity": RunIdentity(
+                matrix_cell="mulder/default",
+                models={"analyst": "fixture-model"},
+                orchestrator_version="fixture",
+                methodology_version="1.0",
+                repeat_index=0,
+                seed=10,
+            ),
+        }
+    )
+    abstaining = load_result(FIXTURES / "result-no-verdict.json").model_copy(
+        update={
+            "run_id": "repeat-1",
+            "system_name": reference.system_name,
+            "system_version": reference.system_version,
+            "identity": RunIdentity.model_validate(reference.identity).model_copy(
+                update={"repeat_index": 1, "seed": 11}
+            ),
+        }
+    )
+
+    score = score_benchmark(manifest, [reference, abstaining])
+    aggregate = score.aggregates[0]
+    claim_f1 = aggregate.metrics["atomic_claims.f1"]
+    assert aggregate.matrix_cell == "mulder/default"
+    assert aggregate.repeat_count == 2
+    assert aggregate.run_ids == ["repeat-0", "repeat-1"]
+    assert claim_f1.mean == 0.5
+    assert claim_f1.population_variance == 0.25
+    assert claim_f1.population_stddev == 0.5
+    assert aggregate.metrics["verdicts.failed_rate"].mean == 0.0
+
+
+def test_duplicate_repeat_index_is_rejected() -> None:
+    manifest = load_manifest(FIXTURES / "manifest-v1.yaml")
+    base = load_result(FIXTURES / "result-reference.json")
+    identity = RunIdentity(
+        matrix_cell="same-cell",
+        models={"analyst": "fixture-model"},
+        orchestrator_version="fixture",
+        methodology_version="1.0",
+    )
+    first = base.model_copy(update={"run_id": "one", "identity": identity})
+    second = base.model_copy(update={"run_id": "two", "identity": identity})
+    with pytest.raises(ValueError, match="duplicate repeat_index"):
+        score_benchmark(manifest, [first, second])
+
+
+def test_matrix_cell_rejects_inconsistent_identity_stamps() -> None:
+    manifest = load_manifest(FIXTURES / "manifest-v1.yaml")
+    base = load_result(FIXTURES / "result-reference.json")
+    first_identity = RunIdentity(
+        matrix_cell="same-cell",
+        models={"analyst": "model-a"},
+        orchestrator_version="fixture",
+        methodology_version="1.0",
+    )
+    second_identity = first_identity.model_copy(
+        update={"models": {"analyst": "model-b"}, "repeat_index": 1}
+    )
+    first = base.model_copy(update={"run_id": "one", "identity": first_identity})
+    second = base.model_copy(update={"run_id": "two", "identity": second_identity})
+    with pytest.raises(ValueError, match="inconsistent .* identity"):
+        score_benchmark(manifest, [first, second])
+
+
+def test_failed_cell_does_not_receive_expected_abstention_credit() -> None:
+    manifest = load_manifest(FIXTURES / "manifest-v1.yaml")
+    result = load_result(FIXTURES / "result-reference.json")
+    failed_cases = [
+        case.model_copy(
+            update={
+                "cell_status": "failed",
+                "failure_reason": "fixture failure",
+                "verdict": "no_verdict",
+                "claims": [],
+                "coverage": [],
+            }
+        )
+        if case.case_id == "unsupported-no-verdict"
+        else case
+        for case in result.cases
+    ]
+    failed = result.model_copy(update={"cases": failed_cases})
+    score = score_benchmark(manifest, [failed]).runs[0].overall
+    assert score.verdicts.failed_cases == 1
+    assert score.verdicts.correct == 2
+    assert score.verdicts.correct_no_verdict == 0
 
 
 def test_incomparable_case_sets_are_rejected() -> None:

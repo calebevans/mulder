@@ -912,6 +912,154 @@ def benchmark_cmd(manifest: Path, results: tuple[Path, ...], output_path: Path) 
     click.echo(f"\nJSON score: {output_path}")
 
 
+def _benchmark_assignments(values: tuple[str, ...], option: str) -> dict[str, str]:
+    """Parse repeatable ``NAME=VALUE`` CLI options without silent replacement."""
+    assignments: dict[str, str] = {}
+    for value in values:
+        name, separator, assigned = value.partition("=")
+        if not separator or not name.strip() or not assigned.strip():
+            raise click.ClickException(f"{option} must use non-empty NAME=VALUE entries")
+        name = name.strip()
+        if name in assignments:
+            raise click.ClickException(f"duplicate {option} name: {name}")
+        assignments[name] = assigned.strip()
+    return assignments
+
+
+@cli.command("benchmark-export")
+@click.argument(
+    "manifest",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--case-db",
+    "case_db_values",
+    multiple=True,
+    metavar="CASE_ID=PATH",
+    help="Read a completed manifest case from this Mulder database.",
+)
+@click.option(
+    "--failed-case",
+    "failed_case_values",
+    multiple=True,
+    metavar="CASE_ID=REASON",
+    help="Record an explicit failed/no-verdict matrix cell instead of hiding it.",
+)
+@click.option("--run-id", required=True)
+@click.option("--system-name", default="mulder", show_default=True)
+@click.option("--system-version", required=True)
+@click.option("--matrix-cell", required=True)
+@click.option(
+    "--model",
+    "model_values",
+    multiple=True,
+    required=True,
+    metavar="ROLE=MODEL",
+    help="Stamp each model role and exact model identifier.",
+)
+@click.option(
+    "--prompt-set-sha256",
+    required=True,
+    help="SHA-256 of the exact prompt set used by this run.",
+)
+@click.option(
+    "--toolset-sha256",
+    required=True,
+    help="SHA-256 of the exact tool configuration used by this run.",
+)
+@click.option("--orchestrator-version", required=True)
+@click.option("--methodology-version", default="1.0", show_default=True)
+@click.option("--repeat-index", type=click.IntRange(min=0), default=0, show_default=True)
+@click.option("--seed", type=int, default=None)
+@click.option("--ablation", "ablations", multiple=True)
+@click.option("--runtime-ms", type=click.IntRange(min=0), default=None)
+@click.option("--input-tokens", type=click.IntRange(min=0), default=0, show_default=True)
+@click.option("--output-tokens", type=click.IntRange(min=0), default=0, show_default=True)
+@click.option("--unattributed-tokens", type=click.IntRange(min=0), default=0, show_default=True)
+@click.option("--cost-usd", type=click.FloatRange(min=0), default=None)
+@click.option(
+    "--output",
+    "output_path",
+    required=True,
+    type=click.Path(dir_okay=False, path_type=Path),
+)
+def benchmark_export_cmd(
+    manifest: Path,
+    case_db_values: tuple[str, ...],
+    failed_case_values: tuple[str, ...],
+    run_id: str,
+    system_name: str,
+    system_version: str,
+    matrix_cell: str,
+    model_values: tuple[str, ...],
+    prompt_set_sha256: str | None,
+    toolset_sha256: str | None,
+    orchestrator_version: str,
+    methodology_version: str,
+    repeat_index: int,
+    seed: int | None,
+    ablations: tuple[str, ...],
+    runtime_ms: int | None,
+    input_tokens: int,
+    output_tokens: int,
+    unattributed_tokens: int,
+    cost_usd: float | None,
+    output_path: Path,
+) -> None:
+    """Export normalized benchmark JSON from read-only case databases."""
+    from pydantic import ValidationError
+
+    from mulder.benchmark.extractor import extract_run_result
+    from mulder.benchmark.io import BenchmarkInputError, load_manifest, write_result
+    from mulder.benchmark.models import ResourceUsage, RunIdentity
+
+    try:
+        case_db_assignments = _benchmark_assignments(case_db_values, "--case-db")
+        failed_cases = _benchmark_assignments(failed_case_values, "--failed-case")
+        models = _benchmark_assignments(model_values, "--model")
+        case_databases = {
+            case_id: Path(path).expanduser() for case_id, path in case_db_assignments.items()
+        }
+        protected_inputs = {
+            manifest.resolve(),
+            *(path.resolve() for path in case_databases.values()),
+        }
+        if output_path.resolve() in protected_inputs:
+            raise ValueError("--output must not overwrite the manifest or a case database")
+        identity = RunIdentity(
+            matrix_cell=matrix_cell,
+            models=models,
+            prompt_set_sha256=prompt_set_sha256,
+            toolset_sha256=toolset_sha256,
+            orchestrator_version=orchestrator_version,
+            methodology_version=methodology_version,
+            repeat_index=repeat_index,
+            seed=seed,
+            ablations=list(ablations),
+        )
+        resources = ResourceUsage(
+            runtime_ms=runtime_ms,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            unattributed_tokens=unattributed_tokens,
+            cost_usd=cost_usd,
+        )
+        result = extract_run_result(
+            load_manifest(manifest),
+            case_databases=case_databases,
+            failed_cases=failed_cases,
+            run_id=run_id,
+            system_name=system_name,
+            system_version=system_version,
+            identity=identity,
+            resources=resources,
+        )
+        write_result(output_path, result)
+    except (BenchmarkInputError, OSError, ValidationError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"Normalized benchmark result: {output_path}")
+
+
 @cli.command("export-navigator")
 @click.argument("case_id")
 @click.option(

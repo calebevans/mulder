@@ -1,0 +1,324 @@
+{
+  "benchmark_id": "nist-cfreds-ndlc-2015-historical",
+  "cases": [
+    {
+      "case_id": "ndlc-2015",
+      "cell_status": "completed",
+      "claims": [
+        {
+          "citations": [],
+          "claim_id": "historical-01",
+          "object_value": "Suspect identity: \"Iaman Informant\" (iaman.informant@nist.gov)",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:01",
+          "verification_state": "verified"
+        },
+        {
+          "citations": [],
+          "claim_id": "historical-02",
+          "object_value": "Identified as \"Windows 7 Professional (64-bit) machine named 'informant-PC' in a WORKGROUP configuration.\" The OS edition is incorrect: ground truth specifies Ultimate, agent reported Professional. Computer name and WORKGROUP configuration correctly identified.",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:02",
+          "verification_state": "inconclusive"
+        },
+        {
+          "citations": [],
+          "claim_id": "historical-03",
+          "object_value": "USB Device 1: SanDisk Cruzer Fit, S/N 4C530012450531101593, exFAT, \"Authorized USB\"",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:03",
+          "verification_state": "verified"
+        },
+        {
+          "citations": [],
+          "claim_id": "historical-04",
+          "object_value": "USB Device 2: SanDisk Cruzer Fit, S/N 4C530012550531106501, FAT32, \"IAMAN $_@\"",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:04",
+          "verification_state": "verified"
+        },
+        {
+          "citations": [],
+          "claim_id": "historical-05",
+          "object_value": "Identified as \"UDF-formatted CD-ROM created on March 26, 2015\" with ExifTool metadata and HL-DT-ST DVD+-RW GT80N drive identification. Filesystem type and drive correctly identified, but creation date is wrong: answer key's UDF descriptor timestamp shows 2015-03-24 16:53:17, not March 26.",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:05",
+          "verification_state": "inconclusive"
+        },
+        {
+          "citations": [],
+          "claim_id": "historical-06",
+          "object_value": "Five Secret Project documents exfiltrated to USB",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:06",
+          "verification_state": "verified"
+        },
+        {
+          "citations": [],
+          "claim_id": "historical-07",
+          "object_value": "Four disguised copies identified with exact original-to-fake filename mappings (e.g., detailed_proposal.docx \u2192 \"a_gift_from_you.gif\"). Internal OOXML ZIP structures confirmed true file types. However, the answer key documents 22 renamed files (4 on D-2, 18 on D-1) and 17 recoverable disguised files on RM2's FAT32 partition. Agent found 4 of 22 mappings; technique correctly detected but coverage incomplete.",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:07",
+          "verification_state": "inconclusive"
+        },
+        {
+          "citations": [],
+          "claim_id": "historical-08",
+          "object_value": "Anti-forensics tools: CCleaner and Eraser deployed",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:08",
+          "verification_state": "verified"
+        },
+        {
+          "citations": [],
+          "claim_id": "historical-09",
+          "object_value": "Search history reveals premeditation (leakage methods, anti-forensics)",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:09",
+          "verification_state": "verified"
+        },
+        {
+          "citations": [],
+          "claim_id": "historical-10",
+          "object_value": "Google Drive sync installed for cloud exfiltration",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:10",
+          "verification_state": "verified"
+        },
+        {
+          "citations": [],
+          "claim_id": "historical-11",
+          "object_value": "iCloud setup downloaded (secondary cloud channel)",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:11",
+          "verification_state": "verified"
+        },
+        {
+          "citations": [],
+          "claim_id": "historical-12",
+          "object_value": "USB connection timestamps via EVTX System log",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:12",
+          "verification_state": "verified"
+        },
+        {
+          "citations": [],
+          "claim_id": "historical-13",
+          "object_value": "Exfiltration timeline: Feb 15 bulk copy (42-second window)",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:13",
+          "verification_state": "verified"
+        },
+        {
+          "citations": [],
+          "claim_id": "historical-14",
+          "object_value": "Agent claimed \"CCleaner's execution effectively destroyed four categories of user activity artifacts \u2014 browser history, Jump Lists, LNK files, and Shellbags.\" The answer key explicitly states CCleaner \"was closed after doing nothing.\" Furthermore, the answer key shows all four artifact categories (browser history, JumpLists, LNK files, ShellBags) DO exist in the evidence. The agent incorrectly attributed artifact absence to CCleaner when the tool was never actually run.",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:14",
+          "verification_state": "contradicted"
+        },
+        {
+          "citations": [],
+          "claim_id": "historical-15",
+          "object_value": "Systematic file deletion on RM2 FAT32 (Mar 24, 09:54-10:00)",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:15",
+          "verification_state": "verified"
+        },
+        {
+          "citations": [],
+          "claim_id": "historical-16",
+          "object_value": "Report identifies RM3 content as \"government IT governance DOCX document with embedded IREAP/UMER references matching the Secret Project documents\" but does not enumerate all files on the disc or match them to the specific 5 documents.",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:16",
+          "verification_state": "inconclusive"
+        },
+        {
+          "citations": [],
+          "claim_id": "historical-17",
+          "object_value": "Report identifies the Word temporary file (~$ecret_project]_proposal.docx) created at 14:37:52 proving document review, and the 22 personal images batch-deleted. Does not provide a complete list of all files opened/accessed on RM2.",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:17",
+          "verification_state": "inconclusive"
+        },
+        {
+          "citations": [],
+          "claim_id": "historical-19",
+          "object_value": "Report identifies the email address iaman.informant@nist.gov and Outlook OST references but does not identify the spy.conspirator@nist.gov correspondent or the specific email exchanges.",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:19",
+          "verification_state": "inconclusive"
+        },
+        {
+          "citations": [],
+          "claim_id": "historical-20",
+          "object_value": "Report correctly notes: \"The modification timestamps on the FAT32 partition are consistently one hour later than the NTFS timestamps, consistent with FAT32 storing local time versus NTFS storing UTC in a UTC+1 timezone environment.\" This is identified but the timezone is assessed as UTC+1 when the ground truth specifies UTC-5 (Eastern Time).",
+          "predicate": "historical_full_match",
+          "subject": "ndlc:answer-key-item:20",
+          "verification_state": "inconclusive"
+        }
+      ],
+      "coverage": [
+        {
+          "domain": "legacy/human-adjudication",
+          "status": "PARTIAL"
+        }
+      ],
+      "verdict": "positive"
+    }
+  ],
+  "identity": {
+    "ablations": [],
+    "matrix_cell": "historical/ndlc/claude-opus-4-6",
+    "methodology_version": "1.0",
+    "models": {
+      "analyst": "claude-opus-4-6",
+      "orchestrator": "claude-sonnet-4-5@20250929"
+    },
+    "orchestrator_version": "historical-unrecorded",
+    "repeat_index": 0
+  },
+  "resources": {
+    "runtime_ms": 6120000,
+    "unattributed_tokens": 330300
+  },
+  "run_id": "mulder-ndlc-historical-2026-06-06",
+  "schema_version": 1,
+  "source_adjudication": {
+    "count_mismatch_note": "The source scorecard reports 12 FOUND and 6 PARTIAL, while its 20 item rows contain 11 FOUND and 7 PARTIAL. Both are retained verbatim; this import does not re-adjudicate the historical run.",
+    "items": [
+      {
+        "ground_truth": "Suspect identity: \"Iaman Informant\" (iaman.informant@nist.gov)",
+        "item_id": "1",
+        "observed": "Correctly identified through SAM registry, resignation letter, Outlook OST references, RM2 volume label \"IAMAN $_@\", and bulk_extractor carved email data. Six independent attribution sources cited.",
+        "status": "FOUND"
+      },
+      {
+        "ground_truth": "PC OS: Windows 7 Ultimate 64-bit, standalone WORKGROUP",
+        "item_id": "2",
+        "observed": "Identified as \"Windows 7 Professional (64-bit) machine named 'informant-PC' in a WORKGROUP configuration.\" The OS edition is incorrect: ground truth specifies Ultimate, agent reported Professional. Computer name and WORKGROUP configuration correctly identified.",
+        "status": "PARTIAL"
+      },
+      {
+        "ground_truth": "USB Device 1: SanDisk Cruzer Fit, S/N 4C530012450531101593, exFAT, \"Authorized USB\"",
+        "item_id": "3",
+        "observed": "Fully identified including serial number, volume label, filesystem, and connection timestamps via USBSTOR registry and System EVTX.",
+        "status": "FOUND"
+      },
+      {
+        "ground_truth": "USB Device 2: SanDisk Cruzer Fit, S/N 4C530012550531106501, FAT32, \"IAMAN $_@\"",
+        "item_id": "4",
+        "observed": "Fully identified including serial number, volume label, dual-partition structure (NTFS+FAT32), and connection timestamps.",
+        "status": "FOUND"
+      },
+      {
+        "ground_truth": "RM3: CD-ROM, UDF filesystem, formatted March 24, 2015 (16:53:17 UTC)",
+        "item_id": "5",
+        "observed": "Identified as \"UDF-formatted CD-ROM created on March 26, 2015\" with ExifTool metadata and HL-DT-ST DVD+-RW GT80N drive identification. Filesystem type and drive correctly identified, but creation date is wrong: answer key's UDF descriptor timestamp shows 2015-03-24 16:53:17, not March 26.",
+        "status": "PARTIAL"
+      },
+      {
+        "ground_truth": "Five Secret Project documents exfiltrated to USB",
+        "item_id": "6",
+        "observed": "All five documents correctly identified by filename, file size, and location on both RM1 and RM2 NTFS partition. Exact byte sizes matched (35,226,880; 16,381,123; 14,547,968; 6,484,502 bytes).",
+        "status": "FOUND"
+      },
+      {
+        "ground_truth": "File masquerading: Documents renamed with false extensions on RM2 FAT32",
+        "item_id": "7",
+        "observed": "Four disguised copies identified with exact original-to-fake filename mappings (e.g., detailed_proposal.docx \u2192 \"a_gift_from_you.gif\"). Internal OOXML ZIP structures confirmed true file types. However, the answer key documents 22 renamed files (4 on D-2, 18 on D-1) and 17 recoverable disguised files on RM2's FAT32 partition. Agent found 4 of 22 mappings; technique correctly detected but coverage incomplete.",
+        "status": "PARTIAL"
+      },
+      {
+        "ground_truth": "Anti-forensics tools: CCleaner and Eraser deployed",
+        "item_id": "8",
+        "observed": "Both tools fully documented: CCleaner 5.04 (ShimCache entry #61, installed/used/uninstalled Mar 13), Eraser 6.2.0.2962 (installed Mar 25, System Restore point \"Installed Eraser 6.2.0.2962\" at 14:57:27).",
+        "status": "FOUND"
+      },
+      {
+        "ground_truth": "Search history reveals premeditation (leakage methods, anti-forensics)",
+        "item_id": "9",
+        "observed": "Extensive reconstruction from bulk_extractor carved URLs. Specific search terms matched: \"information leakage cases\" (47 hits), \"anti-forensic tools\" (85 hits), \"file sharing and tethering\" (491 hits), \"windows event logs\" (61 hits), \"external device and forensics\" (65 hits).",
+        "status": "FOUND"
+      },
+      {
+        "ground_truth": "Google Drive sync installed for cloud exfiltration",
+        "item_id": "10",
+        "observed": "googledrivesync.exe identified in ShimCache with execution flag and compilation date. Google Drive sync folder at Users/informant/Google Drive/ with deleted sync databases. Prefetch GOOGLEDRIVESYNC.EXE-841A0D94.pf corroborates.",
+        "status": "FOUND"
+      },
+      {
+        "ground_truth": "iCloud setup downloaded (secondary cloud channel)",
+        "item_id": "11",
+        "observed": "icloudsetup.exe identified in ShimCache, downloaded March 23, 2015 within 20 seconds of a Google Drive sync download.",
+        "status": "FOUND"
+      },
+      {
+        "ground_truth": "USB connection timestamps via EVTX System log",
+        "item_id": "12",
+        "observed": "System EVTX USBSTOR driver installation at 18:31:10 for Device 1 on March 23. Device 2 first connection at 13:58:32 on March 24. Cross-correlated with registry timestamps.",
+        "status": "FOUND"
+      },
+      {
+        "ground_truth": "Exfiltration timeline: Feb 15 bulk copy (42-second window)",
+        "item_id": "13",
+        "observed": "Exact reconstruction: \"bulk copy operation transferring five proprietary documents to the USB media. The filesystem timeline records all five files between 16:51:38 and 16:52:20, a 42-second window consistent with a single drag-and-drop operation.\"",
+        "status": "FOUND"
+      },
+      {
+        "ground_truth": "Anti-forensics: CCleaner deployed but did not clean (launched and closed without action)",
+        "item_id": "14",
+        "observed": "Agent claimed \"CCleaner's execution effectively destroyed four categories of user activity artifacts \u2014 browser history, Jump Lists, LNK files, and Shellbags.\" The answer key explicitly states CCleaner \"was closed after doing nothing.\" Furthermore, the answer key shows all four artifact categories (browser history, JumpLists, LNK files, ShellBags) DO exist in the evidence. The agent incorrectly attributed artifact absence to CCleaner when the tool was never actually run.",
+        "status": "FALSE POSITIVE"
+      },
+      {
+        "ground_truth": "Systematic file deletion on RM2 FAT32 (Mar 24, 09:54-10:00)",
+        "item_id": "15",
+        "observed": "Exact timeframe captured: \"systematically deleted all remaining organized files on RM2's FAT32 partition between 09:54:54 and 10:00:18.\"",
+        "status": "FOUND"
+      },
+      {
+        "ground_truth": "RM3 contains government documents matching Secret Project content",
+        "item_id": "16",
+        "observed": "Report identifies RM3 content as \"government IT governance DOCX document with embedded IREAP/UMER references matching the Secret Project documents\" but does not enumerate all files on the disc or match them to the specific 5 documents.",
+        "status": "PARTIAL"
+      },
+      {
+        "ground_truth": "Files opened in RM2 (list all accessed files)",
+        "item_id": "17",
+        "observed": "Report identifies the Word temporary file (~$ecret_project]_proposal.docx) created at 14:37:52 proving document review, and the 22 personal images batch-deleted. Does not provide a complete list of all files opened/accessed on RM2.",
+        "status": "PARTIAL"
+      },
+      {
+        "ground_truth": "Network drive directories traversed",
+        "item_id": "18",
+        "observed": "Report does not identify any network drive access or traversal. The answer key documents directory browsing on the company's secured network drives. No network share artifacts were surfaced.",
+        "status": "MISSED"
+      },
+      {
+        "ground_truth": "Email communication with spy.conspirator@nist.gov",
+        "item_id": "19",
+        "observed": "Report identifies the email address iaman.informant@nist.gov and Outlook OST references but does not identify the spy.conspirator@nist.gov correspondent or the specific email exchanges.",
+        "status": "PARTIAL"
+      },
+      {
+        "ground_truth": "FAT32 timezone offset (local time vs UTC)",
+        "item_id": "20",
+        "observed": "Report correctly notes: \"The modification timestamps on the FAT32 partition are consistently one hour later than the NTFS timestamps, consistent with FAT32 storing local time versus NTFS storing UTC in a UTC+1 timezone environment.\" This is identified but the timezone is assessed as UTC+1 when the ground truth specifies UTC-5 (Eastern Time).",
+        "status": "PARTIAL"
+      }
+    ],
+    "note": "FOUND rows become verified exact claims. PARTIAL rows remain inconclusive, FALSE POSITIVE remains contradicted, and MISSED has no observed claim. No atomic evidence anchors were recorded in the historical report, so citation scores are intentionally zero.",
+    "reported_counts": {
+      "FALSE POSITIVE": 1,
+      "FOUND": 12,
+      "MISSED": 1,
+      "PARTIAL": 6
+    },
+    "scheme": "FOUND/PARTIAL/MISSED/FALSE POSITIVE",
+    "source_path": "examples/ndlc/ACCURACY-REPORT.md",
+    "source_sha256": "cbbe43fa590080fcd8684fe251085c846b30d8b8e0c5c31de8761fa9533d3792"
+  },
+  "system_name": "mulder",
+  "system_version": "historical-unrecorded"
+}

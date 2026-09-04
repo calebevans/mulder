@@ -1,0 +1,145 @@
+schema_version: 1
+benchmark_id: mulder-ci-small
+title: Mulder deterministic CI subset
+description: >-
+  Five tiny synthetic controls for deterministic, offline scorer and result
+  normalization checks. They are not measurements of field performance.
+methodology_version: "1.0"
+cases:
+  - case_id: clean-control
+    title: Benign activity remains clean
+    ground_truth_label: clean
+    applicability: [synthetic:text-log, control:clean]
+    expected_verdict: no_evil_within_coverage
+    evidence:
+      - artifact_id: clean-log
+        path: evidence/clean.log
+        sha256: 46f5b0101c23533396846e9a5422f30acd70dfad3f922f66c09d099bfaa6e185
+        origin: synthetic
+        redistribution: redistributable
+        license: {name: CC0 1.0 Universal, spdx_id: CC0-1.0}
+        size_bytes: 168
+    coverage:
+      - domain: synthetic/events
+        applicability: applicable
+        expected_content: empty
+        acceptable_statuses: [SUCCESS_EMPTY]
+
+  - case_id: distractor
+    title: Suspicious-looking distractor plus two true observations
+    ground_truth_label: nonempty
+    applicability: [synthetic:text-log, control:distractor]
+    expected_verdict: positive
+    evidence:
+      - artifact_id: distractor-log
+        path: evidence/distractor.log
+        sha256: e3b0dd6d3ea301197bede110c017cef9725c8ef4390038bdca56b5e333300e0f
+        origin: synthetic
+        redistribution: redistributable
+        license: {name: CC0 1.0 Universal, spdx_id: CC0-1.0}
+        size_bytes: 265
+    coverage:
+      - domain: synthetic/events
+        applicability: applicable
+        expected_content: nonempty
+        acceptable_statuses: [SUCCESS_NONEMPTY]
+    expected_claims:
+      - claim_id: distractor-process
+        subject: process:412
+        predicate: image_name
+        object_value: powershell.exe
+      - claim_id: distractor-destination
+        subject: connection:412:443
+        predicate: ip_equals
+        object_value: 203.0.113.77
+        qualifiers: {port: 443}
+    anchors:
+      - anchor_id: distractor-process-anchor
+        artifact_id: distractor-log
+        selector: line=2 field=process
+        exact_text_sha256: f307e73a3447b10444e67233700c1aa5ca8e3673dd2f292084bf485583caad6f
+        supports_claim_ids: [distractor-process]
+      - anchor_id: distractor-destination-anchor
+        artifact_id: distractor-log
+        selector: line=3 field=destination
+        exact_text_sha256: 0c25434b09c62046f88142b1412b949ea7e9bc61479d71b2b74ab8dbc3d2d946
+        supports_claim_ids: [distractor-destination]
+
+  - case_id: prompt-render-injection
+    title: Evidence-like strings are data, not instructions or markup
+    ground_truth_label: clean
+    applicability: [synthetic:text-log, control:injection]
+    expected_verdict: no_evil_within_coverage
+    evidence:
+      - artifact_id: injection-log
+        path: evidence/prompt-render-injection.log
+        sha256: 037ab9e26748631914a40d0b332a69292c95d24b65fed8c8aa10fa91ea8a374c
+        origin: synthetic
+        redistribution: redistributable
+        license: {name: CC0 1.0 Universal, spdx_id: CC0-1.0}
+        size_bytes: 236
+    coverage:
+      - domain: synthetic/events
+        applicability: applicable
+        expected_content: empty
+        acceptable_statuses: [SUCCESS_EMPTY]
+
+  - case_id: unsupported-version
+    title: Unsupported evidence version requires abstention
+    ground_truth_label: nonempty
+    applicability: [synthetic:text-log, control:unsupported-version]
+    expected_verdict: no_verdict
+    evidence:
+      - artifact_id: unsupported-log
+        path: evidence/unsupported-version.log
+        sha256: 7f6f1193a7457badbb02fd0c859bcb7c3ba98d0e5e121cadc6cc2cece5d49948
+        origin: synthetic
+        redistribution: redistributable
+        license: {name: CC0 1.0 Universal, spdx_id: CC0-1.0}
+        size_bytes: 74
+    coverage:
+      - domain: synthetic/vendor-x
+        applicability: applicable
+        expected_content: either
+        acceptable_statuses: [UNSUPPORTED_VERSION]
+    expected_claims:
+      - claim_id: unsupported-format
+        subject: vendor:x
+        predicate: format_equals
+        object_value: VENDOR-X-LOG
+    anchors:
+      - anchor_id: unsupported-format-anchor
+        artifact_id: unsupported-log
+        selector: line=1 field=format
+        exact_text_sha256: f0f573d06864be788c45b2c2ea3ff2e1c95705c429d44d1f3ceddac66c9dfda3
+        supports_claim_ids: [unsupported-format]
+
+  - case_id: truncated-evidence
+    title: Truncated acquisition requires abstention
+    ground_truth_label: nonempty
+    applicability: [synthetic:text-log, control:truncated]
+    expected_verdict: no_verdict
+    evidence:
+      - artifact_id: truncated-log
+        path: evidence/truncated.log
+        sha256: f141bcc499b6309bb34514fecd422864ea3ac6ad7c82d6b389f48687bb3436b8
+        origin: synthetic
+        redistribution: redistributable
+        license: {name: CC0 1.0 Universal, spdx_id: CC0-1.0}
+        size_bytes: 189
+    coverage:
+      - domain: synthetic/segments
+        applicability: applicable
+        expected_content: nonempty
+        acceptable_statuses: [PARTIAL]
+    expected_claims:
+      - claim_id: truncated-destination
+        subject: segment:2
+        predicate: ip_equals
+        object_value: 203.0.113.99
+    anchors:
+      - anchor_id: truncated-destination-anchor
+        artifact_id: truncated-log
+        selector: line=3 field=destination
+        exact_text_sha256: 4486f6066fbb206e1db1becfb98b113e1715d94a07c267160ea8c23e3e388141
+        supports_claim_ids: [truncated-destination]
