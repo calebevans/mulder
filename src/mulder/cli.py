@@ -143,6 +143,7 @@ def report(case_id: str, db_dir: str) -> None:
     """
     from mulder.audit import AuditLog
     from mulder.db import CaseDB
+    from mulder.report.proof_cards import build_proof_cards
     from mulder.report.renderer import ReportRenderer
 
     db_dir_path = Path(db_dir).expanduser()
@@ -159,6 +160,18 @@ def report(case_id: str, db_dir: str) -> None:
         findings = case_db.get_findings()
         sources_list = case_db.get_sources()
         evidence_integrity = case_db.get_evidence_registry()
+        coverage_records = case_db.get_coverage()
+        proof_cards = build_proof_cards(
+            findings,
+            claims={f.finding_id: case_db.get_claims(f.finding_id) for f in findings},
+            verifications={
+                f.finding_id: case_db.get_claim_verifications(f.finding_id) for f in findings
+            },
+            revisions={
+                f.finding_id: case_db.get_finding_revisions(f.finding_id) for f in findings
+            },
+            coverage_records=coverage_records,
+        )
 
         audit = AuditLog(audit_path)
         audit_summary = audit.summary()
@@ -175,6 +188,8 @@ def report(case_id: str, db_dir: str) -> None:
             audit_log_path=audit_path,
             sources_list=sources_list,
             evidence_integrity=evidence_integrity,
+            coverage_records=coverage_records,
+            proof_cards=proof_cards,
         )
         md_path.write_text(md_text, encoding="utf-8")
         click.echo(f"  Markdown: {md_path}")
@@ -206,6 +221,8 @@ def report(case_id: str, db_dir: str) -> None:
                 sources_list=sources_list,
                 evidence_integrity=evidence_integrity,
                 source_windows=source_windows,
+                coverage_records=coverage_records,
+                proof_cards=proof_cards,
             )
             html_path.write_text(html_text, encoding="utf-8")
             click.echo(f"  HTML:     {html_path}")
@@ -242,19 +259,41 @@ def report(case_id: str, db_dir: str) -> None:
     is_flag=True,
     help="Replace an existing manifest after re-verifying every current artifact.",
 )
+@click.option(
+    "--signing-key",
+    type=click.Path(path_type=Path, dir_okay=False, exists=True),
+    help="Existing examiner-owned Ed25519 PEM private key; no key is generated implicitly.",
+)
+@click.option("--examiner", help="Optional caller-asserted examiner label stored as metadata.")
+@click.option("--key-id", help="Optional caller-selected key identifier; defaults to fingerprint.")
 def seal_case_cmd(
     case_id: str,
     db_dir: str,
     manifest_path: Path | None,
     artifacts: tuple[Path, ...],
     force: bool,
+    signing_key: Path | None,
+    examiner: str | None,
+    key_id: str | None,
 ) -> None:
-    """Seal CASE_ID into a relocatable, unsigned case manifest.
+    """Seal CASE_ID into a relocatable, optionally signed case manifest.
 
     This is a local operation. It reads the case database, audit log, original
     evidence, and generated reports without starting MCP or calling a model.
     """
+    from mulder.case_signing import Ed25519PEMKeyProvider, SigningKeyError
     from mulder.receipt import SealError, seal_case
+
+    if signing_key is None and (examiner is not None or key_id is not None):
+        raise click.UsageError("--examiner and --key-id require --signing-key")
+    try:
+        provider = (
+            Ed25519PEMKeyProvider.from_file(signing_key, examiner=examiner, key_id=key_id)
+            if signing_key is not None
+            else None
+        )
+    except SigningKeyError as exc:
+        raise click.ClickException(str(exc)) from exc
 
     try:
         path = seal_case(
@@ -263,11 +302,15 @@ def seal_case_cmd(
             manifest_path=manifest_path,
             report_artifacts=artifacts,
             overwrite=force,
+            key_provider=provider,
         )
     except (OSError, SealError) as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo(f"Sealed case manifest: {path}")
-    click.echo("Signature: unsigned (examiner-controlled signing is not enabled)")
+    if provider is None:
+        click.echo("Signature: unsigned (no examiner key supplied)")
+    else:
+        click.echo(f"Signature: Ed25519 ({provider.public_metadata.fingerprint})")
 
 
 @cli.command("verify-case")
@@ -281,10 +324,24 @@ def seal_case_cmd(
     type=click.Path(path_type=Path),
     help="Relocated evidence root; otherwise the manifest's relative locator is used.",
 )
+@click.option(
+    "--public-key",
+    "public_key_path",
+    default=None,
+    type=click.Path(path_type=Path, dir_okay=False, exists=True),
+    help="Examiner-selected Ed25519 PEM/OpenSSH public key (embedded key is used otherwise).",
+)
+@click.option(
+    "--replay-inventory",
+    type=click.Path(path_type=Path, dir_okay=False, exists=True),
+    help="JSON inventory used only for EXACT/DRIFTED/UNSUPPORTED replay classification.",
+)
 @click.option("--json", "json_output", is_flag=True, help="Emit machine-readable JSON.")
 def verify_case_cmd(
     manifest_path: Path,
     evidence_root: Path | None,
+    public_key_path: Path | None,
+    replay_inventory: Path | None,
     json_output: bool,
 ) -> None:
     """Verify MANIFEST_PATH entirely offline.
@@ -297,7 +354,20 @@ def verify_case_cmd(
 
     from mulder.receipt import format_verification_result, verify_case
 
-    result = verify_case(manifest_path, evidence_root=evidence_root)
+    inventory: dict[str, object] | None = None
+    if replay_inventory is not None:
+        try:
+            inventory = json.loads(replay_inventory.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise click.ClickException(f"Cannot read replay inventory: {exc}") from exc
+        if not isinstance(inventory, dict):
+            raise click.ClickException("Replay inventory must be a JSON object")
+    result = verify_case(
+        manifest_path,
+        evidence_root=evidence_root,
+        public_key_path=public_key_path,
+        replay_inventory=inventory,
+    )
     if json_output:
         click.echo(json.dumps(result.as_dict(), indent=2, sort_keys=True))
     else:

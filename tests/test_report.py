@@ -5,7 +5,21 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from mulder.models import AuditSummary, CaseMetadataRow, Finding
+from mulder.models import (
+    AtomicClaim,
+    AuditSummary,
+    CaseMetadataRow,
+    ClaimVerification,
+    CoverageKey,
+    CoverageMetadata,
+    CoverageRecord,
+    EvidenceAnchor,
+    Finding,
+    FindingRevision,
+    ToolOutcome,
+    ToolOutcomeStatus,
+)
+from mulder.report.proof_cards import ReceiptState, build_proof_cards
 from mulder.report.renderer import (
     ReportRenderer,
     _attack_id_to_url,
@@ -196,6 +210,129 @@ class TestRenderSmoke:
         result = renderer.render(meta, [finding], summary, audit_path)
         assert len(result) > 0
         assert "smoke" in result
+
+    def test_proof_card_preserves_anchor_revision_verification_and_receipt(
+        self, tmp_path: Path
+    ) -> None:
+        finding = _make_finding()
+        anchor = EvidenceAnchor(
+            anchor_id="anchor-1",
+            claim_id="claim-1",
+            tool_call_id="tc_1",
+            source_id=7,
+            source_name="src",
+            source_hash="sha256:source",
+            window_id=11,
+            line_start=40,
+            line_end=42,
+            char_start=3,
+            char_end=10,
+            exact_text="malware",
+            artifact_family="event-log",
+            extractor_family="evtx",
+            independence_key="host-a:event-log",
+            value_type="text",
+            normalized_value="malware",
+        )
+        claim = AtomicClaim(
+            claim_id="claim-1",
+            finding_id=finding.finding_id,
+            ordinal=0,
+            statement="Malware was observed",
+            subject="host-a",
+            predicate="executed",
+            object_value="malware",
+            epistemic_state="verified",
+            anchors=[anchor],
+        )
+        verification = ClaimVerification(
+            verification_id="verification-1",
+            claim_id=claim.claim_id,
+            verifier_name="typed-value",
+            verifier_version="1.2",
+            result="verified",
+            reason_code="exact_match",
+            verified_at="2026-01-01T00:00:00Z",
+        )
+        revision = FindingRevision(
+            revision_id="revision-1",
+            finding_id=finding.finding_id,
+            revision_number=1,
+            state="confirmed",
+            snapshot=finding,
+            actor_kind="investigator",
+            reason_code="finding_submitted",
+            changed_fields=["description"],
+            evidence_added=["tc_1"],
+            created_at="2026-01-01T00:00:00Z",
+        )
+        coverage = CoverageRecord(
+            case_id="c",
+            key=CoverageKey(system_name="host-a", evidence_domain="process", check_name="scan"),
+            outcome=ToolOutcome(
+                status=ToolOutcomeStatus.SUCCESS_NONEMPTY,
+                coverage=CoverageMetadata(
+                    rows_examined=10,
+                    rows_total=10,
+                    tool_version="3.0",
+                    parser_version="2.0",
+                ),
+            ),
+            source_name="src",
+            tool_call_id="tc_1",
+            recorded_at="2026-01-01T00:00:00Z",
+        )
+        cards = build_proof_cards(
+            [finding],
+            claims={finding.finding_id: [claim]},
+            verifications={finding.finding_id: [verification]},
+            revisions={finding.finding_id: [revision]},
+            coverage_records=[coverage],
+            receipt_state=ReceiptState(
+                status="verified",
+                signature_status="valid",
+                manifest_hash="sha256:manifest",
+                audit_head="sha256:audit",
+                public_key_fingerprint="sha256:key",
+            ),
+        )
+
+        card = cards[0]
+        rendered_claim = card["claims"][0]  # type: ignore[index]
+        rendered_anchor = rendered_claim["anchors"][0]
+        assert rendered_anchor["source_hash"] == "sha256:source"
+        assert rendered_anchor["exact_text"] == "malware"
+        assert rendered_claim["verifications"][0]["verifier_version"] == "1.2"
+        assert len(card["revisions"]) == 1  # type: ignore[arg-type]
+        assert len(card["coverage"]) == 1  # type: ignore[arg-type]
+
+        meta = CaseMetadataRow(
+            case_id="c",
+            ingested_at="2025-01-01T00:00:00Z",
+            evidence_root="/evidence",
+            extractor_versions={},
+        )
+        summary = AuditSummary(
+            total_tool_calls=1,
+            total_findings=1,
+            tool_call_counts={},
+            total_duration_ms=1,
+            first_timestamp="2026-01-01T00:00:00Z",
+            last_timestamp="2026-01-01T00:00:01Z",
+        )
+        audit_path = tmp_path / "audit.jsonl"
+        audit_path.write_text("")
+        markdown = ReportRenderer().render(
+            meta, [finding], summary, audit_path, proof_cards=cards
+        )
+        html = ReportRenderer().render_html(
+            meta, [finding], summary, audit_path, proof_cards=cards
+        )
+        assert "Proof Card" in markdown
+        assert "src:40-42" in markdown
+        assert "typed-value@1.2" in markdown
+        assert "Proof Card" in html
+        assert "sha256:key" in html
 
 
 class TestRenderNarrativeTemplate:

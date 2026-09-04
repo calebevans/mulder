@@ -533,10 +533,12 @@ repeatedly to bind additional generated files. Existing manifests are preserved 
 is explicit. Run this after the final report/export operation; any later database or audit event is
 correctly reported as a post-seal change and requires an explicit re-seal.
 
-The v1 receipt is deliberately marked **unsigned**. It detects changes relative to the retained
-manifest but does not establish an examiner identity; examiner-controlled signing is a separate
-trust layer. Sealing fails if registered evidence is missing or has already changed, or if the
-current audit chain is invalid.
+Signing is optional. Pass `--signing-key PATH` to use an existing examiner-owned Ed25519 PEM
+private key, with optional `--examiner` and `--key-id` metadata. Mulder never generates a key or
+infers an examiner identity. The public key and fingerprint are portable verification metadata;
+an examiner label is only a caller assertion. Without `--signing-key`, the receipt remains
+explicitly **unsigned**. Sealing fails if registered evidence is missing or has already changed,
+or if the current audit chain is invalid.
 
 The `sqlite-logical-v1` database commitment includes every non-internal SQLite schema object and
 every typed value in every non-internal table, in deterministic value order. It intentionally
@@ -547,7 +549,8 @@ case database. Table-level schema, row-count, and content commitments make failu
 ### `mulder verify-case`
 
 ```
-mulder verify-case <manifest_path> [--evidence-root PATH] [--json]
+mulder verify-case <manifest_path> [--evidence-root PATH] [--public-key PATH]
+                   [--replay-inventory PATH] [--json]
 ```
 
 Verifies a copied case using only local file and SQLite reads: it does not start MCP, call a model,
@@ -555,6 +558,15 @@ or use the network. Artifact locations are relative to the manifest, so moving t
 evidence directories together does not invalidate the receipt. Use `--evidence-root` when the
 evidence was moved independently. Diagnostics identify the exact missing/changed evidence,
 report, database table, or audit-chain property.
+
+Signature status is reported independently as `valid`, `invalid`, `unsigned`, or `unverifiable`.
+Without `--public-key`, a signed manifest is checked against its embedded key; use an independently
+obtained PEM/OpenSSH public key to establish that it matches the examiner key you intended to
+trust. Replay is separately classified `EXACT`, `DRIFTED`, `NON_DETERMINISTIC`, or `UNSUPPORTED`
+from the recorded tool/parser/extractor/model inputs and an optional JSON inventory. Version drift
+does not imply tampering. Reports include per-finding proof cards with atomic claims, exact anchors,
+verification history, revisions, linked coverage, and receipt state. Reports generated before
+sealing honestly show `pending_seal`, avoiding a circular report/manifest commitment.
 
 Exit codes are `0` for a fully verified native case, `1` for mutation/corruption/missing material,
 `2` for intact but unchained legacy material, and `3` for an unsupported manifest schema. A legacy
@@ -595,7 +607,7 @@ After an investigation completes, all artifacts are written to the cases directo
 |------|-------------|
 | `{case_id}.db` | SQLite database with all indexed evidence, findings, and metadata |
 | `{case_id}.audit.jsonl` | Append-only audit log recording every tool invocation with parameters and timestamps |
-| `{case_id}.manifest.json` | Relocatable unsigned case receipt produced by `mulder seal-case` |
+| `{case_id}.manifest.json` | Relocatable, optionally examiner-signed case receipt produced by `mulder seal-case` |
 
 ### Reports
 

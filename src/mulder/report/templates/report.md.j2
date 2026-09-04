@@ -128,6 +128,21 @@ These hypotheses were explicitly tested and no supporting evidence was found.
 
 {{ finding.description }}
 
+{% set card = proof_cards_by_id.get(finding.finding_id) %}
+{% if card %}
+#### Proof Card
+
+- Receipt: `{{ card.receipt.status }}` / signature `{{ card.receipt.signature_status }}`{% if card.receipt.public_key_fingerprint %} / key `{{ card.receipt.public_key_fingerprint }}`{% endif %}
+- Revision history: {{ card.revisions | length }} revision(s); coverage links: {{ card.coverage | length }}
+{% for claim in card.claims %}
+
+**Claim {{ claim.ordinal + 1 }} — `{{ claim.epistemic_state }}`:** {{ claim.statement }}
+
+{% for anchor in claim.anchors %}- {{ anchor.role }} `{{ anchor.source_name }}:{{ anchor.line_start }}-{{ anchor.line_end }}` chars {{ anchor.char_start }}-{{ anchor.char_end }} via `{{ anchor.tool_call_id }}` (source `{{ anchor.source_hash }}`): “{{ anchor.exact_text }}”
+{% endfor %}{% for verification in claim.verifications %}- Verification `{{ verification.result }}` by `{{ verification.verifier_name }}@{{ verification.verifier_version }}` (`{{ verification.reason_code }}`)
+{% endfor %}{% endfor %}
+{% endif %}
+
 {% endfor %}
 
 ---
