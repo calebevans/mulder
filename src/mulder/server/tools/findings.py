@@ -455,9 +455,7 @@ def submit_finding(
 
     try:
         stored_claims = ctx.db.insert_finding(finding, claim_inputs)
-        verifications = (
-            ctx.db.verify_finding_claims(finding_id) if stored_claims else []
-        )
+        verifications = ctx.db.verify_finding_claims(finding_id) if stored_claims else []
         persisted_claims = ctx.db.get_claims(finding_id)
         confirmation = assess_confirmation(persisted_claims) if persisted_claims else None
         if (
@@ -465,7 +463,11 @@ def submit_finding(
             and confirmation is not None
             and not confirmation.accepted
         ):
-            ctx.db.delete_finding(finding_id)
+            ctx.db.delete_finding(
+                finding_id,
+                actor_kind="deterministic_rule",
+                reason_code="confirmation_policy_rejected",
+            )
             response = error_response(
                 tc_id,
                 "submit_finding",
@@ -482,7 +484,11 @@ def submit_finding(
         # compensate before the finding becomes visible if verification cannot
         # complete. Exact anchor validation itself is transactional in CaseDB.
         if ctx.db._finding_exists(finding_id):
-            ctx.db.delete_finding(finding_id)
+            ctx.db.delete_finding(
+                finding_id,
+                actor_kind="deterministic_rule",
+                reason_code="verification_failed",
+            )
         return error_response(
             tc_id,
             "submit_finding",
@@ -498,9 +504,7 @@ def submit_finding(
         "finding_id": finding_id,
         "status": "accepted",
         "confidence": finding.confidence,
-        "atomic_claims": [
-            claim.model_dump() for claim in ctx.db.get_claims(finding_id)
-        ],
+        "atomic_claims": [claim.model_dump() for claim in ctx.db.get_claims(finding_id)],
         "claim_verifications": [item.model_dump() for item in verifications],
         "confirmation_assessment": confirmation.model_dump() if confirmation else None,
         "claim_mode": "atomic_checked" if stored_claims else "legacy_unverified",
@@ -552,6 +556,8 @@ def update_finding(
     mitre_attack_ids: list[str] | None = None,
     event_time_start: str | None = None,
     event_time_end: str | None = None,
+    revision_state: str | None = None,
+    reason_code: str = "analyst_correction",
 ) -> dict[str, object]:
     """Update or correct an existing finding.
 
@@ -573,6 +579,8 @@ def update_finding(
         mitre_attack_ids: New ATT&CK IDs (optional).
         event_time_start: New start time (optional).
         event_time_end: New end time (optional).
+        revision_state: Explicit lifecycle state for this revision (optional).
+        reason_code: Stable explanation recorded in immutable history.
     """
     ctx = get_ctx()
     tc_id = make_tool_call_id()
@@ -627,13 +635,34 @@ def update_finding(
         if value is not None:
             update_kwargs[field] = value
 
-    ctx.db.update_finding(finding_id, **update_kwargs)
+    try:
+        ctx.db.update_finding(
+            finding_id,
+            actor_kind="investigator",
+            reason_code=reason_code,
+            revision_state=revision_state,
+            **cast(dict[str, Any], update_kwargs),
+        )
+    except Exception as exc:
+        return error_response(
+            tc_id,
+            "update_finding",
+            {"finding_id": finding_id},
+            f"Finding revision validation error: {exc}",
+            (time.monotonic() - t0) * 1000,
+            error_type="validation",
+        )
 
     updated = ctx.db.get_finding(finding_id)
     ctx.audit.log_tool_call(
         tool_call_id=tc_id,
         tool_name="update_finding",
-        params={"finding_id": finding_id, **update_kwargs},
+        params={
+            "finding_id": finding_id,
+            "revision_state": revision_state,
+            "reason_code": reason_code,
+            **update_kwargs,
+        },
         output_hash=hash_output(update_kwargs),
         duration_ms=(time.monotonic() - t0) * 1000,
     )
@@ -653,22 +682,29 @@ def update_finding(
 
 @mcp.tool()
 @tool_access(Role.CROSS_ANALYST | Role.NARRATIVE_ANALYST)
-def delete_finding(finding_id: str) -> dict[str, object]:
-    """Delete a finding that was submitted in error.
+def delete_finding(
+    finding_id: str,
+    reason_code: str = "analyst_withdrawal",
+) -> dict[str, object]:
+    """Withdraw a finding while preserving immutable correction history.
 
     Use this when a finding turns out to be completely wrong (e.g.,
     a legitimate tool misidentified as malware). The finding is
-    permanently removed from the case database and will not appear
-    in the final report.
+    hidden from the current report but retained as a tombstoned revision.
 
     Args:
         finding_id: The finding ID to delete.
+        reason_code: Stable explanation for the withdrawal.
     """
     ctx = get_ctx()
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
-    deleted = ctx.db.delete_finding(finding_id)
+    deleted = ctx.db.delete_finding(
+        finding_id,
+        actor_kind="investigator",
+        reason_code=reason_code,
+    )
 
     if not deleted:
         return error_response(
@@ -689,7 +725,7 @@ def delete_finding(finding_id: str) -> dict[str, object]:
     ctx.audit.log_tool_call(
         tool_call_id=tc_id,
         tool_name="delete_finding",
-        params={"finding_id": finding_id},
+        params={"finding_id": finding_id, "reason_code": reason_code},
         output_hash=hash_output(result),
         duration_ms=elapsed,
     )
@@ -767,6 +803,9 @@ def get_findings(limit: int = 20, offset: int = 0) -> dict[str, object]:
         item["claim_verifications"] = [
             verification.model_dump()
             for verification in ctx.db.get_claim_verifications(finding.finding_id)
+        ]
+        item["revisions"] = [
+            revision.model_dump() for revision in ctx.db.get_finding_revisions(finding.finding_id)
         ]
         results.append(item)
     resp: dict[str, object] = {
@@ -1218,6 +1257,8 @@ def deduplicate_findings(
                 representative.description += suffix
             ctx.db.update_finding(
                 representative.finding_id,
+                actor_kind="system",
+                reason_code="deduplicated_findings",
                 description=representative.description,
                 severity=representative.severity,
                 sources=representative.sources,
@@ -1225,7 +1266,11 @@ def deduplicate_findings(
                 mitre_attack_ids=representative.mitre_attack_ids,
             )
             for fid in delete_ids:
-                ctx.db.delete_finding(fid)
+                ctx.db.delete_finding(
+                    fid,
+                    actor_kind="system",
+                    reason_code="merged_as_duplicate",
+                )
             merged_count += len(delete_ids)
 
     if not dry_run:

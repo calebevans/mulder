@@ -178,6 +178,27 @@ class Finding(BaseModel):
         return self
 
 
+class FindingRevision(BaseModel):
+    """Immutable snapshot recording one visible change to a finding."""
+
+    revision_id: str
+    finding_id: str
+    revision_number: int = Field(ge=1)
+    parent_revision_id: str | None = None
+    state: Literal[
+        "draft", "indicated", "confirmed", "refuted", "quarantined", "unknown", "withdrawn"
+    ]
+    snapshot: Finding
+    actor_kind: Literal["investigator", "deterministic_rule", "blind_reviewer", "human", "system"]
+    actor_id: str | None = None
+    reason_code: str
+    changed_fields: list[str] = Field(default_factory=list)
+    evidence_added: list[str] = Field(default_factory=list)
+    evidence_removed: list[str] = Field(default_factory=list)
+    tombstone: bool = False
+    created_at: str
+
+
 class EvidenceAnchorInput(BaseModel):
     """Caller-supplied locator for an exact quote in an evidence window.
 

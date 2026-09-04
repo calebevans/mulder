@@ -47,6 +47,7 @@ from mulder.models import (
     CoverageRecord,
     EvidenceAnchor,
     Finding,
+    FindingRevision,
     SourceRow,
     ToolOutcome,
     ToolOutcomeStatus,
@@ -109,7 +110,28 @@ findings_t = Table(
     Column("event_time_start", Text),
     Column("event_time_end", Text),
     Column("negative_verdict", Text),
+    Column("is_deleted", Integer, nullable=False, default=0, server_default="0"),
     Column("submitted_at", Text, nullable=False),
+)
+
+finding_revisions_t = Table(
+    "finding_revisions",
+    metadata,
+    Column("revision_id", Text, primary_key=True),
+    Column("finding_id", Text, ForeignKey("findings.finding_id"), nullable=False, index=True),
+    Column("revision_number", Integer, nullable=False),
+    Column("parent_revision_id", Text, nullable=True),
+    Column("state", Text, nullable=False),
+    Column("snapshot", Text, nullable=False),
+    Column("actor_kind", Text, nullable=False),
+    Column("actor_id", Text, nullable=True),
+    Column("reason_code", Text, nullable=False),
+    Column("changed_fields", Text, nullable=False),
+    Column("evidence_added", Text, nullable=False),
+    Column("evidence_removed", Text, nullable=False),
+    Column("tombstone", Integer, nullable=False),
+    Column("created_at", Text, nullable=False),
+    UniqueConstraint("finding_id", "revision_number", name="uq_finding_revision_number"),
 )
 
 coverage_register_t = Table(
@@ -423,6 +445,121 @@ def _migrate_add_negative_verdict(conn: Connection) -> None:
             raise
 
 
+def _migrate_add_finding_revisions(conn: Connection) -> None:
+    """Add tombstone state and backfill immutable history for legacy findings."""
+    try:
+        conn.execute(text("ALTER TABLE findings ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0"))
+    except Exception as exc:
+        if "duplicate column" not in str(exc).lower():
+            raise
+    finding_revisions_t.create(conn, checkfirst=True)
+    legacy_rows = conn.execute(
+        select(findings_t).where(
+            ~findings_t.c.finding_id.in_(select(finding_revisions_t.c.finding_id))
+        )
+    ).fetchall()
+    for row in legacy_rows:
+        finding = _finding_from_row(row)
+        _append_finding_revision(
+            conn,
+            finding,
+            state=_state_for_finding(finding),
+            actor_kind="system",
+            actor_id=None,
+            reason_code="legacy_import",
+            changed_fields=list(type(finding).model_fields),
+            previous=None,
+        )
+
+
+def _finding_from_row(row: Any) -> Finding:
+    """Build the current finding read model from one SQLAlchemy row."""
+    return Finding(
+        finding_id=row.finding_id,
+        case_id=row.case_id,
+        title=row.title,
+        description=row.description,
+        severity=row.severity,
+        confidence=row.confidence,
+        evidence_refs=json.loads(row.evidence_refs),
+        sources=json.loads(row.sources),
+        mitre_attack_ids=json.loads(row.mitre_attack_ids) if row.mitre_attack_ids else [],
+        event_time_start=row.event_time_start,
+        event_time_end=row.event_time_end,
+        negative_verdict=(
+            json.loads(row.negative_verdict) if getattr(row, "negative_verdict", None) else None
+        ),
+        submitted_at=row.submitted_at,
+    )
+
+
+def _state_for_finding(finding: Finding) -> str:
+    """Map the compatibility confidence field to revision lifecycle state."""
+    return "confirmed" if finding.confidence == "confirmed" else "indicated"
+
+
+def _append_finding_revision(
+    conn: Connection,
+    finding: Finding,
+    *,
+    state: str,
+    actor_kind: str,
+    actor_id: str | None,
+    reason_code: str,
+    changed_fields: list[str],
+    previous: Finding | None,
+    tombstone: bool = False,
+) -> FindingRevision:
+    """Append one immutable snapshot inside the caller's transaction."""
+    latest = conn.execute(
+        select(
+            finding_revisions_t.c.revision_id,
+            finding_revisions_t.c.revision_number,
+        )
+        .where(finding_revisions_t.c.finding_id == finding.finding_id)
+        .order_by(finding_revisions_t.c.revision_number.desc())
+        .limit(1)
+    ).fetchone()
+    revision_number = int(latest.revision_number) + 1 if latest is not None else 1
+    previous_refs = set(previous.evidence_refs) if previous is not None else set()
+    current_refs = set(finding.evidence_refs)
+    revision = FindingRevision(
+        revision_id=f"fr_{uuid4().hex[:12]}",
+        finding_id=finding.finding_id,
+        revision_number=revision_number,
+        parent_revision_id=str(latest.revision_id) if latest is not None else None,
+        state=cast(Any, state),
+        snapshot=finding,
+        actor_kind=cast(Any, actor_kind),
+        actor_id=actor_id,
+        reason_code=reason_code,
+        changed_fields=sorted(changed_fields),
+        evidence_added=sorted(current_refs - previous_refs),
+        evidence_removed=sorted(previous_refs - current_refs),
+        tombstone=tombstone,
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
+    conn.execute(
+        insert(finding_revisions_t).values(
+            revision_id=revision.revision_id,
+            finding_id=revision.finding_id,
+            revision_number=revision.revision_number,
+            parent_revision_id=revision.parent_revision_id,
+            state=revision.state,
+            snapshot=revision.snapshot.model_dump_json(),
+            actor_kind=revision.actor_kind,
+            actor_id=revision.actor_id,
+            reason_code=revision.reason_code,
+            changed_fields=json.dumps(revision.changed_fields),
+            evidence_added=json.dumps(revision.evidence_added),
+            evidence_removed=json.dumps(revision.evidence_removed),
+            tombstone=int(revision.tombstone),
+            created_at=revision.created_at,
+        )
+    )
+    return revision
+
+
 _SENTINEL = object()
 
 
@@ -576,6 +713,7 @@ class CaseDB:
             _migrate_add_claim_tables(conn)
             _migrate_add_coverage_register(conn)
             _migrate_add_negative_verdict(conn)
+            _migrate_add_finding_revisions(conn)
         return db
 
     def close(self) -> None:
@@ -1124,6 +1262,7 @@ class CaseDB:
                             if finding.negative_verdict is not None
                             else None
                         ),
+                        is_deleted=0,
                         submitted_at=finding.submitted_at,
                     )
                 )
@@ -1251,6 +1390,21 @@ class CaseDB:
                         .where(findings_t.c.finding_id == finding.finding_id)
                         .values(sources=json.dumps(sorted(resolved_source_names)))
                     )
+                revision_finding = finding.model_copy(
+                    update={
+                        "sources": (sorted(resolved_source_names) if stored else finding.sources)
+                    }
+                )
+                _append_finding_revision(
+                    conn,
+                    revision_finding,
+                    state=_state_for_finding(revision_finding),
+                    actor_kind="investigator",
+                    actor_id=None,
+                    reason_code="finding_submitted",
+                    changed_fields=list(type(finding).model_fields),
+                    previous=None,
+                )
                 return stored
 
         return self._wq.submit(_do_insert)
@@ -1442,8 +1596,17 @@ class CaseDB:
             for row in rows
         ]
 
-    def update_finding(self, finding_id: str, **kwargs: object) -> bool:
-        """Update fields on an existing finding. Returns True if found.
+    def update_finding(
+        self,
+        finding_id: str,
+        *,
+        actor_kind: str = "system",
+        actor_id: str | None = None,
+        reason_code: str = "finding_updated",
+        revision_state: str | None = None,
+        **kwargs: object,
+    ) -> bool:
+        """Update the current read model and append an immutable revision.
 
         Only the provided keyword arguments are written; omitted fields
         remain unchanged.  List-valued columns (``evidence_refs``,
@@ -1452,18 +1615,42 @@ class CaseDB:
 
         Args:
             finding_id: Primary key of the finding to update.
-            **kwargs: Column names mapped to their new values.
+            actor_kind: Origin of the change recorded in immutable history.
+            actor_id: Optional stable actor identity.
+            reason_code: Machine-readable explanation for the transition.
+            revision_state: Explicit lifecycle state, or derive it from confidence.
+            **kwargs: Finding fields mapped to their new values.
 
         Returns:
             True if a row was matched and updated, False otherwise.
         """
         json_columns = frozenset({"evidence_refs", "sources", "mitre_attack_ids"})
+        allowed_columns = frozenset(
+            {
+                "title",
+                "description",
+                "severity",
+                "confidence",
+                "evidence_refs",
+                "sources",
+                "mitre_attack_ids",
+                "event_time_start",
+                "event_time_end",
+                "negative_verdict",
+            }
+        )
         values: dict[str, object] = {}
         for key, val in kwargs.items():
             if val is None:
                 continue
+            if key not in allowed_columns:
+                raise ValueError(f"Unsupported finding field: {key}")
             if key in json_columns:
                 values[key] = json.dumps(val)
+            elif key == "negative_verdict":
+                values[key] = (
+                    val.model_dump_json() if hasattr(val, "model_dump_json") else json.dumps(val)
+                )
             else:
                 values[key] = val
 
@@ -1471,19 +1658,52 @@ class CaseDB:
             return self._finding_exists(finding_id)
 
         def _do_update() -> bool:
-            """Execute the UPDATE and return whether a row was matched."""
+            """Execute the projection update and revision append atomically."""
             with self._engine.begin() as conn:
+                before_row = conn.execute(
+                    select(findings_t).where(
+                        (findings_t.c.finding_id == finding_id) & (findings_t.c.is_deleted == 0)
+                    )
+                ).fetchone()
+                if before_row is None:
+                    return False
+                before = _finding_from_row(before_row)
                 result = conn.execute(
                     update(findings_t)
-                    .where(findings_t.c.finding_id == finding_id)
+                    .where(
+                        (findings_t.c.finding_id == finding_id) & (findings_t.c.is_deleted == 0)
+                    )
                     .values(**values)
                 )
-                return result.rowcount > 0
+                after_row = conn.execute(
+                    select(findings_t).where(findings_t.c.finding_id == finding_id)
+                ).fetchone()
+                if result.rowcount <= 0 or after_row is None:
+                    return False
+                after = _finding_from_row(after_row)
+                _append_finding_revision(
+                    conn,
+                    after,
+                    state=revision_state or _state_for_finding(after),
+                    actor_kind=actor_kind,
+                    actor_id=actor_id,
+                    reason_code=reason_code,
+                    changed_fields=list(values),
+                    previous=before,
+                )
+                return True
 
         return bool(self._wq.submit(_do_update))
 
-    def delete_finding(self, finding_id: str) -> bool:
-        """Delete a finding by ID. Returns True if a row was deleted.
+    def delete_finding(
+        self,
+        finding_id: str,
+        *,
+        actor_kind: str = "system",
+        actor_id: str | None = None,
+        reason_code: str = "finding_withdrawn",
+    ) -> bool:
+        """Tombstone a finding while preserving its claims and full history.
 
         Args:
             finding_id: Primary key of the finding to remove.
@@ -1493,10 +1713,33 @@ class CaseDB:
         """
 
         def _do_delete() -> bool:
-            """Execute the DELETE and return whether a row was matched."""
+            """Append a withdrawal and hide the current read projection."""
             with self._engine.begin() as conn:
+                row = conn.execute(
+                    select(findings_t).where(
+                        (findings_t.c.finding_id == finding_id) & (findings_t.c.is_deleted == 0)
+                    )
+                ).fetchone()
+                if row is None:
+                    return False
+                finding = _finding_from_row(row)
                 result = conn.execute(
-                    delete(findings_t).where(findings_t.c.finding_id == finding_id)
+                    update(findings_t)
+                    .where(
+                        (findings_t.c.finding_id == finding_id) & (findings_t.c.is_deleted == 0)
+                    )
+                    .values(is_deleted=1)
+                )
+                _append_finding_revision(
+                    conn,
+                    finding,
+                    state="withdrawn",
+                    actor_kind=actor_kind,
+                    actor_id=actor_id,
+                    reason_code=reason_code,
+                    changed_fields=["is_deleted"],
+                    previous=finding,
+                    tombstone=True,
                 )
                 return result.rowcount > 0
 
@@ -1504,61 +1747,59 @@ class CaseDB:
 
     def _finding_exists(self, finding_id: str) -> bool:
         """Return True if a finding with the given ID exists."""
-        stmt = select(findings_t.c.finding_id).where(findings_t.c.finding_id == finding_id)
+        stmt = select(findings_t.c.finding_id).where(
+            (findings_t.c.finding_id == finding_id) & (findings_t.c.is_deleted == 0)
+        )
         with self._engine.connect() as conn:
             return conn.execute(stmt).fetchone() is not None
 
     def get_finding(self, finding_id: str) -> Finding | None:
         """Return a single finding by ID, or None if not found."""
-        stmt = select(findings_t).where(findings_t.c.finding_id == finding_id)
+        stmt = select(findings_t).where(
+            (findings_t.c.finding_id == finding_id) & (findings_t.c.is_deleted == 0)
+        )
         with self._engine.connect() as conn:
             row = conn.execute(stmt).fetchone()
         if row is None:
             return None
-        return Finding(
-            finding_id=row.finding_id,
-            case_id=row.case_id,
-            title=row.title,
-            description=row.description,
-            severity=row.severity,
-            confidence=row.confidence,
-            evidence_refs=json.loads(row.evidence_refs),
-            sources=json.loads(row.sources),
-            mitre_attack_ids=json.loads(row.mitre_attack_ids) if row.mitre_attack_ids else [],
-            event_time_start=row.event_time_start,
-            event_time_end=row.event_time_end,
-            negative_verdict=(
-                json.loads(row.negative_verdict)
-                if getattr(row, "negative_verdict", None)
-                else None
-            ),
-            submitted_at=row.submitted_at,
-        )
+        return _finding_from_row(row)
 
     def get_findings(self) -> list[Finding]:
         """Return all findings ordered by submission time."""
-        stmt = select(findings_t).order_by(findings_t.c.submitted_at)
+        stmt = (
+            select(findings_t)
+            .where(findings_t.c.is_deleted == 0)
+            .order_by(findings_t.c.submitted_at)
+        )
+        with self._engine.connect() as conn:
+            rows = conn.execute(stmt).fetchall()
+        return [_finding_from_row(row) for row in rows]
+
+    def get_finding_revisions(self, finding_id: str) -> list[FindingRevision]:
+        """Return complete immutable history, including withdrawn findings."""
+        stmt = (
+            select(finding_revisions_t)
+            .where(finding_revisions_t.c.finding_id == finding_id)
+            .order_by(finding_revisions_t.c.revision_number)
+        )
         with self._engine.connect() as conn:
             rows = conn.execute(stmt).fetchall()
         return [
-            Finding(
+            FindingRevision(
+                revision_id=row.revision_id,
                 finding_id=row.finding_id,
-                case_id=row.case_id,
-                title=row.title,
-                description=row.description,
-                severity=row.severity,
-                confidence=row.confidence,
-                evidence_refs=json.loads(row.evidence_refs),
-                sources=json.loads(row.sources),
-                mitre_attack_ids=json.loads(row.mitre_attack_ids) if row.mitre_attack_ids else [],
-                event_time_start=row.event_time_start,
-                event_time_end=row.event_time_end,
-                negative_verdict=(
-                    json.loads(row.negative_verdict)
-                    if getattr(row, "negative_verdict", None)
-                    else None
-                ),
-                submitted_at=row.submitted_at,
+                revision_number=row.revision_number,
+                parent_revision_id=row.parent_revision_id,
+                state=row.state,
+                snapshot=Finding.model_validate_json(row.snapshot),
+                actor_kind=row.actor_kind,
+                actor_id=row.actor_id,
+                reason_code=row.reason_code,
+                changed_fields=json.loads(row.changed_fields),
+                evidence_added=json.loads(row.evidence_added),
+                evidence_removed=json.loads(row.evidence_removed),
+                tombstone=bool(row.tombstone),
+                created_at=row.created_at,
             )
             for row in rows
         ]

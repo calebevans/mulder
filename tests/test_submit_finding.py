@@ -148,6 +148,9 @@ class TestEvidenceValidation:
         claim = case_db.get_claims(finding_id)[0]
         assert claim.anchors[0].exact_text == "cmd.exe"
         assert claim.epistemic_state == "verified"
+        revisions = case_db.get_finding_revisions(finding_id)
+        assert len(revisions) == 1
+        assert revisions[0].reason_code == "finding_submitted"
 
     def test_claim_refs_must_exactly_match_finding_refs(
         self, case_db: CaseDB, audit_log: AuditLog
