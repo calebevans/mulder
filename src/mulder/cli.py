@@ -161,6 +161,7 @@ def report(case_id: str, db_dir: str) -> None:
         sources_list = case_db.get_sources()
         evidence_integrity = case_db.get_evidence_registry()
         coverage_records = case_db.get_coverage()
+        reasoning_review = case_db.get_reasoning_review()
         proof_cards = build_proof_cards(
             findings,
             claims={f.finding_id: case_db.get_claims(f.finding_id) for f in findings},
@@ -190,6 +191,7 @@ def report(case_id: str, db_dir: str) -> None:
             evidence_integrity=evidence_integrity,
             coverage_records=coverage_records,
             proof_cards=proof_cards,
+            reasoning_review=reasoning_review,
         )
         md_path.write_text(md_text, encoding="utf-8")
         click.echo(f"  Markdown: {md_path}")
@@ -223,6 +225,7 @@ def report(case_id: str, db_dir: str) -> None:
                 source_windows=source_windows,
                 coverage_records=coverage_records,
                 proof_cards=proof_cards,
+                reasoning_review=reasoning_review,
             )
             html_path.write_text(html_text, encoding="utf-8")
             click.echo(f"  HTML:     {html_path}")
@@ -266,6 +269,11 @@ def report(case_id: str, db_dir: str) -> None:
 )
 @click.option("--examiner", help="Optional caller-asserted examiner label stored as metadata.")
 @click.option("--key-id", help="Optional caller-selected key identifier; defaults to fingerprint.")
+@click.option(
+    "--require-resolved-contradictions",
+    is_flag=True,
+    help="Refuse sealing while any material contradiction remains unresolved.",
+)
 def seal_case_cmd(
     case_id: str,
     db_dir: str,
@@ -275,6 +283,7 @@ def seal_case_cmd(
     signing_key: Path | None,
     examiner: str | None,
     key_id: str | None,
+    require_resolved_contradictions: bool,
 ) -> None:
     """Seal CASE_ID into a relocatable, optionally signed case manifest.
 
@@ -303,6 +312,7 @@ def seal_case_cmd(
             report_artifacts=artifacts,
             overwrite=force,
             key_provider=provider,
+            require_resolved_contradictions=require_resolved_contradictions,
         )
     except (OSError, SealError) as exc:
         raise click.ClickException(str(exc)) from exc

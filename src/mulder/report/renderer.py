@@ -28,6 +28,7 @@ from mulder.patterns import (
     format_token_count,
     is_external_ip,
 )
+from mulder.reasoning import ReasoningReviewProjection
 from mulder.security.evidence_envelope import escape_report_markdown, render_safe_markdown
 
 logger = logging.getLogger(__name__)
@@ -1057,6 +1058,7 @@ class ReportRenderer:
         coverage_records: Sequence[CoverageRecord | dict[str, Any]] | None = None,
         proof_cards: Sequence[dict[str, object]] | None = None,
         graph_results: Sequence[GraphQueryResult | dict[str, Any]] | None = None,
+        reasoning_review: ReasoningReviewProjection | dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Assemble template variables from case metadata, findings, audit trail, and sources.
 
@@ -1074,6 +1076,7 @@ class ReportRenderer:
             coverage_records: Persistent analysis coverage and boundary rows.
             proof_cards: Provenance-rich claim, revision, coverage, and receipt cards.
             graph_results: Bounded graph query results to render for static review.
+            reasoning_review: Competing hypotheses and separate specialist reviews.
 
         Returns:
             Dict of template variables ready for Jinja2 rendering.
@@ -1092,6 +1095,23 @@ class ReportRenderer:
             ).model_dump()
             for result in graph_results or ()
         ]
+        if reasoning_review is None:
+            reasoning_review_data: dict[str, Any] = {}
+        elif isinstance(reasoning_review, ReasoningReviewProjection):
+            reasoning_review_data = reasoning_review.model_dump(mode="json")
+        else:
+            reasoning_review_data = ReasoningReviewProjection.model_validate(
+                reasoning_review
+            ).model_dump(mode="json")
+        has_reasoning_review = bool(
+            reasoning_review_data.get("hypotheses")
+            or reasoning_review_data.get("contradictions")
+            or any(
+                seat.get("verdicts")
+                for seat in reasoning_review_data.get("review_seats", ())
+                if isinstance(seat, dict)
+            )
+        )
         proof_cards_by_id = {
             finding_id: card
             for card in proof_card_data
@@ -1254,6 +1274,8 @@ class ReportRenderer:
             "proof_cards": proof_card_data,
             "proof_cards_by_id": proof_cards_by_id,
             "graph_visualizations": graph_visualizations,
+            "reasoning_review": reasoning_review_data,
+            "has_reasoning_review": has_reasoning_review,
             "model_token_breakdown": self._load_model_usage(
                 Path(audit_log_path).parent, case_metadata.case_id
             ),
@@ -1355,6 +1377,7 @@ class ReportRenderer:
             for finding_id, card in ctx.get("proof_cards_by_id", {}).items()
         }
         markdown_ctx["proof_cards"] = list(markdown_ctx["proof_cards_by_id"].values())
+        markdown_ctx["reasoning_review"] = _safe_proof_value(ctx.get("reasoning_review", {}))
         markdown_ctx["network_iocs"] = [
             SimpleNamespace(
                 **{
@@ -1526,6 +1549,7 @@ class ReportRenderer:
         coverage_records: list[CoverageRecord] | None = None,
         proof_cards: list[dict[str, object]] | None = None,
         graph_results: list[GraphQueryResult] | None = None,
+        reasoning_review: ReasoningReviewProjection | None = None,
     ) -> str:
         """Render the markdown report template (``report.md.j2``) to a string.
 
@@ -1545,6 +1569,7 @@ class ReportRenderer:
             coverage_records: Persistent analysis coverage and boundary rows.
             proof_cards: Per-finding proof-card data.
             graph_results: Bounded graph query results for static review views.
+            reasoning_review: Competing hypotheses and separate specialist reviews.
 
         Returns:
             Rendered markdown report string.
@@ -1561,6 +1586,7 @@ class ReportRenderer:
             coverage_records=coverage_records,
             proof_cards=proof_cards,
             graph_results=graph_results,
+            reasoning_review=reasoning_review,
         )
         return self._render_markdown(ctx)
 
@@ -1578,6 +1604,7 @@ class ReportRenderer:
         coverage_records: list[CoverageRecord] | None = None,
         proof_cards: list[dict[str, object]] | None = None,
         graph_results: list[GraphQueryResult] | None = None,
+        reasoning_review: ReasoningReviewProjection | None = None,
     ) -> str:
         """Render the HTML report with markdown descriptions converted to HTML.
 
@@ -1598,6 +1625,7 @@ class ReportRenderer:
             coverage_records: Persistent analysis coverage and boundary rows.
             proof_cards: Per-finding proof-card data.
             graph_results: Bounded graph query results for static review views.
+            reasoning_review: Competing hypotheses and separate specialist reviews.
 
         Returns:
             Rendered HTML report string.
@@ -1615,6 +1643,7 @@ class ReportRenderer:
             coverage_records=coverage_records,
             proof_cards=proof_cards,
             graph_results=graph_results,
+            reasoning_review=reasoning_review,
         )
         return self._render_html(ctx)
 
@@ -1633,6 +1662,7 @@ class ReportRenderer:
         coverage_records: list[CoverageRecord] | None = None,
         proof_cards: list[dict[str, object]] | None = None,
         graph_results: list[GraphQueryResult] | None = None,
+        reasoning_review: ReasoningReviewProjection | None = None,
     ) -> tuple[str, str, bytes | None]:
         """Render markdown, HTML, and optionally PDF reports.
 
@@ -1656,6 +1686,7 @@ class ReportRenderer:
             coverage_records: Persistent analysis coverage and boundary rows.
             proof_cards: Per-finding proof-card data.
             graph_results: Bounded graph query results for static review views.
+            reasoning_review: Competing hypotheses and separate specialist reviews.
 
         Returns:
             Tuple of (markdown_text, html_text, pdf_bytes_or_none).
@@ -1673,6 +1704,7 @@ class ReportRenderer:
             coverage_records=coverage_records,
             proof_cards=proof_cards,
             graph_results=graph_results,
+            reasoning_review=reasoning_review,
         )
         md_text = self._render_markdown(ctx)
         html_text = self._render_html(dict(ctx))

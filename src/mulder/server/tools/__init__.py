@@ -22,6 +22,7 @@ from mulder.server.tools import (  # noqa: F401  # noqa: F401
     mvt,
     phone,
     plaso,
+    reasoning,
     review,
     tsk,
     yara,

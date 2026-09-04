@@ -926,6 +926,7 @@ def finalize_report() -> dict[str, object]:
         coverage_records=coverage_records,
     )
     renderer = ReportRenderer()
+    reasoning_review = ctx.db.get_reasoning_review()
 
     _MAX_WINDOWS_PER_SOURCE = 50
     source_names = [s.source_name for s in sources_list]
@@ -961,6 +962,7 @@ def finalize_report() -> dict[str, object]:
             enrichment_windows=enrichment_windows,
             coverage_records=coverage_records,
             proof_cards=proof_cards,
+            reasoning_review=reasoning_review,
         )
     except Exception as exc:
         logger.warning(
@@ -976,6 +978,7 @@ def finalize_report() -> dict[str, object]:
             enrichment_windows=enrichment_windows,
             coverage_records=coverage_records,
             proof_cards=proof_cards,
+            reasoning_review=reasoning_review,
         )
         html_text = ""
         html_warning: str | None = f"HTML report generation failed: {exc}"
