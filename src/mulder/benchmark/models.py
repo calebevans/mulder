@@ -36,12 +36,15 @@ BenchmarkStage = Literal[
     "alternative_narrative",
     "blind_reviewer",
 ]
+ExecutableBenchmarkStage = Literal[
+    "candidate_filters",
+    "verifier",
+    "independence_gate",
+]
 AblationTarget = Literal[
     "without-candidate-filters",
     "without-verifier",
     "without-independence-gate",
-    "without-alternative-narrative",
-    "without-blind-reviewer",
 ]
 WorkflowAction = Literal["remove_claim", "set_verification_state", "revise_claim"]
 
@@ -50,10 +53,12 @@ EXECUTABLE_ABLATIONS = frozenset(
         "without-candidate-filters",
         "without-verifier",
         "without-independence-gate",
-        "without-blind-reviewer",
     }
 )
-RESERVED_ABLATION_LABELS = EXECUTABLE_ABLATIONS | {"without-alternative-narrative"}
+RETIRED_REVIEW_ABLATIONS = frozenset(
+    {"without-alternative-narrative", "without-blind-reviewer"}
+)
+RESERVED_ABLATION_LABELS = EXECUTABLE_ABLATIONS | RETIRED_REVIEW_ABLATIONS
 
 
 def _ground_truth_scalar_key(value: JsonScalar) -> tuple[str, str]:
@@ -584,9 +589,9 @@ class AblationExecutionReceipt(StrictModel):
     base_cost_usd: float | None = Field(default=None, ge=0)
     workflow_sha256: Sha256 = Field(pattern=r"^[0-9a-f]{64}$")
     disabled: list[AblationTarget] = Field(min_length=1)
-    executed_stages: list[BenchmarkStage]
-    skipped_stages: list[BenchmarkStage] = Field(min_length=1)
-    case_operation_counts: dict[str, dict[BenchmarkStage, int]]
+    executed_stages: list[ExecutableBenchmarkStage]
+    skipped_stages: list[ExecutableBenchmarkStage] = Field(min_length=1)
+    case_operation_counts: dict[str, dict[ExecutableBenchmarkStage, int]]
 
     @model_validator(mode="after")
     def _check_receipt(self) -> AblationExecutionReceipt:
@@ -701,20 +706,20 @@ class BenchmarkRunResult(StrictModel):
             raise ValueError("workflow trace case IDs must be unique")
         if trace_ids and set(trace_ids) != set(case_ids):
             raise ValueError("workflow traces must cover the result case set exactly")
-        reserved = (
-            set(self.identity.ablations) & RESERVED_ABLATION_LABELS
-            if self.identity is not None
-            else set()
-        )
-        if reserved and self.ablation_receipt is None:
-            raise ValueError("reserved ablation labels require an execution receipt")
+        identity_labels = set(self.identity.ablations) if self.identity is not None else set()
+        retired = identity_labels & RETIRED_REVIEW_ABLATIONS
+        if retired:
+            raise ValueError(f"unsupported review ablation labels: {sorted(retired)!r}")
+        executable = identity_labels & EXECUTABLE_ABLATIONS
+        if executable and self.ablation_receipt is None:
+            raise ValueError("executable ablation labels require an execution receipt")
         if self.ablation_receipt is not None:
             if self.identity is None:
                 raise ValueError("an ablation receipt requires run identity")
             receipt_labels = set(self.ablation_receipt.disabled)
-            if reserved != set(self.identity.ablations):
-                raise ValueError("reserved ablations cannot be mixed with legacy labels")
-            if reserved != receipt_labels:
+            if executable != identity_labels:
+                raise ValueError("executable ablations cannot be mixed with legacy labels")
+            if executable != receipt_labels:
                 raise ValueError("ablation identity and receipt disagree")
             if not self.workflow_traces:
                 raise ValueError("an ablation receipt requires complete workflow traces")

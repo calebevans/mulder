@@ -1990,7 +1990,6 @@ def benchmark_cmd(manifest: Path, results: tuple[Path, ...], output_path: Path) 
             "without-candidate-filters",
             "without-verifier",
             "without-independence-gate",
-            "without-blind-reviewer",
         ]
     ),
     help="Actually skip this component while replaying the committed workflow trace.",

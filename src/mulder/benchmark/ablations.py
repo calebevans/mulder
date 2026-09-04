@@ -21,6 +21,7 @@ from mulder.benchmark.models import (
     CaseRunResult,
     CaseWorkflowTrace,
     ClaimRevision,
+    ExecutableBenchmarkStage,
     ObservedClaim,
     ResourceUsage,
     RunIdentity,
@@ -38,17 +39,15 @@ from mulder.review.candidates import group_duplicate_findings, representative_fi
 from mulder.verification.claims import verify_claim
 from mulder.verification.policy import assess_confirmation
 
-STAGE_ORDER: tuple[BenchmarkStage, ...] = (
+STAGE_ORDER: tuple[ExecutableBenchmarkStage, ...] = (
     "candidate_filters",
     "verifier",
     "independence_gate",
-    "blind_reviewer",
 )
-TARGET_TO_STAGE: dict[AblationTarget, BenchmarkStage] = {
+TARGET_TO_STAGE: dict[AblationTarget, ExecutableBenchmarkStage] = {
     "without-candidate-filters": "candidate_filters",
     "without-verifier": "verifier",
     "without-independence-gate": "independence_gate",
-    "without-blind-reviewer": "blind_reviewer",
 }
 ABLATION_CHOICES = tuple(TARGET_TO_STAGE)
 
@@ -153,7 +152,7 @@ def _observed(
 def _real_case_execution(
     trace: CaseWorkflowTrace,
     disabled: frozenset[BenchmarkStage],
-) -> tuple[CaseRunResult, dict[BenchmarkStage, int]]:
+) -> tuple[CaseRunResult, dict[ExecutableBenchmarkStage, int]]:
     """Execute actual deterministic Mulder policies over bounded domain inputs."""
     if trace.trace_version != 2:
         raise ValueError("new executable ablations require v2 real-component traces")
@@ -177,7 +176,9 @@ def _real_case_execution(
     }
     revisions: list[ClaimRevision] = []
     iterations: dict[str, int] = {}
-    counts: dict[BenchmarkStage, int] = {stage: 0 for stage in STAGE_ORDER}
+    counts: dict[ExecutableBenchmarkStage, int] = {
+        stage: 0 for stage in STAGE_ORDER
+    }
 
     def transition(
         claim_id: str,
@@ -209,7 +210,7 @@ def _real_case_execution(
                 reason=reason,
             )
         )
-        if stage in counts:
+        if stage in STAGE_ORDER:
             counts[stage] += 1
         if after is None:
             del claims[claim_id]
@@ -459,7 +460,7 @@ def execute_ablations(
         raise ValueError("an ablation matrix cell must differ from its base result")
     disabled_stages = frozenset(TARGET_TO_STAGE[target] for target in disabled_targets)
     new_cases: list[CaseRunResult] = []
-    operation_counts: dict[str, dict[BenchmarkStage, int]] = {}
+    operation_counts: dict[str, dict[ExecutableBenchmarkStage, int]] = {}
     for case in result.cases:
         trace = traces[case.case_id]
         executed, counts = _real_case_execution(trace, disabled_stages)
@@ -532,7 +533,11 @@ def validate_ablation_result(result: BenchmarkRunResult) -> None:
         else:
             claims, revisions = _replay(trace, disabled_stages)
             executed = case.model_copy(update={"claims": claims, "revisions": revisions})
-            expected_counts = {stage.stage: len(stage.operations) for stage in trace.stages}
+            expected_counts = {
+                stage.stage: len(stage.operations)
+                for stage in trace.stages
+                if stage.stage in STAGE_ORDER
+            }
             base_claims, base_revisions = _replay(trace, frozenset())
             base_case = case.model_copy(
                 update={"claims": base_claims, "revisions": base_revisions}

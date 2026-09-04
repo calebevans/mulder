@@ -12,7 +12,7 @@ from urllib.parse import quote
 
 from mulder.benchmark.ablations import execute_workflow_base
 from mulder.benchmark.anchors import canonical_anchor_id as canonical_anchor_id
-from mulder.benchmark.io import BenchmarkInputError, resolve_text_selector
+from mulder.benchmark.io import BenchmarkInputError, read_text_selector_snapshot
 from mulder.benchmark.models import (
     BenchmarkCase,
     BenchmarkManifest,
@@ -35,24 +35,65 @@ def canonical_coverage_domain(system: str, domain: str, check: str) -> str:
     return "/".join(quote(part, safe="") for part in (system, domain, check))
 
 
+_DATABASE_METADATA_PRAGMAS = (
+    "application_id",
+    "auto_vacuum",
+    "encoding",
+    "freelist_count",
+    "journal_mode",
+    "page_count",
+    "page_size",
+    "schema_version",
+    "user_version",
+)
+
+
 def _database_commitment(connection: sqlite3.Connection) -> str:
     """Commit to the complete logical SQLite state visible to this transaction."""
     digest = hashlib.sha256()
+    for pragma in _DATABASE_METADATA_PRAGMAS:
+        row = connection.execute(f"PRAGMA {pragma}").fetchone()
+        digest.update(pragma.encode("ascii"))
+        digest.update(b"=")
+        digest.update(repr(row).encode("utf-8"))
+        digest.update(b"\0")
     for statement in connection.iterdump():
         digest.update(statement.encode("utf-8"))
         digest.update(b"\0")
     return digest.hexdigest()
 
 
+def _database_path_identity(db_path: Path) -> tuple[int, int]:
+    try:
+        status = db_path.stat()
+    except OSError as exc:
+        raise ValueError(
+            f"case database path became unavailable during benchmark export: {db_path}"
+        ) from exc
+    return status.st_dev, status.st_ino
+
+
+def _open_read_snapshot(db_path: Path) -> sqlite3.Connection:
+    source_uri = f"file:{quote(str(db_path.resolve()), safe='/')}?mode=ro"
+    connection = sqlite3.connect(source_uri, uri=True)
+    try:
+        connection.execute("PRAGMA query_only=ON")
+        connection.execute("BEGIN")
+    except sqlite3.Error:
+        connection.close()
+        raise
+    return connection
+
+
 @contextmanager
 def _stable_case_snapshot(db_path: Path) -> Iterator[Path]:
     """Yield one materialized read snapshot and reject concurrent mutations."""
-    source_uri = f"file:{quote(str(db_path.resolve()), safe='/')}?mode=ro"
-    source = sqlite3.connect(source_uri, uri=True)
+    initial_identity = _database_path_identity(db_path)
+    source = _open_read_snapshot(db_path)
     try:
-        source.execute("PRAGMA query_only=ON")
-        source.execute("BEGIN")
         initial_commitment = _database_commitment(source)
+        if _database_path_identity(db_path) != initial_identity:
+            raise ValueError("case database path was replaced during benchmark export")
         with TemporaryDirectory(prefix="mulder-benchmark-snapshot-") as temp_dir:
             snapshot_path = Path(temp_dir) / "case.db"
             with sqlite3.connect(snapshot_path) as snapshot:
@@ -61,9 +102,21 @@ def _stable_case_snapshot(db_path: Path) -> Iterator[Path]:
                 yield snapshot_path
             finally:
                 source.rollback()
-                source.execute("BEGIN")
-                final_commitment = _database_commitment(source)
-                source.rollback()
+                final_identity = _database_path_identity(db_path)
+                if final_identity != initial_identity:
+                    raise ValueError(
+                        "case database path was replaced during benchmark export"
+                    )
+                final_source = _open_read_snapshot(db_path)
+                try:
+                    final_commitment = _database_commitment(final_source)
+                    if _database_path_identity(db_path) != final_identity:
+                        raise ValueError(
+                            "case database path was replaced during benchmark export"
+                        )
+                finally:
+                    final_source.rollback()
+                    final_source.close()
             if final_commitment != initial_commitment:
                 raise ValueError("case database changed during benchmark export")
     finally:
@@ -252,11 +305,6 @@ def _evidence_bindings(
                 raise ValueError(
                     f"anchor {anchor.anchor_id!r} source path does not match manifest artifact"
                 )
-            current_digest = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
-            if current_digest != artifact.sha256:
-                raise ValueError(
-                    f"anchor {anchor.anchor_id!r} artifact bytes no longer match manifest"
-                )
             canonical_id = canonical_anchor_id(anchor)
             expected = expected_anchors.get(canonical_id)
             if expected is None:
@@ -266,9 +314,16 @@ def _evidence_bindings(
                     f"anchor {canonical_id!r} answer-key artifact does not match source"
                 )
             try:
-                resolved_text = resolve_text_selector(artifact_path, expected.selector)
+                artifact_snapshot = read_text_selector_snapshot(
+                    artifact_path, expected.selector
+                )
             except BenchmarkInputError as exc:
                 raise ValueError(str(exc)) from exc
+            if artifact_snapshot.artifact_sha256 != artifact.sha256:
+                raise ValueError(
+                    f"anchor {anchor.anchor_id!r} artifact bytes no longer match manifest"
+                )
+            resolved_text = artifact_snapshot.exact_text
             resolved_hash = hashlib.sha256(resolved_text.encode("utf-8")).hexdigest()
             if resolved_text != anchor.exact_text:
                 raise ValueError(

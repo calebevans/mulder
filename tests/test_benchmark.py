@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+from io import BytesIO
 from pathlib import Path
 
 import pytest
 from pydantic import BaseModel
 
+import mulder.benchmark.io as benchmark_io
 from mulder.benchmark.io import BenchmarkInputError, load_manifest, load_result
 from mulder.benchmark.models import (
     BenchmarkManifest,
@@ -19,6 +21,41 @@ from mulder.benchmark.models import (
 from mulder.benchmark.scorer import score_benchmark
 
 FIXTURES = Path(__file__).parents[1] / "benchmarks" / "fixtures"
+
+
+def test_selector_snapshot_hashes_and_resolves_one_binary_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    evidence_path = tmp_path / "evidence.txt"
+    calls: list[int] = []
+
+    class SplitBytes(BytesIO):
+        def read(self, size: int = -1) -> bytes:
+            calls.append(size)
+            if len(calls) > 1:
+                return b"image=swapped.exe\n"
+            return super().read(size)
+
+    stream = SplitBytes(b"image=cmd.exe\n")
+
+    def open_stream(
+        path: Path, mode: str = "r", buffering: int = -1, encoding: str | None = None,
+        errors: str | None = None, newline: str | None = None,
+    ) -> SplitBytes:
+        del buffering, encoding, errors, newline
+        assert path == evidence_path
+        assert mode == "rb"
+        return stream
+
+    monkeypatch.setattr(Path, "open", open_stream)
+    snapshot = benchmark_io.read_text_selector_snapshot(
+        evidence_path, "line=1;field=image"
+    )
+
+    assert calls == [-1]
+    assert snapshot.artifact_sha256 == hashlib.sha256(b"image=cmd.exe\n").hexdigest()
+    assert snapshot.size_bytes == len(b"image=cmd.exe\n")
+    assert snapshot.exact_text == "cmd.exe"
 
 
 def test_fixture_evidence_hashes_match_manifest() -> None:

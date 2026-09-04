@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shutil
 import sqlite3
 from pathlib import Path
 
@@ -469,6 +471,85 @@ def test_run_export_rejects_database_mutation_during_evaluation(
         )
 
 
+def test_run_export_rejects_database_path_replacement_during_evaluation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = _case_database(tmp_path)
+    replacement = tmp_path / "replacement.db"
+    shutil.copy2(db_path, replacement)
+    extracted = extract_case_result("db-case", db_path)
+    manifest = _manifest(extracted.claims[0].citations[0], tmp_path / "processes.txt")
+    execute = benchmark_extractor.execute_workflow_base
+
+    def replace_after_evaluation(trace: CaseWorkflowTrace) -> object:
+        result = execute(trace)
+        os.replace(replacement, db_path)
+        return result
+
+    monkeypatch.setattr(
+        benchmark_extractor, "execute_workflow_base", replace_after_evaluation
+    )
+    with pytest.raises(ValueError, match="replaced during benchmark export"):
+        extract_run_result(
+            manifest,
+            case_databases={"db-case": db_path},
+            failed_cases={},
+            run_id="replaced-during-export",
+            system_name="mulder",
+            system_version="test",
+            identity=RunIdentity(
+                matrix_cell="test/default",
+                models={"analyst": "fixture"},
+                prompt_set_sha256="a" * 64,
+                toolset_sha256="b" * 64,
+                orchestrator_version="test",
+                methodology_version=manifest.methodology_version,
+            ),
+            resources=ResourceUsage(),
+            evidence_root=tmp_path,
+        )
+
+
+def test_run_export_rejects_database_user_version_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = _case_database(tmp_path)
+    extracted = extract_case_result("db-case", db_path)
+    manifest = _manifest(extracted.claims[0].citations[0], tmp_path / "processes.txt")
+    execute = benchmark_extractor.execute_workflow_base
+
+    def mutate_metadata_after_evaluation(trace: CaseWorkflowTrace) -> object:
+        result = execute(trace)
+        with sqlite3.connect(db_path) as connection:
+            connection.execute("PRAGMA user_version=99")
+        return result
+
+    monkeypatch.setattr(
+        benchmark_extractor,
+        "execute_workflow_base",
+        mutate_metadata_after_evaluation,
+    )
+    with pytest.raises(ValueError, match="changed during benchmark export"):
+        extract_run_result(
+            manifest,
+            case_databases={"db-case": db_path},
+            failed_cases={},
+            run_id="metadata-mutated-during-export",
+            system_name="mulder",
+            system_version="test",
+            identity=RunIdentity(
+                matrix_cell="test/default",
+                models={"analyst": "fixture"},
+                prompt_set_sha256="a" * 64,
+                toolset_sha256="b" * 64,
+                orchestrator_version="test",
+                methodology_version=manifest.methodology_version,
+            ),
+            resources=ResourceUsage(),
+            evidence_root=tmp_path,
+        )
+
+
 def test_run_export_rejects_artifact_mutation_during_evaluation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -538,7 +619,9 @@ def test_scorer_rechecks_selector_against_current_artifact_bytes(tmp_path: Path)
         score_benchmark(manifest, [result], evidence_root=tmp_path)
 
 
-def test_withdrawn_case_db_reviewer_decision_feeds_real_ablation(tmp_path: Path) -> None:
+def test_withdrawn_case_db_reviewer_decision_is_replayed_but_not_ablatable(
+    tmp_path: Path,
+) -> None:
     db_path = _case_database(tmp_path)
     with CaseDB(db_path) as db:
         anchor_id = canonical_anchor_id(db.get_claims("finding-1")[0].anchors[0])
@@ -571,14 +654,13 @@ def test_withdrawn_case_db_reviewer_decision_feeds_real_ablation(tmp_path: Path)
         resources=ResourceUsage(),
         evidence_root=tmp_path,
     )
-    restored = execute_ablations(
-        run,
-        ["without-blind-reviewer"],
-        run_id="without-blind",
-        matrix_cell="test/without-blind",
-    )
-    assert restored.cases[0].verdict == "positive"
-    assert restored.cases[0].claims[0].verification_state == "verified"
+    with pytest.raises(ValueError, match="unknown executable ablations"):
+        execute_ablations(
+            run,
+            ["without-blind-reviewer"],
+            run_id="without-blind",
+            matrix_cell="test/without-blind",
+        )
 
 
 def test_export_accepts_explicit_failed_cells_without_a_database(tmp_path: Path) -> None:

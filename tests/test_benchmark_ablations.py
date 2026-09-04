@@ -22,7 +22,6 @@ TARGETS = (
     "without-candidate-filters",
     "without-verifier",
     "without-independence-gate",
-    "without-blind-reviewer",
 )
 
 
@@ -258,7 +257,9 @@ def test_scorer_revalidates_revision_order_after_unchecked_model_copy() -> None:
         score_benchmark(_correction_manifest(), [invalid_result])
 
 
-def test_bounded_workflow_calls_real_mulder_components(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_bounded_workflow_calls_supported_components_and_persisted_adjudicators(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     trace = load_result(BASE_RESULT).workflow_traces[0]
     calls = {
         "candidate": 0,
@@ -343,14 +344,80 @@ def test_reviewer_stage_cannot_be_changed_by_relabelling_actor_kind() -> None:
     )
 
 
-def test_unsupported_alternative_narrative_ablation_is_rejected_honestly() -> None:
+@pytest.mark.parametrize(
+    "target", ["without-alternative-narrative", "without-blind-reviewer"]
+)
+def test_unsupported_review_ablation_is_rejected_honestly(target: str) -> None:
     with pytest.raises(ValueError, match="unknown executable ablations"):
         execute_ablations(
             load_result(BASE_RESULT),
-            ["without-alternative-narrative"],
-            run_id="unsupported-alternative",
-            matrix_cell="fixture/unsupported-alternative",
+            [target],
+            run_id="unsupported-review",
+            matrix_cell="fixture/unsupported-review",
         )
+
+
+@pytest.mark.parametrize(
+    ("target", "stage"),
+    [
+        ("without-alternative-narrative", "alternative_narrative"),
+        ("without-blind-reviewer", "blind_reviewer"),
+    ],
+)
+def test_direct_result_model_rejects_retired_review_receipts(
+    target: str, stage: str
+) -> None:
+    payload = load_result(BASE_RESULT).model_dump(mode="json")
+    payload["identity"]["ablations"] = [target]
+    payload["ablation_receipt"] = {
+        "receipt_version": "mulder.benchmark.ablation/v1",
+        "base_run_id": "retired-base",
+        "base_matrix_cell": "fixture/base",
+        "base_result_sha256": "a" * 64,
+        "base_runtime_ms": 0,
+        "base_input_tokens": 0,
+        "base_output_tokens": 0,
+        "base_unattributed_tokens": 0,
+        "base_cost_usd": 0,
+        "workflow_sha256": "b" * 64,
+        "disabled": [target],
+        "executed_stages": [],
+        "skipped_stages": [stage],
+        "case_operation_counts": {},
+    }
+
+    with pytest.raises(ValueError, match="Input should be"):
+        BenchmarkRunResult.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "target", ["without-alternative-narrative", "without-blind-reviewer"]
+)
+def test_direct_result_model_rejects_retired_review_identity_stamping(
+    target: str,
+) -> None:
+    payload = load_result(BASE_RESULT).model_dump(mode="json")
+    payload["identity"]["ablations"] = [target]
+
+    with pytest.raises(ValueError, match="unsupported review ablation"):
+        BenchmarkRunResult.model_validate(payload)
+
+
+def test_direct_result_model_rejects_retired_review_stage_in_receipt() -> None:
+    result = execute_ablations(
+        load_result(BASE_RESULT),
+        ["without-verifier"],
+        run_id="supported-receipt",
+        matrix_cell="fixture/supported-receipt",
+    )
+    payload = result.model_dump(mode="json")
+    payload["ablation_receipt"]["executed_stages"].append("blind_reviewer")
+    payload["ablation_receipt"]["case_operation_counts"]["staged-incident"][
+        "blind_reviewer"
+    ] = 1
+
+    with pytest.raises(ValueError, match="Input should be"):
+        BenchmarkRunResult.model_validate(payload)
 
 
 def test_nested_workflow_domain_models_reject_unknown_fields() -> None:
@@ -425,7 +492,9 @@ def test_each_ablation_actually_skips_its_stage_and_emits_a_receipt(target: str)
     assert receipt is not None
     assert receipt.disabled == [target]
     assert "alternative_narrative" not in receipt.executed_stages
+    assert "blind_reviewer" not in receipt.executed_stages
     assert "alternative_narrative" not in receipt.case_operation_counts["staged-incident"]
+    assert "blind_reviewer" not in receipt.case_operation_counts["staged-incident"]
     assert len(receipt.skipped_stages) == 1
     skipped = receipt.skipped_stages[0]
     assert skipped not in receipt.executed_stages
@@ -471,15 +540,10 @@ def test_ablation_matrix_has_real_stage_specific_effects() -> None:
         retained_id,
         ids["finding-weak"],
     }
-    assert claim_ids("without-blind-reviewer") == {
-        retained_id,
-        ids["finding-blind"],
-    }
 
     scores = {run.run_id: run.overall for run in score_benchmark(manifest, results.values()).runs}
     assert scores["fixture-without-verifier"].atomic_claims.recall == 0.0
     assert scores["fixture-without-independence-gate"].atomic_claims.false_positive == 1
-    assert scores["fixture-without-blind-reviewer"].atomic_claims.false_positive == 1
 
 
 def test_ablation_engine_rejects_invalid_or_legacy_inputs() -> None:
@@ -540,7 +604,7 @@ def test_benchmark_ablate_cli_writes_same_versioned_result_schema(tmp_path: Path
             "benchmark-ablate",
             str(BASE_RESULT),
             "--ablation",
-            "without-blind-reviewer",
+            "without-independence-gate",
             "--run-id",
             "cli-ablation",
             "--matrix-cell",
@@ -552,12 +616,17 @@ def test_benchmark_ablate_cli_writes_same_versioned_result_schema(tmp_path: Path
     assert invocation.exit_code == 0, invocation.output
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["schema_version"] == 1
-    assert payload["identity"]["ablations"] == ["without-blind-reviewer"]
-    assert payload["ablation_receipt"]["skipped_stages"] == ["blind_reviewer"]
+    assert payload["identity"]["ablations"] == ["without-independence-gate"]
+    assert payload["ablation_receipt"]["skipped_stages"] == ["independence_gate"]
 
 
 @pytest.mark.parametrize(
-    "ablation", ["without-verifier", "without-alternative-narrative"]
+    "ablation",
+    [
+        "without-verifier",
+        "without-alternative-narrative",
+        "without-blind-reviewer",
+    ],
 )
 def test_export_refuses_to_stamp_an_executable_ablation_without_execution(
     ablation: str,

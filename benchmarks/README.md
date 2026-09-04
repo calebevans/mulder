@@ -129,8 +129,8 @@ workflow execution, and scoring resolves it again against the current artifact
 bytes.
 
 `benchmark-export --ablation` retains historical free-form identity labels for
-old result compatibility, but the four executable safety-component names and
-the retired Alternative Narrative label cannot be stamped.
+old result compatibility, but the three executable safety-component names and
+the retired Alternative Narrative and Blind Reviewer labels cannot be stamped.
 Executable ablations use a complete typed workflow trace and the separate
 offline command:
 
@@ -141,22 +141,23 @@ mulder benchmark-ablate benchmarks/ablation/result-real-base-v2.json \
   --output no-verifier-r0.json
 ```
 
-The supported switches are `without-verifier`, `without-independence-gate`,
-`without-blind-reviewer`, and `without-candidate-filters`. New ablations require
-v2 domain inputs rather than hand-authored output transformations. The committed
-fixture is built through a
+The supported switches are `without-verifier`, `without-independence-gate`, and
+`without-candidate-filters`. New ablations require v2 domain inputs rather than
+hand-authored output transformations. The committed fixture is built through a
 real CaseDB from five content-addressed evidence files; only clock and ID
 adapters are fixed to make its immutable history byte-reproducible. The engine first proves that the current
 real Mulder components reproduce the base result, then executes them again while
 skipping the selected stage. Verdicts, claims, coverage, revisions, and resource
 measurements are recomputed; base runtime, token, and cost values are never
 cloned into a synthetic ablation.
-Persisted Alternative Narrative decisions still pass through the production
-adjudication seam during base replay. `without-alternative-narrative` is not an
-executable target because a CaseDB export does not contain the production
-finalize-readiness transcript consumed by `validate_narrative`; treating a
-reason-code relabel as that gate would overstate what the benchmark executes.
-Its receipt binds the base run identity, base result and trace hashes, the four
+Persisted Alternative Narrative and Blind Reviewer decisions are still replayed
+as immutable history when constructing the base result. Neither is an executable
+ablation: a CaseDB export does not contain the production finalize-readiness
+transcript consumed by `validate_narrative`, and Mulder has no production blind
+review execution seam. Treating reason-code relabels as those components would
+overstate what the benchmark executes. The retired labels are rejected by the
+result model and receipt schema.
+Its receipt binds the base run identity, base result and trace hashes, the three
 supported executed/skipped stages, and per-case operation counts. The scorer
 reconstructs the base, re-executes every received ablated result, and fails
 closed on tampering.

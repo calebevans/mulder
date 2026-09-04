@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar
 
@@ -58,38 +59,69 @@ def load_manifest(path: Path) -> BenchmarkManifest:
 _TEXT_SELECTOR = re.compile(r"line=(?P<line>[1-9][0-9]*)[; ]+field=(?P<field>[A-Za-z0-9_.-]+)")
 
 
-def resolve_text_selector(path: Path, selector: str) -> str:
-    """Resolve the bounded key-value text selector used by local fixtures."""
+@dataclass(frozen=True)
+class TextSelectorSnapshot:
+    """Digest and selected text derived from one immutable in-memory read."""
+
+    artifact_sha256: str
+    size_bytes: int
+    exact_text: str
+
+
+def _read_evidence_bytes(path: Path) -> bytes:
+    try:
+        with path.open("rb") as evidence_file:
+            return evidence_file.read()
+    except OSError as exc:
+        raise BenchmarkInputError(f"cannot verify evidence artifact {path}: {exc}") from exc
+
+
+def resolve_text_selector_bytes(content: bytes, selector: str, *, source: Path) -> str:
+    """Resolve a bounded key-value selector from already captured artifact bytes."""
     match = _TEXT_SELECTOR.fullmatch(selector)
     if match is None:
         raise BenchmarkInputError(f"unsupported evidence selector {selector!r}")
-    lines = path.read_text(encoding="utf-8").splitlines()
+    try:
+        lines = content.decode("utf-8").splitlines()
+    except UnicodeDecodeError as exc:
+        raise BenchmarkInputError(f"evidence artifact is not UTF-8 text: {source}") from exc
     line_number = int(match.group("line"))
     if line_number > len(lines):
-        raise BenchmarkInputError(f"selector {selector!r} is outside {path}")
+        raise BenchmarkInputError(f"selector {selector!r} is outside {source}")
     field = re.escape(match.group("field"))
     value = re.search(rf"(?:^|\s){field}=([^\s]+)", lines[line_number - 1])
     if value is None and match.group("field") == "format":
         return lines[line_number - 1].split(maxsplit=1)[0]
     if value is None:
-        raise BenchmarkInputError(f"selector {selector!r} does not resolve in {path}")
+        raise BenchmarkInputError(f"selector {selector!r} does not resolve in {source}")
     return value.group(1)
+
+
+def read_text_selector_snapshot(path: Path, selector: str) -> TextSelectorSnapshot:
+    """Hash and resolve a selector from one file descriptor and byte buffer."""
+    content = _read_evidence_bytes(path)
+    return TextSelectorSnapshot(
+        artifact_sha256=hashlib.sha256(content).hexdigest(),
+        size_bytes=len(content),
+        exact_text=resolve_text_selector_bytes(content, selector, source=path),
+    )
+
+
+def resolve_text_selector(path: Path, selector: str) -> str:
+    """Resolve the bounded key-value text selector used by local fixtures."""
+    return read_text_selector_snapshot(path, selector).exact_text
 
 
 def _verify_manifest_evidence(root: Path, manifest: BenchmarkManifest) -> None:
     for case in manifest.cases:
         artifacts = {artifact.artifact_id: artifact for artifact in case.evidence}
+        contents: dict[str, bytes] = {}
         paths: dict[str, Path] = {}
         for artifact in case.evidence:
             if artifact.redistribution != "redistributable":
                 continue
             evidence_path = (root / artifact.path).resolve()
-            try:
-                content = evidence_path.read_bytes()
-            except OSError as exc:
-                raise BenchmarkInputError(
-                    f"cannot verify evidence artifact {artifact.artifact_id!r}: {exc}"
-                ) from exc
+            content = _read_evidence_bytes(evidence_path)
             if hashlib.sha256(content).hexdigest() != artifact.sha256:
                 raise BenchmarkInputError(
                     f"evidence artifact {artifact.artifact_id!r} sha256 does not match"
@@ -99,11 +131,15 @@ def _verify_manifest_evidence(root: Path, manifest: BenchmarkManifest) -> None:
                     f"evidence artifact {artifact.artifact_id!r} size does not match"
                 )
             paths[artifact.artifact_id] = evidence_path
+            contents[artifact.artifact_id] = content
         for anchor in case.anchors:
             artifact = artifacts[anchor.artifact_id]
             if artifact.redistribution != "redistributable":
                 continue
-            exact_text = resolve_text_selector(paths[artifact.artifact_id], anchor.selector)
+            artifact_path = paths[artifact.artifact_id]
+            exact_text = resolve_text_selector_bytes(
+                contents[artifact.artifact_id], anchor.selector, source=artifact_path
+            )
             if hashlib.sha256(exact_text.encode("utf-8")).hexdigest() != anchor.exact_text_sha256:
                 raise BenchmarkInputError(
                     f"evidence anchor {anchor.anchor_id!r} exact text hash does not match"

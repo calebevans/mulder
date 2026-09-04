@@ -40,8 +40,7 @@ jobs:
           for target in \
             without-candidate-filters \
             without-verifier \
-            without-independence-gate \
-            without-blind-reviewer
+            without-independence-gate
           do
             uv run --locked --extra dev mulder benchmark-ablate \
               benchmarks/ablation/result-real-base-v2.json \
@@ -59,7 +58,6 @@ jobs:
           without-candidate-filters.json
           without-verifier.json
           without-independence-gate.json
-          without-blind-reviewer.json
           --output benchmark-scheduled-score.json
 
       - name: Run deterministic acceptance assertions

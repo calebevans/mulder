@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Literal, TypeAlias, TypeVar
 
 from mulder.benchmark.anchors import canonical_anchor_id
-from mulder.benchmark.io import BenchmarkInputError, resolve_text_selector
+from mulder.benchmark.io import BenchmarkInputError, read_text_selector_snapshot
 from mulder.benchmark.models import (
     AggregateScore,
     BenchmarkCase,
@@ -146,21 +146,18 @@ def _validate_case_evidence_bindings(
             raise ValueError("methodology 1.1 scoring requires the manifest evidence root")
         artifact_path = (evidence_root / artifact.path).resolve()
         try:
-            current_bytes = artifact_path.read_bytes()
-        except OSError as exc:
-            raise ValueError(
-                f"workflow anchor {anchor_id!r} artifact cannot be read: {exc}"
-            ) from exc
-        if hashlib.sha256(current_bytes).hexdigest() != artifact.sha256:
-            raise ValueError(
-                f"workflow anchor {anchor_id!r} artifact bytes no longer match manifest"
+            artifact_snapshot = read_text_selector_snapshot(
+                artifact_path, binding.selector
             )
-        try:
-            resolved_text = resolve_text_selector(artifact_path, binding.selector)
         except BenchmarkInputError as exc:
             raise ValueError(
                 f"workflow anchor {anchor_id!r} selector does not resolve: {exc}"
             ) from exc
+        if artifact_snapshot.artifact_sha256 != artifact.sha256:
+            raise ValueError(
+                f"workflow anchor {anchor_id!r} artifact bytes no longer match manifest"
+            )
+        resolved_text = artifact_snapshot.exact_text
         if (
             resolved_text != anchor.exact_text
             or hashlib.sha256(resolved_text.encode("utf-8")).hexdigest()

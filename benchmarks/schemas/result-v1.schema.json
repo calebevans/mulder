@@ -72,9 +72,7 @@
               "enum": [
                 "candidate_filters",
                 "verifier",
-                "independence_gate",
-                "alternative_narrative",
-                "blind_reviewer"
+                "independence_gate"
               ]
             },
             "type": "object"
@@ -87,9 +85,7 @@
             "enum": [
               "without-candidate-filters",
               "without-verifier",
-              "without-independence-gate",
-              "without-alternative-narrative",
-              "without-blind-reviewer"
+              "without-independence-gate"
             ],
             "type": "string"
           },
@@ -102,9 +98,7 @@
             "enum": [
               "candidate_filters",
               "verifier",
-              "independence_gate",
-              "alternative_narrative",
-              "blind_reviewer"
+              "independence_gate"
             ],
             "type": "string"
           },
@@ -122,9 +116,7 @@
             "enum": [
               "candidate_filters",
               "verifier",
-              "independence_gate",
-              "alternative_narrative",
-              "blind_reviewer"
+              "independence_gate"
             ],
             "type": "string"
           },
