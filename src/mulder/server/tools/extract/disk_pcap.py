@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from mulder.models import CoverageMetadata, ToolOutcome, ToolOutcomeStatus
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
@@ -390,6 +391,9 @@ def analyze_disk_pcaps(
 
     if not all_pcaps:
         elapsed = (time.monotonic() - t0) * 1000
+        rows_examined = sum(
+            len(chunk.splitlines()) for chunks, _offset in chunk_groups for chunk in chunks
+        )
         return tool_response(
             tc_id,
             "analyze_disk_pcaps",
@@ -401,6 +405,14 @@ def analyze_disk_pcaps(
             },
             source=None,
             elapsed_ms=elapsed,
+            outcome=ToolOutcome(
+                status=ToolOutcomeStatus.SUCCESS_EMPTY,
+                coverage=CoverageMetadata(
+                    rows_examined=rows_examined,
+                    rows_total=rows_examined,
+                    parser_version="fls-text-v1",
+                ),
+            ),
         )
 
     max_size_bytes = max_pcap_size_mb * 1024 * 1024
@@ -478,6 +490,25 @@ def analyze_disk_pcaps(
         "credentials": all_credentials[:100],
     }
 
+    incomplete_count = len(pcaps_failed) + len(pcaps_skipped_size)
+    outcome = ToolOutcome(
+        status=(
+            ToolOutcomeStatus.PARTIAL
+            if incomplete_count
+            else ToolOutcomeStatus.SUCCESS_NONEMPTY
+        ),
+        coverage=CoverageMetadata(
+            rows_examined=len(pcaps_analyzed),
+            rows_total=len(all_pcaps),
+            truncation_reason=(
+                f"{incomplete_count} discovered captures were not analyzed"
+                if incomplete_count
+                else None
+            ),
+            parser_version="fls-text-v1",
+        ),
+    )
+
     return tool_response(
         tc_id,
         "analyze_disk_pcaps",
@@ -485,4 +516,5 @@ def analyze_disk_pcaps(
         results,
         source=None,
         elapsed_ms=elapsed,
+        outcome=outcome,
     )
