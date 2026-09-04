@@ -9,12 +9,14 @@ from pathlib import Path
 import pytest
 
 from mulder.execution import (
+    BubblewrapNetworkIsolationBackend,
     CommandPolicy,
     CommandRequest,
     CommandRunner,
     ExecutionAuditEvent,
     ExecutionStatus,
     NetworkClass,
+    NetworkIsolationPlan,
     PathArgument,
 )
 from mulder.server import helpers
@@ -30,8 +32,41 @@ def _python_policy(**kwargs: object) -> CommandPolicy:
     return CommandPolicy(**values)  # type: ignore[arg-type]
 
 
+class _VerifiedTestIsolation:
+    def prepare(self, argv: tuple[str, ...]) -> NetworkIsolationPlan:
+        return NetworkIsolationPlan(
+            enforced=True,
+            backend="test-netns",
+            argv=argv,
+            reason_code="network_isolation_enforced",
+            message="deterministic test isolation",
+        )
+
+
+class _UnavailableTestIsolation:
+    def prepare(self, argv: tuple[str, ...]) -> NetworkIsolationPlan:
+        return NetworkIsolationPlan(
+            enforced=False,
+            backend="unavailable-test-backend",
+            argv=argv,
+            reason_code="network_isolation_unavailable",
+            message="test backend unavailable",
+        )
+
+
+def _runner(
+    policy: CommandPolicy,
+    audit_sink: object | None = None,
+) -> CommandRunner:
+    return CommandRunner(
+        policy,
+        audit_sink=audit_sink,  # type: ignore[arg-type]
+        network_isolation=_VerifiedTestIsolation(),
+    )
+
+
 def test_runs_pinned_executable_without_shell() -> None:
-    result = CommandRunner(_python_policy()).run(
+    result = _runner(_python_policy()).run(
         CommandRequest(
             executable=sys.executable,
             arguments=("-c", "print('forensic output')"),
@@ -42,19 +77,21 @@ def test_runs_pinned_executable_without_shell() -> None:
     assert result.returncode == 0
     assert result.stdout == b"forensic output\n"
     assert result.argv[0] == str(Path(sys.executable).resolve())
+    assert result.network_enforcement == "network_isolation_enforced"
+    assert result.network_backend == "test-netns"
 
 
 def test_executable_substitution_is_denied() -> None:
     policy = CommandPolicy(
         allowed_executables=frozenset({Path("/bin/echo").resolve()}),
     )
-    result = CommandRunner(policy).run(CommandRequest(executable=sys.executable))
+    result = _runner(policy).run(CommandRequest(executable=sys.executable))
     assert result.status is ExecutionStatus.DENIED
     assert result.decision.reason_code == "executable_denied"
 
 
 def test_dangerous_environment_override_is_denied() -> None:
-    result = CommandRunner(_python_policy()).run(
+    result = _runner(_python_policy()).run(
         CommandRequest(
             executable=sys.executable,
             environment={"LD_PRELOAD": "/tmp/attacker.so"},
@@ -66,7 +103,7 @@ def test_dangerous_environment_override_is_denied() -> None:
 
 def test_dangerous_inherited_environment_is_removed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LD_PRELOAD", "/tmp/attacker.so")
-    result = CommandRunner(_python_policy()).run(
+    result = _runner(_python_policy()).run(
         CommandRequest(
             executable=sys.executable,
             arguments=("-c", "import os; print('LD_PRELOAD' in os.environ)"),
@@ -85,7 +122,7 @@ def test_symlink_path_escape_is_denied(tmp_path: Path) -> None:
     (outside / "secret").write_text("x")
     (root / "escape").symlink_to(outside, target_is_directory=True)
     policy = _python_policy(allowed_roots=(root,))
-    result = CommandRunner(policy).run(
+    result = _runner(policy).run(
         CommandRequest(
             executable=sys.executable,
             arguments=(PathArgument(root / "escape" / "secret"),),
@@ -100,7 +137,7 @@ def test_authorized_path_argument_is_replaced_with_resolved_path(tmp_path: Path)
     root.mkdir()
     artifact = root / "artifact.txt"
     artifact.write_text("evidence")
-    result = CommandRunner(_python_policy(allowed_roots=(root,))).run(
+    result = _runner(_python_policy(allowed_roots=(root,))).run(
         CommandRequest(
             executable=sys.executable,
             arguments=(
@@ -117,7 +154,7 @@ def test_authorized_path_argument_is_replaced_with_resolved_path(tmp_path: Path)
 
 
 def test_network_capability_is_fail_closed() -> None:
-    result = CommandRunner(_python_policy()).run(
+    result = _runner(_python_policy()).run(
         CommandRequest(
             executable=sys.executable,
             network_class=NetworkClass.OUTBOUND,
@@ -128,7 +165,7 @@ def test_network_capability_is_fail_closed() -> None:
 
 
 def test_output_cap_terminates_child() -> None:
-    result = CommandRunner(_python_policy(max_output_bytes=1024)).run(
+    result = _runner(_python_policy(max_output_bytes=1024)).run(
         CommandRequest(
             executable=sys.executable,
             arguments=("-c", "print('x' * 100000)"),
@@ -141,7 +178,7 @@ def test_output_cap_terminates_child() -> None:
 
 
 def test_timeout_terminates_process_group() -> None:
-    result = CommandRunner(_python_policy()).run(
+    result = _runner(_python_policy()).run(
         CommandRequest(
             executable=sys.executable,
             arguments=("-c", "import time; time.sleep(2)"),
@@ -154,7 +191,7 @@ def test_timeout_terminates_process_group() -> None:
 
 def test_denial_emits_content_minimal_audit_event() -> None:
     events: list[ExecutionAuditEvent] = []
-    result = CommandRunner(_python_policy(), audit_sink=events.append).run(
+    result = _runner(_python_policy(), audit_sink=events.append).run(
         CommandRequest(
             executable=sys.executable,
             network_class=NetworkClass.OUTBOUND,
@@ -169,6 +206,54 @@ def test_denial_emits_content_minimal_audit_event() -> None:
     assert event.argument_count == 1
     assert "super-secret" not in str(event.as_mapping())
     assert event.request_digest.startswith("sha256:")
+
+
+def test_none_network_fails_closed_and_receipts_backend_denial(tmp_path: Path) -> None:
+    events: list[ExecutionAuditEvent] = []
+    marker = tmp_path / "must-not-exist"
+    result = CommandRunner(
+        _python_policy(),
+        audit_sink=events.append,
+        network_isolation=_UnavailableTestIsolation(),
+    ).run(
+        CommandRequest(
+            executable=sys.executable,
+            arguments=("-c", f"from pathlib import Path; Path({str(marker)!r}).touch()"),
+        )
+    )
+
+    assert result.status is ExecutionStatus.DENIED
+    assert not marker.exists()
+    assert result.decision.reason_code == "network_isolation_unavailable"
+    assert result.network_backend == "unavailable-test-backend"
+    assert events[0].network_enforcement == "network_isolation_unavailable"
+    assert events[0].policy_decision == "deny"
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="bubblewrap is Linux-only")
+def test_production_none_network_namespace_denies_outbound_socket_attempt() -> None:
+    script = (
+        "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); "
+        "\ntry: s.connect(('192.0.2.1', 9)); print('network-open')"
+        "\nexcept OSError: print('network-denied')"
+    )
+    result = CommandRunner(
+        _python_policy(),
+        network_isolation=BubblewrapNetworkIsolationBackend(),
+    ).run(
+        CommandRequest(
+            executable=sys.executable,
+            arguments=("-I", "-c", script),
+            timeout_seconds=2,
+        )
+    )
+
+    if result.status is ExecutionStatus.DENIED:
+        assert result.decision.reason_code == "network_isolation_unavailable"
+    else:
+        assert result.status is ExecutionStatus.COMPLETED
+        assert result.stdout == b"network-denied\n"
+        assert result.network_enforcement == "network_isolation_enforced"
 
 
 def test_argument_nul_is_rejected_before_policy() -> None:

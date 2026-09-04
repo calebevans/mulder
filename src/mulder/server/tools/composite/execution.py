@@ -11,6 +11,7 @@ from mulder.patterns import SUSPICIOUS_PATHS
 from mulder.server.app import get_ctx, mcp
 from mulder.server.helpers import (
     make_tool_call_id,
+    project_window_evidence,
     slim_window,
 )
 from mulder.server.tool_access import Role, tool_access
@@ -39,6 +40,12 @@ _RUN_COUNT_RE = re.compile(r"run\s*count[:\s]+(\d+)", re.IGNORECASE)
 _SHA1_RE = re.compile(r"\b([a-fA-F0-9]{40})\b")
 
 _UNUSUAL_EXE_PATHS = SUSPICIOUS_PATHS
+_EVIDENCE_SOURCE_NAMES = {
+    "prefetch": _SRC_EZ_PREFETCH,
+    "amcache": _SRC_EZ_AMCACHE,
+    "shimcache": _SRC_EZ_SHIMCACHE,
+    "memory_pstree": _SRC_PSTREE,
+}
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -81,8 +88,7 @@ def _merge_exe(
     exe_data: dict[str, dict[str, Any]],
     name: str,
     source: str,
-    event_time: str | None,
-    text: str,
+    window: WindowRow,
 ) -> None:
     """Upsert an executable entry, updating first/last seen times.
 
@@ -90,8 +96,7 @@ def _merge_exe(
         exe_data: Mutable map of lowercased exe name to timeline entry.
         name: Executable name (original case).
         source: Source label (e.g. "prefetch", "amcache").
-        event_time: ISO-8601 timestamp from the source window, or None.
-        text: Raw text snippet for evidence.
+        window: Exact source window used for this evidence entry.
     """
     key = name.lower()
     if key not in exe_data:
@@ -108,12 +113,19 @@ def _merge_exe(
     entry = exe_data[key]
     if source not in entry["sources"]:
         entry["sources"].append(source)
-    if event_time:
-        if entry["first_seen"] is None or event_time < entry["first_seen"]:
-            entry["first_seen"] = event_time
-        if entry["last_seen"] is None or event_time > entry["last_seen"]:
-            entry["last_seen"] = event_time
-    entry["evidence_snippets"].append(text[:150])
+    if window.event_time:
+        if entry["first_seen"] is None or window.event_time < entry["first_seen"]:
+            entry["first_seen"] = window.event_time
+        if entry["last_seen"] is None or window.event_time > entry["last_seen"]:
+            entry["last_seen"] = window.event_time
+    entry["evidence_snippets"].append(
+        project_window_evidence(
+            window,
+            _EVIDENCE_SOURCE_NAMES.get(source, source),
+            max_characters=150,
+            content_key="snippet",
+        )
+    )
 
 
 def _ingest_source_entries(
@@ -143,7 +155,7 @@ def _ingest_source_entries(
         if not m:
             continue
         exe_name = m.group(1)
-        _merge_exe(exe_data, exe_name, source_name, w.event_time, w.raw_text)
+        _merge_exe(exe_data, exe_name, source_name, w)
         matched.append((exe_name, w))
     return matched
 

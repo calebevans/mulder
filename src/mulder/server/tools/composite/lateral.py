@@ -9,8 +9,8 @@ from typing import Any
 from mulder.models import WindowRow
 from mulder.server.app import get_ctx, mcp
 from mulder.server.helpers import (
-    _PREVIEW_CHAR_LIMIT,
     make_tool_call_id,
+    project_window_evidence,
     slim_window,
 )
 from mulder.server.tool_access import Role, tool_access
@@ -65,7 +65,7 @@ def _classify_logon_windows(
                 "logon_type": logon_type,
                 "source": _SRC_EVTX_SECURITY,
                 "event_time": w.event_time,
-                "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
+                **project_window_evidence(w, _SRC_EVTX_SECURITY, content_key="evidence_text"),
                 "source_window": slim_window(w),
             }
         )
@@ -77,7 +77,9 @@ def _classify_logon_windows(
                     "type": "failed_logon",
                     "source": _SRC_EVTX_SECURITY,
                     "event_time": w.event_time,
-                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
+                    **project_window_evidence(
+                        w, _SRC_EVTX_SECURITY, content_key="evidence_text"
+                    ),
                     "source_window": slim_window(w),
                 }
             )
@@ -89,7 +91,9 @@ def _classify_logon_windows(
                     "type": "explicit_credentials",
                     "source": _SRC_EVTX_SECURITY,
                     "event_time": w.event_time,
-                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
+                    **project_window_evidence(
+                        w, _SRC_EVTX_SECURITY, content_key="evidence_text"
+                    ),
                     "source_window": slim_window(w),
                 }
             )
@@ -109,7 +113,7 @@ def _collect_netscan_lateral(
                 "ports": matching_ports,
                 "source": _SRC_NETSCAN,
                 "event_time": w.event_time,
-                "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
+                **project_window_evidence(w, _SRC_NETSCAN, content_key="evidence_text"),
                 "source_window": slim_window(w),
             }
             indicators.append(entry)
@@ -130,7 +134,7 @@ def _collect_rdp_artifacts(
                     "type": "rdp_artifact",
                     "source": _SRC_PLASO,
                     "event_time": w.event_time,
-                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
+                    **project_window_evidence(w, _SRC_PLASO, content_key="evidence_text"),
                     "source_window": slim_window(w),
                 }
             )
@@ -151,7 +155,9 @@ def _collect_rdp_artifacts(
                         "type": "rdp_logon",
                         "source": _SRC_EZ_EVTX_SECURITY,
                         "event_time": w.event_time,
-                        "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
+                        **project_window_evidence(
+                            w, _SRC_EZ_EVTX_SECURITY, content_key="evidence_text"
+                        ),
                         "source_window": slim_window(w),
                     }
                 )
@@ -171,7 +177,7 @@ def _collect_rdp_artifacts(
                     "type": "rdp_terminal_services",
                     "source": _SRC_EVTX_SYSTEM,
                     "event_time": w.event_time,
-                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
+                    **project_window_evidence(w, _SRC_EVTX_SYSTEM, content_key="evidence_text"),
                     "source_window": slim_window(w),
                 }
             )
@@ -198,7 +204,7 @@ def _collect_winrm_indicators(sub_call_ids: list[str]) -> list[dict[str, Any]]:
                     "type": "winrm_connection",
                     "source": _SRC_EVTX_SYSTEM,
                     "event_time": w.event_time,
-                    "evidence_text": text.strip()[:_PREVIEW_CHAR_LIMIT],
+                    **project_window_evidence(w, _SRC_EVTX_SYSTEM, content_key="evidence_text"),
                     "source_window": slim_window(w),
                 }
             )
@@ -224,7 +230,7 @@ def _collect_srum_network_anomalies(sub_call_ids: list[str]) -> list[dict[str, A
                     "type": "srum_network_anomaly",
                     "source": _SRC_EZ_SRUM,
                     "event_time": w.event_time,
-                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
+                    **project_window_evidence(w, _SRC_EZ_SRUM, content_key="evidence_text"),
                     "source_window": slim_window(w),
                 }
             )
@@ -247,7 +253,9 @@ def _collect_pcap_lateral(sub_call_ids: list[str]) -> list[dict[str, Any]]:
                     "ports": matching_ports,
                     "source": _SRC_PCAP_CONVERSATIONS,
                     "event_time": w.event_time,
-                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
+                    **project_window_evidence(
+                        w, _SRC_PCAP_CONVERSATIONS, content_key="evidence_text"
+                    ),
                     "source_window": slim_window(w),
                 }
             )

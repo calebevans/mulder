@@ -16,6 +16,8 @@ from mulder.server.helpers import (
     extract_pid,
     extract_pids_from_windows,
     make_tool_call_id,
+    project_window_collection,
+    project_window_evidence,
     slim_window,
 )
 from mulder.server.tool_access import Role, tool_access
@@ -148,9 +150,9 @@ def _check_timestomping(
             indicators.append(
                 {
                     "type": "potential_timestomping",
-                    "source": w.raw_text[:20],
+                    "source": f"source:{w.source_id}",
                     "event_time": w.event_time,
-                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
+                    **project_window_evidence(w, None, content_key="evidence_text"),
                     "source_window": slim_window(w),
                 }
             )
@@ -184,7 +186,7 @@ def _check_log_clearing(
                 {
                     "type": "log_clearing",
                     "event_time": w.event_time,
-                    "evidence_text": text.strip()[:_PREVIEW_CHAR_LIMIT],
+                    **project_window_evidence(w, None, content_key="evidence_text"),
                     "source_window": slim_window(w),
                 }
             )
@@ -274,7 +276,7 @@ def _check_disabled_security(
                     "matched_process": matched,
                     "source": _SRC_PLASO,
                     "event_time": w.event_time,
-                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
+                    **project_window_evidence(w, _SRC_PLASO, content_key="evidence_text"),
                     "source_window": slim_window(w),
                 }
             )
@@ -297,7 +299,9 @@ def _check_disabled_security(
                         "matched_process": matched,
                         "source": "volatility.cmdline",
                         "event_time": w.event_time,
-                        "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
+                        **project_window_evidence(
+                            w, "volatility.cmdline", content_key="evidence_text"
+                        ),
                         "source_window": slim_window(w),
                     }
                 )
@@ -323,21 +327,39 @@ def _build_process_graph(
     all_pids = set(pid_names.keys())
     for pid in all_pids:
         name = pid_names.get(pid, "unknown")
-        cmdline = " ".join(w.raw_text.strip() for w in cmdline_pids.get(pid, []))
-        connections = [w.raw_text.strip() for w in netscan_pids.get(pid, [])]
-        dll_anomalies: list[str] = []
+        cmdline_windows = cmdline_pids.get(pid, [])
+        connections = [
+            project_window_evidence(
+                window, _SRC_NETSCAN, content_key="connection"
+            )
+            for window in netscan_pids.get(pid, [])
+        ]
+        dll_anomalies: list[dict[str, object]] = []
         if dlllist_pids and pid in dlllist_pids:
             for w in dlllist_pids[pid]:
                 path_lower = w.raw_text.lower()
                 if any(pat in path_lower for pat in SUSPICIOUS_PATHS):
-                    dll_anomalies.append(w.raw_text.strip()[:_HINT_CHAR_LIMIT])
+                    dll_anomalies.append(
+                        project_window_evidence(
+                            w,
+                            _SRC_DLLLIST,
+                            max_characters=_HINT_CHAR_LIMIT,
+                            content_key="dll",
+                        )
+                    )
 
         nodes[pid] = {
             "pid": pid,
             "name": name,
             "parent_pid": parent_map.get(pid),
             "parent_name": pid_names.get(parent_map.get(pid, -1), "unknown"),
-            "cmdline": cmdline[:_PREVIEW_CHAR_LIMIT],
+            **project_window_collection(
+                cmdline_windows,
+                _SRC_CMDLINE,
+                max_characters=_PREVIEW_CHAR_LIMIT,
+                content_key="cmdline",
+                separator=" ",
+            ),
             "network_connections": connections[:10],
             "dll_anomalies": dll_anomalies[:5],
             "malfind_hit": pid in malfind_pids,
@@ -467,7 +489,7 @@ def _correlate_with_netscan(
                     "matched_ips": sorted(overlap),
                     "pid": pid,
                     "process": proc_name,
-                    "netscan_text": w.raw_text.strip()[:300],
+                    **project_window_evidence(w, _SRC_NETSCAN, content_key="netscan_text"),
                 }
             )
 
@@ -518,7 +540,7 @@ def _collect_secure_delete_hits(
                         "type": "secure_delete_tool",
                         "tool": matched,
                         "source": src,
-                        "evidence_text": w.raw_text.strip()[:300],
+                        **project_window_evidence(w, src, content_key="evidence_text"),
                     }
                 )
 
@@ -540,7 +562,7 @@ def _collect_secure_delete_hits(
                         "type": "log_clearing",
                         "source": evtx_src,
                         "event_time": w.event_time,
-                        "evidence_text": text.strip()[:300],
+                        **project_window_evidence(w, evtx_src, content_key="evidence_text"),
                     }
                 )
 
@@ -573,7 +595,12 @@ def _collect_usn_deletion_hits(
             deletions.append(
                 {
                     "event_time": w.event_time,
-                    "evidence_text": w.raw_text.strip()[:_HINT_CHAR_LIMIT],
+                    **project_window_evidence(
+                        w,
+                        _SRC_TSK_FILELIST,
+                        max_characters=_HINT_CHAR_LIMIT,
+                        content_key="evidence_text",
+                    ),
                 }
             )
 
@@ -717,7 +744,12 @@ def reconstruct_execution_chains() -> dict[str, object]:
             if exe and exe not in prefetch_data:
                 prefetch_data[exe] = {
                     "event_time": w.event_time,
-                    "text": w.raw_text[:_HINT_CHAR_LIMIT],
+                    **project_window_evidence(
+                        w,
+                        _SRC_EZ_PREFETCH,
+                        max_characters=_HINT_CHAR_LIMIT,
+                        content_key="text",
+                    ),
                 }
 
     for chain in chains:
@@ -854,7 +886,9 @@ def correlate_pcap_with_host(
                             "type": "pcap_evtx_ip_match",
                             "matched_ips": sorted(overlap),
                             "event_time": w.event_time,
-                            "evidence_text": w.raw_text.strip()[:300],
+                            **project_window_evidence(
+                                w, _SRC_EZ_EVTX_SECURITY, content_key="evidence_text"
+                            ),
                         }
                     )
 

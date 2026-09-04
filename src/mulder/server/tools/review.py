@@ -24,7 +24,7 @@ from mulder.patterns import (
     source_is_cited,
 )
 from mulder.server.app import get_ctx, mcp
-from mulder.server.helpers import hash_output, make_tool_call_id
+from mulder.server.helpers import hash_output, make_tool_call_id, project_window_evidence
 from mulder.server.tool_access import ANALYSTS, Role, tool_access
 from mulder.server.tools.findings import _evaluate_finalize_gates
 
@@ -75,16 +75,18 @@ _MAX_SAMPLE_WINDOWS = 3
 _MAX_SAMPLE_TEXT_LEN = 300
 
 
-def _get_source_samples(db: CaseDB, source_name: str) -> list[str]:
-    """Return truncated text samples from the first few windows of a source."""
+def _get_source_samples(db: CaseDB, source_name: str) -> list[dict[str, object]]:
+    """Return envelope-projected samples from the first few source windows."""
     windows = db.get_windows_by_source(source_name)
-    samples: list[str] = []
-    for w in windows[:_MAX_SAMPLE_WINDOWS]:
-        text = w.raw_text
-        if len(text) > _MAX_SAMPLE_TEXT_LEN:
-            text = text[:_MAX_SAMPLE_TEXT_LEN] + "..."
-        samples.append(text)
-    return samples
+    return [
+        project_window_evidence(
+            window,
+            source_name,
+            max_characters=_MAX_SAMPLE_TEXT_LEN,
+            content_key="sample",
+        )
+        for window in windows[:_MAX_SAMPLE_WINDOWS]
+    ]
 
 
 @mcp.tool()

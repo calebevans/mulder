@@ -225,6 +225,15 @@ escalations fail before provider options are constructed. Continuation
 sessions retain the same identity; JSON repair and the deterministic verifier
 receive no MCP tool authority.
 
+`run_parallel` is not an authorization shortcut. Each model session receives a
+fresh secret, and a `PreToolUse` hook binds a signed, session-scoped identity
+grant to the parallel request. The MCP server verifies that grant and runs the
+same single-tool role/capability authorization for every nested task before it
+looks up a dispatcher. Invalid or absent grants fail closed. Consequently a
+Narrative Executor can parallelize its valid query/mutation tools but cannot
+dispatch extraction-only tools. The delegation secret is removed from every
+forensic child-process environment.
+
 ### The `@tool_access` Decorator
 
 ```python
@@ -512,6 +521,21 @@ policy with typed, resolved paths and no network capability. Deployments must
 still confine the helper with `--cap-add SYS_ADMIN --device /dev/fuse` (or an
 equivalent OS policy); process separation alone does not grant or sandbox OS
 privileges.
+
+## Untrusted evidence presentation
+
+Database values and source-file bytes remain unchanged. Before any evidence
+text crosses into a model-facing response, the shared presentation Interface
+in `security.evidence_envelope` creates an immutable packet with a complete
+SHA-256 digest, exact source/window selector, visible control characters,
+handling instructions, and presentation flags. Truncation affects only the
+packet's content field; the digest still commits to the selected full value.
+
+The same Interface is used by paginated raw reads, search, timeline,
+correlation, standard window helpers, direct evidence-file reads, review/EZ
+samples, and composite evidence excerpts. UI consumers use the corresponding
+HTML-escaped representation. Evidence flags are handling signals, never a
+maliciousness verdict.
 
 ## Evidence Reference Validation
 

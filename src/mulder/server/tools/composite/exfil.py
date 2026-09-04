@@ -8,8 +8,8 @@ from typing import Any
 
 from mulder.server.app import get_ctx, mcp
 from mulder.server.helpers import (
-    _PREVIEW_CHAR_LIMIT,
     make_tool_call_id,
+    project_window_evidence,
     slim_window,
 )
 from mulder.server.tool_access import Role, tool_access
@@ -84,7 +84,9 @@ def _collect_exfil_urls(sub_call_ids: list[str]) -> list[dict[str, Any]]:
                     "service": matched_svc,
                     "source": _SRC_BULK_URL,
                     "event_time": w.event_time,
-                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
+                    **project_window_evidence(
+                        w, _SRC_BULK_URL, content_key="evidence_text"
+                    ),
                     "source_window": slim_window(w),
                 }
             )
@@ -105,7 +107,9 @@ def _collect_exfil_emails(sub_call_ids: list[str]) -> list[dict[str, Any]]:
                     "type": "exfil_email",
                     "source": _SRC_BULK_EMAIL,
                     "event_time": w.event_time,
-                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
+                    **project_window_evidence(
+                        w, _SRC_BULK_EMAIL, content_key="evidence_text"
+                    ),
                     "source_window": slim_window(w),
                 }
             )
@@ -132,7 +136,9 @@ def _collect_exfil_domains(sub_call_ids: list[str]) -> list[dict[str, Any]]:
                     "domain": matched_svc,
                     "source": _SRC_BULK_DOMAIN,
                     "event_time": w.event_time,
-                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
+                    **project_window_evidence(
+                        w, _SRC_BULK_DOMAIN, content_key="evidence_text"
+                    ),
                     "source_window": slim_window(w),
                 }
             )
@@ -171,7 +177,7 @@ def _collect_high_port_connections(sub_call_ids: list[str]) -> list[dict[str, An
                     "ports": unusual,
                     "source": _SRC_NETSCAN,
                     "event_time": w.event_time,
-                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
+                    **project_window_evidence(w, _SRC_NETSCAN, content_key="evidence_text"),
                     "source_window": slim_window(w),
                 }
             )
@@ -196,7 +202,7 @@ def _collect_large_file_access(sub_call_ids: list[str]) -> list[dict[str, Any]]:
                     "type": "large_file_access",
                     "source": _SRC_PLASO,
                     "event_time": w.event_time,
-                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
+                    **project_window_evidence(w, _SRC_PLASO, content_key="evidence_text"),
                     "source_window": slim_window(w),
                 }
             )
@@ -223,7 +229,7 @@ def _collect_pcap_exfil_dns(sub_call_ids: list[str]) -> list[dict[str, Any]]:
                     "domain": matched_svc,
                     "source": _SRC_PCAP_DNS,
                     "event_time": w.event_time,
-                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
+                    **project_window_evidence(w, _SRC_PCAP_DNS, content_key="evidence_text"),
                     "source_window": slim_window(w),
                 }
             )
@@ -250,7 +256,7 @@ def _collect_pcap_exfil_http(sub_call_ids: list[str]) -> list[dict[str, Any]]:
                     "service": matched_svc,
                     "source": _SRC_PCAP_HTTP,
                     "event_time": w.event_time,
-                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
+                    **project_window_evidence(w, _SRC_PCAP_HTTP, content_key="evidence_text"),
                     "source_window": slim_window(w),
                 }
             )
@@ -372,7 +378,7 @@ def _collect_staging_archives(sub_call_ids: list[str]) -> list[dict[str, Any]]:
                         "type": "archive_file",
                         "source": source,
                         "event_time": w.event_time,
-                        "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
+                        **project_window_evidence(w, source, content_key="evidence_text"),
                         "source_window": slim_window(w),
                     }
                 )
@@ -400,7 +406,7 @@ def _collect_suspicious_location_archives(
                         "type": "archive_in_suspicious_location",
                         "source": source,
                         "event_time": w.event_time,
-                        "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
+                        **project_window_evidence(w, source, content_key="evidence_text"),
                         "source_window": slim_window(w),
                     }
                 )
@@ -436,7 +442,7 @@ def _collect_large_file_staging(sub_call_ids: list[str]) -> list[dict[str, Any]]
                         "file_size_bytes": size,
                         "source": _SRC_EZ_MFT,
                         "event_time": w.event_time,
-                        "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
+                        **project_window_evidence(w, _SRC_EZ_MFT, content_key="evidence_text"),
                         "source_window": slim_window(w),
                     }
                 )
@@ -466,7 +472,7 @@ def _collect_created_then_deleted(sub_call_ids: list[str]) -> list[dict[str, Any
                     "type": "archive_created_then_deleted",
                     "source": _SRC_EZ_MFT,
                     "event_time": w.event_time,
-                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
+                    **project_window_evidence(w, _SRC_EZ_MFT, content_key="evidence_text"),
                     "source_window": slim_window(w),
                 }
             )

@@ -12,6 +12,8 @@ from mulder.server.helpers import (
     _HINT_CHAR_LIMIT,
     extract_pids_from_windows,
     make_tool_call_id,
+    project_window_collection,
+    project_window_evidence,
     slim_window,
 )
 from mulder.server.tool_access import Role, tool_access
@@ -193,7 +195,6 @@ def _analyze_pid(
     """Evaluate a single PID for suspicion indicators. Returns None if benign."""
     reasons: list[str] = []
     source_windows: list[dict[str, Any]] = []
-    connections: list[str] = []
     name = pid_names.get(pid, "unknown")
     parent_pid = parent_map.get(pid)
     parent_name = pid_names.get(parent_pid, "unknown") if parent_pid else "unknown"
@@ -214,8 +215,6 @@ def _analyze_pid(
         reasons.append("lolbin_execution")
 
     if pid in netscan_pids:
-        for w in netscan_pids[pid]:
-            connections.append(w.raw_text.strip())
         if _netscan_has_external(netscan_pids[pid]):
             reasons.append("external_network_connection")
         source_windows.extend(slim_window(w) for w in netscan_pids[pid])
@@ -233,16 +232,29 @@ def _analyze_pid(
     if not reasons:
         return None
 
-    cmdline_full = " ".join(w.raw_text.strip() for w in cmdline_pids.get(pid, []))
-    cmdline_out = (cmdline_full[:300] + "...") if len(cmdline_full) > 300 else cmdline_full
-    capped_conns = [c[:_HINT_CHAR_LIMIT] for c in connections[:5]]
+    cmdline_windows = cmdline_pids.get(pid, [])
+    capped_conns = [
+        project_window_evidence(
+            window,
+            _SRC_NETSCAN,
+            max_characters=_HINT_CHAR_LIMIT,
+            content_key="connection",
+        )
+        for window in netscan_pids.get(pid, [])[:5]
+    ]
 
     return {
         "pid": pid,
         "name": name,
         "parent_pid": parent_pid,
         "parent_name": parent_name,
-        "cmdline": cmdline_out,
+        **project_window_collection(
+            cmdline_windows,
+            _SRC_CMDLINE,
+            max_characters=300,
+            content_key="cmdline",
+            separator=" ",
+        ),
         "malfind_hit": pid in malfind_pids,
         "network_connections": capped_conns,
         "suspicion_reasons": reasons,

@@ -15,13 +15,17 @@ from mulder.execution.policy import (
     PolicyDecision,
 )
 from mulder.execution.runner import (
+    BubblewrapNetworkIsolationBackend,
     CommandResult,
     CommandRunner,
     ExecutionAuditEvent,
     ExecutionStatus,
+    NetworkIsolationBackend,
+    NetworkIsolationPlan,
 )
 
 __all__ = [
+    "BubblewrapNetworkIsolationBackend",
     "CommandPolicy",
     "CommandRequest",
     "CommandResult",
@@ -29,6 +33,8 @@ __all__ = [
     "ExecutionAuditEvent",
     "ExecutionStatus",
     "NetworkClass",
+    "NetworkIsolationBackend",
+    "NetworkIsolationPlan",
     "PathAccess",
     "PathArgument",
     "PolicyDecision",

@@ -11,7 +11,12 @@ import time
 from typing import Any
 
 from mulder.server.app import get_ctx, mcp
-from mulder.server.helpers import hash_output, make_tool_call_id, windowed_response
+from mulder.server.helpers import (
+    hash_output,
+    make_tool_call_id,
+    project_window_evidence,
+    windowed_response,
+)
 from mulder.server.tool_access import Role, tool_access
 
 _EZ_SUMMARY_SAMPLE_CAP = 10
@@ -88,12 +93,16 @@ def _make_ez_tool(source_name: str, tool_name: str) -> Any:
         windows = ctx.db.get_windows_by_source(source_name)
         total = len(windows)
 
-        samples: list[str] = []
+        samples: list[dict[str, object]] = []
         for w in windows[:_EZ_SUMMARY_SAMPLE_CAP]:
-            text = w.raw_text.strip()
-            if len(text) > _EZ_SUMMARY_TEXT_CAP:
-                text = text[:_EZ_SUMMARY_TEXT_CAP] + "..."
-            samples.append(text)
+            samples.append(
+                project_window_evidence(
+                    w,
+                    source_name,
+                    max_characters=_EZ_SUMMARY_TEXT_CAP,
+                    content_key="sample",
+                )
+            )
 
         elapsed = (time.monotonic() - t0) * 1000
         ctx.audit.log_tool_call(

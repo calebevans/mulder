@@ -130,15 +130,20 @@ class TestAnalyzeOfficeDocumentDdeIntegration:
                 "case-1", "/evidence/case-1/t.docx", analyze_dde=True
             )
 
+    @staticmethod
+    def _preview_content(result: dict[str, object]) -> str:
+        _start, payload, _end = str(result["preview"]).splitlines()
+        return str(json.loads(payload)["content"])
+
     def test_clean_document_reports_no_dde_links(self) -> None:
         proc = MagicMock(returncode=0, stdout=REAL_CLEAN_JSON, stderr="")
         result = self._run(proc)
-        assert '"dde_links": []' in str(result["preview"])
+        assert '"dde_links": []' in self._preview_content(result)
 
     def test_real_dde_link_reaches_the_response(self) -> None:
         proc = MagicMock(returncode=0, stdout=REAL_DDE_JSON, stderr="")
         result = self._run(proc)
-        assert "DDEAUTO" in str(result["preview"])
+        assert "DDEAUTO" in self._preview_content(result)
 
 
 class TestPackagedMcpConfig:

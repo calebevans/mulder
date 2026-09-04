@@ -19,7 +19,7 @@ from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, ParamSpec
+from typing import Any, ParamSpec, cast
 from uuid import uuid4
 
 from mulder.execution import (
@@ -33,6 +33,7 @@ from mulder.execution import (
     PathArgument,
 )
 from mulder.models import CoverageMetadata, ToolOutcome, ToolOutcomeStatus
+from mulder.security.evidence_envelope import present_model_evidence
 from mulder.server.app import get_ctx, has_ctx
 
 current_batch_id: ContextVar[str | None] = ContextVar("current_batch_id", default=None)
@@ -287,8 +288,9 @@ def serialize_windows(
     windows: Sequence[Any],
     cap: int = _DEFAULT_WINDOW_CAP,
     text_cap: int = _DEFAULT_TEXT_CAP,
+    source_name: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Convert Pydantic window models to dicts, capped for token efficiency.
+    """Project evidence windows through the immutable model-presentation seam.
 
     Returns at most *cap* windows with ``raw_text`` truncated to
     *text_cap* characters.  Callers should check
@@ -299,10 +301,104 @@ def serialize_windows(
     capped = windows[:cap] if len(windows) > cap else windows
     result: list[dict[str, Any]] = []
     for w in capped:
-        d: dict[str, Any] = w.model_dump() if hasattr(w, "model_dump") else dict(w)
-        truncate_raw_text(d, text_cap)
+        d = _window_mapping(w)
+        d.update(project_window_evidence(w, source_name, max_characters=text_cap))
+        if d["evidence_envelope"]["truncation"]["truncated"]:
+            d["full_text_available"] = True
         result.append(d)
     return result
+
+
+def project_window_evidence(
+    window: Any,
+    source_name: str | None,
+    *,
+    max_characters: int = _DEFAULT_TEXT_CAP,
+    content_key: str = "raw_text",
+) -> dict[str, object]:
+    """Return one exact, selector-bound window value for a model response."""
+    window_mapping = _window_mapping(window)
+    raw = str(window_mapping.get("raw_text", ""))
+    window_id = window_mapping.get("window_id")
+    source_id = window_mapping.get("source_id")
+    selector = json.dumps(
+        {
+            "line_end": window_mapping.get("line_end"),
+            "line_start": window_mapping.get("line_start"),
+            "window_id": window_id,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    presentation = present_model_evidence(
+        raw,
+        source_id=str(source_id if source_id is not None else source_name or "unknown"),
+        source_name=source_name,
+        source_record_ids=([window_id] if isinstance(window_id, int) else ()),
+        selector=selector,
+        max_characters=max_characters,
+    )
+    return presentation.response_fields(
+        content_key=content_key,
+        metadata_key=(
+            "evidence_envelope" if content_key == "raw_text" else f"{content_key}_envelope"
+        ),
+    )
+
+
+def project_window_collection(
+    windows: Sequence[Any],
+    source_name: str,
+    *,
+    max_characters: int,
+    content_key: str,
+    separator: str = "\n",
+) -> dict[str, object]:
+    """Project a deterministic join of windows with every boundary in its selector."""
+    mappings = [_window_mapping(window) for window in windows]
+    if not mappings:
+        return {content_key: "", f"{content_key}_envelope": None}
+    raw = separator.join(str(mapping.get("raw_text", "")) for mapping in mappings)
+    selector = json.dumps(
+        {
+            "separator": separator,
+            "windows": [
+                {
+                    "line_end": mapping.get("line_end"),
+                    "line_start": mapping.get("line_start"),
+                    "window_id": mapping.get("window_id"),
+                }
+                for mapping in mappings
+            ],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    window_ids = [
+        window_id
+        for mapping in mappings
+        if isinstance((window_id := mapping.get("window_id")), int)
+    ]
+    presentation = present_model_evidence(
+        raw,
+        source_id=source_name,
+        source_name=source_name,
+        source_record_ids=window_ids,
+        selector=selector,
+        max_characters=max_characters,
+    )
+    return presentation.response_fields(
+        content_key=content_key,
+        metadata_key=f"{content_key}_envelope",
+    )
+
+
+def _window_mapping(window: Any) -> dict[str, Any]:
+    if hasattr(window, "model_dump"):
+        return cast("dict[str, Any]", window.model_dump())
+    if hasattr(window, "_mapping"):
+        return dict(window._mapping)
+    return dict(window)
 
 
 def windowed_response(
@@ -321,7 +417,7 @@ def windowed_response(
     and logs the audit entry.
     """
     total = len(windows)
-    results = serialize_windows(windows, cap=cap, text_cap=text_cap)
+    results = serialize_windows(windows, cap=cap, text_cap=text_cap, source_name=source)
 
     if has_ctx():
         ctx = get_ctx()
@@ -433,16 +529,29 @@ def tool_response(
 
     preview = ""
     if isinstance(results, dict | list):
-        preview = json.dumps(results, default=str)[:_PREVIEW_CHAR_LIMIT]
+        preview = json.dumps(results, default=str)
     elif isinstance(results, str):
-        preview = results[:_PREVIEW_CHAR_LIMIT]
+        preview = results
+    preview_presentation = present_model_evidence(
+        preview,
+        source_id=source,
+        source_name=source,
+        selector=json.dumps(
+            {"kind": "indexed_tool_result", "tool_call_id": tc_id},
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        max_characters=_PREVIEW_CHAR_LIMIT,
+    )
 
     resp: dict[str, object] = {
         "tool_call_id": tc_id,
         "status": "success",
         "outcome": precise_outcome.model_dump(mode="json"),
         "source": source,
-        "preview": preview + ("..." if len(preview) >= _PREVIEW_CHAR_LIMIT else ""),
+        **preview_presentation.response_fields(
+            content_key="preview", metadata_key="preview_evidence_envelope"
+        ),
         "hint": (
             f"Full output indexed as '{source}'. "
             f"Use search(query, source='{source}') or "

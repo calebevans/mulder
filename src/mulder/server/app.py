@@ -634,7 +634,7 @@ def _slim_result(result: Any) -> Any:
         return result
     slimmed = dict(result)
 
-    if isinstance(slimmed.get("raw_text"), str):
+    if isinstance(slimmed.get("raw_text"), str) and "evidence_envelope" not in slimmed:
         text = slimmed["raw_text"]
         if len(text) > _PARALLEL_TEXT_CAP:
             slimmed["raw_text"] = text[:_PARALLEL_TEXT_CAP]
@@ -651,7 +651,17 @@ def _slim_result(result: Any) -> Any:
         inner = dict(slimmed["results"])
         slimmed["results"] = inner
         for k, v in inner.items():
-            if isinstance(v, str) and len(v) > _PARALLEL_TEXT_CAP:
+            has_bound_envelope = any(
+                envelope_key == "evidence_envelope"
+                if k == "raw_text"
+                else envelope_key.startswith(k) and envelope_key.endswith("envelope")
+                for envelope_key in inner
+            )
+            if (
+                isinstance(v, str)
+                and len(v) > _PARALLEL_TEXT_CAP
+                and not has_bound_envelope
+            ):
                 inner[k] = v[:_PARALLEL_TEXT_CAP]
                 slimmed.setdefault("truncated_fields", []).append(k)
 
@@ -665,7 +675,10 @@ _SEQUENTIAL_ONLY: set[str] = {
 
 @mcp.tool()
 @tool_access(EXECUTORS)
-async def run_parallel(tasks: list[dict[str, Any]]) -> dict[str, Any]:
+async def run_parallel(
+    tasks: list[dict[str, Any]],
+    delegation_grant: str = "",
+) -> dict[str, Any]:
     """Run multiple tool calls in parallel and return all results.
 
     Use this when you need to run the same tool on multiple evidence items
@@ -680,10 +693,28 @@ async def run_parallel(tasks: list[dict[str, Any]]) -> dict[str, Any]:
     Args:
         tasks: List of objects, each with ``tool`` (tool name string) and
             ``args`` (dict of keyword arguments for that tool).
+        delegation_grant: Internal signed session identity inserted by the
+            SDK hook. Callers and models must not supply this value.
     """
     from uuid import uuid4
 
+    from mulder.orchestrator.capabilities import (
+        DELEGATION_SECRET_ENV,
+        CapabilityViolation,
+        authorize_tool,
+        identity_from_delegation_grant,
+    )
     from mulder.server.helpers import current_batch_id, hash_output
+
+    identity = None
+    if tasks:
+        delegation_secret = os.environ.get(DELEGATION_SECRET_ENV, "")
+        if not delegation_secret or not delegation_grant:
+            raise CapabilityViolation("nested-tool delegation grant is required")
+        identity = identity_from_delegation_grant(
+            delegation_grant,
+            delegation_secret,
+        )
 
     batch_id = f"bp_{uuid4().hex[:8]}"
     results: list[Any] = [None] * len(tasks)
@@ -697,6 +728,9 @@ async def run_parallel(tasks: list[dict[str, Any]]) -> dict[str, Any]:
                 results[idx] = {"error": f"Unknown tool: {tool_name}"}
                 return
             try:
+                if tool_name == "run_parallel":
+                    arguments = dict(arguments)
+                    arguments["delegation_grant"] = delegation_grant
                 results[idx] = await fn(**arguments)
             except Exception as exc:
                 logger.exception("run_parallel: %s failed", tool_name)
@@ -707,6 +741,17 @@ async def run_parallel(tasks: list[dict[str, Any]]) -> dict[str, Any]:
     for i, task in enumerate(tasks):
         if not isinstance(task, dict) or "tool" not in task:
             results[i] = {"error": f"Task {i} missing required 'tool' key"}
+            continue
+        tool_name = task["tool"]
+        arguments = task.get("args", {})
+        if not isinstance(tool_name, str) or not isinstance(arguments, dict):
+            results[i] = {"error": f"Task {i} has invalid 'tool' or 'args' value"}
+            continue
+        assert identity is not None
+        try:
+            authorize_tool(identity, tool_name)
+        except CapabilityViolation as exc:
+            results[i] = {"error": f"Unauthorized nested tool: {exc}"}
 
     valid_tasks = [
         (i, t)
@@ -736,7 +781,12 @@ async def run_parallel(tasks: list[dict[str, Any]]) -> dict[str, Any]:
         ctx.audit.log_tool_call(
             tool_call_id=batch_id,
             tool_name="run_parallel",
-            params={"tasks": [t["tool"] for t in tasks]},
+            params={
+                "tasks": [
+                    t.get("tool", "<invalid>") if isinstance(t, dict) else "<invalid>"
+                    for t in tasks
+                ]
+            },
             output_hash=hash_output(results),
             duration_ms=elapsed_ms,
             sub_calls=sub_call_ids,
@@ -746,7 +796,14 @@ async def run_parallel(tasks: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "batch_id": batch_id,
         "parallel_results": [
-            {"tool": tasks[i]["tool"], "result": _slim_result(results[i])}
+            {
+                "tool": (
+                    tasks[i].get("tool", "<invalid>")
+                    if isinstance(tasks[i], dict)
+                    else "<invalid>"
+                ),
+                "result": _slim_result(results[i]),
+            }
             for i in range(len(tasks))
         ],
         "total_tasks": len(tasks),

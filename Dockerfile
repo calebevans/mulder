@@ -352,6 +352,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ssdeep \
         scalpel \
         binwalk \
+        bubblewrap \
         testdisk \
         chkrootkit \
         outguess \

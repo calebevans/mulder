@@ -7,8 +7,8 @@ from typing import Any
 
 from mulder.server.app import get_ctx, mcp
 from mulder.server.helpers import (
-    _PREVIEW_CHAR_LIMIT,
     make_tool_call_id,
+    project_window_evidence,
     slim_window,
 )
 from mulder.server.tool_access import Role, tool_access
@@ -91,7 +91,7 @@ def _collect_registry_persistence(
                         "type": "registry_autorun",
                         "key_pattern": matched_key,
                         "source": reg_source,
-                        "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
+                        **project_window_evidence(w, reg_source, content_key="evidence_text"),
                         "source_window": slim_window(w),
                     }
                 )
@@ -109,7 +109,9 @@ def _collect_service_persistence(
             {
                 "type": "installed_service",
                 "source": "volatility.svcscan",
-                "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
+                **project_window_evidence(
+                    w, "volatility.svcscan", content_key="evidence_text"
+                ),
                 "source_window": slim_window(w),
             }
         )
@@ -133,7 +135,7 @@ def _collect_evtx_service_installs(
                 {
                     "type": "service_install_event",
                     "source": _SRC_EVTX_SYSTEM,
-                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
+                    **project_window_evidence(w, _SRC_EVTX_SYSTEM, content_key="evidence_text"),
                     "source_window": slim_window(w),
                 }
             )
@@ -158,7 +160,7 @@ def _collect_startup_dir_modifications(
                 {
                     "type": "startup_directory_modification",
                     "source": _SRC_PLASO,
-                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
+                    **project_window_evidence(w, _SRC_PLASO, content_key="evidence_text"),
                     "source_window": slim_window(w),
                 }
             )
@@ -191,7 +193,7 @@ def _collect_ez_execution_persistence(
                         "type": mech_type,
                         "executable": matched_exe,
                         "source": src,
-                        "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
+                        **project_window_evidence(w, src, content_key="evidence_text"),
                         "source_window": slim_window(w),
                     }
                 )
@@ -216,7 +218,7 @@ def _collect_scheduled_task_persistence(
                 {
                     "type": "scheduled_task",
                     "source": _SRC_EVTX_SYSTEM,
-                    "evidence_text": text.strip()[:_PREVIEW_CHAR_LIMIT],
+                    **project_window_evidence(w, _SRC_EVTX_SYSTEM, content_key="evidence_text"),
                     "source_window": slim_window(w),
                 }
             )
@@ -238,7 +240,9 @@ def _collect_startup_files(
                 {
                     "type": "startup_directory_file",
                     "source": _SRC_TSK_FILELIST,
-                    "evidence_text": w.raw_text.strip()[:_PREVIEW_CHAR_LIMIT],
+                    **project_window_evidence(
+                        w, _SRC_TSK_FILELIST, content_key="evidence_text"
+                    ),
                     "source_window": slim_window(w),
                 }
             )

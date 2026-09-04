@@ -87,6 +87,7 @@ _DANGEROUS_ENVIRONMENT = frozenset(
         "LD_AUDIT",
         "LD_LIBRARY_PATH",
         "LD_PRELOAD",
+        "MULDER_TOOL_DELEGATION_SECRET",
         "NODE_OPTIONS",
         "PERL5OPT",
         "PERLLIB",

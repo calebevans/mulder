@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import secrets
 from typing import TYPE_CHECKING, Any, cast
 
 from claude_agent_sdk import ClaudeAgentOptions, query
@@ -23,9 +24,11 @@ from claude_agent_sdk.types import (
 )
 
 from mulder.orchestrator.capabilities import (
+    DELEGATION_SECRET_ENV,
     UTILITY_IDENTITY,
     AgentIdentity,
     authorize_tool_list,
+    create_delegation_grant,
 )
 from mulder.orchestrator.display import InvestigationDashboard
 from mulder.orchestrator.errors import AuthenticationError, ModelNotAvailableError
@@ -47,6 +50,7 @@ if TYPE_CHECKING:
         HookInput,
         HookJSONOutput,
         PostToolUseHookInput,
+        PreToolUseHookInput,
     )
 
 logger = logging.getLogger(__name__)
@@ -244,6 +248,10 @@ class SessionExecutor:
         effective_tools = (
             authorize_tool_list(identity, allowed_tools) if identity is not None else allowed_tools
         )
+        session_env = dict(self._env)
+        delegation_secret = secrets.token_urlsafe(48) if identity is not None else None
+        if delegation_secret is not None:
+            session_env[DELEGATION_SECRET_ENV] = delegation_secret
         provider_route = self._authorize_model_request(
             model=model,
             prompt=prompt,
@@ -259,10 +267,14 @@ class SessionExecutor:
             permission_mode="bypassPermissions",
             cwd=self._cwd,
             effort=self._effort,
-            env=self._env,
+            env=session_env,
             stderr=self._dashboard.suppress_stderr,
             max_buffer_size=_MAX_BUFFER_SIZE_BYTES,
-            hooks=self._provider_policy_hooks(provider_route),
+            hooks=self._provider_policy_hooks(
+                provider_route,
+                identity=identity,
+                delegation_secret=delegation_secret,
+            ),
         )
 
         messages: list[str] = []
@@ -637,6 +649,9 @@ class SessionExecutor:
         """
         utility_model = self._model_config.resolve("utility", "planner")
         effective_tools = authorize_tool_list(UTILITY_IDENTITY, allowed_tools)
+        session_env = dict(self._env)
+        delegation_secret = secrets.token_urlsafe(48)
+        session_env[DELEGATION_SECRET_ENV] = delegation_secret
 
         provider_route = self._authorize_model_request(
             model=utility_model,
@@ -651,9 +666,13 @@ class SessionExecutor:
             permission_mode="bypassPermissions",
             cwd=self._cwd,
             effort="low",
-            env=self._env,
+            env=session_env,
             stderr=self._dashboard.suppress_stderr,
-            hooks=self._provider_policy_hooks(provider_route),
+            hooks=self._provider_policy_hooks(
+                provider_route,
+                identity=UTILITY_IDENTITY,
+                delegation_secret=delegation_secret,
+            ),
         )
 
         collected_text: list[str] = []
@@ -732,8 +751,14 @@ class SessionExecutor:
         )
         return route
 
-    def _provider_policy_hooks(self, route: ProviderRoute) -> dict[HookEvent, list[HookMatcher]]:
-        """Authorize dynamic tool results before the SDK sends another turn."""
+    def _provider_policy_hooks(
+        self,
+        route: ProviderRoute,
+        *,
+        identity: AgentIdentity | None = None,
+        delegation_secret: str | None = None,
+    ) -> dict[HookEvent, list[HookMatcher]]:
+        """Authorize results and bind nested calls to the initiating identity."""
 
         async def authorize_tool_response(
             hook_input: HookInput,
@@ -768,7 +793,37 @@ class SessionExecutor:
             )
             return {}
 
-        return {"PostToolUse": [HookMatcher(hooks=[authorize_tool_response])]}
+        hooks: dict[HookEvent, list[HookMatcher]] = {
+            "PostToolUse": [HookMatcher(hooks=[authorize_tool_response])]
+        }
+        if identity is not None:
+            if delegation_secret is None:
+                raise ValueError("delegation secret is required for an agent identity")
+            grant = create_delegation_grant(identity, delegation_secret)
+
+            async def bind_parallel_identity(
+                hook_input: HookInput,
+                _tool_use_id: str | None,
+                _context: HookContext,
+            ) -> HookJSONOutput:
+                pre_tool_input = cast("PreToolUseHookInput", hook_input)
+                updated_input = dict(pre_tool_input.get("tool_input", {}))
+                updated_input["delegation_grant"] = grant
+                return {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "allow",
+                        "updatedInput": updated_input,
+                    }
+                }
+
+            hooks["PreToolUse"] = [
+                HookMatcher(
+                    matcher="mcp__mulder__run_parallel",
+                    hooks=[bind_parallel_identity],
+                )
+            ]
+        return hooks
 
     def _track_utility_tokens(self, result: ResultMessage, label: str) -> None:
         """Extract token usage from a utility query's ResultMessage.

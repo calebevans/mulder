@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import os
 import subprocess
 import sys
@@ -14,8 +15,11 @@ from mulder.orchestrator.capabilities import (
     AgentIdentity,
     Capability,
     CapabilityViolation,
+    authorize_tool,
     authorize_tool_list,
+    create_delegation_grant,
     identity_for_phase,
+    identity_from_delegation_grant,
 )
 from mulder.orchestrator.phases import (
     ALTERNATIVE_NARRATIVE,
@@ -128,3 +132,69 @@ def test_preflighted_pack_seats_retain_extraction_role_boundaries() -> None:
     assert Capability.FORENSIC_EXECUTION in identity.capabilities
     with pytest.raises(CapabilityViolation, match="pack identity"):
         identity_for_phase("pack.anti-forensics.clock", "publisher")
+
+
+def test_delegation_grant_is_tamper_evident() -> None:
+    identity = identity_for_phase("alternative_narrative", "executor")
+    grant = create_delegation_grant(identity, "session-secret")
+
+    assert identity_from_delegation_grant(grant, "session-secret") == identity
+    with pytest.raises(CapabilityViolation, match="invalid nested-tool"):
+        identity_from_delegation_grant(grant + "x", "session-secret")
+
+
+@pytest.mark.asyncio()
+async def test_nested_authorization_has_direct_parity_and_preserves_valid_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mulder.server import app
+
+    identity = identity_for_phase("alternative_narrative", "executor")
+    secret = "narrative-session-secret"
+    grant = create_delegation_grant(identity, secret)
+    called: list[str] = []
+
+    async def fake_search(**_kwargs: object) -> dict[str, object]:
+        called.append("search")
+        return {"status": "success", "results": []}
+
+    async def fake_extraction(**_kwargs: object) -> dict[str, object]:
+        called.append("run_volatility")
+        return {"status": "success"}
+
+    monkeypatch.setenv("MULDER_TOOL_DELEGATION_SECRET", secret)
+    monkeypatch.setitem(app._tool_dispatch, "search", fake_search)
+    monkeypatch.setitem(app._tool_dispatch, "run_volatility", fake_extraction)
+
+    authorize_tool(identity, "search")
+    with pytest.raises(CapabilityViolation):
+        authorize_tool(identity, "run_volatility")
+
+    response = await inspect.unwrap(app.run_parallel)(
+        tasks=[
+            {"tool": "search", "args": {"query": "x"}},
+            {"tool": "run_volatility", "args": {"plugin": "pslist"}},
+        ],
+        delegation_grant=grant,
+    )
+
+    assert called == ["search"]
+    assert response["parallel_results"][0]["result"]["status"] == "success"
+    assert "Unauthorized nested tool" in response["parallel_results"][1]["result"]["error"]
+
+    extraction_identity = identity_for_phase("extraction", "executor")
+    extraction_grant = create_delegation_grant(extraction_identity, secret)
+    extraction_response = await inspect.unwrap(app.run_parallel)(
+        tasks=[{"tool": "run_volatility", "args": {"plugin": "pslist"}}],
+        delegation_grant=extraction_grant,
+    )
+    assert called == ["search", "run_volatility"]
+    assert extraction_response["parallel_results"][0]["result"]["status"] == "success"
+
+
+@pytest.mark.asyncio()
+async def test_parallel_dispatch_without_a_verified_initiator_fails_closed() -> None:
+    from mulder.server import app
+
+    with pytest.raises(CapabilityViolation, match="delegation grant is required"):
+        await inspect.unwrap(app.run_parallel)(tasks=[{"tool": "search", "args": {}}])

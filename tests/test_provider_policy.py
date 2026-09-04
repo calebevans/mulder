@@ -9,6 +9,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from mulder.orchestrator.capabilities import (
+    identity_for_phase,
+    identity_from_delegation_grant,
+)
 from mulder.orchestrator.models import ModelConfig
 from mulder.orchestrator.session import SessionExecutor
 from mulder.security.evidence_envelope import EvidenceFlag, envelope_evidence
@@ -260,6 +264,40 @@ async def test_sdk_hook_manifests_dynamic_tool_results_without_content(tmp_path:
     entry = json.loads(manifest_text)
     assert entry["fields"][0]["name"] == "tool_response:get_raw_output"
     assert entry["fields"][0]["sensitivity_labels"] == ["secret.bearer_token"]
+
+
+@pytest.mark.asyncio()
+async def test_pre_tool_hook_binds_parallel_call_to_signed_session_identity() -> None:
+    session = _session(ProviderPolicy())
+    identity = identity_for_phase("alternative_narrative", "executor")
+    hooks = session._provider_policy_hooks(
+        resolve_provider_route("claude-test"),
+        identity=identity,
+        delegation_secret="session-only-secret",
+    )
+    callback = hooks["PreToolUse"][0].hooks[0]
+
+    result = await callback(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "mcp__mulder__run_parallel",
+            "tool_input": {"tasks": []},
+            "tool_use_id": "tool-1",
+            "session_id": "session-1",
+            "transcript_path": "/tmp/transcript",
+            "cwd": "/tmp",
+            "permission_mode": "bypassPermissions",
+        },
+        "tool-1",
+        {"signal": None},
+    )
+
+    updated = result["hookSpecificOutput"]["updatedInput"]
+    assert updated["tasks"] == []
+    assert (
+        identity_from_delegation_grant(updated["delegation_grant"], "session-only-secret")
+        == identity
+    )
 
 
 @pytest.mark.asyncio()

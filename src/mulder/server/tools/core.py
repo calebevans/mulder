@@ -13,13 +13,14 @@ import json
 import logging
 import re
 import time
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select as sa_select
 
 from mulder.db import windows_t
-from mulder.security.evidence_envelope import envelope_evidence
+from mulder.security.evidence_envelope import present_model_evidence
 from mulder.server import source_names as _sn
 from mulder.server.app import get_ctx, mcp
 from mulder.server.helpers import (
@@ -33,7 +34,6 @@ from mulder.server.helpers import (
     hash_output,
     make_tool_call_id,
     serialize_windows,
-    truncate_raw_text,
     windowed_response,
 )
 from mulder.server.tool_access import PLANNERS, Role, tool_access
@@ -56,11 +56,14 @@ _CORRELATE_WINDOW_CAP = 20
 _MODEL_EVIDENCE_CHAR_CAP = 100_000
 
 
-def _truncated_window(w: Any, cap: int = _RAW_TEXT_SEARCH_CAP) -> dict[str, object]:
-    """Serialize a window with raw_text truncated for compact output."""
-    d: dict[str, Any] = w.model_dump() if hasattr(w, "model_dump") else dict(w)
-    truncate_raw_text(d, cap)
-    return d
+def _truncated_window(
+    w: Any,
+    *,
+    source_name: str,
+    cap: int = _RAW_TEXT_SEARCH_CAP,
+) -> dict[str, object]:
+    """Project one compact window through the evidence presentation seam."""
+    return serialize_windows((w,), cap=1, text_cap=cap, source_name=source_name)[0]
 
 
 @mcp.tool()
@@ -214,7 +217,7 @@ def _search_regex(
                 if len(matches) < max_results:
                     matches.append(
                         {
-                            "window": _truncated_window(w),
+                            "window": _truncated_window(w, source_name=src_name),
                             "source_name": src_name,
                         }
                     )
@@ -252,7 +255,10 @@ def _search_fts(
         time_end=t_end,
         exclude_source_names=exclude_sources,
     )
-    results = [{"window": _truncated_window(w), "source_name": sname} for w, sname in raw_matches]
+    results = [
+        {"window": _truncated_window(w, source_name=sname), "source_name": sname}
+        for w, sname in raw_matches
+    ]
     return results, total_matches
 
 
@@ -429,7 +435,10 @@ def correlate_across_sources(
         total_for_src = len(wins)
         capped = wins[:_CORRELATE_WINDOW_CAP]
         slimmed_by_source[src] = {
-            "windows": [_truncated_window(w, cap=_RAW_TEXT_CORRELATE_CAP) for w in capped],
+            "windows": [
+                _truncated_window(w, source_name=src, cap=_RAW_TEXT_CORRELATE_CAP)
+                for w in capped
+            ],
             "total_windows": total_for_src,
             "truncated": total_for_src > _CORRELATE_WINDOW_CAP,
         }
@@ -651,7 +660,9 @@ def scan_hidden_processes() -> dict[str, object]:
         {
             "pid": pid,
             "source": _SRC_PSSCAN,
-            "evidence_windows": serialize_windows(psscan_pids[pid], cap=10),
+            "evidence_windows": serialize_windows(
+                psscan_pids[pid], cap=10, source_name=_SRC_PSSCAN
+            ),
         }
         for pid in sorted(hidden_pids)
     ]
@@ -768,7 +779,9 @@ def scan_kernel_modules() -> dict[str, object]:
         {
             "module_name": name,
             "source": _SRC_MODSCAN,
-            "evidence_windows": serialize_windows(scanned_mods[name], cap=10),
+            "evidence_windows": serialize_windows(
+                scanned_mods[name], cap=10, source_name=_SRC_MODSCAN
+            ),
         }
         for name in sorted(hidden_names)
     ]
@@ -908,15 +921,15 @@ def get_raw_output(
         sort_keys=True,
         separators=(",", ":"),
     )
-    envelope = envelope_evidence(
+    presentation = present_model_evidence(
         raw_text,
         source_id=source_name,
         source_name=source_name,
-        source_record_ids=[w.source_id for w in page],
+        source_record_ids=window_ids,
         selector=selector,
         max_characters=_MODEL_EVIDENCE_CHAR_CAP,
     )
-    model_representation = envelope.for_model()
+    envelope = presentation.envelope
 
     result: dict[str, object] = {
         "status": "success",
@@ -928,10 +941,7 @@ def get_raw_output(
         # Backwards-compatible string field, now carrying a delimited JSON
         # packet rather than executable-looking evidence text.  The complete
         # raw value remains unchanged in the case DB and committed by digest.
-        "raw_text": envelope.to_model_packet(),
-        "evidence_envelope": model_representation.model_dump(
-            mode="json", exclude={"content"}
-        ),
+        **presentation.response_fields(),
     }
     if envelope.truncation.truncated:
         result["content_truncated"] = True
@@ -1017,6 +1027,7 @@ def decode_payload(
                     extraction_meta = {
                         "extracted_from_source": src_name,
                         "extracted_length": len(longest),
+                        "window_id": window.window_id,
                         "window_line_start": window.line_start,
                         "search_pattern": pattern,
                     }
@@ -1045,7 +1056,7 @@ def decode_payload(
     data = data.strip()
     decoded: str | None = None
     detected_encoding: str = encoding
-    layers: list[dict[str, str]] = []
+    layers: list[dict[str, object]] = []
 
     if encoding == "auto":
         detected_encoding = _detect_encoding(data)
@@ -1119,21 +1130,77 @@ def decode_payload(
                     inner_results = inner_result.get("results")
                     if isinstance(inner_results, dict):
                         inner_layers = inner_results.get("layers", [])
-                        if inner_layers:
+                        if isinstance(inner_layers, list) and inner_layers:
                             layers.extend(inner_layers)
-                            decoded = inner_results.get("decoded", decoded)
+                            inner_decoded = inner_results.get("decoded", decoded)
+                            if isinstance(inner_decoded, str) and inner_decoded.startswith(
+                                "MULDER_EVIDENCE_ENVELOPE_BEGIN\n"
+                            ):
+                                with suppress(
+                                    IndexError,
+                                    KeyError,
+                                    TypeError,
+                                    json.JSONDecodeError,
+                                ):
+                                    inner_decoded = json.loads(inner_decoded.splitlines()[1])[
+                                        "content"
+                                    ]
+                            decoded = str(inner_decoded)
 
     else:
         decoded = f"[unknown encoding: {detected_encoding}]"
 
-    if decoded and len(decoded) > _MAX_DECODE_OUTPUT:
-        decoded = decoded[:_MAX_DECODE_OUTPUT] + f"\n... [truncated at {_MAX_DECODE_OUTPUT} chars]"
+    decoded_text = decoded or ""
+    decoded_selector = json.dumps(
+        {
+            "detected_encoding": detected_encoding,
+            "extracted_from_source": extraction_meta.get("extracted_from_source"),
+            "window_id": extraction_meta.get("window_id"),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    decoded_source = str(
+        extraction_meta.get("extracted_from_source") or source or "decode_payload"
+    )
+    decoded_presentation = present_model_evidence(
+        decoded_text,
+        source_id=decoded_source,
+        source_name=decoded_source,
+        source_record_ids=(
+            [int(window_id)]
+            if isinstance((window_id := extraction_meta.get("window_id")), int)
+            else ()
+        ),
+        selector=decoded_selector,
+        max_characters=_MAX_DECODE_OUTPUT,
+    )
+
+    for layer_index, layer in enumerate(layers):
+        preview = layer.get("preview")
+        if not isinstance(preview, str) or preview.startswith("("):
+            continue
+        layer_presentation = present_model_evidence(
+            preview,
+            source_id=str(source or "decode_payload"),
+            source_name=source,
+            selector=json.dumps(
+                {"kind": "decode_layer_preview", "layer": layer_index},
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            max_characters=max(_PREVIEW_CHAR_LIMIT, _HINT_CHAR_LIMIT),
+        )
+        layer["preview"] = layer_presentation.packet
+        layer["preview_evidence_envelope"] = layer_presentation.metadata
 
     results: dict[str, object] = {
         "detected_encoding": detected_encoding,
         "layers": layers,
-        "decoded": decoded,
-        "decoded_length": len(decoded) if decoded else 0,
+        **decoded_presentation.response_fields(
+            content_key="decoded", metadata_key="decoded_evidence_envelope"
+        ),
+        "decoded_length": len(decoded_text),
     }
     if extraction_meta:
         results["extraction"] = extraction_meta
@@ -1259,14 +1326,15 @@ def get_timeline(
     flat: list[dict[str, object]] = []
     for source_name, windows in grouped.items():
         for w in windows:
-            raw = w.raw_text
-            if len(raw) > _TIMELINE_TEXT_CAP:
-                raw = raw[:_TIMELINE_TEXT_CAP] + "..."
+            projected = serialize_windows(
+                (w,), cap=1, text_cap=_TIMELINE_TEXT_CAP, source_name=source_name
+            )[0]
             flat.append(
                 {
                     "event_time": w.event_time,
                     "source_name": source_name,
-                    "raw_text": raw,
+                    "raw_text": projected["raw_text"],
+                    "evidence_envelope": projected["evidence_envelope"],
                     "window_id": w.window_id,
                 }
             )
@@ -1364,10 +1432,12 @@ def get_bookmarks() -> dict[str, object]:
         wid = int(str(bm["window_id"]))
         row = window_map.get(wid)
         if row:
-            raw = row.raw_text
-            if len(raw) > _TIMELINE_TEXT_CAP:
-                raw = raw[:_TIMELINE_TEXT_CAP] + "..."
-            entry["raw_text"] = raw
+            source_name = str(bm.get("source_name") or f"source:{row.source_id}")
+            projected = serialize_windows(
+                (row,), cap=1, text_cap=_TIMELINE_TEXT_CAP, source_name=source_name
+            )[0]
+            entry["raw_text"] = projected["raw_text"]
+            entry["evidence_envelope"] = projected["evidence_envelope"]
             entry["event_time"] = row.event_time
         enriched.append(entry)
 

@@ -7,6 +7,10 @@ tools; identities independently constrain what each seat is allowed to do.
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
 from dataclasses import dataclass
 from enum import Enum
 
@@ -35,6 +39,10 @@ class AgentIdentity:
 
 class CapabilityViolation(ValueError):
     """Raised before SDK startup when a tool exceeds an identity's authority."""
+
+
+DELEGATION_SECRET_ENV = "MULDER_TOOL_DELEGATION_SECRET"
+_DELEGATION_VERSION = 1
 
 
 _MUTATION_TOOLS = frozenset(
@@ -82,6 +90,24 @@ def tool_capability(tool_name: str, declared_roles: Role) -> Capability:
     return Capability.CASE_READ
 
 
+def authorize_tool(identity: AgentIdentity, tool_name: str) -> None:
+    """Authorize one direct or nested tool against role and capabilities."""
+    roles = get_registered_tool_roles(tool_name)
+    if roles is None:
+        raise CapabilityViolation(
+            f"identity {identity.name!r} requested unknown tool {tool_name!r}"
+        )
+    if not identity.role & roles:
+        raise CapabilityViolation(
+            f"identity {identity.name!r} is not assigned role for {tool_name!r}"
+        )
+    required = tool_capability(tool_name, roles)
+    if required not in identity.capabilities:
+        raise CapabilityViolation(
+            f"identity {identity.name!r} lacks {required.value!r} for {tool_name!r}"
+        )
+
+
 def authorize_tool_list(identity: AgentIdentity, requested: list[str]) -> list[str]:
     """Validate and return a deterministic tool allowlist for an identity.
 
@@ -91,22 +117,57 @@ def authorize_tool_list(identity: AgentIdentity, requested: list[str]) -> list[s
     """
     authorized: set[str] = set()
     for tool_name in requested:
-        roles = get_registered_tool_roles(tool_name)
-        if roles is None:
-            raise CapabilityViolation(
-                f"identity {identity.name!r} requested unknown tool {tool_name!r}"
-            )
-        if not identity.role & roles:
-            raise CapabilityViolation(
-                f"identity {identity.name!r} is not assigned role for {tool_name!r}"
-            )
-        required = tool_capability(tool_name, roles)
-        if required not in identity.capabilities:
-            raise CapabilityViolation(
-                f"identity {identity.name!r} lacks {required.value!r} for {tool_name!r}"
-            )
+        authorize_tool(identity, tool_name)
         authorized.add(tool_name)
     return sorted(authorized)
+
+
+def create_delegation_grant(identity: AgentIdentity, secret: str) -> str:
+    """Sign one session-scoped identity for server-side nested dispatch."""
+    if not secret:
+        raise ValueError("delegation secret must not be empty")
+    payload = json.dumps(
+        {
+            "capabilities": sorted(capability.value for capability in identity.capabilities),
+            "name": identity.name,
+            "role": identity.role.value,
+            "version": _DELEGATION_VERSION,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    encoded = base64.urlsafe_b64encode(payload).rstrip(b"=")
+    signature = hmac.new(secret.encode("utf-8"), encoded, hashlib.sha256).digest()
+    encoded_signature = base64.urlsafe_b64encode(signature).rstrip(b"=").decode("ascii")
+    return f"{encoded.decode('ascii')}.{encoded_signature}"
+
+
+def identity_from_delegation_grant(grant: str, secret: str) -> AgentIdentity:
+    """Verify a session grant and reconstruct its immutable initiating identity."""
+    try:
+        encoded, encoded_signature = grant.split(".", maxsplit=1)
+        signature = _decode_urlsafe(encoded_signature)
+        expected = hmac.new(
+            secret.encode("utf-8"), encoded.encode("ascii"), hashlib.sha256
+        ).digest()
+        if not hmac.compare_digest(signature, expected):
+            raise ValueError("signature mismatch")
+        payload = json.loads(_decode_urlsafe(encoded).decode("utf-8"))
+        if payload.get("version") != _DELEGATION_VERSION:
+            raise ValueError("unsupported version")
+        capabilities = frozenset(Capability(value) for value in payload["capabilities"])
+        return AgentIdentity(
+            name=str(payload["name"]),
+            role=Role(int(payload["role"])),
+            capabilities=capabilities,
+        )
+    except (KeyError, TypeError, ValueError, UnicodeError, json.JSONDecodeError) as exc:
+        raise CapabilityViolation("invalid nested-tool delegation grant") from exc
+
+
+def _decode_urlsafe(value: str) -> bytes:
+    padding = "=" * (-len(value) % 4)
+    return base64.b64decode(value + padding, altchars=b"-_", validate=True)
 
 
 _READ = frozenset({Capability.CASE_READ})

@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from mulder.path_policy import PathPolicyError, resolve_allowed_path
+from mulder.security.evidence_envelope import present_model_evidence
 from mulder.server.app import get_cfg, get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import hash_output, make_tool_call_id
@@ -587,10 +588,9 @@ def read_evidence_file(
         with open(target, "rb") as f:
             raw = f.read(max_bytes)
         try:
-            content = raw.decode("utf-8")
+            raw.decode("utf-8")
             is_binary = False
         except UnicodeDecodeError:
-            content = raw.decode("utf-8", errors="replace")
             is_binary = any(b < 0x20 and b not in (0x09, 0x0A, 0x0D) for b in raw[:512])
     except OSError as exc:
         logger.error("Failed to read evidence file %r: %s", file_path, exc)
@@ -607,10 +607,22 @@ def read_evidence_file(
     file_size = target.stat().st_size
     truncated = file_size > max_bytes
 
+    selector = json.dumps(
+        {"byte_end": len(raw), "byte_start": 0, "file_size": file_size},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    presentation = present_model_evidence(
+        raw,
+        source_id=str(target),
+        source_name=target.name,
+        selector=selector,
+        max_characters=(2000 if is_binary else max(1, max_bytes)),
+    )
     result = {
-        "content": content
-        if not is_binary
-        else content[:2000] + "\n... (binary file, showing first 2000 chars with replacements)",
+        **presentation.response_fields(
+            content_key="content", metadata_key="evidence_envelope"
+        ),
         "file_size": file_size,
         "truncated": truncated,
         "is_binary": is_binary,

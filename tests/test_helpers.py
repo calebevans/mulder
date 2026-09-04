@@ -94,7 +94,13 @@ class TestSerializeWindows:
             raw_text="x" * 500,
         )
         result = serialize_windows([w], text_cap=100)
-        assert result[0]["raw_text"] == "x" * 100 + "..."
+        _start, payload, _end = result[0]["raw_text"].splitlines()
+        representation = json.loads(payload)
+        assert representation["content"] == "x" * 100
+        assert representation["truncation"]["truncated"] is True
+        assert result[0]["evidence_envelope"] == {
+            key: value for key, value in representation.items() if key != "content"
+        }
         assert result[0]["full_text_available"] is True
 
     def test_short_text_not_truncated(self) -> None:
@@ -106,7 +112,12 @@ class TestSerializeWindows:
             raw_text="short",
         )
         result = serialize_windows([w], text_cap=100)
-        assert result[0]["raw_text"] == "short"
+        _start, payload, _end = result[0]["raw_text"].splitlines()
+        representation = json.loads(payload)
+        assert representation["content"] == "short"
+        assert representation["provenance"]["selector"] == (
+            '{"line_end":1,"line_start":0,"window_id":null}'
+        )
         assert "full_text_available" not in result[0]
 
 

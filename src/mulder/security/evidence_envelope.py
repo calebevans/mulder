@@ -20,6 +20,7 @@ import json
 import re
 import unicodedata
 from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass
 from enum import Enum
 from html.parser import HTMLParser
 from typing import Literal
@@ -175,6 +176,37 @@ class EvidenceEnvelope(BaseModel):
         return self.decoded_text[: self.truncation.presented_characters]
 
 
+@dataclass(frozen=True)
+class ModelEvidencePresentation:
+    """One immutable projection for every model-facing evidence value.
+
+    Keeping the packet and its metadata behind one object prevents callers
+    from accidentally presenting a truncated/plaintext value while attaching
+    a digest or selector for some different byte sequence.
+    """
+
+    envelope: EvidenceEnvelope
+
+    @property
+    def packet(self) -> str:
+        """Return the deterministic, instruction-isolating model packet."""
+        return self.envelope.to_model_packet()
+
+    @property
+    def metadata(self) -> dict[str, object]:
+        """Return packet metadata without duplicating evidence content."""
+        return self.envelope.for_model().model_dump(mode="json", exclude={"content"})
+
+    def response_fields(
+        self,
+        *,
+        content_key: str = "raw_text",
+        metadata_key: str = "evidence_envelope",
+    ) -> dict[str, object]:
+        """Return the inseparable packet/metadata pair for a response object."""
+        return {content_key: self.packet, metadata_key: self.metadata}
+
+
 _ANSI_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
 _ROLE_MARKER_RE = re.compile(
     r"(?im)(?:^|\n)\s*(?:"
@@ -310,6 +342,34 @@ def envelope_evidence(
         trust_label=trust_label,
         flags=flags,
         sensitivity_labels=tuple(sorted(sensitivity_labels)),
+    )
+
+
+def present_model_evidence(
+    raw: str | bytes,
+    *,
+    source_id: str,
+    selector: str,
+    source_name: str | None = None,
+    source_record_ids: Sequence[int] = (),
+    encoding: str | None = None,
+    max_characters: int = 100_000,
+    trust_label: TrustLabel = TrustLabel.UNTRUSTED_EVIDENCE,
+    sensitivity_hooks: Sequence[SensitivityHook] = (common_sensitivity_hook,),
+) -> ModelEvidencePresentation:
+    """Build the sole supported projection of evidence into model responses."""
+    return ModelEvidencePresentation(
+        envelope_evidence(
+            raw,
+            source_id=source_id,
+            selector=selector,
+            source_name=source_name,
+            source_record_ids=source_record_ids,
+            encoding=encoding,
+            max_characters=max_characters,
+            trust_label=trust_label,
+            sensitivity_hooks=sensitivity_hooks,
+        )
     )
 
 
