@@ -8,7 +8,7 @@ import json
 import logging
 import re
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -1055,6 +1055,7 @@ class ReportRenderer:
         enrichment_windows: list[dict[str, Any]] | None = None,
         coverage_records: Sequence[CoverageRecord | dict[str, Any]] | None = None,
         proof_cards: Sequence[dict[str, object]] | None = None,
+        case_review: Mapping[str, object] | None = None,
     ) -> dict[str, Any]:
         """Assemble template variables from case metadata, findings, audit trail, and sources.
 
@@ -1071,6 +1072,7 @@ class ReportRenderer:
                 DB source containing threat intel metadata for IOCs.
             coverage_records: Persistent analysis coverage and boundary rows.
             proof_cards: Provenance-rich claim, revision, coverage, and receipt cards.
+            case_review: Versioned transport-neutral review projection.
 
         Returns:
             Dict of template variables ready for Jinja2 rendering.
@@ -1242,6 +1244,7 @@ class ReportRenderer:
             "coverage_records": coverage_data,
             "proof_cards": proof_card_data,
             "proof_cards_by_id": proof_cards_by_id,
+            "case_review": dict(case_review) if case_review is not None else None,
             "model_token_breakdown": self._load_model_usage(
                 Path(audit_log_path).parent, case_metadata.case_id
             ),
@@ -1343,6 +1346,7 @@ class ReportRenderer:
             for finding_id, card in ctx.get("proof_cards_by_id", {}).items()
         }
         markdown_ctx["proof_cards"] = list(markdown_ctx["proof_cards_by_id"].values())
+        markdown_ctx["case_review"] = _safe_proof_value(ctx.get("case_review"))
         markdown_ctx["network_iocs"] = [
             SimpleNamespace(
                 **{
@@ -1509,6 +1513,7 @@ class ReportRenderer:
         enrichment_windows: list[dict[str, Any]] | None = None,
         coverage_records: list[CoverageRecord] | None = None,
         proof_cards: list[dict[str, object]] | None = None,
+        case_review: Mapping[str, object] | None = None,
     ) -> str:
         """Render the markdown report template (``report.md.j2``) to a string.
 
@@ -1527,6 +1532,7 @@ class ReportRenderer:
                 DB source for threat intel context.
             coverage_records: Persistent analysis coverage and boundary rows.
             proof_cards: Per-finding proof-card data.
+            case_review: Versioned transport-neutral review projection.
 
         Returns:
             Rendered markdown report string.
@@ -1542,6 +1548,7 @@ class ReportRenderer:
             enrichment_windows=enrichment_windows,
             coverage_records=coverage_records,
             proof_cards=proof_cards,
+            case_review=case_review,
         )
         return self._render_markdown(ctx)
 
@@ -1558,6 +1565,7 @@ class ReportRenderer:
         enrichment_windows: list[dict[str, Any]] | None = None,
         coverage_records: list[CoverageRecord] | None = None,
         proof_cards: list[dict[str, object]] | None = None,
+        case_review: Mapping[str, object] | None = None,
     ) -> str:
         """Render the HTML report with markdown descriptions converted to HTML.
 
@@ -1577,6 +1585,7 @@ class ReportRenderer:
                 DB source for threat intel context.
             coverage_records: Persistent analysis coverage and boundary rows.
             proof_cards: Per-finding proof-card data.
+            case_review: Versioned transport-neutral review projection.
 
         Returns:
             Rendered HTML report string.
@@ -1593,6 +1602,7 @@ class ReportRenderer:
             enrichment_windows=enrichment_windows,
             coverage_records=coverage_records,
             proof_cards=proof_cards,
+            case_review=case_review,
         )
         return self._render_html(ctx)
 
@@ -1610,6 +1620,7 @@ class ReportRenderer:
         enrichment_windows: list[dict[str, Any]] | None = None,
         coverage_records: list[CoverageRecord] | None = None,
         proof_cards: list[dict[str, object]] | None = None,
+        case_review: Mapping[str, object] | None = None,
     ) -> tuple[str, str, bytes | None]:
         """Render markdown, HTML, and optionally PDF reports.
 
@@ -1632,6 +1643,7 @@ class ReportRenderer:
                 DB source for threat intel context.
             coverage_records: Persistent analysis coverage and boundary rows.
             proof_cards: Per-finding proof-card data.
+            case_review: Versioned transport-neutral review projection.
 
         Returns:
             Tuple of (markdown_text, html_text, pdf_bytes_or_none).
@@ -1648,6 +1660,7 @@ class ReportRenderer:
             enrichment_windows=enrichment_windows,
             coverage_records=coverage_records,
             proof_cards=proof_cards,
+            case_review=case_review,
         )
         md_text = self._render_markdown(ctx)
         html_text = self._render_html(dict(ctx))

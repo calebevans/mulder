@@ -293,7 +293,10 @@ def _table_commitment(
 
 def _connect_read_only(path: Path) -> sqlite3.Connection:
     """Open SQLite without creating or migrating a database."""
-    uri = path.resolve().as_uri() + "?mode=ro"
+    # All callers require a quiescent database before snapshotting. Immutable
+    # mode therefore preserves authoritative content while also preventing an
+    # ostensibly read-only review from creating WAL/SHM sidecars.
+    uri = path.resolve().as_uri() + "?mode=ro&immutable=1"
     connection = sqlite3.connect(uri, uri=True, timeout=5.0)
     connection.execute("PRAGMA query_only=ON")
     return connection

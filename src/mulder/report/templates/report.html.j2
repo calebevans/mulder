@@ -956,6 +956,28 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
     </div>
   </div>
   {% endif %}
+  {% if case_review %}
+  <div class="card mt-2">
+    <div class="card-header">Case Review Snapshot</div>
+    <div class="card-body">
+      <p style="opacity:0.7;margin-bottom:1em;">Projected by <code>{{ case_review.schema }}</code>. Phase states are durable observations, not completion claims.</p>
+      <div class="finding-meta-bar">
+        <div><strong>Receipt:</strong> <code>{{ case_review.receipt.status }}</code></div>
+        <div><strong>Signature:</strong> <code>{{ case_review.receipt.signature_status }}</code></div>
+        <div><strong>Replay:</strong> <code>{{ case_review.receipt.replay_status }}</code></div>
+        <div><strong>Audit:</strong> <code>{{ case_review.audit.integrity_status }}</code></div>
+        <div><strong>Cost:</strong> ${{ "%.4f" | format(case_review.costs.estimated_cost_usd) }} audit estimate</div>
+      </div>
+      <div style="overflow-x:auto;margin-top:0.75rem;">
+        <table>
+          <thead><tr><th>Phase</th><th>Observed state</th><th>Basis</th></tr></thead>
+          <tbody>{% for phase in case_review.phases %}<tr><td>{{ phase.name }}</td><td><code>{{ phase.state }}</code></td><td>{{ phase.basis | join('; ') or 'No durable state' }}</td></tr>{% endfor %}</tbody>
+        </table>
+      </div>
+      <p style="opacity:0.7;margin-top:0.75rem;">Placeholders — contradictions: <code>{{ case_review.contradictions.status }}</code>; follow-ups: <code>{{ case_review.follow_ups.status }}</code>; graph: <code>{{ case_review.graph.status }}</code>.</p>
+    </div>
+  </div>
+  {% endif %}
 </div>
 
 <!-- ==================== ATT&CK ==================== -->

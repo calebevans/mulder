@@ -143,8 +143,9 @@ def report(case_id: str, db_dir: str) -> None:
     """
     from mulder.audit import AuditLog
     from mulder.db import CaseDB
-    from mulder.report.proof_cards import build_proof_cards
+    from mulder.models import CaseMetadataRow
     from mulder.report.renderer import ReportRenderer
+    from mulder.review.model import CaseReviewError, ReviewQuery, query_case_review
 
     db_dir_path = Path(db_dir).expanduser()
     db_path = db_dir_path / f"{case_id}.db"
@@ -155,23 +156,33 @@ def report(case_id: str, db_dir: str) -> None:
 
     click.echo(f"Loading case '{case_id}' from {db_path} ...")
 
+    try:
+        review = query_case_review(
+            ReviewQuery(
+                case_id=case_id,
+                db_dir=db_dir_path,
+                finding_limit=500,
+                evidence_limit=1000,
+                revision_limit=1000,
+            )
+        )
+    except CaseReviewError as exc:
+        raise click.ClickException(str(exc)) from exc
+
     with CaseDB(db_path) as case_db:
-        case_metadata = case_db.get_case_metadata()
-        findings = case_db.get_findings()
+        case_metadata = CaseMetadataRow(
+            case_id=review.case.case_id,
+            ingested_at=review.case.ingested_at,
+            evidence_root=review.case.evidence_root,
+            extractor_versions=review.case.extractor_versions,
+            narrative=review.case.narrative,
+        )
+        findings = [item.finding for item in review.findings.active]
         sources_list = case_db.get_sources()
         evidence_integrity = case_db.get_evidence_registry()
-        coverage_records = case_db.get_coverage()
-        proof_cards = build_proof_cards(
-            findings,
-            claims={f.finding_id: case_db.get_claims(f.finding_id) for f in findings},
-            verifications={
-                f.finding_id: case_db.get_claim_verifications(f.finding_id) for f in findings
-            },
-            revisions={
-                f.finding_id: case_db.get_finding_revisions(f.finding_id) for f in findings
-            },
-            coverage_records=coverage_records,
-        )
+        coverage_records = [cell.record for cell in review.coverage.matrix]
+        proof_cards = review.proof_cards()
+        review_data = review.model_dump(mode="json", by_alias=True)
 
         audit = AuditLog(audit_path)
         audit_summary = audit.summary()
@@ -190,6 +201,7 @@ def report(case_id: str, db_dir: str) -> None:
             evidence_integrity=evidence_integrity,
             coverage_records=coverage_records,
             proof_cards=proof_cards,
+            case_review=review_data,
         )
         md_path.write_text(md_text, encoding="utf-8")
         click.echo(f"  Markdown: {md_path}")
@@ -223,6 +235,7 @@ def report(case_id: str, db_dir: str) -> None:
                 source_windows=source_windows,
                 coverage_records=coverage_records,
                 proof_cards=proof_cards,
+                case_review=review_data,
             )
             html_path.write_text(html_text, encoding="utf-8")
             click.echo(f"  HTML:     {html_path}")
@@ -230,6 +243,102 @@ def report(case_id: str, db_dir: str) -> None:
             click.echo(f"  HTML generation failed: {exc}", err=True)
 
     click.echo("Done.")
+
+
+@cli.command("review")
+@click.argument("case_id")
+@click.option(
+    "--db-dir",
+    default=DEFAULT_DB_DIR,
+    show_default=True,
+    help="Directory containing the authoritative case artifacts.",
+)
+@click.option("--finding-offset", default=0, type=click.IntRange(min=0), show_default=True)
+@click.option(
+    "--finding-limit", default=100, type=click.IntRange(min=1, max=500), show_default=True
+)
+@click.option("--evidence-offset", default=0, type=click.IntRange(min=0), show_default=True)
+@click.option(
+    "--evidence-limit", default=200, type=click.IntRange(min=1, max=1000), show_default=True
+)
+@click.option("--revision-offset", default=0, type=click.IntRange(min=0), show_default=True)
+@click.option(
+    "--revision-limit", default=200, type=click.IntRange(min=1, max=1000), show_default=True
+)
+@click.option(
+    "--manifest",
+    "manifest_path",
+    type=click.Path(path_type=Path, dir_okay=False, exists=True),
+    help="Explicit case manifest; defaults to DB_DIR/CASE_ID.manifest.json.",
+)
+@click.option(
+    "--public-key",
+    "public_key_path",
+    type=click.Path(path_type=Path, dir_okay=False, exists=True),
+    help="Independent Ed25519 public key for receipt verification.",
+)
+@click.option(
+    "--replay-inventory",
+    type=click.Path(path_type=Path, dir_okay=False, exists=True),
+    help="JSON inventory for replay classification.",
+)
+@click.option("--json", "json_output", is_flag=True, help="Emit the versioned review JSON.")
+def review_case_cmd(
+    case_id: str,
+    db_dir: str,
+    finding_offset: int,
+    finding_limit: int,
+    evidence_offset: int,
+    evidence_limit: int,
+    revision_offset: int,
+    revision_limit: int,
+    manifest_path: Path | None,
+    public_key_path: Path | None,
+    replay_inventory: Path | None,
+    json_output: bool,
+) -> None:
+    """Read one bounded, transport-neutral case-review projection."""
+    import json
+
+    from mulder.review.model import (
+        CaseReviewError,
+        ReviewQuery,
+        format_case_review,
+        query_case_review,
+    )
+
+    inventory: dict[str, object] | None = None
+    if replay_inventory is not None:
+        try:
+            loaded = json.loads(replay_inventory.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise click.ClickException(f"Cannot read replay inventory: {exc}") from exc
+        if not isinstance(loaded, dict):
+            raise click.ClickException("Replay inventory must be a JSON object")
+        inventory = loaded
+    try:
+        review = query_case_review(
+            ReviewQuery(
+                case_id=case_id,
+                db_dir=Path(db_dir),
+                finding_offset=finding_offset,
+                finding_limit=finding_limit,
+                evidence_offset=evidence_offset,
+                evidence_limit=evidence_limit,
+                revision_offset=revision_offset,
+                revision_limit=revision_limit,
+                manifest_path=manifest_path,
+                public_key_path=public_key_path,
+                replay_inventory=inventory,
+            )
+        )
+    except CaseReviewError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(
+        review.model_dump_json(indent=2, by_alias=True)
+        if json_output
+        else format_case_review(review)
+    )
 
 
 @cli.command("seal-case")

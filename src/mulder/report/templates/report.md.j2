@@ -58,6 +58,30 @@ tracking via append-only JSONL audit log.
 | Sources | {{ sources | length }} evidence sources across {{ total_tool_calls }} tool calls |
 {% if negative_count %}| Ruled Out | {{ negative_count }} hypotheses tested and rejected |
 {% endif %}
+{% if case_review %}
+---
+
+## Case Review Snapshot
+
+This section is projected from the same read-only `{{ case_review.schema }}` calculation used by
+the review CLI. Phase rows report durable observations, not phase-completion claims.
+
+| | |
+|---|---|
+| Receipt | `{{ case_review.receipt.status }}`; signature `{{ case_review.receipt.signature_status }}`; replay `{{ case_review.receipt.replay_status }}` |
+| Audit | `{{ case_review.audit.integrity_status }}` ({{ case_review.audit.entry_count }} entries) |
+| Findings page | {{ case_review.findings.page.returned }} of {{ case_review.findings.page.total }} ({{ case_review.findings.active_total }} active, {{ case_review.findings.withdrawn_total }} withdrawn) |
+| Evidence detail page | {{ case_review.findings.evidence_page.returned }} of {{ case_review.findings.evidence_page.total }} anchors |
+| Revision detail page | {{ case_review.findings.revision_page.returned }} of {{ case_review.findings.revision_page.total }} revisions |
+| Cost | ${{ "%.4f" | format(case_review.costs.estimated_cost_usd) }} audit estimate; {{ case_review.costs.recorded_input_tokens }} recorded input / {{ case_review.costs.recorded_output_tokens }} recorded output tokens |
+
+| Phase | Observed state | Basis |
+|---|---|---|
+{% for phase in case_review.phases %}| {{ phase.name }} | `{{ phase.state }}` | {{ phase.basis | join("; ") or "No durable state" }} |
+{% endfor %}
+
+Future projections remain explicit placeholders: contradictions `{{ case_review.contradictions.status }}`, follow-ups `{{ case_review.follow_ups.status }}`, graph `{{ case_review.graph.status }}`.
+{% endif %}
 {% if evidence_integrity %}
 ---
 
