@@ -245,6 +245,7 @@ class TestAnalyzeDiskPcapsTool:
         )
         assert result["status"] == "error"
         assert result["error_type"] == "no_filelist"
+        assert result["outcome"]["status"] == "UNAVAILABLE"
 
     @patch("mulder.server.tools.extract.disk_pcap.require_binary")
     @patch("mulder.server.tools.extract.disk_pcap._collect_fls_chunks")
@@ -270,6 +271,7 @@ class TestAnalyzeDiskPcapsTool:
         assert result["status"] == "success"
         assert result["results"]["pcaps_discovered"] == 0
         assert result["results"]["pcaps_analyzed"] == 0
+        assert result["outcome"]["status"] == "SUCCESS_EMPTY"
 
     @patch("mulder.server.tools.extract.disk_pcap.extract_and_index")
     @patch("mulder.server.tools.extract.disk_pcap._extract_pcap_via_icat")
@@ -312,6 +314,9 @@ class TestAnalyzeDiskPcapsTool:
         assert result["status"] == "success"
         assert "Captures/huge.pcap" in result["results"]["pcaps_skipped_oversize"]
         assert result["results"]["pcaps_analyzed"] == 0
+        assert result["outcome"]["status"] == "PARTIAL"
+        assert result["outcome"]["coverage"]["rows_examined"] == 0
+        assert result["outcome"]["coverage"]["rows_total"] == 1
 
     @patch("mulder.server.tools.extract.disk_pcap.extract_and_index")
     @patch("mulder.server.tools.extract.disk_pcap._extract_pcap_via_icat")

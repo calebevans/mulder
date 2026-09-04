@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, ParamSpec
 from uuid import uuid4
 
+from mulder.models import CoverageMetadata, ToolOutcome, ToolOutcomeStatus
 from mulder.server.app import get_ctx, has_ctx
 
 current_batch_id: ContextVar[str | None] = ContextVar("current_batch_id", default=None)
@@ -269,9 +270,24 @@ def windowed_response(
             duration_ms=elapsed_ms,
             batch_id=current_batch_id.get(),
         )
+    if total > cap:
+        outcome_status = ToolOutcomeStatus.SAMPLED
+    elif total == 0:
+        outcome_status = ToolOutcomeStatus.SUCCESS_EMPTY
+    else:
+        outcome_status = ToolOutcomeStatus.SUCCESS_NONEMPTY
+    outcome = ToolOutcome(
+        status=outcome_status,
+        coverage=CoverageMetadata(
+            rows_examined=len(results),
+            rows_total=total,
+            sample_reason=(f"response capped at {cap} windows" if total > cap else None),
+        ),
+    )
     resp: dict[str, object] = {
         "tool_call_id": tc_id,
         "status": "success",
+        "outcome": outcome.model_dump(mode="json"),
         "results": results,
         "source": source,
         "result_count": len(results),
@@ -303,8 +319,14 @@ def tool_response(
     results: dict[str, object] | list[object],
     source: str | None = None,
     elapsed_ms: float = 0,
+    outcome: ToolOutcome | None = None,
 ) -> dict[str, object]:
     """Build an audited success response and log the tool call.
+
+    ``outcome`` is the precise, versioned execution contract.  When omitted,
+    it defaults to ``SUCCESS_NONEMPTY`` so adoption can proceed tool by tool;
+    callers returning empty, sampled, or partial data must pass it explicitly.
+    The legacy top-level ``status`` is retained for existing clients.
 
     When *source* is provided (indicating data has been indexed into the
     case DB), returns a compact response with only a preview of the output.
@@ -314,6 +336,8 @@ def tool_response(
     When *source* is None, returns the full results (for read/reference
     tools whose output is not indexed elsewhere).
     """
+    precise_outcome = outcome or ToolOutcome(status=ToolOutcomeStatus.SUCCESS_NONEMPTY)
+
     if has_ctx():
         ctx = get_ctx()
         ctx.audit.log_tool_call(
@@ -329,6 +353,7 @@ def tool_response(
         return {
             "tool_call_id": tc_id,
             "status": "success",
+            "outcome": precise_outcome.model_dump(mode="json"),
             "results": results,
             "source": source,
         }
@@ -352,6 +377,7 @@ def tool_response(
     resp: dict[str, object] = {
         "tool_call_id": tc_id,
         "status": "success",
+        "outcome": precise_outcome.model_dump(mode="json"),
         "source": source,
         "preview": preview + ("..." if len(preview) >= _PREVIEW_CHAR_LIMIT else ""),
         "hint": (
@@ -375,8 +401,31 @@ def error_response(
     elapsed_ms: float = 0,
     error_type: str = "unknown",
     suggestion: str | None = None,
+    outcome_status: ToolOutcomeStatus | None = None,
+    coverage: CoverageMetadata | None = None,
 ) -> dict[str, object]:
-    """Build an audited error response and log the tool call."""
+    """Build an audited error response and log the tool call.
+
+    Common legacy error types are mapped to precise outcome states.  A caller
+    can supply ``outcome_status`` and ``coverage`` when it knows more.
+    """
+    if outcome_status is None:
+        if error_type == "timeout":
+            outcome_status = ToolOutcomeStatus.TIMED_OUT
+        elif error_type in {
+            "binary_missing",
+            "file_not_found",
+            "hive_not_found",
+            "no_filelist",
+        }:
+            outcome_status = ToolOutcomeStatus.UNAVAILABLE
+        else:
+            outcome_status = ToolOutcomeStatus.FAILED
+    outcome = ToolOutcome(
+        status=outcome_status,
+        coverage=coverage or CoverageMetadata(),
+        reason=error,
+    )
     if has_ctx():
         ctx = get_ctx()
         ctx.audit.log_tool_call(
@@ -390,6 +439,7 @@ def error_response(
     result: dict[str, object] = {
         "tool_call_id": tc_id,
         "status": "error",
+        "outcome": outcome.model_dump(mode="json"),
         "error_type": error_type,
         "error_message": error,
     }

@@ -268,6 +268,9 @@ class TestIndexAppFilesTool:
         assert result["status"] == "success"
         assert result["results"]["files_discovered"] == 0
         assert "NonExistent/Path" in result["results"]["pattern"]
+        assert result["outcome"]["status"] == "SUCCESS_EMPTY"
+        assert result["outcome"]["coverage"]["rows_examined"] == 8
+        assert result["outcome"]["coverage"]["rows_total"] == 8
 
     @patch("mulder.server.tools.extract.app_files.extract_and_index")
     @patch("mulder.server.tools.extract.app_files._extract_and_read_file")
@@ -301,6 +304,10 @@ class TestIndexAppFilesTool:
         assert result["results"]["files_discovered"] == 300
         assert result["results"]["files_capped_at"] == 50
         assert mock_extract.call_count == 50
+        assert result["outcome"]["status"] == "SAMPLED"
+        assert result["outcome"]["coverage"]["rows_examined"] == 50
+        assert result["outcome"]["coverage"]["rows_total"] == 300
+        assert "max_files=50" in result["outcome"]["coverage"]["sample_reason"]
 
     @patch("mulder.server.tools.extract.app_files.extract_and_index")
     @patch("mulder.server.tools.extract.app_files._extract_and_read_file")
@@ -330,6 +337,9 @@ class TestIndexAppFilesTool:
         assert result["status"] == "success"
         assert result["results"]["files_extracted"] == 0
         assert result["results"]["files_skipped_binary"] > 0
+        assert result["outcome"]["status"] == "PARTIAL"
+        assert result["outcome"]["coverage"]["rows_examined"] == 0
+        assert result["outcome"]["coverage"]["rows_total"] > 0
 
     @patch("mulder.server.tools.extract.app_files.extract_and_index")
     @patch("mulder.server.tools.extract.app_files._extract_and_read_file")

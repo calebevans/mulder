@@ -16,6 +16,7 @@ import subprocess
 import time
 from typing import Any
 
+from mulder.models import CoverageMetadata, ToolOutcome, ToolOutcomeStatus
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
@@ -289,6 +290,9 @@ def index_app_files(
 
     if not all_matches:
         elapsed = (time.monotonic() - t0) * 1000
+        rows_examined = sum(
+            len(chunk.splitlines()) for chunks, _offset in chunk_groups for chunk in chunks
+        )
         return tool_response(
             tc_id,
             "index_app_files",
@@ -303,6 +307,14 @@ def index_app_files(
             },
             source=None,
             elapsed_ms=elapsed,
+            outcome=ToolOutcome(
+                status=ToolOutcomeStatus.SUCCESS_EMPTY,
+                coverage=CoverageMetadata(
+                    rows_examined=rows_examined,
+                    rows_total=rows_examined,
+                    parser_version="fls-text-v1",
+                ),
+            ),
         )
 
     capped = all_matches[:max_files]
@@ -351,6 +363,31 @@ def index_app_files(
         "extensions_used": sorted(ext_set),
     }
 
+    if files_indexed < len(capped):
+        outcome_status = ToolOutcomeStatus.PARTIAL
+    elif len(all_matches) > len(capped):
+        outcome_status = ToolOutcomeStatus.SAMPLED
+    elif files_indexed == 0:
+        outcome_status = ToolOutcomeStatus.SUCCESS_EMPTY
+    else:
+        outcome_status = ToolOutcomeStatus.SUCCESS_NONEMPTY
+
+    coverage = CoverageMetadata(
+        rows_examined=files_indexed,
+        rows_total=len(all_matches),
+        truncation_reason=(
+            f"{len(capped) - files_indexed} selected files were not indexed"
+            if files_indexed < len(capped)
+            else None
+        ),
+        sample_reason=(
+            f"max_files={max_files} limited {len(all_matches)} matching files"
+            if len(all_matches) > len(capped)
+            else None
+        ),
+        parser_version="fls-text-v1",
+    )
+
     return tool_response(
         tc_id,
         "index_app_files",
@@ -358,4 +395,5 @@ def index_app_files(
         results,
         source=None,
         elapsed_ms=elapsed,
+        outcome=ToolOutcome(status=outcome_status, coverage=coverage),
     )
