@@ -146,6 +146,7 @@ Each investigation produces:
 - **Per-case SQLite database** - FTS5 full-text search across all indexed evidence
 - **Append-only audit log** - JSONL recording every tool invocation with BLAKE2b output hashes
 - **Optional exports** - STIX 2.1 IOC bundle, CSV IOC list, and MITRE ATT&CK Navigator layer via `mulder export-iocs` and `mulder export-navigator`
+- **Portable case receipts** - seal evidence, logical database state, audit head, claims, tool versions, and reports with `mulder seal-case`; verify a relocated bundle offline with `mulder verify-case`
 
 ## Documentation
 
