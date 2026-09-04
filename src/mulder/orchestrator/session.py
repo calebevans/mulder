@@ -21,6 +21,11 @@ from claude_agent_sdk.types import (
     ToolUseBlock,
 )
 
+from mulder.orchestrator.capabilities import (
+    UTILITY_IDENTITY,
+    AgentIdentity,
+    authorize_tool_list,
+)
 from mulder.orchestrator.display import InvestigationDashboard
 from mulder.orchestrator.errors import AuthenticationError, ModelNotAvailableError
 from mulder.orchestrator.models import ModelConfig
@@ -185,6 +190,7 @@ class SessionExecutor:
         max_budget: float,
         log_prefix: str = "",
         task_system: str = "",
+        identity: AgentIdentity | None = None,
     ) -> PhaseResult:
         """Execute a single SDK query session.
 
@@ -204,16 +210,21 @@ class SessionExecutor:
             log_prefix: Optional prefix for dashboard log lines.
             task_system: When non-empty, tool use blocks update the
                 dashboard task panel for this system name.
+            identity: Stable pipeline identity. When supplied, the requested
+                tools are authorized before any provider options are built.
 
         Returns:
             PhaseResult with collected messages and usage information.
         """
+        effective_tools = (
+            authorize_tool_list(identity, allowed_tools) if identity is not None else allowed_tools
+        )
         options = ClaudeAgentOptions(
             system_prompt=system_prompt,
             model=model,
             max_turns=max_turns,
             max_budget_usd=max_budget,
-            allowed_tools=allowed_tools,
+            allowed_tools=effective_tools,
             disallowed_tools=disallowed_tools,
             permission_mode="bypassPermissions",
             cwd=self._cwd,
@@ -594,12 +605,13 @@ class SessionExecutor:
             Parsed JSON dictionary, or None if the query failed.
         """
         utility_model = self._model_config.resolve("utility", "planner")
+        effective_tools = authorize_tool_list(UTILITY_IDENTITY, allowed_tools)
 
         options = ClaudeAgentOptions(
             model=utility_model,
             max_turns=max_turns,
             max_budget_usd=budget,
-            allowed_tools=allowed_tools,
+            allowed_tools=effective_tools,
             permission_mode="bypassPermissions",
             cwd=self._cwd,
             effort="low",

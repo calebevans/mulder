@@ -216,6 +216,15 @@ When a gate fails, the orchestrator retries the phase with:
 
 Tools self-declare which pipeline roles may invoke them via the `@tool_access` decorator (`src/mulder/server/tool_access.py`). At import time, `phases.py` calls `get_tools_for_role(Role.EXTRACT_EXECUTOR)` (and similar) to build allowlists dynamically, eliminating manual tool list maintenance.
 
+Before an SDK session starts, `orchestrator.capabilities` independently binds
+that allowlist to a stable agent identity and a set of effect capabilities
+(`case-read`, `forensic-execution`, `case-mutation`, `job-control`, and
+`publication`). A tool must satisfy both its decorator role and the identity's
+effect capability. Unknown tools, cross-role additions, and capability
+escalations fail before provider options are constructed. Continuation
+sessions retain the same identity; JSON repair and the deterministic verifier
+receive no MCP tool authority.
+
 ### The `@tool_access` Decorator
 
 ```python
@@ -494,7 +503,15 @@ flowchart TB
     mulderUser --> mulderCLI
 ```
 
-The container runs with `--privileged` (or `--cap-add SYS_ADMIN`) to support disk image mounting via `ewfmount`, `guestmount`, and `mount`.
+TSK-first extraction avoids mount privileges in the common path. Fallback disk
+mounting crosses the `MountBroker` boundary into
+`python -m mulder.execution.mount_helper`, whose protocol contains only mount
+and unmount operations and whose argv fixes read-only, `noexec`, `nodev`, and
+`nosuid` options. The parent invokes that helper through the central command
+policy with typed, resolved paths and no network capability. Deployments must
+still confine the helper with `--cap-add SYS_ADMIN --device /dev/fuse` (or an
+equivalent OS policy); process separation alone does not grant or sandbox OS
+privileges.
 
 ## Evidence Reference Validation
 

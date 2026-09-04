@@ -66,3 +66,15 @@ def tool_access(*roles: Role) -> Callable[[F], F]:
 def get_tools_for_role(role: Role) -> list[str]:
     """Return sorted MCP tool names accessible by a given role."""
     return sorted(f"mcp__mulder__{name}" for name, allowed in _registry.items() if role & allowed)
+
+
+def get_registered_tool_roles(tool_name: str) -> Role | None:
+    """Return the declared roles for one Mulder MCP tool.
+
+    Both SDK-qualified names (``mcp__mulder__search``) and registry names
+    (``search``) are accepted.  Returning ``None`` for unknown tools keeps
+    authorization fail-closed without exposing the mutable registry.
+    """
+    prefix = "mcp__mulder__"
+    registry_name = tool_name[len(prefix) :] if tool_name.startswith(prefix) else tool_name
+    return _registry.get(registry_name)

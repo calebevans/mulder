@@ -240,7 +240,11 @@ mkdir -p ~/mulder-cases
 
 ### Privileged Access
 
-The `--privileged` flag is required for FUSE operations that several forensic tools depend on (`ewfmount` for E01 images, `guestmount` for VM disk images, etc.).
+TSK-first analysis normally needs no mount privilege. Fallback FUSE operations
+(`ewfmount`, `guestmount`, or `mount`) run through a separate, closed-protocol
+helper process: it accepts only read-only mount and unmount requests, never
+arbitrary commands. The long-lived model/MCP process does not execute mount
+commands directly.
 
 If `--privileged` is too permissive for your environment, use the narrower capability grant instead:
 
@@ -249,6 +253,11 @@ If `--privileged` is too permissive for your environment, use the narrower capab
 ```
 
 The container runs as a non-root `mulder` user. An entrypoint script handles credential copying and permission setup automatically.
+
+For stronger isolation, deploy `python -m mulder.execution.mount_helper` as a
+separately confined service/process with only the mount capability and image
+roots it needs. The built-in subprocess boundary narrows the protocol, but OS
+privilege separation still depends on how the container or helper is launched.
 
 ### Using an Anthropic API Key
 

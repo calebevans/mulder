@@ -16,6 +16,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from mulder.orchestrator.capabilities import identity_for_phase
 from mulder.orchestrator.display import InvestigationDashboard
 from mulder.orchestrator.errors import AuthenticationError, ModelNotAvailableError
 from mulder.orchestrator.evidence import EvidenceContext, ServerBridge
@@ -484,6 +485,7 @@ class Orchestrator:
                     disallowed_tools=phase.disallowed_tools,
                     max_turns=phase.single_max_turns,
                     max_budget=budget,
+                    identity=identity_for_phase(phase.name, "single"),
                 )
             except (AuthenticationError, ModelNotAvailableError) as exc:
                 self.dashboard.log_gate_fail(str(exc))
@@ -507,6 +509,7 @@ class Orchestrator:
                     disallowed_tools=phase.disallowed_tools,
                     max_turns=phase.single_max_turns,
                     max_budget=budget,
+                    identity=identity_for_phase(phase.name, "single"),
                 )
                 accumulated_turns += continuation.turns_used
                 phase_result.messages.extend(continuation.messages)

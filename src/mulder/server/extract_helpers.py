@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from mulder.extractors.disk import _mount_image, _unmount_image
+from mulder.execution.privileged import MountBroker, SubprocessMountBroker
 from mulder.models import WindowRow
 
 logger = logging.getLogger(__name__)
@@ -212,10 +212,11 @@ class _MountCache:
     torn down only when the last caller releases it.
     """
 
-    def __init__(self) -> None:
-        """Initialize an empty cache with its protecting lock."""
+    def __init__(self, broker: MountBroker | None = None) -> None:
+        """Initialize an empty cache with its broker and protecting lock."""
         self._lock = threading.Lock()
         self._entries: dict[str, _MountEntry] = {}
+        self._broker = broker or SubprocessMountBroker()
 
     @contextmanager
     def acquire(self, image_path: str) -> Iterator[str]:
@@ -248,7 +249,7 @@ class _MountCache:
 
         if is_owner:
             try:
-                mounted = _mount_image(Path(image_path), entry.mount_dir)
+                mounted = self._broker.mount_read_only(Path(image_path), entry.mount_dir)
                 if mounted:
                     entry.mounted = True
                 else:
@@ -285,7 +286,7 @@ class _MountCache:
 
         if do_cleanup:
             if entry.mounted:
-                _unmount_image(entry.mount_dir)
+                self._broker.unmount(entry.mount_dir)
             with suppress(OSError):
                 shutil.rmtree(entry.mount_dir, ignore_errors=True)
 
