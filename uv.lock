@@ -1523,6 +1523,7 @@ source = { editable = "." }
 dependencies = [
     { name = "claude-agent-sdk" },
     { name = "click" },
+    { name = "cryptography" },
     { name = "detect-secrets" },
     { name = "httpx" },
     { name = "jinja2" },
@@ -1568,6 +1569,7 @@ requires-dist = [
     { name = "claude-agent-sdk", specifier = ">=0.2" },
     { name = "click", specifier = ">=8.3" },
     { name = "colorama", marker = "extra == 'forensics'", specifier = ">=0.4.4" },
+    { name = "cryptography", specifier = ">=44.0" },
     { name = "detect-secrets", specifier = ">=1.5" },
     { name = "evtx", marker = "extra == 'forensics'", specifier = ">=0.6.2" },
     { name = "httpx", specifier = ">=0.27" },

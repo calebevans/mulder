@@ -43,6 +43,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
+    "cryptography>=44.0",
     "mcp>=2.0",
     "sqlalchemy>=2.0",
     "volatility3>=2.0",

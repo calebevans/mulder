@@ -1054,6 +1054,7 @@ class ReportRenderer:
         source_windows: dict[str, list[dict[str, Any]]] | None = None,
         enrichment_windows: list[dict[str, Any]] | None = None,
         coverage_records: Sequence[CoverageRecord | dict[str, Any]] | None = None,
+        proof_cards: Sequence[dict[str, object]] | None = None,
     ) -> dict[str, Any]:
         """Assemble template variables from case metadata, findings, audit trail, and sources.
 
@@ -1069,6 +1070,7 @@ class ReportRenderer:
             enrichment_windows: Raw windows from the ``enrichment.iocs``
                 DB source containing threat intel metadata for IOCs.
             coverage_records: Persistent analysis coverage and boundary rows.
+            proof_cards: Provenance-rich claim, revision, coverage, and receipt cards.
 
         Returns:
             Dict of template variables ready for Jinja2 rendering.
@@ -1078,6 +1080,13 @@ class ReportRenderer:
             [_normalize_source(s) for s in sources_list] if sources_list else None
         )
         normalized_coverage = [_normalize_coverage(record) for record in coverage_records or []]
+        proof_card_data = [dict(card) for card in proof_cards or ()]
+        proof_cards_by_id = {
+            finding_id: card
+            for card in proof_card_data
+            if isinstance((finding := card.get("finding")), dict)
+            and isinstance((finding_id := finding.get("finding_id")), str)
+        }
         _NEG_PREFIX = "[NEGATIVE]"
         negative_findings = [
             f
@@ -1231,6 +1240,8 @@ class ReportRenderer:
             "mitre_tactic_groups": active_tactic_groups,
             "source_windows": source_windows or {},
             "coverage_records": coverage_data,
+            "proof_cards": proof_card_data,
+            "proof_cards_by_id": proof_cards_by_id,
             "model_token_breakdown": self._load_model_usage(
                 Path(audit_log_path).parent, case_metadata.case_id
             ),
@@ -1298,6 +1309,15 @@ class ReportRenderer:
                 }
             )
 
+        def _safe_proof_value(value: Any) -> Any:
+            if isinstance(value, str):
+                return escape_report_markdown(value)
+            if isinstance(value, list):
+                return [_safe_proof_value(item) for item in value]
+            if isinstance(value, dict):
+                return {key: _safe_proof_value(item) for key, item in value.items()}
+            return value
+
         markdown_ctx = dict(ctx)
         for key in ("case_id", "evidence_root", "audit_log_path", "executive_summary_md"):
             markdown_ctx[key] = escape_report_markdown(str(markdown_ctx.get(key, "")))
@@ -1318,6 +1338,11 @@ class ReportRenderer:
             }
             for entry in ctx.get("evidence_integrity", [])
         ]
+        markdown_ctx["proof_cards_by_id"] = {
+            finding_id: _safe_proof_value(card)
+            for finding_id, card in ctx.get("proof_cards_by_id", {}).items()
+        }
+        markdown_ctx["proof_cards"] = list(markdown_ctx["proof_cards_by_id"].values())
         markdown_ctx["network_iocs"] = [
             SimpleNamespace(
                 **{
@@ -1483,6 +1508,7 @@ class ReportRenderer:
         evidence_integrity: list[dict[str, object]] | None = None,
         enrichment_windows: list[dict[str, Any]] | None = None,
         coverage_records: list[CoverageRecord] | None = None,
+        proof_cards: list[dict[str, object]] | None = None,
     ) -> str:
         """Render the markdown report template (``report.md.j2``) to a string.
 
@@ -1500,6 +1526,7 @@ class ReportRenderer:
             enrichment_windows: Raw windows from the ``enrichment.iocs``
                 DB source for threat intel context.
             coverage_records: Persistent analysis coverage and boundary rows.
+            proof_cards: Per-finding proof-card data.
 
         Returns:
             Rendered markdown report string.
@@ -1514,6 +1541,7 @@ class ReportRenderer:
             evidence_integrity=evidence_integrity,
             enrichment_windows=enrichment_windows,
             coverage_records=coverage_records,
+            proof_cards=proof_cards,
         )
         return self._render_markdown(ctx)
 
@@ -1529,6 +1557,7 @@ class ReportRenderer:
         source_windows: dict[str, list[dict[str, Any]]] | None = None,
         enrichment_windows: list[dict[str, Any]] | None = None,
         coverage_records: list[CoverageRecord] | None = None,
+        proof_cards: list[dict[str, object]] | None = None,
     ) -> str:
         """Render the HTML report with markdown descriptions converted to HTML.
 
@@ -1547,6 +1576,7 @@ class ReportRenderer:
             enrichment_windows: Raw windows from the ``enrichment.iocs``
                 DB source for threat intel context.
             coverage_records: Persistent analysis coverage and boundary rows.
+            proof_cards: Per-finding proof-card data.
 
         Returns:
             Rendered HTML report string.
@@ -1562,6 +1592,7 @@ class ReportRenderer:
             source_windows=source_windows,
             enrichment_windows=enrichment_windows,
             coverage_records=coverage_records,
+            proof_cards=proof_cards,
         )
         return self._render_html(ctx)
 
@@ -1578,6 +1609,7 @@ class ReportRenderer:
         generate_pdf: bool = True,
         enrichment_windows: list[dict[str, Any]] | None = None,
         coverage_records: list[CoverageRecord] | None = None,
+        proof_cards: list[dict[str, object]] | None = None,
     ) -> tuple[str, str, bytes | None]:
         """Render markdown, HTML, and optionally PDF reports.
 
@@ -1599,6 +1631,7 @@ class ReportRenderer:
             enrichment_windows: Raw windows from the ``enrichment.iocs``
                 DB source for threat intel context.
             coverage_records: Persistent analysis coverage and boundary rows.
+            proof_cards: Per-finding proof-card data.
 
         Returns:
             Tuple of (markdown_text, html_text, pdf_bytes_or_none).
@@ -1614,6 +1647,7 @@ class ReportRenderer:
             source_windows=source_windows,
             enrichment_windows=enrichment_windows,
             coverage_records=coverage_records,
+            proof_cards=proof_cards,
         )
         md_text = self._render_markdown(ctx)
         html_text = self._render_html(dict(ctx))

@@ -856,6 +856,29 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
     </div>
     <div class="finding-body">
       <div class="finding-desc">{{ f.description_html }}</div>
+      {% set card = proof_cards_by_id.get(f.finding_id) %}
+      {% if card %}
+      <div class="evidence-chain proof-card">
+        <h4>Proof Card</h4>
+        <div class="finding-meta-bar">
+          <div><strong>Receipt:</strong> <code>{{ card.receipt.status }}</code></div>
+          <div><strong>Signature:</strong> <code>{{ card.receipt.signature_status }}</code>{% if card.receipt.public_key_fingerprint %} — <code>{{ card.receipt.public_key_fingerprint }}</code>{% endif %}</div>
+          <div><strong>History:</strong> {{ card.revisions | length }} revision(s)</div>
+          <div><strong>Coverage links:</strong> {{ card.coverage | length }}</div>
+        </div>
+        {% for claim in card.claims %}
+        <div class="ev-item" style="display:block;cursor:default;">
+          <strong>Claim {{ claim.ordinal + 1 }}</strong> <code>{{ claim.epistemic_state }}</code> — {{ claim.statement }}
+          {% for anchor in claim.anchors %}
+          <div style="margin-top:0.35rem;"><code>{{ anchor.source_name }}:{{ anchor.line_start }}-{{ anchor.line_end }}</code> chars {{ anchor.char_start }}-{{ anchor.char_end }} via <code>{{ anchor.tool_call_id }}</code>: “{{ anchor.exact_text }}”</div>
+          {% endfor %}
+          {% for verification in claim.verifications %}
+          <div style="margin-top:0.35rem;">Verification <code>{{ verification.result }}</code> by <code>{{ verification.verifier_name }}@{{ verification.verifier_version }}</code> ({{ verification.reason_code }})</div>
+          {% endfor %}
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
       <div class="evidence-strength">
         <span>Evidence strength:</span>
         <div class="evidence-strength-bar"><div class="evidence-strength-fill" style="width:{{ [f.evidence_refs | length * 20, 100] | min }}%"></div></div>

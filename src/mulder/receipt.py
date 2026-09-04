@@ -1,10 +1,4 @@
-"""Portable, offline-verifiable case manifests.
-
-The manifest is deliberately a receipt, not a signature.  It commits every
-artifact needed to review a case and carries an explicit ``unsigned`` marker;
-examiner-controlled signing is a separate layer.  Paths are stored relative to
-the manifest so a case directory can be moved without invalidating it.
-"""
+"""Portable, offline-verifiable and optionally examiner-signed case manifests."""
 
 from __future__ import annotations
 
@@ -23,6 +17,17 @@ from typing import Literal, cast
 
 from mulder import __version__
 from mulder.audit import AuditIntegrityResult, AuditLog
+from mulder.case_signing import (
+    SIGNATURE_ALGORITHM,
+    SIGNATURE_PROFILE,
+    ExaminerKeyProvider,
+    SigningKeyError,
+    create_signature_block,
+    embedded_public_key,
+    load_public_key,
+    public_key_metadata,
+    verify_manifest_signature,
+)
 
 MANIFEST_SCHEMA = "mulder.case-manifest"
 MANIFEST_VERSION = 1
@@ -30,7 +35,8 @@ SQLITE_LOGICAL_PROFILE = "sqlite-logical-v1"
 
 VerificationStatus = Literal["verified", "legacy_unverified", "invalid", "unsupported_manifest"]
 DiagnosticSeverity = Literal["error", "warning"]
-SignatureStatus = Literal["unsigned", "unknown"]
+SignatureStatus = Literal["unsigned", "valid", "invalid", "unverifiable", "unknown"]
+ReplayStatus = Literal["EXACT", "DRIFTED", "NON_DETERMINISTIC", "UNSUPPORTED"]
 
 _STANDARD_ARTIFACT_SUFFIXES = (
     ".report.md",
@@ -64,6 +70,54 @@ class VerificationDiagnostic:
 
 
 @dataclass(frozen=True)
+class ReplayInventory:
+    """Version inventory of the local environment proposed for replay."""
+
+    mulder_version: str
+    extractor_versions: Mapping[str, str]
+    tool_versions: Mapping[str, str]
+    parser_versions: Mapping[str, str]
+
+    @classmethod
+    def current(cls) -> ReplayInventory:
+        """Return what the verifier can establish without invoking any tools."""
+        return cls(__version__, {}, {}, {})
+
+    @classmethod
+    def from_mapping(cls, raw: Mapping[str, object]) -> ReplayInventory:
+        """Validate a JSON-like examiner-supplied replay inventory."""
+        def versions(name: str) -> dict[str, str]:
+            value = raw.get(name, {})
+            if not isinstance(value, dict) or not all(
+                isinstance(key, str) and isinstance(version, str)
+                for key, version in value.items()
+            ):
+                raise ValueError(f"replay inventory {name} must be a string-to-string object")
+            return cast(dict[str, str], value)
+
+        mulder_version = raw.get("mulder_version", __version__)
+        if not isinstance(mulder_version, str):
+            raise ValueError("replay inventory mulder_version must be a string")
+        return cls(
+            mulder_version,
+            versions("extractor_versions"),
+            versions("tool_versions"),
+            versions("parser_versions"),
+        )
+
+
+@dataclass(frozen=True)
+class ReplayAssessment:
+    """Replay compatibility, intentionally separate from tamper detection."""
+
+    status: ReplayStatus
+    reasons: tuple[str, ...]
+
+    def as_dict(self) -> dict[str, object]:
+        return {"status": self.status, "reasons": list(self.reasons)}
+
+
+@dataclass(frozen=True)
 class CaseVerificationResult:
     """Complete result of an offline case-manifest verification."""
 
@@ -73,6 +127,8 @@ class CaseVerificationResult:
     artifacts_checked: int
     diagnostics: tuple[VerificationDiagnostic, ...]
     signature_status: SignatureStatus = "unknown"
+    public_key: Mapping[str, str] | None = None
+    replay: ReplayAssessment = ReplayAssessment("UNSUPPORTED", ("not assessed",))
 
     @property
     def ok(self) -> bool:
@@ -87,6 +143,8 @@ class CaseVerificationResult:
             "case_id": self.case_id,
             "artifacts_checked": self.artifacts_checked,
             "signature_status": self.signature_status,
+            "public_key": dict(self.public_key) if self.public_key is not None else None,
+            "replay": self.replay.as_dict(),
             "diagnostics": [diagnostic.as_dict() for diagnostic in self.diagnostics],
         }
 
@@ -444,6 +502,160 @@ def _discover_reports(case_id: str, db_dir: Path) -> list[Path]:
     return reports
 
 
+def _replay_contract(case_id: str, db_path: Path, db_dir: Path) -> dict[str, object]:
+    """Record versioned inputs without running a parser, model, or forensic tool."""
+    tools: dict[str, str] = {}
+    parsers: dict[str, str] = {}
+    unknown: list[str] = []
+    connection = _connect_read_only(db_path)
+    try:
+        table_names = {
+            cast(str, row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_schema WHERE type = 'table'"
+            ).fetchall()
+        }
+        if "coverage_register" in table_names:
+            rows = connection.execute(
+                "SELECT system_name, evidence_domain, check_name, coverage "
+                "FROM coverage_register ORDER BY system_name, evidence_domain, check_name"
+            ).fetchall()
+            for system_name, evidence_domain, check_name, coverage_json in rows:
+                key = f"{system_name}/{evidence_domain}/{check_name}"
+                try:
+                    coverage = json.loads(cast(str, coverage_json))
+                except (json.JSONDecodeError, TypeError):
+                    unknown.append(f"coverage:{key}:invalid")
+                    continue
+                if not isinstance(coverage, dict):
+                    unknown.append(f"coverage:{key}:invalid")
+                    continue
+                tool_version = coverage.get("tool_version")
+                parser_version = coverage.get("parser_version")
+                if isinstance(tool_version, str) and tool_version:
+                    tools[key] = tool_version
+                else:
+                    unknown.append(f"tool:{key}")
+                if isinstance(parser_version, str) and parser_version:
+                    parsers[key] = parser_version
+                else:
+                    unknown.append(f"parser:{key}")
+        if "claim_verifications" in table_names:
+            rows = connection.execute(
+                "SELECT DISTINCT verifier_name, verifier_version FROM claim_verifications "
+                "ORDER BY verifier_name, verifier_version"
+            ).fetchall()
+            for verifier_name, verifier_version in rows:
+                key = f"claim-verifier:{verifier_name}"
+                if isinstance(verifier_version, str) and verifier_version:
+                    previous = tools.get(key)
+                    if previous is not None and previous != verifier_version:
+                        unknown.append(f"tool:{key}:multiple_versions")
+                    tools[key] = verifier_version
+                else:
+                    unknown.append(f"tool:{key}")
+    finally:
+        connection.close()
+
+    models: list[str] = []
+    usage_path = db_dir / f"{case_id}.model_usage.json"
+    if usage_path.is_file():
+        try:
+            usage = json.loads(usage_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            unknown.append("models:model_usage_sidecar_invalid")
+        else:
+            if not isinstance(usage, list):
+                unknown.append("models:model_usage_sidecar_invalid")
+            else:
+                for index, item in enumerate(usage):
+                    if isinstance(item, dict) and isinstance(item.get("model"), str):
+                        models.append(cast(str, item["model"]))
+                    else:
+                        unknown.append(f"models:model_usage_entry:{index}")
+
+    return {
+        "schema": "mulder.replay-inputs",
+        "version": 1,
+        "mulder_version": __version__,
+        "extractor_versions": {},  # filled from the transactional DB snapshot
+        "tool_versions": dict(sorted(tools.items())),
+        "parser_versions": dict(sorted(parsers.items())),
+        "model_inputs": sorted(set(models)),
+        "unknown_versions": sorted(set(unknown)),
+    }
+
+
+def assess_replay(
+    manifest: Mapping[str, object],
+    inventory: ReplayInventory | Mapping[str, object] | None = None,
+) -> ReplayAssessment:
+    """Classify replay feasibility without changing artifact-integrity status."""
+    methodology = manifest.get("methodology")
+    contract = methodology.get("replay") if isinstance(methodology, dict) else None
+    if not isinstance(contract, dict) or (
+        contract.get("schema") != "mulder.replay-inputs" or contract.get("version") != 1
+    ):
+        return ReplayAssessment("UNSUPPORTED", ("manifest has no supported replay contract",))
+    models = contract.get("model_inputs")
+    if isinstance(models, list) and models:
+        names = ", ".join(str(model) for model in models)
+        return ReplayAssessment(
+            "NON_DETERMINISTIC",
+            (f"recorded model inputs cannot guarantee byte-identical replay: {names}",),
+        )
+    unknown = contract.get("unknown_versions")
+    if isinstance(unknown, list) and unknown:
+        return ReplayAssessment(
+            "UNSUPPORTED",
+            tuple(f"recorded input has no usable version: {item}" for item in unknown),
+        )
+    try:
+        current = (
+            ReplayInventory.current()
+            if inventory is None
+            else inventory
+            if isinstance(inventory, ReplayInventory)
+            else ReplayInventory.from_mapping(inventory)
+        )
+    except ValueError as exc:
+        return ReplayAssessment("UNSUPPORTED", (str(exc),))
+
+    reasons: list[str] = []
+    missing: list[str] = []
+    recorded_mulder = contract.get("mulder_version")
+    if not isinstance(recorded_mulder, str):
+        missing.append("recorded Mulder version is absent")
+    elif recorded_mulder != current.mulder_version:
+        reasons.append(
+            f"mulder version drift: recorded {recorded_mulder}, current {current.mulder_version}"
+        )
+    for field, observed in (
+        ("extractor_versions", current.extractor_versions),
+        ("tool_versions", current.tool_versions),
+        ("parser_versions", current.parser_versions),
+    ):
+        recorded = contract.get(field)
+        if not isinstance(recorded, dict) or not all(
+            isinstance(key, str) and isinstance(value, str) for key, value in recorded.items()
+        ):
+            missing.append(f"recorded {field} inventory is invalid")
+            continue
+        for name, version in cast(dict[str, str], recorded).items():
+            current_version = observed.get(name)
+            if current_version is None:
+                missing.append(f"current {field}:{name} is unavailable")
+            elif current_version != version:
+                reasons.append(
+                    f"{field}:{name} drift: recorded {version}, current {current_version}"
+                )
+    if missing:
+        return ReplayAssessment("UNSUPPORTED", tuple(missing))
+    if reasons:
+        return ReplayAssessment("DRIFTED", tuple(reasons))
+    return ReplayAssessment("EXACT", ())
+
+
 def _write_manifest(path: Path, manifest: Mapping[str, object], overwrite: bool) -> None:
     """Atomically persist a completed manifest."""
     if path.exists() and not overwrite:
@@ -478,6 +690,7 @@ def seal_case(
     manifest_path: Path | None = None,
     report_artifacts: Sequence[Path] = (),
     overwrite: bool = False,
+    key_provider: ExaminerKeyProvider | None = None,
 ) -> Path:
     """Create a versioned manifest binding one complete case snapshot.
 
@@ -593,6 +806,8 @@ def seal_case(
             else {"status": "absent_legacy"}
         )
 
+    replay = _replay_contract(case_id, db_path, db_dir)
+    replay["extractor_versions"] = dict(sorted(database.extractor_versions.items()))
     manifest: dict[str, object] = {
         "schema": MANIFEST_SCHEMA,
         "version": MANIFEST_VERSION,
@@ -636,6 +851,7 @@ def seal_case(
             "mulder_version": __version__,
             "extractor_versions": database.extractor_versions,
             "audit_tool_counts": dict(sorted(tool_counts.items())),
+            "replay": replay,
         },
         "reports": reports,
         "integrity": {
@@ -643,6 +859,10 @@ def seal_case(
             "signature": {"status": "unsigned"},
         },
     }
+    if key_provider is not None:
+        cast(dict[str, object], manifest["integrity"])["signature"] = create_signature_block(
+            manifest, key_provider
+        )
     cast(dict[str, object], manifest["integrity"])["manifest_hash"] = _manifest_hash(manifest)
     _write_manifest(output, manifest, overwrite)
     return output
@@ -1176,10 +1396,128 @@ def _verify_reports(
     return checked
 
 
+def _verify_signature(
+    manifest: Mapping[str, object],
+    integrity: Mapping[str, object],
+    public_key_path: Path | None,
+    diagnostics: list[VerificationDiagnostic],
+) -> tuple[SignatureStatus, Mapping[str, str] | None]:
+    """Verify optional Ed25519 approval independently of artifact checks."""
+    signature_raw = integrity.get("signature")
+    if not isinstance(signature_raw, dict):
+        _diagnostic(
+            diagnostics,
+            "signature.invalid_block",
+            "manifest:signature",
+            "Manifest integrity block has no signature status.",
+        )
+        return "invalid", None
+    signature = cast(dict[str, object], signature_raw)
+    if signature.get("status") == "unsigned":
+        if public_key_path is not None:
+            _diagnostic(
+                diagnostics,
+                "signature.manifest_unsigned",
+                "manifest:signature",
+                "A verification key was supplied, but this manifest is explicitly unsigned.",
+                severity="warning",
+            )
+        return "unsigned", None
+    if (
+        signature.get("status") != "signed"
+        or signature.get("algorithm") != SIGNATURE_ALGORITHM
+        or signature.get("profile") != SIGNATURE_PROFILE
+    ):
+        _diagnostic(
+            diagnostics,
+            "signature.unsupported",
+            "manifest:signature",
+            "Manifest signature status, algorithm, or profile is unsupported.",
+            expected={"status": "signed", "algorithm": SIGNATURE_ALGORITHM,
+                      "profile": SIGNATURE_PROFILE},
+            actual={
+                "status": signature.get("status"),
+                "algorithm": signature.get("algorithm"),
+                "profile": signature.get("profile"),
+            },
+        )
+        return "unverifiable", None
+
+    try:
+        embedded = embedded_public_key(signature)
+        embedded_metadata = public_key_metadata(embedded)
+    except SigningKeyError as exc:
+        _diagnostic(diagnostics, "signature.invalid_public_key", "manifest:signature", str(exc))
+        return "invalid", None
+
+    metadata = embedded_metadata.as_dict()
+    metadata["source"] = "embedded"
+    if isinstance(signature.get("key_id"), str):
+        metadata["key_id_assertion"] = cast(str, signature["key_id"])
+    if isinstance(signature.get("examiner"), str):
+        metadata["examiner_assertion"] = cast(str, signature["examiner"])
+    if signature.get("fingerprint") != embedded_metadata.fingerprint:
+        _diagnostic(
+            diagnostics,
+            "signature.fingerprint_mismatch",
+            "manifest:signature",
+            "Embedded public-key bytes do not match the signed fingerprint metadata.",
+            expected=signature.get("fingerprint"),
+            actual=embedded_metadata.fingerprint,
+        )
+        return "invalid", metadata
+
+    key = embedded
+    if public_key_path is not None:
+        try:
+            key = load_public_key(public_key_path)
+        except (OSError, SigningKeyError) as exc:
+            _diagnostic(
+                diagnostics,
+                "signature.verification_key_unreadable",
+                "verification-key",
+                str(exc),
+            )
+            return "unverifiable", metadata
+        supplied = public_key_metadata(key)
+        metadata = supplied.as_dict()
+        metadata["source"] = "provided"
+        if isinstance(signature.get("key_id"), str):
+            metadata["key_id_assertion"] = cast(str, signature["key_id"])
+        if isinstance(signature.get("examiner"), str):
+            metadata["examiner_assertion"] = cast(str, signature["examiner"])
+        if supplied.fingerprint != embedded_metadata.fingerprint:
+            _diagnostic(
+                diagnostics,
+                "signature.wrong_key",
+                "verification-key",
+                "Supplied public key does not match the key embedded in the signed manifest.",
+                expected=embedded_metadata.fingerprint,
+                actual=supplied.fingerprint,
+            )
+            return "invalid", metadata
+    try:
+        valid = verify_manifest_signature(manifest, signature, key)
+    except SigningKeyError as exc:
+        _diagnostic(diagnostics, "signature.invalid_value", "manifest:signature", str(exc))
+        return "invalid", metadata
+    if not valid:
+        _diagnostic(
+            diagnostics,
+            "signature.invalid",
+            "manifest:signature",
+            "Ed25519 signature does not cover the current canonical manifest.",
+        )
+        return "invalid", metadata
+    return "valid", metadata
+
+
 def verify_case(
     manifest_path: Path,
     *,
     evidence_root: Path | None = None,
+    public_key_path: Path | None = None,
+    replay_inventory: ReplayInventory | Mapping[str, object] | None = None,
 ) -> CaseVerificationResult:
     """Verify a sealed case without MCP, an inference provider, or network I/O."""
     path = Path(manifest_path).expanduser().resolve(strict=False)
@@ -1215,6 +1553,7 @@ def verify_case(
         )
         return CaseVerificationResult("invalid", str(path), None, 0, tuple(diagnostics))
     manifest = cast(dict[str, object], raw)
+    replay = assess_replay(manifest, replay_inventory)
     case_raw = manifest.get("case")
     case_id = case_raw.get("case_id") if isinstance(case_raw, dict) else None
     case_id = case_id if isinstance(case_id, str) else None
@@ -1234,6 +1573,7 @@ def verify_case(
 
     integrity = manifest.get("integrity")
     signature_status: SignatureStatus = "unknown"
+    key_metadata: Mapping[str, str] | None = None
     if not isinstance(integrity, dict) or integrity.get("algorithm") != "sha256":
         _diagnostic(
             diagnostics,
@@ -1261,16 +1601,9 @@ def verify_case(
                     expected=integrity.get("manifest_hash"),
                     actual=observed_hash,
                 )
-        signature = integrity.get("signature")
-        if not isinstance(signature, dict) or signature.get("status") != "unsigned":
-            _diagnostic(
-                diagnostics,
-                "manifest.unsupported_signature",
-                "manifest",
-                "This verifier supports only the explicit unsigned v1 receipt.",
-            )
-        else:
-            signature_status = "unsigned"
+        signature_status, key_metadata = _verify_signature(
+            manifest, cast(dict[str, object], integrity), public_key_path, diagnostics
+        )
 
     locations = manifest.get("locations")
     database = manifest.get("database")
@@ -1284,7 +1617,14 @@ def verify_case(
             "Manifest is missing a locations, database, evidence_registry, or audit object.",
         )
         return CaseVerificationResult(
-            "invalid", str(path), case_id, 0, tuple(diagnostics), signature_status
+            "invalid",
+            str(path),
+            case_id,
+            0,
+            tuple(diagnostics),
+            signature_status,
+            key_metadata,
+            replay,
         )
 
     checked = _verify_database(
@@ -1318,6 +1658,8 @@ def verify_case(
         checked,
         tuple(diagnostics),
         signature_status,
+        key_metadata,
+        replay,
     )
 
 
@@ -1325,8 +1667,22 @@ def format_verification_result(result: CaseVerificationResult) -> str:
     """Render a concise human-readable verification report."""
     label = result.status.upper().replace("_", " ")
     case = result.case_id or "unknown"
-    trust = " — unsigned manifest" if result.signature_status == "unsigned" else ""
-    lines = [f"Case {case}: {label}{trust} ({result.artifacts_checked} artifacts checked)"]
+    trust = f" — signature {result.signature_status}"
+    lines = [
+        f"Case {case}: {label}{trust} ({result.artifacts_checked} artifacts checked)",
+        f"Replay: {result.replay.status}",
+    ]
+    if result.public_key is not None:
+        lines.append(
+            "Verification key: "
+            f"{result.public_key.get('fingerprint', 'unknown')} "
+            f"({result.public_key.get('source', 'unknown')} source)"
+        )
+        examiner = result.public_key.get("examiner_assertion")
+        if examiner is not None:
+            lines.append(f"Examiner assertion: {examiner!r} (metadata only)")
+    for reason in result.replay.reasons:
+        lines.append(f"  {reason}")
     for diagnostic in result.diagnostics:
         lines.append(
             f"[{diagnostic.severity.upper()}] {diagnostic.code} "

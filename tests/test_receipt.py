@@ -12,12 +12,31 @@ from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from mulder import __version__
 from mulder.audit import AuditLog
+from mulder.case_signing import Ed25519PEMKeyProvider
 from mulder.cli import cli
 from mulder.db import CaseDB
-from mulder.models import AtomicClaimInput, EvidenceAnchorInput, Finding, WindowRow
-from mulder.receipt import CaseVerificationResult, SealError, seal_case, verify_case
+from mulder.models import (
+    AtomicClaimInput,
+    CoverageKey,
+    CoverageMetadata,
+    EvidenceAnchorInput,
+    Finding,
+    ToolOutcome,
+    ToolOutcomeStatus,
+    WindowRow,
+)
+from mulder.receipt import (
+    CaseVerificationResult,
+    ReplayInventory,
+    SealError,
+    seal_case,
+    verify_case,
+)
 
 
 @dataclass(frozen=True)
@@ -144,6 +163,36 @@ def _codes(result: CaseVerificationResult) -> set[str]:
     return {diagnostic.code for diagnostic in result.diagnostics}
 
 
+def _write_key_pair(tmp_path: Path, name: str) -> tuple[Path, Path]:
+    private = Ed25519PrivateKey.generate()
+    private_path = tmp_path / f"{name}.private.pem"
+    public_path = tmp_path / f"{name}.public.pem"
+    private_path.write_bytes(
+        private.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    public_path.write_bytes(
+        private.public_key().public_bytes(
+            serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+    )
+    return private_path, public_path
+
+
+def _sign_fixture(sealed: SealedFixture, key_path: Path) -> None:
+    sealed.manifest.unlink()
+    seal_case(
+        "fixture",
+        sealed.case_dir,
+        key_provider=Ed25519PEMKeyProvider.from_file(
+            key_path, examiner="Examiner assertion", key_id="lab-key-7"
+        ),
+    )
+
+
 def test_clean_case_verifies_and_binds_claims_tools_and_reports(tmp_path: Path) -> None:
     sealed = _build_sealed_case(tmp_path)
 
@@ -164,6 +213,155 @@ def test_clean_case_verifies_and_binds_claims_tools_and_reports(tmp_path: Path) 
     assert manifest["methodology"]["extractor_versions"] == {"fixture-extractor": "2.1.0"}
     assert manifest["methodology"]["audit_tool_counts"] == {"search": 1}
     assert [report["name"] for report in manifest["reports"]] == ["fixture.report.md"]
+
+
+def test_examiner_supplied_key_signs_exact_manifest_and_exposes_metadata(tmp_path: Path) -> None:
+    sealed = _build_sealed_case(tmp_path)
+    private_path, public_path = _write_key_pair(tmp_path, "examiner")
+    _sign_fixture(sealed, private_path)
+
+    embedded = verify_case(sealed.manifest)
+    externally_selected = verify_case(sealed.manifest, public_key_path=public_path)
+
+    assert embedded.status == "verified"
+    assert embedded.signature_status == "valid"
+    assert embedded.public_key is not None
+    assert embedded.public_key["source"] == "embedded"
+    assert embedded.public_key["examiner_assertion"] == "Examiner assertion"
+    assert externally_selected.signature_status == "valid"
+    assert externally_selected.public_key is not None
+    assert externally_selected.public_key["source"] == "provided"
+
+
+def test_wrong_examiner_key_is_distinguished_from_unsigned(tmp_path: Path) -> None:
+    sealed = _build_sealed_case(tmp_path)
+    private_path, _ = _write_key_pair(tmp_path, "right")
+    _, wrong_public_path = _write_key_pair(tmp_path, "wrong")
+    _sign_fixture(sealed, private_path)
+
+    result = verify_case(sealed.manifest, public_key_path=wrong_public_path)
+
+    assert result.status == "invalid"
+    assert result.signature_status == "invalid"
+    assert "signature.wrong_key" in _codes(result)
+
+
+def test_changed_manifest_claim_commitment_invalidates_signature(tmp_path: Path) -> None:
+    sealed = _build_sealed_case(tmp_path)
+    private_path, _ = _write_key_pair(tmp_path, "examiner")
+    _sign_fixture(sealed, private_path)
+    manifest = json.loads(sealed.manifest.read_text(encoding="utf-8"))
+    manifest["database"]["record_sets"]["claims"]["row_count"] = 2
+    sealed.manifest.write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = verify_case(sealed.manifest)
+
+    assert result.signature_status == "invalid"
+    assert "signature.invalid" in _codes(result)
+    assert "manifest.content_mismatch" in _codes(result)
+
+
+def test_changed_database_claim_set_fails_receipt_while_signature_remains_valid(
+    tmp_path: Path,
+) -> None:
+    sealed = _build_sealed_case(tmp_path)
+    private_path, _ = _write_key_pair(tmp_path, "examiner")
+    _sign_fixture(sealed, private_path)
+    connection = sqlite3.connect(sealed.database)
+    try:
+        connection.execute("UPDATE claims SET statement = 'Different material claim'")
+        connection.commit()
+    finally:
+        connection.close()
+
+    result = verify_case(sealed.manifest)
+
+    assert result.status == "invalid"
+    assert result.signature_status == "valid"
+    assert "database.content_mismatch" in _codes(result)
+    assert any(item.subject == "database:claims" for item in result.diagnostics)
+
+
+def test_unsigned_manifest_remains_explicit_and_key_is_never_inferred(tmp_path: Path) -> None:
+    sealed = _build_sealed_case(tmp_path)
+
+    result = verify_case(sealed.manifest)
+
+    assert result.status == "verified"
+    assert result.signature_status == "unsigned"
+    assert result.public_key is None
+
+
+def test_replay_version_drift_does_not_turn_into_tamper_failure(tmp_path: Path) -> None:
+    sealed = _build_sealed_case(tmp_path)
+    inventory = ReplayInventory(
+        mulder_version="0.0-different",
+        extractor_versions={"fixture-extractor": "9.9"},
+        tool_versions={},
+        parser_versions={},
+    )
+
+    result = verify_case(sealed.manifest, replay_inventory=inventory)
+
+    assert result.status == "verified"
+    assert result.replay.status == "DRIFTED"
+    assert any("version drift" in reason for reason in result.replay.reasons)
+    assert not _codes(result)
+
+
+def test_replay_classifies_recorded_tool_and_parser_version_drift(tmp_path: Path) -> None:
+    sealed = _build_sealed_case(tmp_path)
+    sealed.manifest.unlink()
+    with CaseDB(sealed.database) as case_db:
+        case_db.record_coverage(
+            CoverageKey(system_name="host-a", evidence_domain="process", check_name="scan"),
+            ToolOutcome(
+                status=ToolOutcomeStatus.SUCCESS_NONEMPTY,
+                coverage=CoverageMetadata(tool_version="3.0", parser_version="2.0"),
+            ),
+            source_name="host.processes",
+            tool_call_id="tc-1",
+        )
+    seal_case("fixture", sealed.case_dir)
+
+    result = verify_case(
+        sealed.manifest,
+        replay_inventory=ReplayInventory(
+            mulder_version=__version__,
+            extractor_versions={"fixture-extractor": "2.1.0"},
+            tool_versions={"host-a/process/scan": "3.1"},
+            parser_versions={"host-a/process/scan": "2.2"},
+        ),
+    )
+
+    assert result.status == "verified"
+    assert result.replay.status == "DRIFTED"
+    assert any("tool_versions" in reason for reason in result.replay.reasons)
+    assert any("parser_versions" in reason for reason in result.replay.reasons)
+
+
+def test_replay_exact_and_model_non_determinism_are_explicit(tmp_path: Path) -> None:
+    sealed = _build_sealed_case(tmp_path)
+    exact = verify_case(
+        sealed.manifest,
+        replay_inventory=ReplayInventory(
+            mulder_version=__version__,
+            extractor_versions={"fixture-extractor": "2.1.0"},
+            tool_versions={},
+            parser_versions={},
+        ),
+    )
+    assert exact.replay.status == "EXACT"
+
+    sealed.manifest.unlink()
+    (sealed.case_dir / "fixture.model_usage.json").write_text(
+        json.dumps([{"model": "examiner-model", "input_tokens": 1, "output_tokens": 1}]),
+        encoding="utf-8",
+    )
+    seal_case("fixture", sealed.case_dir)
+    nondeterministic = verify_case(sealed.manifest)
+    assert nondeterministic.status == "verified"
+    assert nondeterministic.replay.status == "NON_DETERMINISTIC"
 
 
 @pytest.mark.parametrize(
@@ -385,6 +583,44 @@ def test_cli_seal_and_offline_verify_contract(tmp_path: Path) -> None:
     payload = json.loads(verified.output)
     assert payload["status"] == "verified"
     assert payload["signature_status"] == "unsigned"
+
+
+def test_cli_uses_only_explicit_signing_and_verification_keys(tmp_path: Path) -> None:
+    sealed = _build_sealed_case(tmp_path)
+    sealed.manifest.unlink()
+    private_path, public_path = _write_key_pair(tmp_path, "cli-examiner")
+    runner = CliRunner()
+
+    created = runner.invoke(
+        cli,
+        [
+            "seal-case",
+            "fixture",
+            "--db-dir",
+            str(sealed.case_dir),
+            "--signing-key",
+            str(private_path),
+            "--examiner",
+            "Analyst A",
+        ],
+    )
+    verified = runner.invoke(
+        cli,
+        [
+            "verify-case",
+            str(sealed.manifest),
+            "--public-key",
+            str(public_path),
+            "--json",
+        ],
+    )
+
+    assert created.exit_code == 0, created.output
+    assert "Signature: Ed25519" in created.output
+    assert verified.exit_code == 0, verified.output
+    payload = json.loads(verified.output)
+    assert payload["signature_status"] == "valid"
+    assert payload["public_key"]["source"] == "provided"
 
 
 def test_cli_legacy_and_unsupported_exit_codes(tmp_path: Path) -> None:

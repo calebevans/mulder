@@ -33,6 +33,7 @@ from mulder.models import (
     ToolOutcomeStatus,
 )
 from mulder.patterns import SEVERITY_ORDER, source_is_cited
+from mulder.report.proof_cards import build_proof_cards
 from mulder.report.renderer import ReportRenderer
 from mulder.server.app import get_ctx, get_job_store, mcp
 from mulder.server.helpers import error_response, hash_output, make_tool_call_id
@@ -911,6 +912,19 @@ def finalize_report() -> dict[str, object]:
     report_path = report_dir / f"{case_metadata.case_id}.report.md"
     audit_log_path = report_dir / f"{case_metadata.case_id}.audit.jsonl"
 
+    proof_cards = build_proof_cards(
+        findings,
+        claims={finding.finding_id: ctx.db.get_claims(finding.finding_id) for finding in findings},
+        verifications={
+            finding.finding_id: ctx.db.get_claim_verifications(finding.finding_id)
+            for finding in findings
+        },
+        revisions={
+            finding.finding_id: ctx.db.get_finding_revisions(finding.finding_id)
+            for finding in findings
+        },
+        coverage_records=coverage_records,
+    )
     renderer = ReportRenderer()
 
     _MAX_WINDOWS_PER_SOURCE = 50
@@ -946,6 +960,7 @@ def finalize_report() -> dict[str, object]:
             generate_pdf=False,
             enrichment_windows=enrichment_windows,
             coverage_records=coverage_records,
+            proof_cards=proof_cards,
         )
     except Exception as exc:
         logger.warning(
@@ -960,6 +975,7 @@ def finalize_report() -> dict[str, object]:
             evidence_integrity=evidence_integrity,
             enrichment_windows=enrichment_windows,
             coverage_records=coverage_records,
+            proof_cards=proof_cards,
         )
         html_text = ""
         html_warning: str | None = f"HTML report generation failed: {exc}"
