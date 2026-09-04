@@ -18,7 +18,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path, PurePosixPath
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -26,8 +26,10 @@ from mulder import __version__
 from mulder.contracts import CORE_CONTRACT_SCHEMA_VERSION
 from mulder.models import ToolOutcome, ToolOutcomeStatus
 from mulder.orchestrator.gates import GateCheck, GateResult
-from mulder.orchestrator.phases import PhaseConfig
 from mulder.server.tool_access import Role, get_tool_access
+
+if TYPE_CHECKING:
+    from mulder.orchestrator.phases import PhaseConfig
 
 DOMAIN_PACK_SCHEMA: Literal["mulder.domain-pack"] = "mulder.domain-pack"
 DOMAIN_PACK_SCHEMA_VERSION: Literal[1] = 1
@@ -619,6 +621,10 @@ def _pack_phase(
     hunt: HuntDefinition,
     bindings: Mapping[str, ToolBinding],
 ) -> PhaseConfig:
+    # Import lazily so MCP tool registration can finish before the built-in
+    # phase allowlists snapshot the role registry.
+    from mulder.orchestrator.phases import PhaseConfig
+
     title = f"Domain pack {manifest.pack_id} / {hunt.title}"
     questions = "\n".join(f"- {question}" for question in hunt.questions)
     tools = [bindings[binding_id] for binding_id in hunt.tool_binding_ids]

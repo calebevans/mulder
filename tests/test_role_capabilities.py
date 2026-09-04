@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 
 from mulder.orchestrator.capabilities import (
@@ -20,7 +25,7 @@ from mulder.orchestrator.phases import (
     REPORT,
     PhaseConfig,
 )
-from mulder.server.tool_access import Role
+from mulder.server.tool_access import Role, get_registered_tool_roles
 
 
 def _seats(phase: PhaseConfig) -> list[tuple[str, list[str]]]:
@@ -41,6 +46,34 @@ def test_every_declared_phase_allowlist_is_authorized() -> None:
             )
 
 
+def test_declared_phase_allowlists_capture_the_complete_tool_registry() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "\n".join(
+                (
+                    "from mulder.orchestrator.phases import EXTRACTION",
+                    "from mulder.server.tool_access import Role, get_tools_for_role",
+                    "declared = EXTRACTION.executor_allowed_tools",
+                    "complete = get_tools_for_role(Role.EXTRACT_EXECUTOR)",
+                    "missing = sorted(set(complete) - set(declared))",
+                    "if missing: raise SystemExit(f'incomplete extraction/executor "
+                    "allowlist: {missing!r}')",
+                )
+            ),
+        ],
+        cwd=project_root,
+        env={**os.environ, "PYTHONPATH": str(project_root / "src")},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert probe.returncode == 0, probe.stderr
+
+
 def test_narrative_identity_cannot_gain_extraction_tool_by_configuration() -> None:
     extraction_tool = next(
         tool
@@ -59,8 +92,7 @@ def test_role_declaration_and_effect_capability_are_both_required() -> None:
     extraction_tool = next(
         tool
         for tool in EXTRACTION.executor_allowed_tools
-        if tool.startswith("mcp__mulder__")
-        and tool not in {"mcp__mulder__open_case", "mcp__mulder__list_cases"}
+        if get_registered_tool_roles(tool) == Role.EXTRACT_EXECUTOR
     )
     underprivileged = AgentIdentity(
         "underprivileged-extractor",
