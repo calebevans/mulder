@@ -66,3 +66,9 @@ def tool_access(*roles: Role) -> Callable[[F], F]:
 def get_tools_for_role(role: Role) -> list[str]:
     """Return sorted MCP tool names accessible by a given role."""
     return sorted(f"mcp__mulder__{name}" for name, allowed in _registry.items() if role & allowed)
+
+
+def get_tool_access(tool_name: str) -> Role | None:
+    """Resolve one short or MCP-qualified tool name through the registry."""
+    short_name = tool_name.removeprefix("mcp__mulder__")
+    return _registry.get(short_name)

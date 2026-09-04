@@ -1,0 +1,84 @@
+{
+  "schema": "mulder.domain-pack",
+  "schema_version": 1,
+  "support_version": "1.0",
+  "pack_id": "synthetic.acme",
+  "pack_version": "0.1.0",
+  "title": "Synthetic ACME forensic domain",
+  "supported_mulder_versions": ["1.4.1"],
+  "supported_core_schema_versions": [1],
+  "classifiers": [
+    {
+      "classifier_id": "acme-file",
+      "artifact_type": "acme_artifact",
+      "path_kind": "file",
+      "extensions": [".acme"],
+      "name_globs": [],
+      "path_globs": []
+    }
+  ],
+  "tool_bindings": [
+    {
+      "binding_id": "inspect",
+      "tool_name": "inspect_acme",
+      "roles": ["executor"],
+      "parser_id": "acme-parser"
+    }
+  ],
+  "parser_support": [
+    {
+      "parser_id": "acme-parser",
+      "supported_versions": ["2.0"]
+    }
+  ],
+  "required_capabilities": ["forensic.local-read"],
+  "hunts": [
+    {
+      "hunt_id": "persistence",
+      "title": "ACME persistence hunt",
+      "artifact_types": ["acme_artifact"],
+      "tool_binding_ids": ["inspect"],
+      "required_capability_ids": ["forensic.local-read"],
+      "gate_ids": ["inspection-attempted"],
+      "questions": ["Does the artifact contain a persistence declaration?"],
+      "planner_instructions": "Plan a bounded inspection of ACME artifacts.",
+      "executor_instructions": "Preserve the typed tool outcome and parser version.",
+      "analyst_instructions": "Report parser limitations as coverage gaps.",
+      "max_retries": 1,
+      "max_follow_ups": 1
+    }
+  ],
+  "gates": [
+    {
+      "gate_id": "inspection-attempted",
+      "required_tool_binding_ids": ["inspect"],
+      "require_all": true
+    }
+  ],
+  "fixtures": [
+    {
+      "fixture_id": "minimal-acme",
+      "path": "sample.acme",
+      "sha256": "b6ff5bc114a75b49eb821e86b978f38d33d4d864ad22dc4b5b54e41b26659c32",
+      "size_bytes": 30
+    }
+  ],
+  "benchmark_expectations": [
+    {
+      "expectation_id": "persistence-present",
+      "fixture_id": "minimal-acme",
+      "hunt_id": "persistence",
+      "acceptable_statuses": ["SUCCESS_NONEMPTY"],
+      "required_gate_ids": ["inspection-attempted"]
+    }
+  ],
+  "receipt_replay": {
+    "schema_version": 1,
+    "receipt_namespace": "synthetic.acme",
+    "replay_mode": "version_matched",
+    "deterministic": true,
+    "records_fixture_digests": true,
+    "records_parser_versions": true,
+    "records_tool_bindings": true
+  }
+}

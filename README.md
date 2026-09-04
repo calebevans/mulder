@@ -155,6 +155,7 @@ Each investigation produces:
 | [Usage Guide](https://github.com/calebevans/mulder/blob/main/docs/usage-guide.md) | Installation, providers, CLI reference, Docker configuration |
 | [Architecture](https://github.com/calebevans/mulder/blob/main/docs/architecture.md) | System design, pipeline phases, quality gates, data flow |
 | [Tool Manifest](https://github.com/calebevans/mulder/blob/main/docs/tool-manifest.md) | API reference for all MCP tools |
+| [Domain Packs](https://github.com/calebevans/mulder/blob/main/docs/domain-packs.md) | Versioned domain workflow contract and preflight |
 | [Adding Tools](https://github.com/calebevans/mulder/blob/main/docs/adding-tools.md) | Contributor guide for adding new forensic tools |
 | [Glossary](https://github.com/calebevans/mulder/blob/main/docs/glossary.md) | Terminology and definitions |
 

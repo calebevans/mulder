@@ -6,10 +6,21 @@ import fnmatch
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Protocol
 
 from mulder.patterns import DISK_IMAGE_EXTS
 
 logger = logging.getLogger(__name__)
+
+
+class ClassifierRule(Protocol):
+    """Structural seam implemented by preflighted domain-pack rules."""
+
+    artifact_type: str
+
+    def matches(self, path: Path, evidence_root: Path) -> bool:
+        """Return whether this rule recognizes *path*."""
+        ...
 
 _MEMORY_DUMP_EXTS = {".mem", ".vmem", ".dmp", ".001"}
 _NETWORK_CAPTURE_EXTS = {".pcap", ".pcapng", ".cap"}
@@ -148,6 +159,7 @@ class ClassifierConfig:
     """Controls what the classifier includes and excludes."""
 
     exclude_patterns: list[str] = field(default_factory=list[str])
+    pack_rules: tuple[ClassifierRule, ...] = ()
 
 
 class EvidenceClassifier:
@@ -169,7 +181,7 @@ class EvidenceClassifier:
             raise FileNotFoundError(f"Evidence path does not exist: {evidence_root}")
 
         if evidence_root.is_file():
-            result = self._classify_file(evidence_root)
+            result = self._classify_file(evidence_root, evidence_root)
             return [result] if result else []
 
         results: list[ClassifiedEvidence] = []
@@ -194,7 +206,7 @@ class EvidenceClassifier:
                 excluded_dirs.add(item)
                 continue
             try:
-                self._process_item(item, results, seen_log_dirs)
+                self._process_item(item, evidence_root, results, seen_log_dirs)
             except (PermissionError, OSError) as exc:
                 logger.warning("Skipping inaccessible file %s: %s", item, exc)
                 continue
@@ -212,11 +224,16 @@ class EvidenceClassifier:
     def _process_item(
         self,
         item: Path,
+        evidence_root: Path,
         results: list[ClassifiedEvidence],
         seen_log_dirs: set[Path],
     ) -> None:
         """Classify *item* and append to *results*; track *seen_log_dirs* for subtree pruning."""
         if item.is_dir():
+            pack_classification = self._classify_pack_rule(item, evidence_root)
+            if pack_classification is not None:
+                results.append(pack_classification)
+                return
             if self._is_ios_backup(item):
                 results.append(ClassifiedEvidence(path=item, artifact_type="ios_backup"))
                 return
@@ -228,14 +245,19 @@ class EvidenceClassifier:
         if any(item.is_relative_to(d) for d in seen_log_dirs):
             return
 
-        classified = self._classify_file(item)
+        classified = self._classify_file(item, evidence_root)
         if classified:
             results.append(classified)
         else:
             logger.debug("Skipping unrecognised file: %s", item)
 
-    def _classify_file(self, path: Path) -> ClassifiedEvidence | None:
+    def _classify_file(
+        self, path: Path, evidence_root: Path | None = None
+    ) -> ClassifiedEvidence | None:
         """Infer artifact type from *path* name and extension, or return None if skipped."""
+        pack_classification = self._classify_pack_rule(path, evidence_root or path)
+        if pack_classification is not None:
+            return pack_classification
         ext = path.suffix.lower()
         name = path.name.lower()
 
@@ -288,6 +310,17 @@ class EvidenceClassifier:
                 return None
             return ClassifiedEvidence(path=path, artifact_type="log_file")
 
+        return None
+
+    def _classify_pack_rule(
+        self,
+        path: Path,
+        evidence_root: Path,
+    ) -> ClassifiedEvidence | None:
+        """Apply preflighted pack rules in their deterministic activation order."""
+        for rule in self._config.pack_rules:
+            if rule.matches(path, evidence_root):
+                return ClassifiedEvidence(path=path, artifact_type=rule.artifact_type)
         return None
 
     @staticmethod

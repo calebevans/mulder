@@ -46,6 +46,7 @@ from mulder.orchestrator.types import (
     PhaseResult,
     extract_catalog_result,
 )
+from mulder.packs.base import DomainPackActivation
 from mulder.patterns import DEFAULT_DB_DIR, DEFAULT_WORKSPACE_DIR
 
 logger = logging.getLogger(__name__)
@@ -74,6 +75,7 @@ class Orchestrator:
         parallel_extractions: int = 3,
         proxy_config: str | None = None,
         case_id: str = "",
+        pack_activation: DomainPackActivation | None = None,
     ) -> None:
         """Initialize the orchestrator.
 
@@ -90,6 +92,8 @@ class Orchestrator:
                 custom model routing.
             case_id: Case identifier used for the database filename and
                 referenced by all phases.
+            pack_activation: Preflighted domain-pack workflows to insert after
+                extraction. Raw manifests are never loaded by the orchestrator.
         """
         self.evidence_path = evidence_path
         self.cwd = str(cwd)
@@ -106,6 +110,7 @@ class Orchestrator:
         self._case_briefing: str = ""
         self._proxy_config = proxy_config
         self._proxy: ProxyManager | None = None
+        self._pack_activation = pack_activation
         self._using_proxy = False
         self._running = False
         self._active_systems: list[str] = []
@@ -145,7 +150,10 @@ class Orchestrator:
             InvestigationResult with all phase results and aggregate metrics.
         """
         result = InvestigationResult()
-        self._total_phases = 5
+        pack_phase_count = (
+            len(self._pack_activation.workflow_steps) if self._pack_activation else 0
+        )
+        self._total_phases = 5 + pack_phase_count
         self._phase_counter = 0
 
         self._start_proxy_if_needed()
@@ -242,7 +250,10 @@ class Orchestrator:
 
         # Phase 2: Extraction (split-mode, rolling worker pool)
         groups = EvidenceContext.group_systems(systems, catalog_data)
-        self._total_phases = 5
+        pack_phase_count = (
+            len(self._pack_activation.workflow_steps) if self._pack_activation else 0
+        )
+        self._total_phases = 5 + pack_phase_count
         self.dashboard.log_info(
             f"Extraction plan: {len(groups)} session(s) for {len(systems)} systems"
             f" (workers: {self._parallel_extractions})"
@@ -259,6 +270,21 @@ class Orchestrator:
         )
 
         await self._run_extraction_pool(groups, result)
+
+        # Domain workflows are supplied by the preflighted pack activation.
+        # New packs therefore add phases without modifying this central sequence.
+        if self._pack_activation is not None:
+            for workflow in self._pack_activation.workflow_steps:
+                pack_result = await self._run_split_phase(
+                    workflow.phase,
+                    prompt_vars={
+                        "case_id": self._case_id,
+                        "evidence_path": self.evidence_path,
+                        "case_briefing": self._case_briefing,
+                    },
+                )
+                result.phases.append(pack_result)
+                self._accumulate(result, pack_result)
 
         # Phase 3: Cross-system analysis (split-mode) — skip for single-host cases
         if len(systems) > 1:
@@ -614,6 +640,11 @@ class Orchestrator:
                     exec_results = await self._roles.run_executor(
                         phase, plan, log_prefix, task_system=task_sys
                     )
+                    combined_result.tool_names.extend(
+                        str(item.get("tool", "")).removeprefix("mcp__mulder__")
+                        for item in exec_results.results
+                        if item.get("tool")
+                    )
 
                     # Step 2.5: Wait for all background batches to finish
                     await self._roles.ensure_batches_complete(exec_results, log_prefix)
@@ -748,6 +779,11 @@ class Orchestrator:
 
         if phase.name == "report":
             return validate_report(phase_result.tool_names)
+
+        if self._pack_activation is not None:
+            workflow = self._pack_activation.workflow_for_phase(phase.name)
+            if workflow is not None:
+                return workflow.validate(phase_result.tool_names)
 
         return None
 

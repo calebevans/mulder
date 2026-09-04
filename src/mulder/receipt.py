@@ -43,6 +43,7 @@ _STANDARD_ARTIFACT_SUFFIXES = (
     ".report.html",
     ".report.pdf",
     ".model_usage.json",
+    ".packs.json",
     ".iocs.csv",
     ".iocs.stix.json",
     ".navigator.json",
