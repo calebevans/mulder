@@ -18,6 +18,7 @@ from mulder.server.tools import (  # noqa: F401  # noqa: F401
     hayabusa,
     hindsight,
     jobs,
+    linux_live,
     mvt,
     phone,
     plaso,

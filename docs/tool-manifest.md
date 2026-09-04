@@ -57,6 +57,27 @@ Extract a compressed evidence archive to make its contents accessible.
 
 **Roles:** `CATALOG` `EXTRACT_EXECUTOR`
 
+### collect_linux_live_state_bundle
+
+Explicitly collect bounded, typed state from the current Linux host into a
+sealed bundle below the case directory. This tool has no command, SSH, remote,
+network, arbitrary input-path, or arbitrary output-path parameter.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| host_id | str | yes | Exact current hostname to authorize and record |
+| checks | list[str] | yes | Built-in Linux check IDs to run |
+| bundle_name | str | yes | Safe output filename stem |
+| max_files_per_check | int | no | Per-check file bound (default 2,000) |
+| max_bytes_per_file | int | no | Per-file capture bound (default 2 MiB) |
+| max_total_bytes | int | no | Aggregate capture bound (default 64 MiB) |
+
+**Returns:** bundle path/digest/seal and per-check
+`success`/`empty`/`partial`/`failed` coverage. Detailed coverage is also stored
+in the case coverage register.
+
+**Roles:** `CATALOG` `EXTRACT_EXECUTOR`
+
 ### verify_evidence_integrity
 
 Verify the integrity of all indexed source data by recomputing BLAKE2b hashes.

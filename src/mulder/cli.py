@@ -562,6 +562,33 @@ def verify_case_cmd(
         raise click.exceptions.Exit(exit_code)
 
 
+@cli.command("verify-linux-live")
+@click.argument(
+    "bundle_path",
+    type=click.Path(path_type=Path, dir_okay=False),
+)
+@click.option("--json", "json_output", is_flag=True, help="Emit machine-readable JSON.")
+def verify_linux_live_cmd(bundle_path: Path, json_output: bool) -> None:
+    """Verify a sealed Linux live-state BUNDLE_PATH entirely offline."""
+    import json
+
+    from mulder.linux_live import verify_linux_live_bundle
+
+    result = verify_linux_live_bundle(bundle_path)
+    payload = result.model_dump(mode="json")
+    if json_output:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        click.echo(f"Linux live bundle: {result.status}")
+        click.echo(f"Host: {result.host_id or 'unknown'}")
+        click.echo(f"Artifacts checked: {result.artifacts_checked}")
+        for diagnostic in result.diagnostics:
+            click.echo(f"- {diagnostic.code} [{diagnostic.subject}]: {diagnostic.message}")
+    exit_code = {"valid": 0, "invalid": 1, "unsupported": 3}[result.status]
+    if exit_code:
+        raise click.exceptions.Exit(exit_code)
+
+
 @cli.command()
 @click.argument("evidence_path")
 @click.argument("case_id")
