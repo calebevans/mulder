@@ -149,6 +149,7 @@ Each investigation produces:
 - **Portable case receipts** - seal evidence, logical database state, audit head, claims, tool versions, and reports with optional examiner-owned Ed25519 signing; verify relocation, signature state, and replay drift entirely offline
 - **Read-only case review** - inspect active/withdrawn revisions, bounded claim and anchor detail, coverage, receipt, costs, and explicit future-work placeholders through one CLI/report fact projection
 - **Publication governance** - render executive, technical, and examiner views from one fact snapshot; exact proof-link and epistemic-label QA gates the state-bound DRAFT-to-APPROVED transition
+- **Local review console** - optionally serve the same fact projection on loopback with resumable audit-sequenced run events, proof cards, and exact evidence drill-down; no browser write or tool-dispatch routes are exposed
 
 ## Documentation
 

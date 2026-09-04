@@ -1563,6 +1563,10 @@ pdf = [
 stix = [
     { name = "stix2" },
 ]
+web = [
+    { name = "starlette" },
+    { name = "uvicorn" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -1591,14 +1595,16 @@ requires-dist = [
     { name = "rich", specifier = ">=15.0" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "sqlalchemy", specifier = ">=2.0" },
+    { name = "starlette", marker = "extra == 'web'", specifier = ">=0.41" },
     { name = "stix2", marker = "extra == 'stix'", specifier = ">=3.0" },
     { name = "tqdm", marker = "extra == 'forensics'", specifier = ">=4.58.0" },
     { name = "twine", marker = "extra == 'dev'" },
+    { name = "uvicorn", marker = "extra == 'web'", specifier = ">=0.30" },
     { name = "volatility3", specifier = ">=2.0" },
     { name = "weasyprint", marker = "extra == 'pdf'", specifier = ">=60.0" },
     { name = "xxhash", marker = "extra == 'forensics'", specifier = ">=3.0" },
 ]
-provides-extras = ["dev", "forensics", "pdf", "stix"]
+provides-extras = ["dev", "forensics", "pdf", "stix", "web"]
 
 [[package]]
 name = "mypy"

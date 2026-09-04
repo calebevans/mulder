@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Evidence {{ detail.anchor.anchor_id }} — Mulder</title>
+  <link rel="stylesheet" href="/static/review.css">
+</head>
+<body>
+  <header>
+    <div>
+      <p class="eyebrow">Exact evidence citation</p>
+      <h1>{{ detail.anchor.anchor_id }}</h1>
+    </div>
+    <a href="/cases/{{ detail.case_id|urlencode }}">Back to case</a>
+  </header>
+  <main>
+    <section>
+      <h2>{{ detail.finding_title }}</h2>
+      <p><span class="badge">{{ detail.finding_confidence }}</span> {{ detail.claim_statement }}</p>
+      <dl>
+        <dt>Claim state</dt><dd>{{ detail.claim_epistemic_state }}</dd>
+        <dt>Source</dt><dd>{{ detail.window.source_name }}</dd>
+        <dt>Source hash</dt><dd><code>{{ detail.window.source_hash }}</code></dd>
+        <dt>Window</dt><dd>{{ detail.window.window_id }}, lines {{ detail.window.line_start }}–{{ detail.window.line_end }}</dd>
+        <dt>Selector</dt><dd>chars {{ detail.citation.char_start }}–{{ detail.citation.char_end }}</dd>
+      </dl>
+    </section>
+    <section id="citation-{{ detail.anchor.anchor_id }}">
+      <h2>Authoritative source window</h2>
+      <pre class="evidence-window"><code>{{ detail.window.text_before }}<mark>{{ detail.window.selected_text }}</mark>{{ detail.window.text_after }}</code></pre>
+      <p>The highlighted text exactly matches the stored anchor selector.</p>
+      <p><a href="/api/cases/{{ detail.case_id|urlencode }}/evidence/{{ detail.anchor.anchor_id|urlencode }}">Typed JSON detail</a></p>
+    </section>
+  </main>
+</body>
+</html>

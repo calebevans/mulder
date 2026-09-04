@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Mulder case review — {{ review.case.case_id }}</title>
+  <link rel="stylesheet" href="/static/review.css">
+</head>
+<body data-event-url="{{ event_url }}">
+  <header>
+    <div>
+      <p class="eyebrow">Mulder read-only review</p>
+      <h1>{{ review.case.case_id }}</h1>
+    </div>
+    <div class="status" aria-live="polite">
+      <span id="event-state">Connecting to durable run events…</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="summary-grid" aria-label="Case status">
+      <article><h2>Findings</h2><p>{{ review.findings.active_total }} active · {{ review.findings.withdrawn_total }} withdrawn</p></article>
+      <article><h2>Audit</h2><p>{{ review.audit.integrity_status }} · {{ review.audit.entry_count }} entries</p></article>
+      <article><h2>Receipt</h2><p>{{ review.receipt.status }} · {{ review.receipt.signature_status }}</p></article>
+      <article><h2>Replay</h2><p>{{ review.receipt.replay_status }}</p></article>
+    </section>
+
+    <section>
+      <h2>Observed phase state</h2>
+      <p class="muted">These are durable observations, not completion claims.</p>
+      <ol class="phase-list">
+      {% for phase in review.phases %}
+        <li><strong>{{ phase.name }}</strong><span>{{ phase.state }}</span></li>
+      {% endfor %}
+      </ol>
+    </section>
+
+    <section>
+      <div class="section-heading">
+        <h2>Finding proof cards</h2>
+        <a href="/api/cases/{{ review.case.case_id|urlencode }}/proof-cards">JSON</a>
+      </div>
+      {% for card in proof_cards %}
+      <article class="proof-card">
+        <div class="section-heading">
+          <h3>{{ card.finding.finding_id }} — {{ card.finding.title }}</h3>
+          <span class="badge">{{ card.finding.severity }} / {{ card.finding.confidence }}</span>
+        </div>
+        {% if card.claims %}
+          {% for claim in card.claims %}
+          <div class="claim">
+            <p><span class="badge">{{ claim.epistemic_state }}</span> {{ claim.statement }}</p>
+            <dl>
+              <dt>Predicate</dt><dd>{{ claim.subject }} · {{ claim.predicate }} · {{ claim.object_value }}</dd>
+              <dt>Verification</dt><dd>{{ claim.verifications|length }} recorded decision(s)</dd>
+            </dl>
+            {% if claim.anchors %}
+            <ul class="anchor-list">
+              {% for anchor in claim.anchors %}
+              <li>
+                <a href="{{ anchor_urls.get(anchor.anchor_id, '#') }}">
+                  {{ anchor.source_name }} lines {{ anchor.line_start }}–{{ anchor.line_end }},
+                  chars {{ anchor.char_start }}–{{ anchor.char_end }}
+                </a>
+                <code>{{ anchor.exact_text }}</code>
+              </li>
+              {% endfor %}
+            </ul>
+            {% else %}
+            <p class="muted">No anchor is present in this bounded review page.</p>
+            {% endif %}
+          </div>
+          {% endfor %}
+        {% else %}
+        <p class="muted">No atomic claims are recorded for this finding.</p>
+        {% endif %}
+      </article>
+      {% else %}
+      <p>No findings are present in this bounded review page.</p>
+      {% endfor %}
+    </section>
+
+    <section>
+      <h2>Durable run events</h2>
+      <p class="muted">The stream resumes after its last audit-chain sequence ID.</p>
+      <ol id="run-events" class="event-list" aria-live="polite"></ol>
+    </section>
+
+    <section class="placeholder-grid">
+      <article><h2>Contradictions</h2><p>{{ review.contradictions.status }}</p></article>
+      <article><h2>Follow-ups</h2><p>{{ review.follow_ups.status }}</p></article>
+      <article><h2>Graph</h2><p>{{ review.graph.status }}</p></article>
+    </section>
+  </main>
+  <script src="/static/review.js" defer></script>
+</body>
+</html>

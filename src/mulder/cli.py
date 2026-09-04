@@ -527,6 +527,76 @@ def approval_status_cmd(case_id: str, db_dir: str) -> None:
     click.echo(json.dumps(status.as_mapping(), sort_keys=True))
 
 
+@cli.command("review-console")
+@click.argument("case_id")
+@click.option(
+    "--db-dir",
+    default=DEFAULT_DB_DIR,
+    show_default=True,
+    help="Directory containing the authoritative case artifacts.",
+)
+@click.option("--host", default="127.0.0.1", show_default=True, help="Address to bind.")
+@click.option(
+    "--port",
+    default=8765,
+    type=click.IntRange(min=1, max=65535),
+    show_default=True,
+)
+@click.option(
+    "--auth-token",
+    envvar="MULDER_REVIEW_TOKEN",
+    help="Examiner-supplied bearer/basic token; required for non-loopback binding.",
+)
+def review_console_cmd(
+    case_id: str,
+    db_dir: str,
+    host: str,
+    port: int,
+    auth_token: str | None,
+) -> None:
+    """Serve one case through the optional, read-only local review console.
+
+    Install ``mulder-dfir[web]`` first. The default address is loopback-only.
+    Non-loopback binding is rejected unless the examiner explicitly supplies
+    an authentication token.
+    """
+    try:
+        from mulder.review.web import (
+            ReviewConsoleConfig,
+            ReviewConsoleError,
+            run_review_console,
+        )
+    except ImportError as exc:
+        raise click.ClickException(
+            "The review console requires the optional 'web' extra: "
+            "install mulder-dfir[web]"
+        ) from exc
+
+    try:
+        config = ReviewConsoleConfig(
+            case_id=case_id,
+            db_dir=Path(db_dir).expanduser(),
+            host=host,
+            port=port,
+            auth_token=auth_token,
+        )
+    except ReviewConsoleError as exc:
+        raise click.UsageError(str(exc)) from exc
+    if not (config.db_dir / f"{config.case_id}.db").is_file():
+        raise click.ClickException(
+            f"Case database not found: {config.db_dir / f'{config.case_id}.db'}"
+        )
+    click.echo(
+        f"Serving read-only case review at http://{config.host}:{config.port}/"
+    )
+    click.echo(
+        "Authentication: examiner token required"
+        if config.auth_token is not None
+        else "Authentication: loopback-only, no token"
+    )
+    run_review_console(config)
+
+
 @cli.command("seal-case")
 @click.argument("case_id")
 @click.option(
@@ -905,6 +975,7 @@ def investigate(
         db_dir=log_dir,
         approval_before_report=approval_before_report,
         resume_after_approval=resume_after_approval,
+        run_event_path=log_dir / f"{case_id}.audit.jsonl",
     )
 
     from mulder.orchestrator.errors import (

@@ -1,4 +1,4 @@
-"""Transport-neutral projections for reviewing Mulder case state."""
+"""Transport-neutral projections and durable events for Mulder case review."""
 
 from mulder.review.decisions import (
     ApprovalDecision,
@@ -8,7 +8,15 @@ from mulder.review.decisions import (
     ReviewWorkflow,
     ReviewWorkflowError,
 )
-from mulder.review.model import CaseReviewModel, ReviewQuery, query_case_review
+from mulder.review.events import RunEvent, RunEventDraft, RunEventJournal, RunEventPage
+from mulder.review.model import (
+    CaseReviewModel,
+    EvidenceDetail,
+    EvidenceReviewQuery,
+    ReviewQuery,
+    query_case_review,
+    query_evidence_detail,
+)
 from mulder.review.publication import PublicationError, PublicationManager
 
 __all__ = [
@@ -16,11 +24,18 @@ __all__ = [
     "ApprovalRequest",
     "ApprovalStatus",
     "CaseReviewModel",
+    "EvidenceDetail",
+    "EvidenceReviewQuery",
+    "PublicationError",
+    "PublicationManager",
     "ReviewEvent",
     "ReviewQuery",
     "ReviewWorkflow",
     "ReviewWorkflowError",
-    "PublicationError",
-    "PublicationManager",
+    "RunEvent",
+    "RunEventDraft",
+    "RunEventJournal",
+    "RunEventPage",
     "query_case_review",
+    "query_evidence_detail",
 ]

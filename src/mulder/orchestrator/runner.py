@@ -50,6 +50,7 @@ from mulder.orchestrator.types import (
 )
 from mulder.packs.base import DomainPackActivation
 from mulder.patterns import DEFAULT_DB_DIR, DEFAULT_WORKSPACE_DIR
+from mulder.review.events import RunEventDraft, RunEventJournal
 from mulder.security.provider_policy import (
     OutboundManifest,
     ProviderPolicy,
@@ -88,6 +89,7 @@ class Orchestrator:
         pack_activation: DomainPackActivation | None = None,
         approval_before_report: bool = False,
         resume_after_approval: bool = False,
+        run_event_path: str | Path | None = None,
     ) -> None:
         """Initialize the orchestrator.
 
@@ -111,6 +113,9 @@ class Orchestrator:
                 stop before the report until an examiner approves it.
             resume_after_approval: Run only the report phase after validating
                 a durable approval checkpoint from a prior invocation.
+            run_event_path: Optional case audit path used for durable,
+                resumable operational events. No event journal is created
+                when omitted.
         """
         self.evidence_path = evidence_path
         self.cwd = str(cwd)
@@ -138,12 +143,17 @@ class Orchestrator:
         self._running = False
         self._active_systems: list[str] = []
         self._cached_catalog_data: dict[str, Any] | None = None
-        self.dashboard = InvestigationDashboard()
         self._provider_policy = ProviderPolicy(
             self.model_config.data_policy,
             zero_egress=self.model_config.zero_egress,
             manifest=OutboundManifest(self._db_dir / f"{self._case_id}.outbound.jsonl"),
         )
+        self._event_journal = (
+            RunEventJournal(Path(run_event_path), self._case_id)
+            if run_event_path is not None
+            else None
+        )
+        self.dashboard = InvestigationDashboard(event_journal=self._event_journal)
         self._session = SessionExecutor(
             dashboard=self.dashboard,
             model_config=self.model_config,
@@ -191,11 +201,45 @@ class Orchestrator:
         self._running = True
         self._log_tailer.start(is_running=lambda: self._running)
         self.dashboard.start()
+        if self._event_journal is not None:
+            self._event_journal.append(
+                RunEventDraft(
+                    kind="investigation_started",
+                    total_phases=self._total_phases,
+                    message="Investigation run started",
+                )
+            )
 
         try:
-            if self._resume_after_approval:
-                return await self._run_approved_report(result)
-            return await self._run_pipeline(result)
+            completed = (
+                await self._run_approved_report(result)
+                if self._resume_after_approval
+                else await self._run_pipeline(result)
+            )
+        except BaseException:
+            if self._event_journal is not None:
+                self._event_journal.append(
+                    RunEventDraft(
+                        kind="investigation_finished",
+                        total_phases=self._total_phases,
+                        turns=result.total_turns,
+                        success=False,
+                        message="Investigation run terminated before completion",
+                    )
+                )
+            raise
+        else:
+            if self._event_journal is not None:
+                self._event_journal.append(
+                    RunEventDraft(
+                        kind="investigation_finished",
+                        total_phases=self._total_phases,
+                        turns=completed.total_turns,
+                        success=completed.success,
+                        message="Investigation run finished",
+                    )
+                )
+            return completed
         finally:
             self._running = False
             self.dashboard.stop()
@@ -959,8 +1003,8 @@ class Orchestrator:
         except OSError:
             logger.warning("Failed to write model usage file", exc_info=True)
 
-    @staticmethod
     def _accumulate(
+        self,
         result: InvestigationResult,
         phase_result: PhaseResult,
     ) -> None:
@@ -971,3 +1015,12 @@ class Orchestrator:
             phase_result: The phase result to accumulate from.
         """
         result.total_turns += phase_result.turns_used
+        if self._event_journal is not None:
+            self._event_journal.append(
+                RunEventDraft(
+                    kind="phase_result",
+                    phase=phase_result.phase_name,
+                    turns=phase_result.turns_used,
+                    success=phase_result.success,
+                )
+            )
