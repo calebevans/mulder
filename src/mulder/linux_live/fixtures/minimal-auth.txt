@@ -1,0 +1,1 @@
+Sep 04 12:00:00 fixture sshd[123]: Accepted publickey for analyst from 192.0.2.10
