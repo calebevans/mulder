@@ -13,11 +13,57 @@ The public interface is deliberately small:
 build = case_db.rebuild_entity_graph()
 snapshot = case_db.get_entity_graph()
 proof = case_db.get_graph_edge_provenance(snapshot.relations[0].edge_id)
+
+from mulder.graph_query import NeighborsQuery
+
+view = case_db.query_entity_graph(
+    NeighborsQuery(entity_id=snapshot.entities[0].entity_id, depth=2, limit=50)
+)
 ```
 
 Callers cannot submit SQL, Cypher, table names, predicates, or query fragments.
-Bounded pivot operations belong in a later module; PR 6.1 exposes only a typed
-snapshot and one exact provenance traversal.
+The query implementation refreshes the deterministic projection before reading,
+so withdrawn or newly contradicted claims cannot remain active in a review view.
+
+## Bounded queries and review views
+
+`query_entity_graph` accepts exactly four discriminated request models:
+
+- `NeighborsQuery` walks incoming, outgoing, or both edge directions up to depth
+  4 and returns at most 100 relations;
+- `PathBetweenQuery` finds one deterministic shortest directed or undirected path
+  up to depth 8;
+- `EventsForEntityQuery` returns at most 100 chronologically ordered events for
+  an exact entity ID;
+- `HostTimelineQuery` returns at most 100 chronologically ordered events whose
+  relation endpoint is scoped to, or itself identifies, the normalized host.
+
+All traversals also have a non-configurable 1,000-edge expansion ceiling. The
+result records its requested output/depth bounds, actual expansions, and whether
+a bound truncated the answer. These limits are validated at the database seam,
+not left to an MCP client or model.
+
+Every returned edge and event carries a selector with the claim ID, the exact
+verification used by the projection, the claim's current epistemic state, and
+supporting anchor/window/source path/hash coordinates. Every returned node
+carries the selectors from its incident returned edges. Entity IDs include the
+case ID and every SQL statement is case-filtered, preventing a selector copied
+from another case from producing results.
+
+Active verified edges are the default. `include_superseded=True` opts into
+historical edges whose claim was withdrawn or otherwise ceased to project;
+`include_refuted=True` separately opts into historical edges whose claim is now
+`contradicted`. Query results label these `verified`, `superseded`, or `refuted`.
+The static dependency-free SVG and Markdown renderer uses the same typed query
+result and renders superseded/refuted edges with distinct labels and line styles.
+MCP tools return both the machine-readable result and this static review view.
+The report renderer can accept the same results through its optional
+`graph_results` argument.
+
+The four MCP tools—`neighbors`, `path_between`, `events_for_entity`, and
+`host_timeline`—are available only to cross-analysis, narrative-analysis, and
+report roles. They accept scalar typed parameters rather than query-language
+text.
 
 ## Projection convention
 

@@ -15,6 +15,7 @@ from mulder.server.tools import (  # noqa: F401  # noqa: F401
     extract,
     eztools,
     findings,
+    graph,
     hayabusa,
     hindsight,
     jobs,
