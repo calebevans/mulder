@@ -1,5 +1,112 @@
 {
   "$defs": {
+    "AblationExecutionReceipt": {
+      "additionalProperties": false,
+      "description": "Content-bound proof that benchmark stages were replayed or skipped.",
+      "properties": {
+        "base_matrix_cell": {
+          "minLength": 1,
+          "title": "Base Matrix Cell",
+          "type": "string"
+        },
+        "base_result_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Base Result Sha256",
+          "type": "string"
+        },
+        "base_run_id": {
+          "minLength": 1,
+          "title": "Base Run Id",
+          "type": "string"
+        },
+        "case_operation_counts": {
+          "additionalProperties": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "propertyNames": {
+              "enum": [
+                "candidate_filters",
+                "verifier",
+                "independence_gate",
+                "alternative_narrative",
+                "blind_reviewer"
+              ]
+            },
+            "type": "object"
+          },
+          "title": "Case Operation Counts",
+          "type": "object"
+        },
+        "disabled": {
+          "items": {
+            "enum": [
+              "without-candidate-filters",
+              "without-verifier",
+              "without-independence-gate",
+              "without-alternative-narrative",
+              "without-blind-reviewer"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Disabled",
+          "type": "array"
+        },
+        "executed_stages": {
+          "items": {
+            "enum": [
+              "candidate_filters",
+              "verifier",
+              "independence_gate",
+              "alternative_narrative",
+              "blind_reviewer"
+            ],
+            "type": "string"
+          },
+          "title": "Executed Stages",
+          "type": "array"
+        },
+        "receipt_version": {
+          "const": "mulder.benchmark.ablation/v1",
+          "default": "mulder.benchmark.ablation/v1",
+          "title": "Receipt Version",
+          "type": "string"
+        },
+        "skipped_stages": {
+          "items": {
+            "enum": [
+              "candidate_filters",
+              "verifier",
+              "independence_gate",
+              "alternative_narrative",
+              "blind_reviewer"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Skipped Stages",
+          "type": "array"
+        },
+        "workflow_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Workflow Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "base_run_id",
+        "base_matrix_cell",
+        "base_result_sha256",
+        "workflow_sha256",
+        "disabled",
+        "executed_stages",
+        "skipped_stages",
+        "case_operation_counts"
+      ],
+      "title": "AblationExecutionReceipt",
+      "type": "object"
+    },
     "CaseRunResult": {
       "additionalProperties": false,
       "description": "Normalized output for one case in an offline benchmark run.",
@@ -46,6 +153,13 @@
           "default": null,
           "title": "Failure Reason"
         },
+        "revisions": {
+          "items": {
+            "$ref": "#/$defs/ClaimRevision"
+          },
+          "title": "Revisions",
+          "type": "array"
+        },
         "verdict": {
           "enum": [
             "positive",
@@ -63,6 +177,86 @@
       "title": "CaseRunResult",
       "type": "object"
     },
+    "CaseWorkflowTrace": {
+      "additionalProperties": false,
+      "description": "Complete, ordered stage trace used only by the benchmark ablation engine.",
+      "properties": {
+        "case_id": {
+          "minLength": 1,
+          "title": "Case Id",
+          "type": "string"
+        },
+        "input_claims": {
+          "items": {
+            "$ref": "#/$defs/ObservedClaim"
+          },
+          "title": "Input Claims",
+          "type": "array"
+        },
+        "stages": {
+          "items": {
+            "$ref": "#/$defs/WorkflowStageTrace"
+          },
+          "title": "Stages",
+          "type": "array"
+        }
+      },
+      "required": [
+        "case_id",
+        "input_claims",
+        "stages"
+      ],
+      "title": "CaseWorkflowTrace",
+      "type": "object"
+    },
+    "ClaimRevision": {
+      "additionalProperties": false,
+      "description": "Auditable before/after assertion revision; correctness is scored externally.",
+      "properties": {
+        "after": {
+          "$ref": "#/$defs/ObservedClaim"
+        },
+        "before": {
+          "$ref": "#/$defs/ObservedClaim"
+        },
+        "claim_id": {
+          "minLength": 1,
+          "title": "Claim Id",
+          "type": "string"
+        },
+        "iteration": {
+          "minimum": 1,
+          "title": "Iteration",
+          "type": "integer"
+        },
+        "reason": {
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "revision_id": {
+          "minLength": 1,
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "stage": {
+          "minLength": 1,
+          "title": "Stage",
+          "type": "string"
+        }
+      },
+      "required": [
+        "revision_id",
+        "claim_id",
+        "iteration",
+        "stage",
+        "before",
+        "after",
+        "reason"
+      ],
+      "title": "ClaimRevision",
+      "type": "object"
+    },
     "ObservedClaim": {
       "additionalProperties": false,
       "description": "One atomic proposition emitted by a benchmarked system.",
@@ -78,6 +272,20 @@
           "minLength": 1,
           "title": "Claim Id",
           "type": "string"
+        },
+        "confidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Confidence"
         },
         "object_value": {
           "anyOf": [
@@ -126,6 +334,25 @@
           },
           "title": "Qualifiers",
           "type": "object"
+        },
+        "severity": {
+          "anyOf": [
+            {
+              "enum": [
+                "informational",
+                "low",
+                "medium",
+                "high",
+                "critical"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Severity"
         },
         "subject": {
           "minLength": 1,
@@ -427,11 +654,146 @@
       ],
       "title": "ToolOutcomeStatus",
       "type": "string"
+    },
+    "WorkflowOperation": {
+      "additionalProperties": false,
+      "description": "One typed, replayable benchmark workflow transformation.",
+      "properties": {
+        "action": {
+          "enum": [
+            "remove_claim",
+            "set_verification_state",
+            "revise_claim"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "claim_id": {
+          "minLength": 1,
+          "title": "Claim Id",
+          "type": "string"
+        },
+        "iteration": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Iteration"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "replacement": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ObservedClaim"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "revision_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision Id"
+        },
+        "verification_state": {
+          "anyOf": [
+            {
+              "enum": [
+                "verified",
+                "contradicted",
+                "inconclusive",
+                "unsupported",
+                "unverified"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Verification State"
+        }
+      },
+      "required": [
+        "action",
+        "claim_id"
+      ],
+      "title": "WorkflowOperation",
+      "type": "object"
+    },
+    "WorkflowStageTrace": {
+      "additionalProperties": false,
+      "description": "Operations attributed to exactly one benchmark workflow component.",
+      "properties": {
+        "operations": {
+          "items": {
+            "$ref": "#/$defs/WorkflowOperation"
+          },
+          "title": "Operations",
+          "type": "array"
+        },
+        "stage": {
+          "enum": [
+            "candidate_filters",
+            "verifier",
+            "independence_gate",
+            "alternative_narrative",
+            "blind_reviewer"
+          ],
+          "title": "Stage",
+          "type": "string"
+        }
+      },
+      "required": [
+        "stage"
+      ],
+      "title": "WorkflowStageTrace",
+      "type": "object"
     }
   },
   "additionalProperties": false,
   "description": "Versioned, committed result object consumed by the scorer.",
   "properties": {
+    "ablation_receipt": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AblationExecutionReceipt"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "benchmark_id": {
       "minLength": 1,
       "title": "Benchmark Id",
@@ -490,6 +852,13 @@
       "minLength": 1,
       "title": "System Version",
       "type": "string"
+    },
+    "workflow_traces": {
+      "items": {
+        "$ref": "#/$defs/CaseWorkflowTrace"
+      },
+      "title": "Workflow Traces",
+      "type": "array"
     }
   },
   "required": [

@@ -1,0 +1,212 @@
+{
+  "schema_version": 1,
+  "benchmark_id": "mulder-executable-ablation-v1",
+  "run_id": "ablation-base",
+  "system_name": "mulder-benchmark-fixture",
+  "system_version": "1.1",
+  "identity": {
+    "matrix_cell": "fixture/default",
+    "models": {"analyst": "deterministic-fixture"},
+    "prompt_set_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "toolset_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "orchestrator_version": "fixture-1",
+    "methodology_version": "1.1",
+    "repeat_index": 0,
+    "seed": 7,
+    "ablations": []
+  },
+  "cases": [
+    {
+      "case_id": "staged-incident",
+      "verdict": "positive",
+      "claims": [
+        {
+          "claim_id": "good",
+          "subject": "process:412",
+          "predicate": "image_name",
+          "object_value": "cmd.exe",
+          "qualifiers": {},
+          "verification_state": "verified",
+          "citations": ["anchor-process"],
+          "confidence": 0.9,
+          "severity": "high"
+        },
+        {
+          "claim_id": "weak",
+          "subject": "process:999",
+          "predicate": "image_name",
+          "object_value": "powershell.exe",
+          "qualifiers": {},
+          "verification_state": "inconclusive",
+          "citations": [],
+          "confidence": 0.8,
+          "severity": "medium"
+        },
+        {
+          "claim_id": "alternative",
+          "subject": "connection:412:443",
+          "predicate": "ip_equals",
+          "object_value": "203.0.113.42",
+          "qualifiers": {"port": 443},
+          "verification_state": "verified",
+          "citations": ["anchor-destination"],
+          "confidence": 0.7,
+          "severity": "high"
+        }
+      ],
+      "coverage": [{"domain": "process_memory", "status": "SUCCESS_NONEMPTY"}],
+      "revisions": [
+        {
+          "revision_id": "alternative-r1",
+          "claim_id": "alternative",
+          "iteration": 1,
+          "stage": "alternative_narrative",
+          "before": {
+            "claim_id": "alternative",
+            "subject": "connection:412:443",
+            "predicate": "ip_equals",
+            "object_value": "198.51.100.10",
+            "qualifiers": {"port": 443},
+            "verification_state": "verified",
+            "citations": ["anchor-destination"],
+            "confidence": 0.6,
+            "severity": "high"
+          },
+          "after": {
+            "claim_id": "alternative",
+            "subject": "connection:412:443",
+            "predicate": "ip_equals",
+            "object_value": "203.0.113.42",
+            "qualifiers": {"port": 443},
+            "verification_state": "verified",
+            "citations": ["anchor-destination"],
+            "confidence": 0.7,
+            "severity": "high"
+          },
+          "reason": "Alternative Narrative check corrected the competing destination."
+        }
+      ]
+    }
+  ],
+  "resources": {
+    "runtime_ms": 10,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "unattributed_tokens": 0,
+    "cost_usd": 0.0
+  },
+  "workflow_traces": [
+    {
+      "case_id": "staged-incident",
+      "input_claims": [
+        {
+          "claim_id": "good",
+          "subject": "process:412",
+          "predicate": "image_name",
+          "object_value": "cmd.exe",
+          "qualifiers": {},
+          "verification_state": "unverified",
+          "citations": ["anchor-process"],
+          "confidence": 0.9,
+          "severity": "high"
+        },
+        {
+          "claim_id": "weak",
+          "subject": "process:999",
+          "predicate": "image_name",
+          "object_value": "powershell.exe",
+          "qualifiers": {},
+          "verification_state": "unverified",
+          "citations": [],
+          "confidence": 0.8,
+          "severity": "medium"
+        },
+        {
+          "claim_id": "alternative",
+          "subject": "connection:412:443",
+          "predicate": "ip_equals",
+          "object_value": "198.51.100.10",
+          "qualifiers": {"port": 443},
+          "verification_state": "unverified",
+          "citations": ["anchor-destination"],
+          "confidence": 0.6,
+          "severity": "high"
+        },
+        {
+          "claim_id": "blind-false-positive",
+          "subject": "process:777",
+          "predicate": "image_name",
+          "object_value": "evil.exe",
+          "qualifiers": {},
+          "verification_state": "unverified",
+          "citations": [],
+          "confidence": 0.75,
+          "severity": "critical"
+        },
+        {
+          "claim_id": "filtered-candidate",
+          "subject": "process:888",
+          "predicate": "image_name",
+          "object_value": "noise.exe",
+          "qualifiers": {},
+          "verification_state": "verified",
+          "citations": [],
+          "confidence": 0.65,
+          "severity": "low"
+        }
+      ],
+      "stages": [
+        {
+          "stage": "candidate_filters",
+          "operations": [
+            {"action": "remove_claim", "claim_id": "filtered-candidate"}
+          ]
+        },
+        {
+          "stage": "verifier",
+          "operations": [
+            {"action": "set_verification_state", "claim_id": "good", "verification_state": "verified"},
+            {"action": "set_verification_state", "claim_id": "weak", "verification_state": "verified"},
+            {"action": "set_verification_state", "claim_id": "alternative", "verification_state": "verified"},
+            {"action": "set_verification_state", "claim_id": "blind-false-positive", "verification_state": "verified"}
+          ]
+        },
+        {
+          "stage": "independence_gate",
+          "operations": [
+            {"action": "set_verification_state", "claim_id": "weak", "verification_state": "inconclusive"}
+          ]
+        },
+        {
+          "stage": "alternative_narrative",
+          "operations": [
+            {
+              "action": "revise_claim",
+              "claim_id": "alternative",
+              "replacement": {
+                "claim_id": "alternative",
+                "subject": "connection:412:443",
+                "predicate": "ip_equals",
+                "object_value": "203.0.113.42",
+                "qualifiers": {"port": 443},
+                "verification_state": "unverified",
+                "citations": ["anchor-destination"],
+                "confidence": 0.7,
+                "severity": "high"
+              },
+              "revision_id": "alternative-r1",
+              "iteration": 1,
+              "reason": "Alternative Narrative check corrected the competing destination."
+            }
+          ]
+        },
+        {
+          "stage": "blind_reviewer",
+          "operations": [
+            {"action": "remove_claim", "claim_id": "blind-false-positive"}
+          ]
+        }
+      ]
+    }
+  ]
+}

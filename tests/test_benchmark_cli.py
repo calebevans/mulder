@@ -29,6 +29,9 @@ def test_benchmark_cli_emits_json_and_comparison_table(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     assert "Claims P/R/F1" in result.output
     assert "Anchor/claim cite" in result.output
+    assert "Confidence Brier/ECE" in result.output
+    assert "Severity exact/MAE" in result.output
+    assert "Fixed/introduced" in result.output
     assert "duplicate-partial" in result.output
     assert "reference" in result.output
     assert f"JSON score: {output}" in result.output

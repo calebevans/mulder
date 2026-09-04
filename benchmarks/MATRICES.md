@@ -12,7 +12,7 @@ Each matrix cell fixes all of the following before execution:
 - exact model identifiers by role;
 - prompt-set and tool-set SHA-256 values;
 - orchestrator and methodology versions;
-- an ordered set of ablation labels;
+- an ordered set of executable ablations and its content-bound execution receipt;
 - corpus manifest hash and evidence hashes;
 - resource limits and the repeat count.
 
@@ -36,8 +36,19 @@ zero. The scorer rejects duplicate matrix-cell/repeat-index pairs and identity
 methodology versions that disagree with the manifest.
 
 A useful scheduled matrix starts with three or more repeats of the default
-configuration, then one-factor ablations such as `no-verification`,
-`no-specialist-routing`, or `no-structured-coverage`. Cross-product matrices
-are harder to interpret and more expensive; add them only for a stated
-hypothesis. Publish the exact input result objects alongside score JSON so any
-reported aggregate can be independently recomputed without a model or network.
+configuration, then one-factor executable ablations. The five supported safety
+components are verifier, independence gate, Alternative Narrative, blind
+reviewer, and candidate filters. A label alone is not evidence: these components
+must be disabled through `mulder benchmark-ablate`, which requires a complete
+ordered trace and emits a replay-checked receipt. Unknown targets, duplicate
+targets, incomplete traces, an already-ablated base, mixed legacy/executable
+labels, and trace/result disagreement fail closed.
+
+The repository's scheduled workflow deliberately uses the bounded synthetic
+fixture in `benchmarks/ablation/`. It produces one public-schema result for each
+one-factor ablation, scores them with the normal CLI, and retains input, output,
+and receipt artifacts. It makes no provider request and does not claim model
+quality; larger or nondeterministic studies may use the same contracts outside
+required CI. Cross-product matrices are harder to interpret and more expensive;
+add them only for a stated hypothesis. Publish exact input result objects beside
+score JSON so any aggregate can be independently recomputed offline.

@@ -351,6 +351,25 @@
           "title": "Qualifiers",
           "type": "object"
         },
+        "severity": {
+          "anyOf": [
+            {
+              "enum": [
+                "informational",
+                "low",
+                "medium",
+                "high",
+                "critical"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Severity"
+        },
         "subject": {
           "minLength": 1,
           "title": "Subject",
@@ -406,8 +425,11 @@
       "type": "string"
     },
     "methodology_version": {
-      "const": "1.0",
       "default": "1.0",
+      "enum": [
+        "1.0",
+        "1.1"
+      ],
       "title": "Methodology Version",
       "type": "string"
     },

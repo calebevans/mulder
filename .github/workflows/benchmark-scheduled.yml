@@ -1,0 +1,77 @@
+name: Scheduled deterministic benchmark
+
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  executable-ablation-matrix:
+    name: Bounded benchmark and executable ablations
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.1
+
+      - name: Install locked dependencies
+        run: uv sync --locked --extra dev
+
+      - name: Replay each auditable one-factor ablation
+        run: |
+          set -euo pipefail
+          for target in \
+            without-candidate-filters \
+            without-verifier \
+            without-independence-gate \
+            without-alternative-narrative \
+            without-blind-reviewer
+          do
+            uv run --locked --extra dev mulder benchmark-ablate \
+              benchmarks/ablation/result-base.json \
+              --ablation "$target" \
+              --run-id "scheduled-$target" \
+              --matrix-cell "scheduled/$target" \
+              --output "$target.json"
+          done
+
+      - name: Score the bounded matrix using the public result schema
+        run: >-
+          uv run --locked --extra dev mulder benchmark
+          benchmarks/ablation/manifest-v1.yaml
+          benchmarks/ablation/result-base.json
+          without-candidate-filters.json
+          without-verifier.json
+          without-independence-gate.json
+          without-alternative-narrative.json
+          without-blind-reviewer.json
+          --output benchmark-scheduled-score.json
+
+      - name: Run deterministic acceptance assertions
+        run: >-
+          uv run --locked --extra dev pytest -q
+          tests/test_benchmark_ablations.py
+
+      - name: Retain replayable inputs, receipts, and scores
+        uses: actions/upload-artifact@v6
+        with:
+          name: deterministic-benchmark-${{ github.run_id }}
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            benchmarks/ablation/manifest-v1.yaml
+            benchmarks/ablation/result-base.json
+            without-*.json
+            benchmark-scheduled-score.json

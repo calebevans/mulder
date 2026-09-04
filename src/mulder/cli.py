@@ -1973,6 +1973,63 @@ def benchmark_cmd(manifest: Path, results: tuple[Path, ...], output_path: Path) 
     click.echo(f"\nJSON score: {output_path}")
 
 
+@cli.command("benchmark-ablate")
+@click.argument(
+    "result_path",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--ablation",
+    "ablations",
+    multiple=True,
+    required=True,
+    type=click.Choice(
+        [
+            "without-candidate-filters",
+            "without-verifier",
+            "without-independence-gate",
+            "without-alternative-narrative",
+            "without-blind-reviewer",
+        ]
+    ),
+    help="Actually skip this component while replaying the committed workflow trace.",
+)
+@click.option("--run-id", required=True)
+@click.option("--matrix-cell", required=True)
+@click.option(
+    "--output",
+    "output_path",
+    required=True,
+    type=click.Path(dir_okay=False, path_type=Path),
+)
+def benchmark_ablate_cmd(
+    result_path: Path,
+    ablations: tuple[str, ...],
+    run_id: str,
+    matrix_cell: str,
+    output_path: Path,
+) -> None:
+    """Replay a normalized benchmark RESULT with typed components disabled."""
+    from pydantic import ValidationError
+
+    from mulder.benchmark.ablations import execute_ablations
+    from mulder.benchmark.io import BenchmarkInputError, load_result, write_result
+
+    try:
+        if output_path.resolve() == result_path.resolve():
+            raise ValueError("--output must not overwrite the base benchmark result")
+        result = execute_ablations(
+            load_result(result_path),
+            ablations,
+            run_id=run_id,
+            matrix_cell=matrix_cell,
+        )
+        write_result(output_path, result)
+    except (BenchmarkInputError, OSError, ValidationError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"Executable ablation result: {output_path}")
+
+
 def _benchmark_assignments(values: tuple[str, ...], option: str) -> dict[str, str]:
     """Parse repeatable ``NAME=VALUE`` CLI options without silent replacement."""
     assignments: dict[str, str] = {}
@@ -2075,6 +2132,14 @@ def benchmark_export_cmd(
     from mulder.benchmark.models import ResourceUsage, RunIdentity
 
     try:
+        from mulder.benchmark.models import EXECUTABLE_ABLATIONS
+
+        executable_labels = sorted(set(ablations) & EXECUTABLE_ABLATIONS)
+        if executable_labels:
+            raise ValueError(
+                "executable ablations cannot be stamped during export; export an unablated "
+                "trace and use benchmark-ablate: " + ", ".join(executable_labels)
+            )
         case_db_assignments = _benchmark_assignments(case_db_values, "--case-db")
         failed_cases = _benchmark_assignments(failed_case_values, "--failed-case")
         models = _benchmark_assignments(model_values, "--model")

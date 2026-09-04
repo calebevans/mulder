@@ -57,6 +57,21 @@ Output hashes bind the
 canonical semantic manifest and result objects, so JSON/YAML formatting changes
 do not create a new benchmark identity.
 
+Methodology `1.1` adds optional, backward-compatible calibration and revision
+inputs. `ObservedClaim.confidence` is a probability in `[0, 1]`; the scorer
+reports mean confidence, empirical exact-claim accuracy, Brier score, and a
+deterministic ten-bin expected calibration error. Optional expected and
+observed severities use the ordered scale `informational`, `low`, `medium`,
+`high`, `critical`; exact agreement and mean absolute ordinal error are reported
+only for exactly matched claims with both labels. Predictions that cannot be
+severity-adjudicated are counted separately, never silently treated as correct.
+
+`CaseRunResult.revisions` records immutable before/after claims, an iteration,
+stage, and reason. The answer key—not a self-reported outcome—determines
+`errors_fixed`, `errors_introduced`, preserved correct assertions, and persistent
+errors. Results written for methodology `1.0` remain valid; missing optional
+inputs produce explicit zero counts and `null` calibration rates.
+
 `mulder benchmark-export` normalizes current Mulder case databases without
 running an investigation or contacting a model or network service. Inputs must
 cover the manifest exactly, using one `--case-db CASE_ID=PATH` or
@@ -80,6 +95,28 @@ coverage domains use URL-escaped `system/domain/check` components. This makes
 normalization stable, but the answer-key anchors must use those canonical IDs
 for citations to resolve. See `MATRICES.md` for scheduled-run and aggregation
 rules, and `ndlc/README.md` for the conservative historical NDLC conversion.
+
+`benchmark-export --ablation` retains historical free-form identity labels for
+old result compatibility, but the five safety-component names cannot be stamped.
+Executable ablations use a complete typed workflow trace and the separate
+offline command:
+
+```console
+mulder benchmark-ablate benchmarks/ablation/result-base.json \
+  --ablation without-verifier \
+  --run-id no-verifier-r0 --matrix-cell fixture/without-verifier \
+  --output no-verifier-r0.json
+```
+
+The supported switches are `without-verifier`, `without-independence-gate`,
+`without-alternative-narrative`, `without-blind-reviewer`, and
+`without-candidate-filters`. The engine first proves that executing every stage
+reproduces the base result, then replays it while skipping the selected stages.
+Its receipt binds the base run identity, base result and trace hashes,
+executed/skipped stages, and per-case operation counts. The scorer reconstructs
+the base, replays every received ablated result, and fails closed on tampering.
+This facility changes normalized benchmark objects
+only; it has no production-runner import or production configuration switch.
 
 The strict Pydantic models in `mulder.benchmark.models` are authoritative. Their
 portable JSON Schema exports are committed in `benchmarks/schemas/`; a parity

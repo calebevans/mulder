@@ -1,0 +1,50 @@
+schema_version: 1
+benchmark_id: mulder-executable-ablation-v1
+title: Bounded executable ablation matrix
+description: Synthetic one-case workflow used to prove benchmark components are actually skipped.
+methodology_version: "1.1"
+cases:
+  - case_id: staged-incident
+    title: Staged candidate review fixture
+    ground_truth_label: nonempty
+    applicability: [control:executable-ablation]
+    expected_verdict: positive
+    evidence:
+      - artifact_id: incident-log
+        path: ../fixtures/evidence/incident.txt
+        sha256: 0cd48f94949318355fe751c163699c667c95c39aa7b5349311716fc8301f6bfa
+        origin: synthetic
+        redistribution: redistributable
+        license:
+          name: Creative Commons Zero v1.0 Universal
+          spdx_id: CC0-1.0
+        size_bytes: 106
+    coverage:
+      - domain: process_memory
+        applicability: applicable
+        expected_content: nonempty
+        acceptable_statuses: [SUCCESS_NONEMPTY]
+        required: true
+    expected_claims:
+      - claim_id: expected-process
+        subject: process:412
+        predicate: image_name
+        object_value: cmd.exe
+        severity: high
+      - claim_id: expected-destination
+        subject: connection:412:443
+        predicate: ip_equals
+        object_value: 203.0.113.42
+        qualifiers: {port: 443}
+        severity: critical
+    anchors:
+      - anchor_id: anchor-process
+        artifact_id: incident-log
+        selector: line=1;field=image
+        exact_text_sha256: 7371f071a9a4e653a5afd134bce9c735ef74b0421d6988958e5c6d8a34feaa3b
+        supports_claim_ids: [expected-process]
+      - anchor_id: anchor-destination
+        artifact_id: incident-log
+        selector: line=2;field=destination
+        exact_text_sha256: 17af1cf3d1b5332c53349fc789abdc853bbeea7ed33eff727ff794ab741ccac9
+        supports_claim_ids: [expected-destination]

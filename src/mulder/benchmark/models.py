@@ -11,12 +11,39 @@ from mulder.models import JsonScalar, ToolOutcomeStatus
 
 SCHEMA_VERSION: Literal[1] = 1
 METHODOLOGY_VERSION: Literal["1.0"] = "1.0"
+SupportedMethodologyVersion = Literal["1.0", "1.1"]
 
 Sha256 = str
 VerificationState = Literal[
     "verified", "contradicted", "inconclusive", "unsupported", "unverified"
 ]
 Verdict = Literal["positive", "no_evil_within_coverage", "no_verdict"]
+Severity = Literal["informational", "low", "medium", "high", "critical"]
+BenchmarkStage = Literal[
+    "candidate_filters",
+    "verifier",
+    "independence_gate",
+    "alternative_narrative",
+    "blind_reviewer",
+]
+AblationTarget = Literal[
+    "without-candidate-filters",
+    "without-verifier",
+    "without-independence-gate",
+    "without-alternative-narrative",
+    "without-blind-reviewer",
+]
+WorkflowAction = Literal["remove_claim", "set_verification_state", "revise_claim"]
+
+EXECUTABLE_ABLATIONS = frozenset(
+    {
+        "without-candidate-filters",
+        "without-verifier",
+        "without-independence-gate",
+        "without-alternative-narrative",
+        "without-blind-reviewer",
+    }
+)
 
 
 def _ground_truth_scalar_key(value: JsonScalar) -> tuple[str, str]:
@@ -96,6 +123,7 @@ class ExpectedClaim(StrictModel):
     predicate: str = Field(min_length=1)
     object_value: JsonScalar
     qualifiers: dict[str, JsonScalar] = Field(default_factory=dict)
+    severity: Severity | None = None
 
 
 class ExpectedAnchor(StrictModel):
@@ -185,7 +213,7 @@ class BenchmarkManifest(StrictModel):
     benchmark_id: str = Field(min_length=1)
     title: str = Field(min_length=1)
     description: str = Field(min_length=1)
-    methodology_version: Literal["1.0"] = METHODOLOGY_VERSION
+    methodology_version: SupportedMethodologyVersion = METHODOLOGY_VERSION
     cases: list[BenchmarkCase] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -206,6 +234,28 @@ class ObservedClaim(StrictModel):
     qualifiers: dict[str, JsonScalar] = Field(default_factory=dict)
     verification_state: VerificationState
     citations: list[str] = Field(default_factory=list)
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    severity: Severity | None = None
+
+
+class ClaimRevision(StrictModel):
+    """Auditable before/after assertion revision; correctness is scored externally."""
+
+    revision_id: str = Field(min_length=1)
+    claim_id: str = Field(min_length=1)
+    iteration: int = Field(ge=1)
+    stage: str = Field(min_length=1)
+    before: ObservedClaim
+    after: ObservedClaim
+    reason: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _check_revision(self) -> ClaimRevision:
+        if self.before.claim_id != self.claim_id or self.after.claim_id != self.claim_id:
+            raise ValueError("revision before/after claim IDs must match claim_id")
+        if self.before == self.after:
+            raise ValueError("revision must change the claim")
+        return self
 
 
 class ObservedCoverage(StrictModel):
@@ -224,6 +274,7 @@ class CaseRunResult(StrictModel):
     failure_reason: str | None = Field(default=None, min_length=1)
     claims: list[ObservedClaim] = Field(default_factory=list)
     coverage: list[ObservedCoverage] = Field(default_factory=list)
+    revisions: list[ClaimRevision] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _check_result_ids(self) -> CaseRunResult:
@@ -233,6 +284,29 @@ class CaseRunResult(StrictModel):
         domains = [item.domain for item in self.coverage]
         if len(set(domains)) != len(domains):
             raise ValueError("observed coverage domains must be unique within a case")
+        revision_ids = [revision.revision_id for revision in self.revisions]
+        if len(set(revision_ids)) != len(revision_ids):
+            raise ValueError("revision_id values must be unique within a case")
+        revision_steps = [(revision.claim_id, revision.iteration) for revision in self.revisions]
+        if len(set(revision_steps)) != len(revision_steps):
+            raise ValueError("claim revision iterations must be unique within a case")
+        final_claims = {claim.claim_id: claim for claim in self.claims}
+        revisions_by_claim: dict[str, list[ClaimRevision]] = {}
+        for revision in self.revisions:
+            revisions_by_claim.setdefault(revision.claim_id, []).append(revision)
+        for claim_id, revisions in revisions_by_claim.items():
+            revisions.sort(key=lambda revision: revision.iteration)
+            if [revision.iteration for revision in revisions] != list(
+                range(1, len(revisions) + 1)
+            ):
+                raise ValueError("claim revision iterations must be contiguous from one")
+            if any(
+                earlier.after != later.before
+                for earlier, later in zip(revisions, revisions[1:], strict=False)
+            ):
+                raise ValueError("claim revision before/after values must form a chain")
+            if claim_id not in final_claims or revisions[-1].after != final_claims[claim_id]:
+                raise ValueError("the last claim revision must equal the published claim")
         if self.cell_status == "failed":
             if self.failure_reason is None:
                 raise ValueError("failed cells require failure_reason")
@@ -242,6 +316,129 @@ class CaseRunResult(StrictModel):
             raise ValueError("failure_reason is valid only for failed cells")
         if self.cell_status == "no_verdict" and self.verdict != "no_verdict":
             raise ValueError("no_verdict cells must use the no_verdict verdict")
+        return self
+
+
+class WorkflowOperation(StrictModel):
+    """One typed, replayable benchmark workflow transformation."""
+
+    action: WorkflowAction
+    claim_id: str = Field(min_length=1)
+    verification_state: VerificationState | None = None
+    replacement: ObservedClaim | None = None
+    revision_id: str | None = Field(default=None, min_length=1)
+    iteration: int | None = Field(default=None, ge=1)
+    reason: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def _check_payload(self) -> WorkflowOperation:
+        if self.action == "remove_claim":
+            if any(
+                value is not None
+                for value in (
+                    self.verification_state,
+                    self.replacement,
+                    self.revision_id,
+                    self.iteration,
+                    self.reason,
+                )
+            ):
+                raise ValueError("remove_claim does not accept an operation payload")
+        elif self.action == "set_verification_state":
+            if self.verification_state is None:
+                raise ValueError("set_verification_state requires verification_state")
+            if any(
+                value is not None
+                for value in (self.replacement, self.revision_id, self.iteration, self.reason)
+            ):
+                raise ValueError("set_verification_state accepts only verification_state")
+        else:
+            if any(
+                value is None
+                for value in (self.replacement, self.revision_id, self.iteration, self.reason)
+            ):
+                raise ValueError(
+                    "revise_claim requires replacement, revision_id, iteration, and reason"
+                )
+            assert self.replacement is not None
+            if self.replacement.claim_id != self.claim_id:
+                raise ValueError("replacement claim ID must match claim_id")
+            if self.verification_state is not None:
+                raise ValueError("revise_claim does not accept verification_state")
+        return self
+
+
+class WorkflowStageTrace(StrictModel):
+    """Operations attributed to exactly one benchmark workflow component."""
+
+    stage: BenchmarkStage
+    operations: list[WorkflowOperation] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _check_stage_actions(self) -> WorkflowStageTrace:
+        permitted: dict[str, set[str]] = {
+            "candidate_filters": {"remove_claim"},
+            "verifier": {"set_verification_state"},
+            "independence_gate": {"set_verification_state"},
+            "alternative_narrative": {"revise_claim"},
+            "blind_reviewer": {"remove_claim"},
+        }
+        invalid = [op.action for op in self.operations if op.action not in permitted[self.stage]]
+        if invalid:
+            raise ValueError(f"stage {self.stage!r} cannot execute actions {invalid!r}")
+        return self
+
+
+class CaseWorkflowTrace(StrictModel):
+    """Complete, ordered stage trace used only by the benchmark ablation engine."""
+
+    case_id: str = Field(min_length=1)
+    input_claims: list[ObservedClaim]
+    stages: list[WorkflowStageTrace]
+
+    @model_validator(mode="after")
+    def _check_trace(self) -> CaseWorkflowTrace:
+        expected: list[str] = [
+            "candidate_filters",
+            "verifier",
+            "independence_gate",
+            "alternative_narrative",
+            "blind_reviewer",
+        ]
+        observed = [stage.stage for stage in self.stages]
+        if observed != expected:
+            raise ValueError(f"workflow stages must be complete and ordered: {expected!r}")
+        claim_ids = [claim.claim_id for claim in self.input_claims]
+        if len(set(claim_ids)) != len(claim_ids):
+            raise ValueError("workflow input claim IDs must be unique")
+        return self
+
+
+class AblationExecutionReceipt(StrictModel):
+    """Content-bound proof that benchmark stages were replayed or skipped."""
+
+    receipt_version: Literal["mulder.benchmark.ablation/v1"] = (
+        "mulder.benchmark.ablation/v1"
+    )
+    base_run_id: str = Field(min_length=1)
+    base_matrix_cell: str = Field(min_length=1)
+    base_result_sha256: Sha256 = Field(pattern=r"^[0-9a-f]{64}$")
+    workflow_sha256: Sha256 = Field(pattern=r"^[0-9a-f]{64}$")
+    disabled: list[AblationTarget] = Field(min_length=1)
+    executed_stages: list[BenchmarkStage]
+    skipped_stages: list[BenchmarkStage] = Field(min_length=1)
+    case_operation_counts: dict[str, dict[BenchmarkStage, int]]
+
+    @model_validator(mode="after")
+    def _check_receipt(self) -> AblationExecutionReceipt:
+        if len(set(self.disabled)) != len(self.disabled):
+            raise ValueError("disabled ablations must be unique")
+        if len(set(self.executed_stages)) != len(self.executed_stages):
+            raise ValueError("executed stages must be unique")
+        if len(set(self.skipped_stages)) != len(self.skipped_stages):
+            raise ValueError("skipped stages must be unique")
+        if set(self.executed_stages) & set(self.skipped_stages):
+            raise ValueError("a stage cannot be both executed and skipped")
         return self
 
 
@@ -332,12 +529,35 @@ class BenchmarkRunResult(StrictModel):
     cases: list[CaseRunResult] = Field(min_length=1)
     resources: ResourceUsage
     source_adjudication: SourceAdjudication | None = None
+    workflow_traces: list[CaseWorkflowTrace] = Field(default_factory=list)
+    ablation_receipt: AblationExecutionReceipt | None = None
 
     @model_validator(mode="after")
     def _check_case_ids(self) -> BenchmarkRunResult:
         case_ids = [case.case_id for case in self.cases]
         if len(set(case_ids)) != len(case_ids):
             raise ValueError("case_id values must be unique within a run")
+        trace_ids = [trace.case_id for trace in self.workflow_traces]
+        if len(set(trace_ids)) != len(trace_ids):
+            raise ValueError("workflow trace case IDs must be unique")
+        if trace_ids and set(trace_ids) != set(case_ids):
+            raise ValueError("workflow traces must cover the result case set exactly")
+        executable = (
+            set(self.identity.ablations) & EXECUTABLE_ABLATIONS
+            if self.identity is not None
+            else set()
+        )
+        if executable and self.ablation_receipt is None:
+            raise ValueError("executable ablation labels require an execution receipt")
+        if self.ablation_receipt is not None:
+            if self.identity is None:
+                raise ValueError("an ablation receipt requires run identity")
+            if executable != set(self.identity.ablations):
+                raise ValueError("executable ablations cannot be mixed with legacy labels")
+            if executable != set(self.ablation_receipt.disabled):
+                raise ValueError("ablation identity and receipt disagree")
+            if not self.workflow_traces:
+                raise ValueError("an ablation receipt requires complete workflow traces")
         return self
 
 
@@ -409,6 +629,39 @@ class VerdictScore(StrictModel):
     no_verdict_recall: float = Field(ge=0, le=1)
 
 
+class ConfidenceCalibrationScore(StrictModel):
+    """Calibration of declared claim probabilities against exact ground truth."""
+
+    count: int = Field(ge=0)
+    mean_confidence: float | None = Field(default=None, ge=0, le=1)
+    empirical_accuracy: float | None = Field(default=None, ge=0, le=1)
+    brier_score: float | None = Field(default=None, ge=0, le=1)
+    expected_calibration_error: float | None = Field(default=None, ge=0, le=1)
+
+
+class SeverityCalibrationScore(StrictModel):
+    """Ordinal severity agreement for claims that exactly match ground truth."""
+
+    count: int = Field(ge=0)
+    exact_matches: int = Field(ge=0)
+    unmatched_predictions: int = Field(ge=0)
+    exact_rate: float | None = Field(default=None, ge=0, le=1)
+    mean_absolute_error: float | None = Field(default=None, ge=0, le=4)
+
+
+class RevisionScore(StrictModel):
+    """Externally adjudicated effects of auditable before/after revisions."""
+
+    revision_events: int = Field(ge=0)
+    assertion_revisions: int = Field(ge=0)
+    iterations_observed: int = Field(ge=0)
+    errors_fixed: int = Field(ge=0)
+    errors_introduced: int = Field(ge=0)
+    correct_preserved: int = Field(ge=0)
+    errors_persisted: int = Field(ge=0)
+    net_errors_fixed: int
+
+
 class ScoreSlice(StrictModel):
     """Scores for all cases or one clean/nonempty subset."""
 
@@ -420,6 +673,9 @@ class ScoreSlice(StrictModel):
     epistemic: EpistemicScore
     coverage: CoverageScore
     verdicts: VerdictScore
+    confidence_calibration: ConfidenceCalibrationScore
+    severity_calibration: SeverityCalibrationScore
+    revisions: RevisionScore
     duplicate_claims: int = Field(ge=0)
     duplicate_citations: int = Field(ge=0)
 
@@ -473,6 +729,6 @@ class BenchmarkScoreDocument(StrictModel):
     score_schema: Literal["mulder.benchmark.score/v1"] = "mulder.benchmark.score/v1"
     benchmark_id: str
     manifest_sha256: Sha256 = Field(pattern=r"^[0-9a-f]{64}$")
-    methodology_version: Literal["1.0"] = METHODOLOGY_VERSION
+    methodology_version: SupportedMethodologyVersion = METHODOLOGY_VERSION
     runs: list[RunScore]
     aggregates: list[AggregateScore] = Field(default_factory=list)

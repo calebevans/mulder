@@ -78,6 +78,9 @@ def render_comparison_table(score: BenchmarkScoreDocument) -> str:
         "Coverage",
         "Verdict",
         "U/C/I",
+        "Confidence Brier/ECE",
+        "Severity exact/MAE",
+        "Fixed/introduced",
         "No verdict",
         "Failed",
         "Runtime",
@@ -102,6 +105,21 @@ def render_comparison_table(score: BenchmarkScoreDocument) -> str:
                 f"{overall.epistemic.unsupported_rate:.3f}/"
                 f"{overall.epistemic.contradicted_rate:.3f}/"
                 f"{overall.epistemic.inconclusive_rate:.3f}",
+                (
+                    f"{overall.confidence_calibration.brier_score:.3f}/"
+                    f"{overall.confidence_calibration.expected_calibration_error:.3f}"
+                    if overall.confidence_calibration.brier_score is not None
+                    and overall.confidence_calibration.expected_calibration_error is not None
+                    else "n/a"
+                ),
+                (
+                    f"{overall.severity_calibration.exact_rate:.3f}/"
+                    f"{overall.severity_calibration.mean_absolute_error:.3f}"
+                    if overall.severity_calibration.exact_rate is not None
+                    and overall.severity_calibration.mean_absolute_error is not None
+                    else "n/a"
+                ),
+                f"{overall.revisions.errors_fixed}/{overall.revisions.errors_introduced}",
                 f"{overall.verdicts.no_verdict_rate:.3f}",
                 f"{overall.verdicts.failed_cases}/{overall.verdicts.total_cases}",
                 str(resources.runtime_ms) if resources.runtime_ms is not None else "unknown",

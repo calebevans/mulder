@@ -19,15 +19,18 @@ from mulder.benchmark.models import (
     CaseRunResult,
     CaseScore,
     CitationScore,
+    ConfidenceCalibrationScore,
     CoverageExpectation,
     CoverageScore,
     EpistemicScore,
     ExpectedClaim,
     MetricDistribution,
     ObservedClaim,
+    RevisionScore,
     RunScore,
     ScoreSlice,
     SetScore,
+    SeverityCalibrationScore,
     VerdictScore,
 )
 from mulder.models import JsonScalar, ToolOutcomeStatus
@@ -157,6 +160,16 @@ class _RawCaseScore:
     failed_cases: int
     duplicate_claims: int
     duplicate_citations: int
+    confidence_samples: tuple[tuple[float, int], ...]
+    severity_errors: tuple[int, ...]
+    unmatched_severity_predictions: int
+    revision_events: int
+    assertion_revisions: int
+    revision_iterations: int
+    errors_fixed: int
+    errors_introduced: int
+    correct_preserved: int
+    errors_persisted: int
 
 
 def _score_case(manifest_case: BenchmarkCase, run_case: CaseRunResult) -> _RawCaseScore:
@@ -227,6 +240,50 @@ def _score_case(manifest_case: BenchmarkCase, run_case: CaseRunResult) -> _RawCa
         and (manifest_case.ground_truth_label == "nonempty" or not required_complete)
     )
 
+    confidence_samples = tuple(
+        (claim.confidence, int(_claim_key(claim) in expected_claims))
+        for claim in run_case.claims
+        if claim.confidence is not None
+    )
+    severity_rank = {
+        "informational": 0,
+        "low": 1,
+        "medium": 2,
+        "high": 3,
+        "critical": 4,
+    }
+    severity_errors: list[int] = []
+    unmatched_severity_predictions = 0
+    for claim in run_case.claims:
+        if claim.severity is None:
+            continue
+        expected = expected_by_key.get(_claim_key(claim))
+        if expected is None or expected.severity is None:
+            unmatched_severity_predictions += 1
+            continue
+        severity_errors.append(
+            abs(severity_rank[claim.severity] - severity_rank[expected.severity])
+        )
+
+    errors_fixed = errors_introduced = correct_preserved = errors_persisted = 0
+    assertion_revisions = 0
+    for revision in run_case.revisions:
+        before_key = _claim_key(revision.before)
+        after_key = _claim_key(revision.after)
+        if before_key == after_key:
+            continue
+        assertion_revisions += 1
+        before_correct = before_key in expected_claims
+        after_correct = after_key in expected_claims
+        if not before_correct and after_correct:
+            errors_fixed += 1
+        elif before_correct and not after_correct:
+            errors_introduced += 1
+        elif before_correct:
+            correct_preserved += 1
+        else:
+            errors_persisted += 1
+
     return _RawCaseScore(
         case_id=manifest_case.case_id,
         ground_truth_label=manifest_case.ground_truth_label,
@@ -257,12 +314,71 @@ def _score_case(manifest_case: BenchmarkCase, run_case: CaseRunResult) -> _RawCa
         failed_cases=int(run_case.cell_status == "failed"),
         duplicate_claims=duplicate_claims,
         duplicate_citations=duplicate_citations,
+        confidence_samples=confidence_samples,
+        severity_errors=tuple(severity_errors),
+        unmatched_severity_predictions=unmatched_severity_predictions,
+        revision_events=len(run_case.revisions),
+        assertion_revisions=assertion_revisions,
+        revision_iterations=len({revision.iteration for revision in run_case.revisions}),
+        errors_fixed=errors_fixed,
+        errors_introduced=errors_introduced,
+        correct_preserved=correct_preserved,
+        errors_persisted=errors_persisted,
     )
 
 
 def _tagged(values: Iterable[object], case_id: str) -> set[tuple[str, object]]:
     """Keep equal propositions in separate cases distinct during micro averaging."""
     return {(case_id, value) for value in values}
+
+
+def _confidence_calibration(samples: list[tuple[float, int]]) -> ConfidenceCalibrationScore:
+    """Compute a deterministic ten-bin ECE and Brier score."""
+    if not samples:
+        return ConfidenceCalibrationScore(count=0)
+    count = len(samples)
+    mean_confidence = statistics.fmean(confidence for confidence, _ in samples)
+    accuracy = statistics.fmean(correct for _, correct in samples)
+    brier = statistics.fmean((confidence - correct) ** 2 for confidence, correct in samples)
+    bins: dict[int, list[tuple[float, int]]] = {}
+    for confidence, correct in samples:
+        bin_index = min(int(confidence * 10), 9)
+        bins.setdefault(bin_index, []).append((confidence, correct))
+    ece = sum(
+        len(bin_samples)
+        / count
+        * abs(
+            statistics.fmean(confidence for confidence, _ in bin_samples)
+            - statistics.fmean(correct for _, correct in bin_samples)
+        )
+        for bin_samples in bins.values()
+    )
+    return ConfidenceCalibrationScore(
+        count=count,
+        mean_confidence=round(mean_confidence, 6),
+        empirical_accuracy=round(accuracy, 6),
+        brier_score=round(brier, 6),
+        expected_calibration_error=round(ece, 6),
+    )
+
+
+def _severity_calibration(
+    errors: list[int], unmatched_predictions: int
+) -> SeverityCalibrationScore:
+    if not errors:
+        return SeverityCalibrationScore(
+            count=0,
+            exact_matches=0,
+            unmatched_predictions=unmatched_predictions,
+        )
+    exact = sum(error == 0 for error in errors)
+    return SeverityCalibrationScore(
+        count=len(errors),
+        exact_matches=exact,
+        unmatched_predictions=unmatched_predictions,
+        exact_rate=_rate(exact, len(errors)),
+        mean_absolute_error=round(statistics.fmean(errors), 6),
+    )
 
 
 def _aggregate(raw_scores: list[_RawCaseScore]) -> ScoreSlice:
@@ -296,6 +412,11 @@ def _aggregate(raw_scores: list[_RawCaseScore]) -> ScoreSlice:
     verdict_correct = sum(score.verdict_correct for score in raw_scores)
     no_verdict = sum(score.no_verdict for score in raw_scores)
     expected_no_verdict = sum(score.expected_no_verdict for score in raw_scores)
+    confidence_samples = [sample for score in raw_scores for sample in score.confidence_samples]
+    severity_errors = [error for score in raw_scores for error in score.severity_errors]
+    unmatched_severity = sum(score.unmatched_severity_predictions for score in raw_scores)
+    errors_fixed = sum(score.errors_fixed for score in raw_scores)
+    errors_introduced = sum(score.errors_introduced for score in raw_scores)
 
     return ScoreSlice(
         case_count=total_cases,
@@ -350,6 +471,18 @@ def _aggregate(raw_scores: list[_RawCaseScore]) -> ScoreSlice:
                 expected_no_verdict,
                 empty=1.0,
             ),
+        ),
+        confidence_calibration=_confidence_calibration(confidence_samples),
+        severity_calibration=_severity_calibration(severity_errors, unmatched_severity),
+        revisions=RevisionScore(
+            revision_events=sum(score.revision_events for score in raw_scores),
+            assertion_revisions=sum(score.assertion_revisions for score in raw_scores),
+            iterations_observed=sum(score.revision_iterations for score in raw_scores),
+            errors_fixed=errors_fixed,
+            errors_introduced=errors_introduced,
+            correct_preserved=sum(score.correct_preserved for score in raw_scores),
+            errors_persisted=sum(score.errors_persisted for score in raw_scores),
+            net_errors_fixed=errors_fixed - errors_introduced,
         ),
         duplicate_claims=sum(score.duplicate_claims for score in raw_scores),
         duplicate_citations=sum(score.duplicate_citations for score in raw_scores),
@@ -433,6 +566,22 @@ def _aggregate_repeats(runs: list[RunScore]) -> list[AggregateScore]:
             "epistemic.inconclusive_rate": _distribution(
                 run.overall.epistemic.inconclusive_rate for run in cell_runs
             ),
+            "confidence_calibration.brier_score": _distribution(
+                run.overall.confidence_calibration.brier_score for run in cell_runs
+            ),
+            "confidence_calibration.expected_calibration_error": _distribution(
+                run.overall.confidence_calibration.expected_calibration_error
+                for run in cell_runs
+            ),
+            "severity_calibration.exact_rate": _distribution(
+                run.overall.severity_calibration.exact_rate for run in cell_runs
+            ),
+            "revisions.errors_fixed": _distribution(
+                run.overall.revisions.errors_fixed for run in cell_runs
+            ),
+            "revisions.errors_introduced": _distribution(
+                run.overall.revisions.errors_introduced for run in cell_runs
+            ),
             "resources.runtime_ms": _distribution(run.resources.runtime_ms for run in cell_runs),
             "resources.total_tokens": _distribution(
                 run.resources.total_tokens for run in cell_runs
@@ -487,6 +636,10 @@ def score_benchmark(
     seen_repeats: set[tuple[str, int]] = set()
     matrix_identities: dict[str, tuple[object, ...]] = {}
     for result in results:
+        if result.ablation_receipt is not None:
+            from mulder.benchmark.ablations import validate_ablation_result
+
+            validate_ablation_result(result)
         if result.benchmark_id != manifest.benchmark_id:
             raise ValueError(
                 f"run {result.run_id!r} benchmark_id {result.benchmark_id!r} does not match "
