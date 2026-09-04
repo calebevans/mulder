@@ -125,6 +125,8 @@ def test_parser_failure_is_not_serialized_as_successful_empty() -> None:
     assert response["outcome"]["status"] != "SUCCESS_EMPTY"
     assert response["outcome"]["coverage"]["bytes_examined"] == 42
     assert response["outcome"]["coverage"]["bytes_total"] == 100
+    assert response["outcome"]["execution"]["output_digest"].startswith("blake2b:")
+    assert response["outcome"]["legacy_mapping"] is None
 
 
 def test_timeout_gets_a_distinct_outcome_without_breaking_legacy_status() -> None:
@@ -179,3 +181,21 @@ def test_windowed_response_distinguishes_empty_and_sampled_scope() -> None:
     assert sampled["outcome"]["status"] == "SAMPLED"
     assert sampled["outcome"]["coverage"]["rows_examined"] == 2
     assert sampled["outcome"]["coverage"]["rows_total"] == 3
+    assert sampled["outcome"]["execution"]["source_ids"] == ["source"]
+
+
+def test_omitted_outcome_is_derived_and_full_content_is_committed() -> None:
+    empty = tool_response("tc_empty", "query", {}, [])
+    explicit_count = tool_response("tc_count", "query", {}, {"result_count": 1})
+    ambiguous = tool_response("tc_ambiguous", "query", {}, {"completed": True})
+    first = windowed_response("tc_first", [{"raw_text": "alpha"}], "source", "search", {}, 0)
+    second = windowed_response("tc_second", [{"raw_text": "bravo"}], "source", "search", {}, 0)
+
+    assert empty["outcome"]["status"] == "SUCCESS_EMPTY"
+    assert explicit_count["outcome"]["status"] == "SUCCESS_NONEMPTY"
+    assert ambiguous["outcome"]["status"] == "PARTIAL"
+    assert "cardinality" in ambiguous["outcome"]["reason"]
+    assert (
+        first["outcome"]["execution"]["output_digest"]
+        != second["outcome"]["execution"]["output_digest"]
+    )

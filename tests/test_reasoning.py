@@ -164,6 +164,32 @@ def test_reasoning_records_persist_with_cost_tests_and_resolution(tmp_path: Path
     reopened.close()
 
 
+def test_finding_revision_links_an_exact_contradiction(tmp_path: Path) -> None:
+    db = CaseDB.create("revision-link", "/evidence", tmp_path)
+    _insert_unverified_claim(db, "revision-link")
+    hypothesis = _create_hypothesis(db)
+    contradiction = db.record_reasoning(
+        RecordContradiction(
+            hypothesis_id=hypothesis.hypothesis_id,
+            description="A competing observation changes the finding state.",
+            material=True,
+            author_id="contradiction-reviewer",
+        )
+    )
+    assert isinstance(contradiction, Contradiction)
+
+    assert db.update_finding(
+        "finding-revision-link",
+        contradiction_ids=[contradiction.contradiction_id],
+        revision_state="refuted",
+        reason_code="material_contradiction",
+    )
+    revision = db.get_finding_revisions("finding-revision-link")[-1]
+    assert revision.state == "refuted"
+    assert revision.contradiction_ids == [contradiction.contradiction_id]
+    db.close()
+
+
 def test_open_migrates_legacy_database_without_reasoning_tables(tmp_path: Path) -> None:
     db = CaseDB.create("reasoning-legacy", "/evidence", tmp_path)
     with db.engine.begin() as conn:

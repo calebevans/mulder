@@ -31,6 +31,7 @@ from mulder.models import (
     CaseMetadataRow,
     ConfirmationAssessment,
     CoverageRecord,
+    CoverageRequirement,
     Finding,
     ScopedNegativeVerdict,
     SourceRow,
@@ -77,12 +78,13 @@ def _coverage_tuple(record: CoverageRecord) -> tuple[str, str, str]:
 
 
 def _evaluate_negative_coverage(
-    findings: list[Finding], coverage_records: list[CoverageRecord]
+    findings: list[Finding],
+    coverage_records: list[CoverageRecord],
+    coverage_requirements: list[CoverageRequirement],
 ) -> tuple[bool, str]:
     """Decide whether negative findings stay within successfully examined scope.
 
-    Legacy investigations with no coverage register remain renderable. Once a
-    register exists, an unscoped negative conclusion is allowed only when at
+    An unscoped negative conclusion is allowed only when at
     least one applicable check completed and no applicable check has an
     incomplete/error state. New scoped verdicts are stricter: every named key
     must exist and have a successful outcome.
@@ -94,11 +96,13 @@ def _evaluate_negative_coverage(
     ]
     if not negative_findings:
         return True, "No clean or absence conclusion requires coverage validation"
-    if not coverage_records:
-        return True, (
-            "Legacy case has no coverage register; negative findings remain unverified "
-            "and are not promoted to NO_EVIL_WITHIN_COVERAGE"
+    if not coverage_requirements:
+        return False, (
+            "Negative conclusions require a declarative mandatory-domain register; "
+            "no coverage requirements were declared"
         )
+    if not coverage_records:
+        return False, "Negative conclusions require explicit completed coverage records"
 
     coverage_by_key = {_coverage_tuple(record): record for record in coverage_records}
     failures: list[str] = []
@@ -161,6 +165,7 @@ def _evaluate_finalize_gates(
     audit_summary: AuditSummary,
     coverage_records: list[CoverageRecord] | None = None,
     confirmation_assessments: dict[str, ConfirmationAssessment] | None = None,
+    coverage_requirements: list[CoverageRequirement] | None = None,
 ) -> list[dict[str, object]]:
     """Evaluate all finalize_report hard gates and return per-gate results.
 
@@ -271,18 +276,51 @@ def _evaluate_finalize_gates(
         detail = "No non-empty sources to check"
     gates.append({"name": "evidence_citation_coverage", "passed": passed, "detail": detail})
 
-    # Gate 6: clean/absence conclusions cannot outrun actual analysis scope.
-    passed, detail = _evaluate_negative_coverage(findings, coverage_records or [])
+    # Gate 6: declared mandatory domains must be present even when no result row exists.
+    requirements = coverage_requirements or []
+    records = coverage_records or []
+    record_by_key = {_coverage_tuple(record): record for record in records}
+    missing_requirements: list[str] = []
+    for requirement in requirements:
+        tuple_key = (
+            requirement.key.system_name,
+            requirement.key.evidence_domain,
+            requirement.key.check_name,
+        )
+        record = record_by_key.get(tuple_key)
+        if record is None:
+            missing_requirements.append("/".join(tuple_key) + "=MISSING")
+        elif record.outcome.status in _COVERAGE_BLOCKING_STATUSES:
+            missing_requirements.append("/".join(tuple_key) + f"={record.outcome.status.value}")
+    gates.append(
+        {
+            "name": "mandatory_coverage",
+            "passed": not missing_requirements,
+            "detail": (
+                f"{len(requirements)} declared mandatory check(s) are represented"
+                if not missing_requirements
+                else "Mandatory coverage incomplete: " + ", ".join(missing_requirements)
+            ),
+        }
+    )
+
+    # Gate 7: clean/absence conclusions cannot outrun actual analysis scope.
+    passed, detail = _evaluate_negative_coverage(findings, records, requirements)
     gates.append({"name": "negative_coverage_scope", "passed": passed, "detail": detail})
 
-    # Gate 7: Atomic confirmed findings still satisfy deterministic policy.
+    # Gate 8: Atomic confirmed findings still satisfy deterministic policy.
     # Legacy findings have no assessment and remain explicitly outside this
     # additive gate until migrated; new atomic findings cannot bypass it.
     assessments = confirmation_assessments or {}
     failed_confirmations = [
         finding_id for finding_id, item in assessments.items() if not item.accepted
     ]
-    passed = not failed_confirmations
+    legacy_confirmed = [
+        finding.finding_id
+        for finding in findings
+        if finding.confidence == "confirmed" and finding.finding_id not in assessments
+    ]
+    passed = not failed_confirmations and not legacy_confirmed
     if passed:
         detail = (
             f"{len(assessments)} atomic confirmed finding(s) satisfy "
@@ -291,7 +329,8 @@ def _evaluate_finalize_gates(
     else:
         detail = (
             "Atomic confirmed findings no longer satisfy verification/independence "
-            f"policy: {failed_confirmations}"
+            f"policy: {failed_confirmations}; legacy/claimless confirmed findings: "
+            f"{legacy_confirmed}"
         )
     gates.append({"name": "atomic_confirmation", "passed": passed, "detail": detail})
 
@@ -411,6 +450,39 @@ def submit_finding(
             error_type="validation",
         )
 
+    unbound_anchors: list[str] = []
+    for claim in claim_inputs:
+        for anchor in claim.anchors:
+            source_name = ctx.db.get_window_source_name(anchor.window_id)
+            exposed_sources = ctx.audit.tool_call_source_names(anchor.tool_call_id)
+            exposed_windows = ctx.audit.tool_call_window_ids(anchor.tool_call_id)
+            source_bound = source_name is not None and any(
+                source_name == exposed or source_name.startswith(exposed + ".")
+                for exposed in exposed_sources
+            )
+            if not source_bound or anchor.window_id not in exposed_windows:
+                unbound_anchors.append(f"{anchor.tool_call_id}->window:{anchor.window_id}")
+    if unbound_anchors:
+        return error_response(
+            tc_id,
+            "submit_finding",
+            {"title": title, "evidence_refs": evidence_refs},
+            "Atomic claim anchors must identify a window actually exposed by the cited call: "
+            + ", ".join(sorted(unbound_anchors)),
+            (time.monotonic() - t0) * 1000,
+            error_type="provenance",
+        )
+
+    if confidence == "confirmed" and not claim_inputs:
+        return error_response(
+            tc_id,
+            "submit_finding",
+            {"title": title, "evidence_refs": evidence_refs},
+            "New confirmed findings require atomic claims and exact evidence anchors",
+            (time.monotonic() - t0) * 1000,
+            error_type="confirmation_policy",
+        )
+
     case_metadata = ctx.db.get_case_metadata()
     finding_id = f"f_{uuid4().hex[:8]}"
     now = datetime.now(timezone.utc).isoformat()
@@ -437,6 +509,7 @@ def submit_finding(
             event_time_start=event_time_start,
             event_time_end=event_time_end,
             negative_verdict=scoped_negative,
+            claim_state="atomic" if claim_inputs else "legacy_unverified",
             submitted_at=now,
         )
     except Exception as exc:
@@ -563,6 +636,7 @@ def update_finding(
     event_time_end: str | None = None,
     revision_state: str | None = None,
     reason_code: str = "analyst_correction",
+    contradiction_ids: list[str] | None = None,
 ) -> dict[str, object]:
     """Update or correct an existing finding.
 
@@ -591,7 +665,8 @@ def update_finding(
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
-    if not ctx.db._finding_exists(finding_id):
+    current = ctx.db.get_finding(finding_id)
+    if current is None:
         return error_response(
             tc_id,
             "update_finding",
@@ -614,6 +689,58 @@ def update_finding(
             )
             resp["valid_refs"] = recent_ids
             return resp
+
+    atomic_claims = ctx.db.get_claims(finding_id)
+    if atomic_claims:
+        claim_refs = {
+            anchor.tool_call_id for claim in atomic_claims for anchor in claim.anchors
+        }
+        if evidence_refs is not None and set(evidence_refs) != claim_refs:
+            return error_response(
+                tc_id,
+                "update_finding",
+                {"finding_id": finding_id, "evidence_refs": evidence_refs},
+                "Atomic finding evidence_refs must remain exactly equal to its anchor calls",
+                (time.monotonic() - t0) * 1000,
+                error_type="validation",
+            )
+        resolved_sources = {
+            anchor.source_name for claim in atomic_claims for anchor in claim.anchors
+        }
+        if sources is not None and set(sources) != resolved_sources:
+            return error_response(
+                tc_id,
+                "update_finding",
+                {"finding_id": finding_id, "sources": sources},
+                "Atomic finding sources are server-resolved and cannot be replaced",
+                (time.monotonic() - t0) * 1000,
+                error_type="validation",
+            )
+
+    target_confidence = confidence or current.confidence
+    if target_confidence == "confirmed":
+        if not atomic_claims:
+            return error_response(
+                tc_id,
+                "update_finding",
+                {"finding_id": finding_id, "confidence": target_confidence},
+                "Confirmed findings require atomic claims and exact evidence anchors",
+                (time.monotonic() - t0) * 1000,
+                error_type="confirmation_policy",
+            )
+        ctx.db.verify_finding_claims(finding_id)
+        confirmation = assess_confirmation(ctx.db.get_claims(finding_id))
+        if not confirmation.accepted:
+            response = error_response(
+                tc_id,
+                "update_finding",
+                {"finding_id": finding_id, "confidence": target_confidence},
+                "Confirmed finding failed deterministic verification or independence policy",
+                (time.monotonic() - t0) * 1000,
+                error_type="confirmation_policy",
+            )
+            response["confirmation_assessment"] = confirmation.model_dump()
+            return response
 
     ts_warnings: list[str] = []
     if event_time_start is not None:
@@ -646,6 +773,7 @@ def update_finding(
             actor_kind="investigator",
             reason_code=reason_code,
             revision_state=revision_state,
+            contradiction_ids=contradiction_ids,
             **cast(dict[str, Any], update_kwargs),
         )
     except Exception as exc:
@@ -881,6 +1009,7 @@ def finalize_report() -> dict[str, object]:
     audit_summary = ctx.audit.summary()
     sources_list = ctx.db.get_sources()
     coverage_records = ctx.db.get_coverage()
+    coverage_requirements = ctx.db.get_coverage_requirements()
 
     confirmation_assessments: dict[str, ConfirmationAssessment] = {}
     for finding in findings:
@@ -900,6 +1029,7 @@ def finalize_report() -> dict[str, object]:
         audit_summary,
         coverage_records=coverage_records,
         confirmation_assessments=confirmation_assessments,
+        coverage_requirements=coverage_requirements,
     )
     for gate in gate_results:
         if not gate["passed"]:

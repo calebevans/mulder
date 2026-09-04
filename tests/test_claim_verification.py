@@ -102,6 +102,74 @@ class TestPureClaimVerifier:
         assert result.result == "contradicted"
         assert result.reason_code == "contradicting_anchor_matched"
 
+    def test_set_membership_and_bounded_range_are_supported(self) -> None:
+        member = verify_claim(
+            _claim(predicate="set_contains", expected="cmd.exe", observed="pwsh.exe, cmd.exe")
+        )
+        ranged = verify_claim(
+            _claim(predicate="within_range", expected="42", observed="42").model_copy(
+                update={"qualifiers": {"minimum": 40, "maximum": 50}}
+            )
+        )
+
+        assert member.result == "verified"
+        assert ranged.result == "verified"
+
+    def test_cross_source_identity_requires_distinct_artifacts(self) -> None:
+        claim = _claim(predicate="cross_source_identity")
+        first = claim.anchors[0].model_copy(update={"artifact_independence_key": "artifact:a"})
+        second = first.model_copy(
+            update={
+                "anchor_id": "a_2",
+                "source_id": 2,
+                "source_hash": "hash-2",
+                "artifact_independence_key": "artifact:b",
+            }
+        )
+
+        assert verify_claim(claim.model_copy(update={"anchors": [first, second]})).result == (
+            "verified"
+        )
+
+    def test_process_ancestry_and_bounded_cooccurrence_are_explicit(self) -> None:
+        claim = _claim(predicate="process_ancestry", expected="child.exe")
+        parent = claim.anchors[0].model_copy(
+            update={"exact_text": "parent.exe", "char_start": 0, "char_end": 10}
+        )
+        child = parent.model_copy(
+            update={
+                "anchor_id": "a_2",
+                "exact_text": "child.exe",
+                "char_start": 12,
+                "char_end": 21,
+            }
+        )
+        ancestry = claim.model_copy(
+            update={
+                "anchors": [parent, child],
+                "qualifiers": {"ancestor": "parent.exe", "descendant": "child.exe"},
+            }
+        )
+        nearby = claim.model_copy(
+            update={
+                "predicate": "bounded_cooccurrence",
+                "object_value": "parent.exe",
+                "anchors": [parent, child],
+                "qualifiers": {"with": "child.exe", "max_line_distance": 0},
+            }
+        )
+
+        assert verify_claim(ancestry).result == "verified"
+        assert verify_claim(nearby).result == "verified"
+
+        unrelated_record = child.model_copy(update={"window_id": 2})
+        assert (
+            verify_claim(
+                ancestry.model_copy(update={"anchors": [parent, unrelated_record]})
+            ).result
+            == "contradicted"
+        )
+
 
 class TestConfirmationPolicy:
     def test_two_distinct_root_sources_are_required(self) -> None:
@@ -115,9 +183,7 @@ class TestConfirmationPolicy:
                 "independence_key": "source:hash-2",
             }
         )
-        assessment = assess_confirmation(
-            [claim.model_copy(update={"anchors": [first, second]})]
-        )
+        assessment = assess_confirmation([claim.model_copy(update={"anchors": [first, second]})])
         assert assessment.accepted is True
         assert assessment.claims[0].independent_sources == 2
 
@@ -128,12 +194,69 @@ class TestConfirmationPolicy:
             [claim.model_copy(update={"anchors": [claim.anchors[0], duplicate]})]
         )
         assert assessment.accepted is False
-        assert assessment.claims[0].reason_code == "insufficient_independent_sources"
+        assert assessment.claims[0].reason_code == (
+            "insufficient_independence:artifact,observation"
+        )
+
+    def test_material_policy_exposes_and_enforces_each_independence_dimension(self) -> None:
+        claim = _claim().model_copy(update={"epistemic_state": "verified"})
+        first = claim.anchors[0].model_copy(
+            update={
+                "artifact_independence_key": "artifact:a",
+                "acquisition_independence_key": "acquisition:shared",
+                "extractor_independence_key": "extractor:one",
+                "observation_independence_key": "observation:a",
+            }
+        )
+        second = first.model_copy(
+            update={
+                "anchor_id": "a_2",
+                "source_id": 2,
+                "artifact_independence_key": "artifact:b",
+                "observation_independence_key": "observation:b",
+            }
+        )
+
+        assessment = assess_confirmation([claim.model_copy(update={"anchors": [first, second]})])
+
+        assert assessment.accepted is True
+        assert assessment.claims[0].independence_dimensions == {
+            "artifact": 2,
+            "acquisition": 1,
+            "extractor": 1,
+            "observation": 2,
+        }
+        assert assessment.claims[0].required_independence_dimensions == {
+            "artifact": 2,
+            "acquisition": 1,
+            "extractor": 1,
+            "observation": 2,
+        }
+
+        strict = assess_confirmation(
+            [claim.model_copy(update={"anchors": [first, second]})],
+            min_independent_acquisitions=2,
+            min_independent_extractors=2,
+        )
+        assert strict.accepted is False
+        assert strict.claims[0].reason_code == ("insufficient_independence:acquisition,extractor")
 
     def test_non_verified_claim_cannot_be_confirmed(self) -> None:
         assessment = assess_confirmation([_claim()])
         assert assessment.accepted is False
         assert assessment.claims[0].reason_code == "claim_unverified"
+
+    def test_nonmaterial_and_cryptographic_predicates_use_documented_policy(self) -> None:
+        verified = _claim().model_copy(update={"epistemic_state": "verified"})
+        nonmaterial = assess_confirmation([verified.model_copy(update={"material": False})])
+        hash_claim = assess_confirmation(
+            [verified.model_copy(update={"predicate": "hash_equals"})]
+        )
+
+        assert nonmaterial.accepted is True
+        assert nonmaterial.claims[0].policy_id == "nonmaterial-single-observation-v2"
+        assert hash_claim.accepted is True
+        assert hash_claim.claims[0].policy_id == "cryptographic-single-artifact-v2"
 
 
 class TestPersistedVerification:

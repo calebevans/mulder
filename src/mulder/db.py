@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import json
 import logging
 import queue
@@ -46,6 +48,7 @@ from mulder.models import (
     ClaimVerification,
     CoverageKey,
     CoverageRecord,
+    CoverageRequirement,
     EvidenceAnchor,
     Finding,
     FindingRevision,
@@ -72,6 +75,92 @@ _T = TypeVar("_T")
 logger = logging.getLogger(__name__)
 
 metadata = MetaData()
+
+
+def _json_pointer_value(document: object, pointer: str) -> object:
+    """Resolve one RFC 6901-style pointer without executing a query language."""
+    current = document
+    if pointer == "":
+        return current
+    if not pointer.startswith("/"):
+        raise ValueError("JSON pointer must be empty or begin with '/'")
+    for encoded in pointer[1:].split("/"):
+        token = encoded.replace("~1", "/").replace("~0", "~")
+        if isinstance(current, list):
+            try:
+                index = int(token)
+                if index < 0 or str(index) != token:
+                    raise ValueError
+                current = current[index]
+            except (ValueError, IndexError) as exc:
+                raise ValueError(f"JSON pointer index is invalid: {token}") from exc
+        elif isinstance(current, dict) and token in current:
+            current = current[token]
+        else:
+            raise ValueError(f"JSON pointer component does not exist: {token}")
+    return current
+
+
+def _typed_selector_value(
+    raw_text: str, selector_type: str, selector: dict[str, object]
+) -> object:
+    """Validate a bounded typed selector against the immutable window payload."""
+    expected_keys: dict[str, set[str]] = {
+        "text_span": set(),
+        "byte_range": {"start", "end"},
+        "csv_cell": {"row", "column"},
+        "json_pointer": {"pointer"},
+        "evtx_field": {"field"},
+        "sqlite_cell": {"row", "column"},
+        "parsed_record": {"field"},
+    }
+    if selector_type not in expected_keys:
+        raise ValueError(f"unsupported selector type: {selector_type}")
+    if set(selector) != expected_keys[selector_type]:
+        raise ValueError(
+            f"{selector_type} selector keys must be exactly "
+            f"{sorted(expected_keys[selector_type])}"
+        )
+    if selector_type == "text_span":
+        return None
+    if selector_type == "byte_range":
+        start = selector.get("start")
+        end = selector.get("end")
+        if type(start) is not int or type(end) is not int or start < 0 or end <= start:
+            raise ValueError("byte_range requires integer start/end bounds")
+        encoded = raw_text.encode("utf-8")
+        if end > len(encoded):
+            raise ValueError("byte_range exceeds the immutable window")
+        try:
+            return encoded[start:end].decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError("byte_range must select complete UTF-8 code points") from exc
+    if selector_type == "csv_cell":
+        row_index = selector.get("row")
+        column = selector.get("column")
+        if type(row_index) is not int or row_index < 1 or not isinstance(column, str):
+            raise ValueError("csv_cell requires a 1-based row and column name")
+        rows = list(csv.DictReader(io.StringIO(raw_text)))
+        if row_index > len(rows) or column not in rows[row_index - 1]:
+            raise ValueError("csv_cell is outside the immutable window")
+        return rows[row_index - 1][column]
+    document = json.loads(raw_text)
+    if selector_type == "json_pointer":
+        pointer = selector.get("pointer")
+        if not isinstance(pointer, str):
+            raise ValueError("json_pointer requires a pointer string")
+        return _json_pointer_value(document, pointer)
+    if selector_type in {"evtx_field", "sqlite_cell", "parsed_record"}:
+        row_index = selector.get("row", 0)
+        field = selector.get("field") or selector.get("column")
+        if type(row_index) is not int or row_index < 0 or not isinstance(field, str):
+            raise ValueError(f"{selector_type} requires a non-negative row and field")
+        record = document[row_index] if isinstance(document, list) else document
+        if not isinstance(record, dict) or field not in record:
+            raise ValueError(f"{selector_type} field does not exist")
+        return record[field]
+    raise AssertionError("unreachable selector type")
+
 
 case_metadata_t = Table(
     "case_metadata",
@@ -123,6 +212,13 @@ findings_t = Table(
     Column("event_time_start", Text),
     Column("event_time_end", Text),
     Column("negative_verdict", Text),
+    Column(
+        "claim_state",
+        Text,
+        nullable=False,
+        default="legacy_unverified",
+        server_default="legacy_unverified",
+    ),
     Column("is_deleted", Integer, nullable=False, default=0, server_default="0"),
     Column("submitted_at", Text, nullable=False),
 )
@@ -142,6 +238,7 @@ finding_revisions_t = Table(
     Column("changed_fields", Text, nullable=False),
     Column("evidence_added", Text, nullable=False),
     Column("evidence_removed", Text, nullable=False),
+    Column("contradiction_ids", Text, nullable=False, default="[]", server_default="[]"),
     Column("tombstone", Integer, nullable=False),
     Column("created_at", Text, nullable=False),
     UniqueConstraint("finding_id", "revision_number", name="uq_finding_revision_number"),
@@ -158,6 +255,8 @@ coverage_register_t = Table(
     Column("status", Text, nullable=False),
     Column("coverage", Text, nullable=False),
     Column("reason", Text),
+    Column("execution", Text),
+    Column("legacy_mapping", Text),
     Column("source_name", Text),
     Column("tool_call_id", Text),
     Column("recorded_at", Text, nullable=False),
@@ -167,6 +266,26 @@ coverage_register_t = Table(
         "evidence_domain",
         "check_name",
         name="uq_coverage_register_key",
+    ),
+)
+
+coverage_requirements_t = Table(
+    "coverage_requirements",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("case_id", Text, ForeignKey("case_metadata.case_id"), nullable=False),
+    Column("system_name", Text, nullable=False),
+    Column("evidence_domain", Text, nullable=False),
+    Column("check_name", Text, nullable=False),
+    Column("required_tool", Text, nullable=False),
+    Column("rationale", Text, nullable=False),
+    Column("declared_at", Text, nullable=False),
+    UniqueConstraint(
+        "case_id",
+        "system_name",
+        "evidence_domain",
+        "check_name",
+        name="uq_coverage_requirement_key",
     ),
 )
 
@@ -187,6 +306,7 @@ claims_t = Table(
     Column("predicate", Text, nullable=False),
     Column("object_value", Text, nullable=False),
     Column("qualifiers", Text, nullable=False),
+    Column("material", Integer, nullable=False, default=1, server_default="1"),
     Column("epistemic_state", Text, nullable=False),
 )
 
@@ -211,9 +331,15 @@ evidence_anchors_t = Table(
     Column("char_start", Integer, nullable=False),
     Column("char_end", Integer, nullable=False),
     Column("exact_text", Text, nullable=False),
+    Column("selector_type", Text, nullable=False, default="text_span", server_default="text_span"),
+    Column("selector", Text, nullable=False, default="{}", server_default="{}"),
     Column("artifact_family", Text, nullable=False),
     Column("extractor_family", Text, nullable=False),
     Column("independence_key", Text, nullable=False, index=True),
+    Column("artifact_independence_key", Text),
+    Column("acquisition_independence_key", Text),
+    Column("extractor_independence_key", Text),
+    Column("observation_independence_key", Text),
     Column("value_type", Text, nullable=False),
     Column("normalized_value", Text, nullable=False),
     Column("role", Text, nullable=False),
@@ -491,6 +617,62 @@ def _migrate_add_plugin_activations(conn: Connection) -> None:
 def _migrate_add_coverage_register(conn: Connection) -> None:
     """Create the additive coverage register for databases from older releases."""
     coverage_register_t.create(conn, checkfirst=True)
+    coverage_requirements_t.create(conn, checkfirst=True)
+    _add_column_if_missing(conn, "coverage_register", "execution TEXT")
+    _add_column_if_missing(conn, "coverage_register", "legacy_mapping TEXT")
+    conn.execute(
+        text(
+            "UPDATE coverage_register SET legacy_mapping = 'LEGACY_UNCLASSIFIED' "
+            "WHERE execution IS NULL AND legacy_mapping IS NULL"
+        )
+    )
+
+
+def _add_column_if_missing(conn: Connection, table_name: str, definition: str) -> None:
+    """Apply one additive SQLite column migration idempotently."""
+    try:
+        conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {definition}"))
+    except Exception as exc:
+        if "duplicate column" not in str(exc).lower():
+            raise
+
+
+def _migrate_foundation_contract_v2(conn: Connection) -> None:
+    """Persist explicit legacy, selector, materiality, and independence state."""
+    _add_column_if_missing(
+        conn,
+        "findings",
+        "claim_state TEXT NOT NULL DEFAULT 'legacy_unverified'",
+    )
+    _add_column_if_missing(conn, "claims", "material INTEGER NOT NULL DEFAULT 1")
+    _add_column_if_missing(
+        conn,
+        "evidence_anchors",
+        "selector_type TEXT NOT NULL DEFAULT 'text_span'",
+    )
+    _add_column_if_missing(conn, "evidence_anchors", "selector TEXT NOT NULL DEFAULT '{}'")
+    for name in (
+        "artifact_independence_key",
+        "acquisition_independence_key",
+        "extractor_independence_key",
+        "observation_independence_key",
+    ):
+        _add_column_if_missing(conn, "evidence_anchors", f"{name} TEXT")
+    conn.execute(
+        text(
+            "UPDATE findings SET claim_state = 'atomic' WHERE finding_id IN "
+            "(SELECT DISTINCT finding_id FROM claims)"
+        )
+    )
+
+
+def _migrate_revision_contradictions(conn: Connection) -> None:
+    """Add explicit revision-to-contradiction links to existing databases."""
+    _add_column_if_missing(
+        conn,
+        "finding_revisions",
+        "contradiction_ids TEXT NOT NULL DEFAULT '[]'",
+    )
 
 
 def _migrate_add_negative_verdict(conn: Connection) -> None:
@@ -510,6 +692,7 @@ def _migrate_add_finding_revisions(conn: Connection) -> None:
         if "duplicate column" not in str(exc).lower():
             raise
     finding_revisions_t.create(conn, checkfirst=True)
+    _migrate_revision_contradictions(conn)
     legacy_rows = conn.execute(
         select(findings_t).where(
             ~findings_t.c.finding_id.in_(select(finding_revisions_t.c.finding_id))
@@ -546,6 +729,7 @@ def _finding_from_row(row: Any) -> Finding:
         negative_verdict=(
             json.loads(row.negative_verdict) if getattr(row, "negative_verdict", None) else None
         ),
+        claim_state=getattr(row, "claim_state", "legacy_unverified"),
         submitted_at=row.submitted_at,
     )
 
@@ -566,6 +750,7 @@ def _append_finding_revision(
     changed_fields: list[str],
     previous: Finding | None,
     tombstone: bool = False,
+    contradiction_ids: list[str] | None = None,
 ) -> FindingRevision:
     """Append one immutable snapshot inside the caller's transaction."""
     latest = conn.execute(
@@ -593,6 +778,7 @@ def _append_finding_revision(
         changed_fields=sorted(changed_fields),
         evidence_added=sorted(current_refs - previous_refs),
         evidence_removed=sorted(previous_refs - current_refs),
+        contradiction_ids=sorted(set(contradiction_ids or [])),
         tombstone=tombstone,
         created_at=datetime.now(timezone.utc).isoformat(),
     )
@@ -610,6 +796,7 @@ def _append_finding_revision(
             changed_fields=json.dumps(revision.changed_fields),
             evidence_added=json.dumps(revision.evidence_added),
             evidence_removed=json.dumps(revision.evidence_removed),
+            contradiction_ids=json.dumps(revision.contradiction_ids),
             tombstone=int(revision.tombstone),
             created_at=revision.created_at,
         )
@@ -768,9 +955,11 @@ class CaseDB:
             _migrate_add_progress(conn)
             _migrate_add_kv_store(conn)
             _migrate_add_claim_tables(conn)
+            _migrate_foundation_contract_v2(conn)
             _migrate_add_coverage_register(conn)
             _migrate_add_negative_verdict(conn)
             _migrate_add_finding_revisions(conn)
+            _migrate_revision_contradictions(conn)
             _migrate_add_entity_graph(conn)
             _migrate_add_reasoning_review(conn)
             _migrate_add_plugin_activations(conn)
@@ -1249,6 +1438,17 @@ class CaseDB:
             for row in rows
         ]
 
+    def get_window_source_name(self, window_id: int) -> str | None:
+        """Resolve one immutable window to its server-owned source identity."""
+        stmt = (
+            select(sources_t.c.source_name)
+            .select_from(windows_t.join(sources_t, windows_t.c.source_id == sources_t.c.source_id))
+            .where(windows_t.c.window_id == window_id)
+        )
+        with self._engine.connect() as conn:
+            value = conn.execute(stmt).scalar()
+        return str(value) if value is not None else None
+
     def get_source_count(self) -> int:
         """Return the number of registered sources."""
         stmt = select(func.count()).select_from(sources_t)
@@ -1303,6 +1503,7 @@ class CaseDB:
 
         def _do_insert() -> list[AtomicClaim]:
             """Persist a finding and its claim graph atomically."""
+            claim_state = "atomic" if claims else "legacy_unverified"
             with self._engine.begin() as conn:
                 conn.execute(
                     insert(findings_t).values(
@@ -1322,6 +1523,7 @@ class CaseDB:
                             if finding.negative_verdict is not None
                             else None
                         ),
+                        claim_state=claim_state,
                         is_deleted=0,
                         submitted_at=finding.submitted_at,
                     )
@@ -1340,6 +1542,7 @@ class CaseDB:
                         predicate=claim_input.predicate,
                         object_value=claim_input.object_value,
                         qualifiers=claim_input.qualifiers,
+                        material=claim_input.material,
                         epistemic_state="unverified",
                         anchors=[],
                     )
@@ -1353,6 +1556,7 @@ class CaseDB:
                             predicate=claim.predicate,
                             object_value=json.dumps(claim.object_value),
                             qualifiers=json.dumps(claim.qualifiers),
+                            material=int(claim.material),
                             epistemic_state=claim.epistemic_state,
                         )
                     )
@@ -1367,6 +1571,7 @@ class CaseDB:
                                 windows_t.c.line_end,
                                 windows_t.c.raw_text,
                                 sources_t.c.source_name,
+                                sources_t.c.source_path,
                                 sources_t.c.source_hash,
                                 sources_t.c.extractor,
                             )
@@ -1396,9 +1601,35 @@ class CaseDB:
                                 f"{anchor_input.window_id}:{anchor_input.char_start}-"
                                 f"{anchor_input.char_end}"
                             )
+                        selected_value = _typed_selector_value(
+                            raw_text,
+                            anchor_input.selector_type,
+                            cast(dict[str, object], anchor_input.selector),
+                        )
+                        if selected_value is not None and str(selected_value) != exact_text:
+                            raise ValueError(
+                                f"{anchor_input.selector_type} resolves to a different value "
+                                "than the exact character span"
+                            )
 
                         extractor = str(row.extractor)
                         source_hash = str(row.source_hash)
+                        artifact_key = f"artifact:{source_hash}"
+                        acquisition_key = (
+                            "acquisition:"
+                            + hashlib.sha256(
+                                str(Path(str(row.source_path)).parent).encode()
+                            ).hexdigest()
+                        )
+                        observation_key = (
+                            f"observation:{source_hash}:{row.window_id}:"
+                            f"{anchor_input.selector_type}:"
+                            + hashlib.sha256(
+                                json.dumps(
+                                    anchor_input.selector, sort_keys=True, separators=(",", ":")
+                                ).encode()
+                            ).hexdigest()
+                        )
                         anchor = EvidenceAnchor(
                             anchor_id=f"a_{uuid4().hex[:12]}",
                             claim_id=claim_id,
@@ -1412,9 +1643,15 @@ class CaseDB:
                             char_start=anchor_input.char_start,
                             char_end=anchor_input.char_end,
                             exact_text=exact_text,
+                            selector_type=anchor_input.selector_type,
+                            selector=anchor_input.selector,
                             artifact_family=anchor_input.artifact_family or extractor,
                             extractor_family=extractor,
                             independence_key=f"source:{source_hash}",
+                            artifact_independence_key=artifact_key,
+                            acquisition_independence_key=acquisition_key,
+                            extractor_independence_key=f"extractor:{extractor}",
+                            observation_independence_key=observation_key,
                             value_type=anchor_input.value_type,
                             normalized_value=anchor_input.normalized_value,
                             role=anchor_input.role,
@@ -1434,9 +1671,15 @@ class CaseDB:
                                 char_start=anchor.char_start,
                                 char_end=anchor.char_end,
                                 exact_text=anchor.exact_text,
+                                selector_type=anchor.selector_type,
+                                selector=json.dumps(anchor.selector, sort_keys=True),
                                 artifact_family=anchor.artifact_family,
                                 extractor_family=anchor.extractor_family,
                                 independence_key=anchor.independence_key,
+                                artifact_independence_key=anchor.artifact_independence_key,
+                                acquisition_independence_key=anchor.acquisition_independence_key,
+                                extractor_independence_key=anchor.extractor_independence_key,
+                                observation_independence_key=anchor.observation_independence_key,
                                 value_type=anchor.value_type,
                                 normalized_value=json.dumps(anchor.normalized_value),
                                 role=anchor.role,
@@ -1452,7 +1695,8 @@ class CaseDB:
                     )
                 revision_finding = finding.model_copy(
                     update={
-                        "sources": (sorted(resolved_source_names) if stored else finding.sources)
+                        "sources": (sorted(resolved_source_names) if stored else finding.sources),
+                        "claim_state": claim_state,
                     }
                 )
                 _append_finding_revision(
@@ -1504,9 +1748,15 @@ class CaseDB:
                     char_start=row.char_start,
                     char_end=row.char_end,
                     exact_text=row.exact_text,
+                    selector_type=row.selector_type,
+                    selector=json.loads(row.selector),
                     artifact_family=row.artifact_family,
                     extractor_family=row.extractor_family,
                     independence_key=row.independence_key,
+                    artifact_independence_key=row.artifact_independence_key,
+                    acquisition_independence_key=row.acquisition_independence_key,
+                    extractor_independence_key=row.extractor_independence_key,
+                    observation_independence_key=row.observation_independence_key,
                     value_type=row.value_type,
                     normalized_value=json.loads(row.normalized_value),
                     role=row.role,
@@ -1523,6 +1773,7 @@ class CaseDB:
                 predicate=row.predicate,
                 object_value=json.loads(row.object_value),
                 qualifiers=json.loads(row.qualifiers),
+                material=bool(row.material),
                 epistemic_state=row.epistemic_state,
                 anchors=by_claim[row.claim_id],
             )
@@ -1754,6 +2005,7 @@ class CaseDB:
         actor_id: str | None = None,
         reason_code: str = "finding_updated",
         revision_state: str | None = None,
+        contradiction_ids: list[str] | None = None,
         **kwargs: object,
     ) -> bool:
         """Update the current read model and append an immutable revision.
@@ -1804,7 +2056,10 @@ class CaseDB:
             else:
                 values[key] = val
 
-        if not values:
+        if revision_state == "refuted" and not contradiction_ids:
+            raise ValueError("refuted revisions require at least one contradiction_id")
+
+        if not values and not contradiction_ids and revision_state is None:
             return self._finding_exists(finding_id)
 
         def _do_update() -> bool:
@@ -1818,17 +2073,39 @@ class CaseDB:
                 if before_row is None:
                     return False
                 before = _finding_from_row(before_row)
-                result = conn.execute(
-                    update(findings_t)
-                    .where(
-                        (findings_t.c.finding_id == finding_id) & (findings_t.c.is_deleted == 0)
+                requested_contradictions = sorted(set(contradiction_ids or []))
+                if requested_contradictions:
+                    stored_contradictions = {
+                        str(value)
+                        for value in conn.execute(
+                            select(hypothesis_contradictions_t.c.contradiction_id).where(
+                                hypothesis_contradictions_t.c.contradiction_id.in_(
+                                    requested_contradictions
+                                )
+                            )
+                        ).scalars()
+                    }
+                    missing = set(requested_contradictions) - stored_contradictions
+                    if missing:
+                        raise ValueError(
+                            "Unknown contradiction link(s): " + ", ".join(sorted(missing))
+                        )
+                result = (
+                    conn.execute(
+                        update(findings_t)
+                        .where(
+                            (findings_t.c.finding_id == finding_id)
+                            & (findings_t.c.is_deleted == 0)
+                        )
+                        .values(**values)
                     )
-                    .values(**values)
+                    if values
+                    else None
                 )
                 after_row = conn.execute(
                     select(findings_t).where(findings_t.c.finding_id == finding_id)
                 ).fetchone()
-                if result.rowcount <= 0 or after_row is None:
+                if (result is not None and result.rowcount <= 0) or after_row is None:
                     return False
                 after = _finding_from_row(after_row)
                 _append_finding_revision(
@@ -1840,6 +2117,7 @@ class CaseDB:
                     reason_code=reason_code,
                     changed_fields=list(values),
                     previous=before,
+                    contradiction_ids=requested_contradictions,
                 )
                 return True
 
@@ -1948,6 +2226,7 @@ class CaseDB:
                 changed_fields=json.loads(row.changed_fields),
                 evidence_added=json.loads(row.evidence_added),
                 evidence_removed=json.loads(row.evidence_removed),
+                contradiction_ids=json.loads(row.contradiction_ids),
                 tombstone=bool(row.tombstone),
                 created_at=row.created_at,
             )
@@ -1997,6 +2276,12 @@ class CaseDB:
                         status=outcome.status.value,
                         coverage=outcome.coverage.model_dump_json(),
                         reason=outcome.reason,
+                        execution=(
+                            outcome.execution.model_dump_json()
+                            if outcome.execution is not None
+                            else None
+                        ),
+                        legacy_mapping=outcome.legacy_mapping,
                         source_name=source_name,
                         tool_call_id=tool_call_id,
                         recorded_at=recorded_at,
@@ -2039,10 +2324,78 @@ class CaseDB:
                     status=ToolOutcomeStatus(row.status),
                     coverage=json.loads(row.coverage),
                     reason=row.reason,
+                    execution=(json.loads(row.execution) if row.execution else None),
+                    legacy_mapping=(row.legacy_mapping if not row.execution else None),
                 ),
                 source_name=row.source_name,
                 tool_call_id=row.tool_call_id,
                 recorded_at=row.recorded_at,
+            )
+            for row in rows
+        ]
+
+    def declare_coverage_requirement(
+        self,
+        key: CoverageKey,
+        *,
+        required_tool: str,
+        rationale: str,
+    ) -> CoverageRequirement:
+        """Declare one mandatory coverage cell before any tool is executed."""
+        case_id = self._get_case_id()
+        declared_at = datetime.now(timezone.utc).isoformat()
+        requirement = CoverageRequirement(
+            case_id=case_id,
+            key=key,
+            required_tool=required_tool,
+            rationale=rationale,
+            declared_at=declared_at,
+        )
+
+        def _do_upsert() -> None:
+            with self._engine.begin() as conn:
+                selector = (
+                    (coverage_requirements_t.c.case_id == case_id)
+                    & (coverage_requirements_t.c.system_name == key.system_name)
+                    & (coverage_requirements_t.c.evidence_domain == key.evidence_domain)
+                    & (coverage_requirements_t.c.check_name == key.check_name)
+                )
+                conn.execute(delete(coverage_requirements_t).where(selector))
+                conn.execute(
+                    insert(coverage_requirements_t).values(
+                        case_id=case_id,
+                        system_name=key.system_name,
+                        evidence_domain=key.evidence_domain,
+                        check_name=key.check_name,
+                        required_tool=required_tool,
+                        rationale=rationale,
+                        declared_at=declared_at,
+                    )
+                )
+
+        self._wq.submit(_do_upsert)
+        return requirement
+
+    def get_coverage_requirements(self) -> list[CoverageRequirement]:
+        """Return mandatory checks in deterministic key order."""
+        stmt = select(coverage_requirements_t).order_by(
+            coverage_requirements_t.c.system_name,
+            coverage_requirements_t.c.evidence_domain,
+            coverage_requirements_t.c.check_name,
+        )
+        with self._engine.connect() as conn:
+            rows = conn.execute(stmt).fetchall()
+        return [
+            CoverageRequirement(
+                case_id=row.case_id,
+                key=CoverageKey(
+                    system_name=row.system_name,
+                    evidence_domain=row.evidence_domain,
+                    check_name=row.check_name,
+                ),
+                required_tool=row.required_tool,
+                rationale=row.rationale,
+                declared_at=row.declared_at,
             )
             for row in rows
         ]

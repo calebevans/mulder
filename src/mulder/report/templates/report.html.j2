@@ -974,6 +974,16 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
           <div><strong>History:</strong> {{ card.revisions | length }} revision(s)</div>
           <div><strong>Coverage links:</strong> {{ card.coverage | length }}</div>
         </div>
+        {% for revision in card.revisions %}
+        <div class="ev-item" style="display:block;cursor:default;">
+          <strong>Revision {{ revision.revision_number }}</strong> <code>{{ revision.state }}</code>
+          by <code>{{ revision.actor_kind }}</code> ({{ revision.reason_code }}) at {{ revision.created_at }}
+          {% if revision.tombstone %}<div><strong>Withdrawn/tombstoned</strong></div>{% endif %}
+          {% if revision.contradiction_ids %}<div>Contradictions: {{ revision.contradiction_ids | join(", ") }}</div>{% endif %}
+          <div>Changed: {{ revision.changed_fields | join(", ") or "none" }}</div>
+          <div>Evidence added: {{ revision.evidence_added | join(", ") or "none" }}; removed: {{ revision.evidence_removed | join(", ") or "none" }}</div>
+        </div>
+        {% endfor %}
         {% for claim in card.claims %}
         <div class="ev-item" style="display:block;cursor:default;">
           <strong>Claim {{ claim.ordinal + 1 }}</strong> <code>{{ claim.epistemic_state }}</code> — {{ claim.statement }}
@@ -1034,7 +1044,7 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
   <div class="card mt-2">
     <div class="card-header">&#10003; Ruled Out (Negative Findings)</div>
     <div class="card-body">
-      <p style="opacity:0.7;margin-bottom:1em;">These hypotheses were explicitly tested and no supporting evidence was found.</p>
+      <p style="opacity:0.7;margin-bottom:1em;">These are investigative negative conclusions. Only entries carrying NO_EVIL_WITHIN_COVERAGE and an explicit displayed scope are supported as tested absence; legacy entries remain unverified.</p>
       <ul style="list-style:none;padding:0;">
         {% for nf in negative_findings %}
         <li style="padding:0.5em 0;border-bottom:1px solid var(--border);cursor:pointer;" onclick="var d=this.querySelector('.neg-full');if(d){d.style.display=d.style.display==='none'?'block':'none'}">

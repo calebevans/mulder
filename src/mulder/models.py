@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal, TypeAlias
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
 
 class ToolOutcomeStatus(str, Enum):
@@ -74,6 +74,21 @@ class CoverageMetadata(BaseModel):
         return self
 
 
+class ToolExecutionMetadata(BaseModel):
+    """Exact execution commitment attached to a non-legacy tool outcome."""
+
+    source_ids: list[str] = Field(default_factory=list)
+    started_at: AwareDatetime
+    ended_at: AwareDatetime
+    output_digest: str = Field(pattern=r"^(?:sha256|blake2b):[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def _check_time_order(self) -> ToolExecutionMetadata:
+        if self.ended_at < self.started_at:
+            raise ValueError("ended_at cannot precede started_at")
+        return self
+
+
 class ToolOutcome(BaseModel):
     """Versioned, serializable execution semantics for an MCP tool response."""
 
@@ -81,12 +96,18 @@ class ToolOutcome(BaseModel):
     status: ToolOutcomeStatus
     coverage: CoverageMetadata = Field(default_factory=CoverageMetadata)
     reason: str | None = None
+    execution: ToolExecutionMetadata | None = None
+    legacy_mapping: Literal["LEGACY_UNCLASSIFIED"] | None = "LEGACY_UNCLASSIFIED"
 
     @model_validator(mode="after")
     def _check_status_metadata(self) -> ToolOutcome:
         """Require the scope explanation that makes sampled results auditable."""
         if self.status is ToolOutcomeStatus.SAMPLED and not self.coverage.sample_reason:
             raise ValueError("SAMPLED outcomes require coverage.sample_reason")
+        if self.execution is not None and self.legacy_mapping is not None:
+            raise ValueError("execution metadata and legacy_mapping are mutually exclusive")
+        if self.execution is None and self.legacy_mapping is None:
+            raise ValueError("outcome must carry execution metadata or an explicit legacy mapping")
         return self
 
 
@@ -107,6 +128,16 @@ class CoverageRecord(BaseModel):
     source_name: str | None = None
     tool_call_id: str | None = None
     recorded_at: str
+
+
+class CoverageRequirement(BaseModel):
+    """Declarative mandatory check that must be represented before sealing."""
+
+    case_id: str
+    key: CoverageKey
+    required_tool: str
+    rationale: str
+    declared_at: str
 
 
 class ScopedNegativeVerdict(BaseModel):
@@ -168,6 +199,7 @@ class Finding(BaseModel):
     event_time_start: str | None = None
     event_time_end: str | None = None
     negative_verdict: ScopedNegativeVerdict | None = None
+    claim_state: Literal["atomic", "legacy_unverified"] = "legacy_unverified"
     submitted_at: str
 
     @model_validator(mode="after")
@@ -195,6 +227,7 @@ class FindingRevision(BaseModel):
     changed_fields: list[str] = Field(default_factory=list)
     evidence_added: list[str] = Field(default_factory=list)
     evidence_removed: list[str] = Field(default_factory=list)
+    contradiction_ids: list[str] = Field(default_factory=list)
     tombstone: bool = False
     created_at: str
 
@@ -213,6 +246,16 @@ class EvidenceAnchorInput(BaseModel):
     char_start: int = Field(ge=0)
     char_end: int = Field(gt=0)
     expected_text: str = Field(min_length=1)
+    selector_type: Literal[
+        "text_span",
+        "csv_cell",
+        "json_pointer",
+        "evtx_field",
+        "sqlite_cell",
+        "byte_range",
+        "parsed_record",
+    ] = "text_span"
+    selector: dict[str, JsonScalar] = Field(default_factory=dict)
     artifact_family: str | None = None
     value_type: str = "text"
     normalized_value: JsonScalar = None
@@ -233,6 +276,7 @@ class AtomicClaimInput(BaseModel):
     predicate: str = Field(min_length=1)
     object_value: JsonScalar
     qualifiers: dict[str, JsonScalar] = Field(default_factory=dict)
+    material: bool = True
     anchors: list[EvidenceAnchorInput] = Field(min_length=1)
 
 
@@ -251,9 +295,23 @@ class EvidenceAnchor(BaseModel):
     char_start: int
     char_end: int
     exact_text: str
+    selector_type: Literal[
+        "text_span",
+        "csv_cell",
+        "json_pointer",
+        "evtx_field",
+        "sqlite_cell",
+        "byte_range",
+        "parsed_record",
+    ] = "text_span"
+    selector: dict[str, JsonScalar] = Field(default_factory=dict)
     artifact_family: str
     extractor_family: str
     independence_key: str
+    artifact_independence_key: str | None = None
+    acquisition_independence_key: str | None = None
+    extractor_independence_key: str | None = None
+    observation_independence_key: str | None = None
     value_type: str
     normalized_value: JsonScalar = None
     role: Literal["supports", "contradicts"] = "supports"
@@ -270,6 +328,7 @@ class AtomicClaim(BaseModel):
     predicate: str
     object_value: JsonScalar
     qualifiers: dict[str, JsonScalar] = Field(default_factory=dict)
+    material: bool = True
     epistemic_state: Literal[
         "legacy_unverified", "unverified", "verified", "contradicted", "inconclusive"
     ] = "unverified"
@@ -302,6 +361,9 @@ class ClaimConfirmation(BaseModel):
     reason_code: str
     independent_sources: int = Field(ge=0)
     required_sources: int = Field(ge=1)
+    policy_id: str = "material-two-artifact-v2"
+    independence_dimensions: dict[str, int] = Field(default_factory=dict)
+    required_independence_dimensions: dict[str, int] = Field(default_factory=dict)
 
 
 class ConfirmationAssessment(BaseModel):

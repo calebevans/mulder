@@ -7,15 +7,23 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from jsonschema import Draft202012Validator
 from pydantic import BaseModel, ValidationError
 
 from mulder.contracts import CoreContractBundle, core_contract_schema
-from mulder.models import AtomicClaim, FindingRevision, ToolOutcome, ToolOutcomeStatus
+from mulder.models import (
+    AtomicClaim,
+    CoverageRecord,
+    FindingRevision,
+    ToolOutcome,
+    ToolOutcomeStatus,
+)
 from mulder.receipt import MANIFEST_SCHEMA, MANIFEST_VERSION
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests" / "fixtures" / "contracts"
 SCHEMA = ROOT / "schemas" / "core-contract-v1.schema.json"
+CASE_MANIFEST_SCHEMA = ROOT / "schemas" / "case-manifest-v1.schema.json"
 
 
 def _load(path: Path) -> Any:
@@ -36,6 +44,7 @@ def test_invalid_contract_fixtures_stay_invalid() -> None:
         "tool_outcome": ToolOutcome,
         "atomic_claim": AtomicClaim,
         "finding_revision": FindingRevision,
+        "coverage_record": CoverageRecord,
     }
     invalid = _load(FIXTURES / "core-invalid-v1.json")
     for case in invalid["cases"]:
@@ -56,3 +65,9 @@ def test_tool_outcome_enum_cannot_drift_from_published_schema() -> None:
 def test_receipt_contract_identity_is_stable() -> None:
     assert MANIFEST_SCHEMA == "mulder.case-manifest"
     assert MANIFEST_VERSION == 1
+
+
+def test_case_manifest_schema_has_positive_and_negative_fixtures() -> None:
+    validator = Draft202012Validator(_load(CASE_MANIFEST_SCHEMA))
+    assert list(validator.iter_errors(_load(FIXTURES / "case-manifest-valid-v1.json"))) == []
+    assert list(validator.iter_errors(_load(FIXTURES / "case-manifest-invalid-v1.json")))

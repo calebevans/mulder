@@ -21,6 +21,15 @@
       }
     },
     {
+      "model": "coverage_record",
+      "payload": {
+        "case_id": "case",
+        "key": {"system_name": "", "evidence_domain": "disk", "check_name": "mft"},
+        "outcome": {"status": "SUCCESS_EMPTY", "coverage": {}},
+        "recorded_at": "2026-01-01T00:00:00Z"
+      }
+    },
+    {
       "model": "finding_revision",
       "payload": {
         "revision_id": "fr_invalid",

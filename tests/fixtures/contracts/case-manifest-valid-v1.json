@@ -1,0 +1,33 @@
+{
+  "schema": "mulder.case-manifest",
+  "version": 1,
+  "created_at": "2026-01-01T00:00:00Z",
+  "case": {"case_id": "case-1", "ingested_at": "2026-01-01T00:00:00Z"},
+  "locations": {"manifest": {"path": "."}, "evidence": {"path": "evidence"}},
+  "database": {
+    "path": "case-1.db",
+    "profile": "sqlite-logical-v1",
+    "logical_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "tables": [],
+    "record_sets": {},
+    "normalized_sources": []
+  },
+  "evidence_registry": {"status": "present", "entries": []},
+  "audit": {
+    "path": "case-1.audit.jsonl",
+    "sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "size_bytes": 0,
+    "chain_status": "empty",
+    "entry_count": 0,
+    "legacy_entries": 0,
+    "head_hash": null
+  },
+  "methodology": {"profile": "mulder-case-v1", "mulder_version": "1", "replay": {}},
+  "operational_state": {},
+  "reports": [],
+  "integrity": {
+    "algorithm": "sha256",
+    "signature": {"status": "unsigned"},
+    "manifest_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  }
+}

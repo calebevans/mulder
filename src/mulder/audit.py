@@ -851,6 +851,29 @@ class AuditLog:
         """Return True if ``tool_call_id`` appears in this audit log."""
         return tool_call_id in self._tool_call_ids
 
+    def tool_call_source_names(self, tool_call_id: str) -> set[str]:
+        """Return server-recorded sources whose output the call exposed."""
+        entry = self._tool_calls.get(tool_call_id)
+        if entry is None:
+            return set()
+        params = entry.get("params")
+        if not isinstance(params, dict):
+            return set()
+        return self._extract_source_names(cast(dict[str, object], params))
+
+    def tool_call_window_ids(self, tool_call_id: str) -> set[int]:
+        """Return immutable window IDs actually exposed by one audited call."""
+        entry = self._tool_calls.get(tool_call_id)
+        if entry is None:
+            return set()
+        params = entry.get("params")
+        if not isinstance(params, dict):
+            return set()
+        values = params.get("returned_window_ids")
+        if not isinstance(values, list):
+            return set()
+        return {value for value in values if type(value) is int and value > 0}
+
     @property
     def tool_call_ids(self) -> set[str]:
         """All tool call IDs indexed from the log (copy of the internal set)."""
@@ -968,6 +991,10 @@ class AuditLog:
         sources_list = params.get("sources")
         if isinstance(sources_list, list):
             names.update(x for x in sources_list if isinstance(x, str))
+        plugin = params.get("plugin")
+        if isinstance(plugin, str) and plugin:
+            short = plugin.rsplit(".", 1)[-1].casefold()
+            names.add(f"volatility.{short}")
         return names
 
     @staticmethod

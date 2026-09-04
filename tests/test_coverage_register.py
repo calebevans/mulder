@@ -15,9 +15,11 @@ from mulder.models import (
     CoverageKey,
     CoverageMetadata,
     CoverageRecord,
+    CoverageRequirement,
     FallbackAttempt,
     Finding,
     ScopedNegativeVerdict,
+    ToolExecutionMetadata,
     ToolOutcome,
     ToolOutcomeStatus,
 )
@@ -44,6 +46,16 @@ def _record(key: CoverageKey, status: ToolOutcomeStatus) -> CoverageRecord:
     )
 
 
+def _requirement(key: CoverageKey | None = None) -> CoverageRequirement:
+    return CoverageRequirement(
+        case_id="test-case",
+        key=key or _key(),
+        required_tool="run_check",
+        rationale="test mandatory domain",
+        declared_at="2025-01-15T11:00:00Z",
+    )
+
+
 def _negative(*, scoped: bool = False) -> Finding:
     verdict = ScopedNegativeVerdict(scope=[_key()]) if scoped else None
     return Finding(
@@ -60,9 +72,12 @@ def _negative(*, scoped: bool = False) -> Finding:
     )
 
 
-def _coverage_gate(
-    records: list[CoverageRecord], finding: Finding | None = None
-) -> dict[str, object]:
+def _finalize_gates(
+    records: list[CoverageRecord],
+    finding: Finding | None = None,
+    *,
+    requirements: list[CoverageRequirement] | None = None,
+) -> list[dict[str, object]]:
     metadata = CaseMetadataRow(
         case_id="test-case",
         ingested_at="2025-01-15T00:00:00Z",
@@ -78,11 +93,34 @@ def _coverage_gate(
         first_timestamp="",
         last_timestamp="",
     )
-    gates = _evaluate_finalize_gates([finding or _negative()], metadata, [], audit, records)
+    return _evaluate_finalize_gates(
+        [finding or _negative()],
+        metadata,
+        [],
+        audit,
+        records,
+        coverage_requirements=(requirements if requirements is not None else [_requirement()]),
+    )
+
+
+def _coverage_gate(
+    records: list[CoverageRecord], finding: Finding | None = None
+) -> dict[str, object]:
+    gates = _finalize_gates(records, finding)
     return next(gate for gate in gates if gate["name"] == "negative_coverage_scope")
 
 
 class TestCoverageRegisterPersistence:
+    def test_mandatory_domain_exists_before_any_result(self, tmp_case_db: CaseDB) -> None:
+        declared = tmp_case_db.declare_coverage_requirement(
+            _key(domain="authentication", check="logons"),
+            required_tool="query_logons",
+            rationale="authentication is mandatory for this case",
+        )
+
+        assert tmp_case_db.get_coverage() == []
+        assert tmp_case_db.get_coverage_requirements() == [declared]
+
     def test_parser_failure_and_successful_empty_remain_distinct(
         self, tmp_case_db: CaseDB
     ) -> None:
@@ -109,6 +147,37 @@ class TestCoverageRegisterPersistence:
         assert records["broken-parser"].outcome.status is ToolOutcomeStatus.FAILED
         assert records["broken-parser"].outcome.reason == "malformed record"
         assert records["empty-parser"].outcome.status is ToolOutcomeStatus.SUCCESS_EMPTY
+
+    def test_execution_and_legacy_mapping_round_trip_durably(self, tmp_path: Path) -> None:
+        db = CaseDB.create("outcomes", "/evidence", tmp_path)
+        executed = ToolOutcome(
+            status=ToolOutcomeStatus.SUCCESS_EMPTY,
+            execution=ToolExecutionMetadata(
+                source_ids=["source-1"],
+                started_at="2026-01-01T00:00:00Z",
+                ended_at="2026-01-01T00:00:01Z",
+                output_digest="sha256:" + "a" * 64,
+            ),
+            legacy_mapping=None,
+        )
+        db.record_coverage(_key(check="executed"), executed)
+        db.record_coverage(_key(check="legacy"), _outcome(ToolOutcomeStatus.SUCCESS_EMPTY))
+        db.close()
+
+        reopened = CaseDB.open("outcomes", tmp_path)
+        try:
+            records = {record.key.check_name: record for record in reopened.get_coverage()}
+            assert records["executed"].outcome.execution == executed.execution
+            assert records["executed"].outcome.legacy_mapping is None
+            assert records["legacy"].outcome.execution is None
+            assert records["legacy"].outcome.legacy_mapping == "LEGACY_UNCLASSIFIED"
+            with reopened.engine.connect() as connection:
+                stored = connection.exec_driver_sql(
+                    "SELECT legacy_mapping FROM coverage_register WHERE check_name = 'legacy'"
+                ).scalar_one()
+            assert stored == "LEGACY_UNCLASSIFIED"
+        finally:
+            reopened.close()
 
     def test_successful_fallback_replaces_current_state_and_retains_lineage(
         self, tmp_case_db: CaseDB
@@ -166,6 +235,20 @@ class TestCoverageRegisterPersistence:
 
 
 class TestNegativeCoverageGate:
+    def test_omitted_declared_domain_blocks_mandatory_coverage_gate(self) -> None:
+        requirements = [
+            _requirement(),
+            _requirement(_key(domain="network", check="netscan")),
+        ]
+        gates = _finalize_gates(
+            [_record(_key(), ToolOutcomeStatus.SUCCESS_EMPTY)],
+            requirements=requirements,
+        )
+        gate = next(item for item in gates if item["name"] == "mandatory_coverage")
+
+        assert gate["passed"] is False
+        assert "host-a/network/netscan=MISSING" in str(gate["detail"])
+
     @pytest.mark.parametrize(
         "status",
         [
@@ -217,11 +300,10 @@ class TestNegativeCoverageGate:
         assert gate["passed"] is False
         assert "missing host-a/processes/pslist" in str(gate["detail"])
 
-    def test_legacy_case_without_register_remains_finalizable_but_unverified(self) -> None:
+    def test_legacy_case_without_register_cannot_support_a_negative(self) -> None:
         gate = _coverage_gate([])
-        assert gate["passed"] is True
-        assert "Legacy case" in str(gate["detail"])
-        assert "not promoted" in str(gate["detail"])
+        assert gate["passed"] is False
+        assert "completed coverage records" in str(gate["detail"])
 
     def test_complete_fallback_supports_negative_after_failed_primary(self) -> None:
         recovered = CoverageRecord(

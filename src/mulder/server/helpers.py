@@ -18,6 +18,7 @@ import time
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from contextvars import ContextVar
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, ParamSpec
 from uuid import uuid4
@@ -32,7 +33,12 @@ from mulder.execution import (
     PathAccess,
     PathArgument,
 )
-from mulder.models import CoverageMetadata, ToolOutcome, ToolOutcomeStatus
+from mulder.models import (
+    CoverageMetadata,
+    ToolExecutionMetadata,
+    ToolOutcome,
+    ToolOutcomeStatus,
+)
 from mulder.server.app import get_ctx, has_ctx
 
 current_batch_id: ContextVar[str | None] = ContextVar("current_batch_id", default=None)
@@ -220,10 +226,22 @@ def audited_tool(
             try:
                 result = func(*args, **kwargs)
                 elapsed = (time.monotonic() - t0) * 1000
+                audit_params = dict(kwargs)
+                returned_window_ids = result.get("returned_window_ids")
+                if isinstance(returned_window_ids, list):
+                    audit_params["returned_window_ids"] = returned_window_ids
+                for result_key, param_key in (
+                    ("source", "source"),
+                    ("source_name", "source"),
+                    ("sources_matched", "sources"),
+                ):
+                    value = result.get(result_key)
+                    if value is not None:
+                        audit_params[param_key] = value
                 ctx.audit.log_tool_call(
                     tool_call_id=tc_id,
                     tool_name=tool_name,
-                    params=dict(kwargs),
+                    params=audit_params,
                     output_hash=hash_output(result),
                     duration_ms=elapsed,
                 )
@@ -305,6 +323,78 @@ def serialize_windows(
     return result
 
 
+def _infer_success_status(results: object, source: str | None) -> ToolOutcomeStatus:
+    """Classify legacy success payloads without an optimistic default."""
+    if isinstance(results, list | tuple | set | frozenset):
+        return (
+            ToolOutcomeStatus.SUCCESS_NONEMPTY if len(results) else ToolOutcomeStatus.SUCCESS_EMPTY
+        )
+    if isinstance(results, Mapping):
+        for count_key in ("result_count", "count", "rows", "windows_indexed", "line_count"):
+            count = results.get(count_key)
+            if isinstance(count, int):
+                return (
+                    ToolOutcomeStatus.SUCCESS_NONEMPTY
+                    if count > 0
+                    else ToolOutcomeStatus.SUCCESS_EMPTY
+                )
+        for collection_key in ("results", "records", "items", "matches", "windows"):
+            collection = results.get(collection_key)
+            if isinstance(collection, list | tuple | set | frozenset | Mapping):
+                return (
+                    ToolOutcomeStatus.SUCCESS_NONEMPTY
+                    if len(collection)
+                    else ToolOutcomeStatus.SUCCESS_EMPTY
+                )
+        if not results:
+            return ToolOutcomeStatus.SUCCESS_EMPTY
+        if source is not None and has_ctx():
+            windows = get_ctx().db.get_windows_by_source(source)
+            return (
+                ToolOutcomeStatus.SUCCESS_NONEMPTY
+                if windows
+                else ToolOutcomeStatus.SUCCESS_EMPTY
+            )
+        return ToolOutcomeStatus.PARTIAL
+    if results in (None, "", b""):
+        return ToolOutcomeStatus.SUCCESS_EMPTY
+    return ToolOutcomeStatus.SUCCESS_NONEMPTY
+
+
+def _source_ids_from_params(params: Mapping[str, object]) -> list[str]:
+    """Derive source identifiers from the bounded public parameter contract."""
+    source_ids: set[str] = set()
+    for name in ("source", "source_name"):
+        value = params.get(name)
+        if isinstance(value, str) and value:
+            source_ids.add(value)
+    values = params.get("sources")
+    if isinstance(values, list):
+        source_ids.update(value for value in values if isinstance(value, str) and value)
+    return sorted(source_ids)
+
+
+def _attach_execution(
+    outcome: ToolOutcome,
+    *,
+    output_digest: str,
+    elapsed_ms: float,
+    source_ids: list[str],
+) -> ToolOutcome:
+    """Replace a legacy marker with the exact execution commitment."""
+    ended = datetime.now(timezone.utc)
+    started = ended - timedelta(milliseconds=max(0.0, elapsed_ms))
+    payload = outcome.model_dump(mode="json")
+    payload["execution"] = ToolExecutionMetadata(
+        source_ids=sorted(set(source_ids)),
+        started_at=started,
+        ended_at=ended,
+        output_digest=output_digest,
+    ).model_dump(mode="json")
+    payload["legacy_mapping"] = None
+    return ToolOutcome.model_validate(payload)
+
+
 def windowed_response(
     tc_id: str,
     windows: Sequence[Any],
@@ -323,13 +413,26 @@ def windowed_response(
     total = len(windows)
     results = serialize_windows(windows, cap=cap, text_cap=text_cap)
 
+    committed_output = {
+        "source": source,
+        "results": results,
+        "total_windows": total,
+    }
+    output_digest = hash_output(committed_output)
     if has_ctx():
         ctx = get_ctx()
+        audit_params = dict(params)
+        audit_params.setdefault("source", source)
+        audit_params["returned_window_ids"] = [
+            window_id
+            for item in results
+            if type(window_id := item.get("window_id")) is int and window_id > 0
+        ]
         ctx.audit.log_tool_call(
             tool_call_id=tc_id,
             tool_name=tool_name,
-            params=params,
-            output_hash=hash_output({"total": total, "returned": len(results)}),
+            params=audit_params,
+            output_hash=output_digest,
             duration_ms=elapsed_ms,
             batch_id=current_batch_id.get(),
         )
@@ -339,13 +442,18 @@ def windowed_response(
         outcome_status = ToolOutcomeStatus.SUCCESS_EMPTY
     else:
         outcome_status = ToolOutcomeStatus.SUCCESS_NONEMPTY
-    outcome = ToolOutcome(
-        status=outcome_status,
-        coverage=CoverageMetadata(
-            rows_examined=len(results),
-            rows_total=total,
-            sample_reason=(f"response capped at {cap} windows" if total > cap else None),
+    outcome = _attach_execution(
+        ToolOutcome(
+            status=outcome_status,
+            coverage=CoverageMetadata(
+                rows_examined=len(results),
+                rows_total=total,
+                sample_reason=(f"response capped at {cap} windows" if total > cap else None),
+            ),
         ),
+        output_digest=output_digest,
+        elapsed_ms=elapsed_ms,
+        source_ids=[source],
     )
     resp: dict[str, object] = {
         "tool_call_id": tc_id,
@@ -386,9 +494,9 @@ def tool_response(
 ) -> dict[str, object]:
     """Build an audited success response and log the tool call.
 
-    ``outcome`` is the precise, versioned execution contract.  When omitted,
-    it defaults to ``SUCCESS_NONEMPTY`` so adoption can proceed tool by tool;
-    callers returning empty, sampled, or partial data must pass it explicitly.
+    ``outcome`` is the precise, versioned execution contract. When omitted,
+    empty/non-empty state is derived from the returned value instead of being
+    optimistically classified as non-empty.
     The legacy top-level ``status`` is retained for existing clients.
 
     When *source* is provided (indicating data has been indexed into the
@@ -399,15 +507,31 @@ def tool_response(
     When *source* is None, returns the full results (for read/reference
     tools whose output is not indexed elsewhere).
     """
-    precise_outcome = outcome or ToolOutcome(status=ToolOutcomeStatus.SUCCESS_NONEMPTY)
+    if outcome is None:
+        inferred_status = _infer_success_status(results, source)
+        outcome = ToolOutcome(
+            status=inferred_status,
+            reason=(
+                "Result cardinality could not be inferred; caller must provide an explicit outcome"
+                if inferred_status is ToolOutcomeStatus.PARTIAL
+                else None
+            ),
+        )
+    output_digest = hash_output(results)
+    precise_outcome = _attach_execution(
+        outcome,
+        output_digest=output_digest,
+        elapsed_ms=elapsed_ms,
+        source_ids=[source] if source is not None else [],
+    )
 
     if has_ctx():
         ctx = get_ctx()
         ctx.audit.log_tool_call(
             tool_call_id=tc_id,
             tool_name=tool_name,
-            params=params,
-            output_hash=hash_output(results),
+            params={**dict(params), **({"source": source} if source is not None else {})},
+            output_hash=output_digest,
             duration_ms=elapsed_ms,
             batch_id=current_batch_id.get(),
         )
@@ -484,10 +608,16 @@ def error_response(
             outcome_status = ToolOutcomeStatus.UNAVAILABLE
         else:
             outcome_status = ToolOutcomeStatus.FAILED
-    outcome = ToolOutcome(
-        status=outcome_status,
-        coverage=coverage or CoverageMetadata(),
-        reason=error,
+    error_payload = {"error": error, "error_type": error_type}
+    outcome = _attach_execution(
+        ToolOutcome(
+            status=outcome_status,
+            coverage=coverage or CoverageMetadata(),
+            reason=error,
+        ),
+        output_digest=hash_output(error_payload),
+        elapsed_ms=elapsed_ms,
+        source_ids=_source_ids_from_params(params),
     )
     if has_ctx():
         ctx = get_ctx()
@@ -495,7 +625,7 @@ def error_response(
             tool_call_id=tc_id,
             tool_name=tool_name,
             params=params,
-            output_hash=hash_output({"error": error}),
+            output_hash=hash_output(error_payload),
             duration_ms=elapsed_ms,
             batch_id=current_batch_id.get(),
         )

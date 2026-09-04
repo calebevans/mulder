@@ -30,6 +30,11 @@
           "title": "Finding Id",
           "type": "string"
         },
+        "material": {
+          "default": true,
+          "title": "Material",
+          "type": "boolean"
+        },
         "object_value": {
           "anyOf": [
             {
@@ -370,6 +375,18 @@
     "EvidenceAnchor": {
       "description": "Server-resolved immutable evidence locator for an atomic claim.",
       "properties": {
+        "acquisition_independence_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Acquisition Independence Key"
+        },
         "anchor_id": {
           "title": "Anchor Id",
           "type": "string"
@@ -377,6 +394,18 @@
         "artifact_family": {
           "title": "Artifact Family",
           "type": "string"
+        },
+        "artifact_independence_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Artifact Independence Key"
         },
         "char_end": {
           "title": "Char End",
@@ -397,6 +426,18 @@
         "extractor_family": {
           "title": "Extractor Family",
           "type": "string"
+        },
+        "extractor_independence_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Extractor Independence Key"
         },
         "independence_key": {
           "title": "Independence Key",
@@ -431,6 +472,18 @@
           "default": null,
           "title": "Normalized Value"
         },
+        "observation_independence_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observation Independence Key"
+        },
         "role": {
           "default": "supports",
           "enum": [
@@ -438,6 +491,43 @@
             "contradicts"
           ],
           "title": "Role",
+          "type": "string"
+        },
+        "selector": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Selector",
+          "type": "object"
+        },
+        "selector_type": {
+          "default": "text_span",
+          "enum": [
+            "text_span",
+            "csv_cell",
+            "json_pointer",
+            "evtx_field",
+            "sqlite_cell",
+            "byte_range",
+            "parsed_record"
+          ],
+          "title": "Selector Type",
           "type": "string"
         },
         "source_hash": {
@@ -545,6 +635,15 @@
       "properties": {
         "case_id": {
           "title": "Case Id",
+          "type": "string"
+        },
+        "claim_state": {
+          "default": "legacy_unverified",
+          "enum": [
+            "atomic",
+            "legacy_unverified"
+          ],
+          "title": "Claim State",
           "type": "string"
         },
         "confidence": {
@@ -687,6 +786,13 @@
           "title": "Changed Fields",
           "type": "array"
         },
+        "contradiction_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Contradiction Ids",
+          "type": "array"
+        },
         "created_at": {
           "title": "Created At",
           "type": "string"
@@ -793,11 +899,69 @@
       "title": "ScopedNegativeVerdict",
       "type": "object"
     },
+    "ToolExecutionMetadata": {
+      "description": "Exact execution commitment attached to a non-legacy tool outcome.",
+      "properties": {
+        "ended_at": {
+          "format": "date-time",
+          "title": "Ended At",
+          "type": "string"
+        },
+        "output_digest": {
+          "pattern": "^(?:sha256|blake2b):[0-9a-f]{64}$",
+          "title": "Output Digest",
+          "type": "string"
+        },
+        "source_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Ids",
+          "type": "array"
+        },
+        "started_at": {
+          "format": "date-time",
+          "title": "Started At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "started_at",
+        "ended_at",
+        "output_digest"
+      ],
+      "title": "ToolExecutionMetadata",
+      "type": "object"
+    },
     "ToolOutcome": {
       "description": "Versioned, serializable execution semantics for an MCP tool response.",
       "properties": {
         "coverage": {
           "$ref": "#/$defs/CoverageMetadata"
+        },
+        "execution": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolExecutionMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "legacy_mapping": {
+          "anyOf": [
+            {
+              "const": "LEGACY_UNCLASSIFIED",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": "LEGACY_UNCLASSIFIED",
+          "title": "Legacy Mapping"
         },
         "reason": {
           "anyOf": [

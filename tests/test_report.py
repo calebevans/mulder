@@ -271,6 +271,7 @@ class TestRenderSmoke:
             reason_code="finding_submitted",
             changed_fields=["description"],
             evidence_added=["tc_1"],
+            contradiction_ids=["hc_material"],
             created_at="2026-01-01T00:00:00Z",
         )
         coverage = CoverageRecord(
@@ -338,8 +339,11 @@ class TestRenderSmoke:
         assert "Proof Card" in markdown
         assert "src:40-42" in markdown
         assert "typed-value@1.2" in markdown
+        assert "finding_submitted" in markdown
+        assert "hc_material" in markdown
         assert "Proof Card" in html
         assert "sha256:key" in html
+        assert "hc_material" in html
 
     def test_render_reports_outbound_policy_status(self, tmp_path: Path) -> None:
         renderer = ReportRenderer()

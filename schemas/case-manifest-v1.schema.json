@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://findevil.dev/schemas/mulder/case-manifest-v1.schema.json",
+  "title": "Mulder offline case manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "version",
+    "created_at",
+    "case",
+    "locations",
+    "database",
+    "evidence_registry",
+    "audit",
+    "methodology",
+    "operational_state",
+    "reports",
+    "integrity"
+  ],
+  "properties": {
+    "schema": {"const": "mulder.case-manifest"},
+    "version": {"const": 1},
+    "created_at": {"type": "string", "format": "date-time"},
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["case_id", "ingested_at"],
+      "properties": {
+        "case_id": {"type": "string", "minLength": 1},
+        "ingested_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "locations": {"type": "object", "required": ["manifest", "evidence"]},
+    "database": {
+      "type": "object",
+      "required": ["path", "profile", "logical_digest", "tables", "record_sets", "normalized_sources"]
+    },
+    "evidence_registry": {
+      "type": "object",
+      "required": ["status", "entries"],
+      "properties": {
+        "status": {"enum": ["present", "legacy_absent"]},
+        "entries": {"type": "array"}
+      }
+    },
+    "audit": {
+      "type": "object",
+      "required": ["path", "sha256", "size_bytes", "chain_status", "entry_count", "legacy_entries", "head_hash"]
+    },
+    "methodology": {"type": "object", "required": ["profile", "mulder_version", "replay"]},
+    "operational_state": {"type": "object"},
+    "reports": {"type": "array"},
+    "review_approval": {"type": "object"},
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "signature", "manifest_hash"],
+      "properties": {
+        "algorithm": {"const": "sha256"},
+        "signature": {"type": "object"},
+        "manifest_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      }
+    }
+  }
+}

@@ -179,7 +179,9 @@ separate and do not vote an atomic claim into a verified state.
 
 ## Hypotheses Ruled Out
 
-These hypotheses were explicitly tested and no supporting evidence was found.
+These are investigative negative conclusions. Only entries carrying
+`NO_EVIL_WITHIN_COVERAGE` and the displayed scope are supported as tested
+absence; legacy entries remain unverified and must not be read as global absence.
 
 {% for f in negative_findings %}
 - **{{ f.title | replace("[NEGATIVE] ", "") }}**{% if f.negative_verdict %} — `{{ f.negative_verdict.verdict }}` within {% for key in f.negative_verdict.scope %}`{{ key.system_name }}/{{ key.evidence_domain }}/{{ key.check_name }}`{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}: {{ f.description | truncate(200) }}
@@ -224,6 +226,8 @@ These hypotheses were explicitly tested and no supporting evidence was found.
 
 - Receipt: `{{ card.receipt.status }}` / signature `{{ card.receipt.signature_status }}`{% if card.receipt.public_key_fingerprint %} / key `{{ card.receipt.public_key_fingerprint }}`{% endif %}
 - Revision history: {{ card.revisions | length }} revision(s); coverage links: {{ card.coverage | length }}
+{% for revision in card.revisions %}- Revision {{ revision.revision_number }} `{{ revision.state }}` by `{{ revision.actor_kind }}` (`{{ revision.reason_code }}`) at {{ revision.created_at }}{% if revision.tombstone %}; **withdrawn/tombstoned**{% endif %}{% if revision.contradiction_ids %}; contradictions: {{ revision.contradiction_ids | join(", ") }}{% endif %}; changed: {{ revision.changed_fields | join(", ") or "none" }}; evidence added: {{ revision.evidence_added | join(", ") or "none" }}; removed: {{ revision.evidence_removed | join(", ") or "none" }}
+{% endfor %}
 {% for claim in card.claims %}
 
 **Claim {{ claim.ordinal + 1 }} — `{{ claim.epistemic_state }}`:** {{ claim.statement }}

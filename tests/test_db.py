@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -204,7 +205,135 @@ class TestFindings:
         assert anchor.source_hash == "sha256-memory"
         assert anchor.extractor_family == "volatility"
         assert anchor.independence_key == "source:sha256-memory"
-        assert tmp_case_db.get_finding(sample_finding.finding_id).sources == ["volatility.pslist"]
+        assert anchor.artifact_independence_key == "artifact:sha256-memory"
+        assert anchor.acquisition_independence_key is not None
+        assert anchor.extractor_independence_key == "extractor:volatility"
+        assert anchor.observation_independence_key is not None
+
+    @pytest.mark.parametrize(
+        ("selector_type", "raw_text", "start", "end", "selector", "expected"),
+        [
+            (
+                "csv_cell",
+                "Image,Pid\ncmd.exe,42\n",
+                10,
+                17,
+                {"row": 1, "column": "Image"},
+                "cmd.exe",
+            ),
+            (
+                "json_pointer",
+                '{"process":{"name":"cmd.exe"}}',
+                20,
+                27,
+                {"pointer": "/process/name"},
+                "cmd.exe",
+            ),
+            ("evtx_field", '{"EventID":1102}', 11, 15, {"field": "EventID"}, "1102"),
+            ("sqlite_cell", '[{"pid":42}]', 8, 10, {"row": 0, "column": "pid"}, "42"),
+            ("parsed_record", '{"path":"cmd.exe"}', 9, 16, {"field": "path"}, "cmd.exe"),
+            ("byte_range", "prefix cmd.exe suffix", 7, 14, {"start": 7, "end": 14}, "cmd.exe"),
+        ],
+    )
+    def test_typed_anchor_selectors_resolve_against_immutable_windows(
+        self,
+        tmp_case_db: CaseDB,
+        sample_finding: Finding,
+        selector_type: str,
+        raw_text: str,
+        start: int,
+        end: int,
+        selector: dict[str, object],
+        expected: str,
+    ) -> None:
+        suffix = selector_type.replace("_", "-")
+        sid = tmp_case_db.register_source(
+            f"typed.{suffix}", f"/evidence/{suffix}", f"hash-{suffix}", "typed", 1
+        )
+        tmp_case_db.insert_windows(
+            sid,
+            [
+                WindowRow(
+                    source_id=sid,
+                    line_start=1,
+                    line_end=1,
+                    event_time=None,
+                    raw_text=raw_text,
+                )
+            ],
+        )
+        window = tmp_case_db.get_windows_by_source(f"typed.{suffix}")[0]
+        finding = sample_finding.model_copy(
+            update={"finding_id": f"f-{suffix}", "confidence": "inference"}
+        )
+        stored = tmp_case_db.insert_finding(
+            finding,
+            [
+                AtomicClaimInput(
+                    statement=f"typed {selector_type}",
+                    subject="record:1",
+                    predicate="equals",
+                    object_value=expected,
+                    anchors=[
+                        EvidenceAnchorInput(
+                            tool_call_id="tc_typed",
+                            window_id=window.window_id,
+                            char_start=start,
+                            char_end=end,
+                            expected_text=expected,
+                            selector_type=selector_type,  # type: ignore[arg-type]
+                            selector=selector,  # type: ignore[arg-type]
+                        )
+                    ],
+                )
+            ],
+        )
+
+        assert stored[0].anchors[0].selector_type == selector_type
+        assert stored[0].anchors[0].selector == selector
+        persisted = tmp_case_db.get_claims(finding.finding_id)
+        assert persisted[0].anchors[0].selector_type == selector_type
+        assert persisted[0].anchors[0].selector == selector
+
+    def test_typed_selector_rejects_ambiguous_or_unbounded_keys(
+        self, tmp_case_db: CaseDB, sample_finding: Finding
+    ) -> None:
+        sid = tmp_case_db.register_source("typed.invalid", "/evidence/a.json", "hash", "json", 1)
+        tmp_case_db.insert_windows(
+            sid,
+            [
+                WindowRow(
+                    source_id=sid,
+                    line_start=1,
+                    line_end=1,
+                    event_time=None,
+                    raw_text='{"name":"cmd.exe"}',
+                )
+            ],
+        )
+        window = tmp_case_db.get_windows_by_source("typed.invalid")[0]
+        assert window.window_id is not None
+        claim = AtomicClaimInput(
+            statement="typed selector must be canonical",
+            subject="record:1",
+            predicate="equals",
+            object_value="cmd.exe",
+            anchors=[
+                EvidenceAnchorInput(
+                    tool_call_id="tc_typed",
+                    window_id=window.window_id,
+                    char_start=9,
+                    char_end=16,
+                    expected_text="cmd.exe",
+                    selector_type="json_pointer",
+                    selector={"pointer": "/name", "unbounded": True},
+                )
+            ],
+        )
+
+        with pytest.raises(ValueError, match="selector keys must be exactly"):
+            tmp_case_db.insert_finding(sample_finding, [claim])
+        assert tmp_case_db.get_finding(sample_finding.finding_id) is None
 
     def test_stale_anchor_rejects_entire_finding(
         self, tmp_case_db: CaseDB, sample_finding: Finding
@@ -641,6 +770,48 @@ class TestUpdateFinding:
         """Non-existent finding_id returns False, no error."""
         result = tmp_case_db.update_finding("nonexistent-id", title="x")
         assert result is False
+
+    def test_concurrent_updates_append_contiguous_revisions(
+        self, tmp_case_db: CaseDB, sample_finding: Finding
+    ) -> None:
+        tmp_case_db.insert_finding(sample_finding)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(
+                pool.map(
+                    lambda title: tmp_case_db.update_finding("f-001", title=title),
+                    ["Concurrent A", "Concurrent B"],
+                )
+            )
+
+        assert results == [True, True]
+        revisions = tmp_case_db.get_finding_revisions("f-001")
+        assert [revision.revision_number for revision in revisions] == [1, 2, 3]
+        assert revisions[2].parent_revision_id == revisions[1].revision_id
+
+    def test_lifecycle_only_update_appends_revision(
+        self, tmp_case_db: CaseDB, sample_finding: Finding
+    ) -> None:
+        tmp_case_db.insert_finding(sample_finding)
+
+        assert tmp_case_db.update_finding(
+            "f-001",
+            revision_state="quarantined",
+            reason_code="analysis_corrected",
+        )
+
+        revisions = tmp_case_db.get_finding_revisions("f-001")
+        assert [revision.state for revision in revisions] == ["confirmed", "quarantined"]
+        assert revisions[-1].changed_fields == []
+
+    def test_refuted_revision_requires_exact_contradiction_link(
+        self, tmp_case_db: CaseDB, sample_finding: Finding
+    ) -> None:
+        tmp_case_db.insert_finding(sample_finding)
+
+        with pytest.raises(ValueError, match="contradiction_id"):
+            tmp_case_db.update_finding("f-001", revision_state="refuted")
+
+        assert len(tmp_case_db.get_finding_revisions("f-001")) == 1
 
     def test_invalid_revision_state_rolls_back_projection(
         self, tmp_case_db: CaseDB, sample_finding: Finding

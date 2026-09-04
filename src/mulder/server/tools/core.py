@@ -352,6 +352,12 @@ def search(
             "t_end": t_end,
             "queries": queries,
             "exclude_sources": exclude_sources,
+            "returned_window_ids": [
+                window_id
+                for result in results
+                if type(window_id := result.get("window_id")) is int and window_id > 0
+            ],
+            "sources": sources_matched,
         },
         output_hash=hash_output(results),
         duration_ms=elapsed,
@@ -368,6 +374,11 @@ def search(
         "has_more": total_matches > len(results),
         "remaining": remaining,
         "sources_matched": sources_matched,
+        "returned_window_ids": [
+            window_id
+            for result in results
+            if type(window_id := result.get("window_id")) is int and window_id > 0
+        ],
         "hint": "Use get_raw_output(source_name, offset, limit) to retrieve full evidence text.",
     }
     if remaining > 0:
@@ -923,6 +934,7 @@ def get_raw_output(
         "source_name": source_name,
         "total_windows": total,
         "returned_windows": len(page),
+        "returned_window_ids": window_ids,
         "next_after_id": next_after,
         "has_more": len(page) == limit,
         # Backwards-compatible string field, now carrying a delimited JSON

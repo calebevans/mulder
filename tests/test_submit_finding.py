@@ -28,7 +28,7 @@ def audit_log(tmp_path: Path) -> AuditLog:
     log.log_tool_call(
         tool_call_id="tc_aabbccdd",
         tool_name="run_volatility",
-        params={"plugin": "pslist"},
+        params={"plugin": "pslist", "returned_window_ids": [1]},
         output_hash="hash1",
         duration_ms=100.0,
     )
@@ -55,11 +55,25 @@ def _call_submit_finding(
         return sync_fn(**kwargs)  # type: ignore[no-any-return]
 
 
+def _call_update_finding(
+    case_db: CaseDB, audit_log: AuditLog, **kwargs: object
+) -> dict[str, object]:
+    ctx = MagicMock()
+    ctx.db = case_db
+    ctx.audit = audit_log
+
+    sync_fn = _tool_dispatch_sync["update_finding"]
+    with patch("mulder.server.tools.findings.get_ctx", return_value=ctx):
+        return sync_fn(**kwargs)  # type: ignore[no-any-return]
+
+
 class TestEvidenceValidation:
     """Tests for evidence_refs validation against the audit log."""
 
-    def test_valid_finding_accepted(self, case_db: CaseDB, audit_log: AuditLog) -> None:
-        """Finding with valid evidence_refs from audit passes validation."""
+    def test_claimless_confirmed_finding_is_rejected(
+        self, case_db: CaseDB, audit_log: AuditLog
+    ) -> None:
+        """Audit-call existence alone cannot promote legacy prose to confirmed."""
         result = _call_submit_finding(
             case_db,
             audit_log,
@@ -73,8 +87,38 @@ class TestEvidenceValidation:
             event_time_start="2025-01-15T08:30:00Z",
             event_time_end="2025-01-15T09:00:00Z",
         )
-        assert result["status"] == "accepted"
-        assert "finding_id" in result
+        assert result["status"] == "error"
+        assert result["error_type"] == "confirmation_policy"
+        assert case_db.get_findings() == []
+
+    def test_claimless_finding_cannot_be_promoted_to_confirmed_by_update(
+        self, case_db: CaseDB, audit_log: AuditLog
+    ) -> None:
+        submitted = _call_submit_finding(
+            case_db,
+            audit_log,
+            title="Legacy inference",
+            description="prose-only",
+            severity="medium",
+            confidence="inference",
+            evidence_refs=["tc_aabbccdd"],
+            sources=["volatility.pslist"],
+        )
+        assert submitted["status"] == "accepted"
+
+        updated = _call_update_finding(
+            case_db,
+            audit_log,
+            finding_id=submitted["finding_id"],
+            confidence="confirmed",
+        )
+
+        assert updated["status"] == "error"
+        assert updated["error_type"] == "confirmation_policy"
+        persisted = case_db.get_finding(str(submitted["finding_id"]))
+        assert persisted is not None
+        assert persisted.confidence == "inference"
+        assert persisted.claim_state == "legacy_unverified"
 
     def test_invalid_evidence_ref_rejected(self, case_db: CaseDB, audit_log: AuditLog) -> None:
         """Finding referencing non-existent audit entry is rejected."""
@@ -144,7 +188,9 @@ class TestEvidenceValidation:
         assert result["claim_mode"] == "atomic_checked"
         assert result["claim_verifications"][0]["result"] == "verified"
         finding_id = str(result["finding_id"])
-        assert case_db.get_finding(finding_id).sources == ["volatility.pslist"]
+        persisted = case_db.get_finding(finding_id)
+        assert persisted.sources == ["volatility.pslist"]
+        assert persisted.claim_state == "atomic"
         claim = case_db.get_claims(finding_id)[0]
         assert claim.anchors[0].exact_text == "cmd.exe"
         assert claim.epistemic_state == "verified"
@@ -185,10 +231,12 @@ class TestEvidenceValidation:
         assert result.get("error_type") == "validation"
         assert "exactly match" in str(result.get("error_message"))
 
-    def test_confirmed_atomic_claim_requires_independent_root_sources(
+    def test_irrelevant_audited_call_cannot_anchor_an_unrelated_window(
         self, case_db: CaseDB, audit_log: AuditLog
     ) -> None:
-        sid = case_db.register_source("src", "/evidence/a", "one-root", "text", 1)
+        sid = case_db.register_source(
+            "volatility.pslist", "/evidence/memory.raw", "memory-hash", "volatility", 1
+        )
         case_db.insert_windows(
             sid,
             [
@@ -201,7 +249,116 @@ class TestEvidenceValidation:
                 )
             ],
         )
-        window = case_db.get_windows_by_source("src")[0]
+        window = case_db.get_windows_by_source("volatility.pslist")[0]
+
+        result = _call_submit_finding(
+            case_db,
+            audit_log,
+            title="Unrelated call",
+            description="must fail",
+            severity="medium",
+            confidence="inference",
+            evidence_refs=["tc_11223344"],
+            sources=["volatility.pslist"],
+            claims=[
+                {
+                    "statement": "Image is cmd.exe",
+                    "subject": "process:1",
+                    "predicate": "image_name",
+                    "object_value": "cmd.exe",
+                    "anchors": [
+                        {
+                            "tool_call_id": "tc_11223344",
+                            "window_id": window.window_id,
+                            "char_start": 0,
+                            "char_end": 7,
+                            "expected_text": "cmd.exe",
+                        }
+                    ],
+                }
+            ],
+        )
+
+        assert result["status"] == "error"
+        assert result["error_type"] == "provenance"
+        assert case_db.get_findings() == []
+
+    def test_call_for_same_source_cannot_anchor_a_window_it_did_not_return(
+        self, case_db: CaseDB, audit_log: AuditLog
+    ) -> None:
+        sid = case_db.register_source(
+            "volatility.pslist", "/evidence/memory.raw", "memory-hash", "volatility", 1
+        )
+        case_db.insert_windows(
+            sid,
+            [
+                WindowRow(
+                    source_id=sid,
+                    line_start=1,
+                    line_end=1,
+                    event_time=None,
+                    raw_text="cmd.exe",
+                )
+            ],
+        )
+        window = case_db.get_windows_by_source("volatility.pslist")[0]
+        assert window.window_id is not None
+        audit_log.log_tool_call(
+            tool_call_id="tc_source_only",
+            tool_name="search",
+            params={"source": "volatility.pslist", "returned_window_ids": []},
+            output_hash="hash3",
+        )
+
+        result = _call_submit_finding(
+            case_db,
+            audit_log,
+            title="Unreturned window",
+            description="must fail",
+            severity="medium",
+            confidence="inference",
+            evidence_refs=["tc_source_only"],
+            sources=["volatility.pslist"],
+            claims=[
+                {
+                    "statement": "Image is cmd.exe",
+                    "subject": "process:1",
+                    "predicate": "image_name",
+                    "object_value": "cmd.exe",
+                    "anchors": [
+                        {
+                            "tool_call_id": "tc_source_only",
+                            "window_id": window.window_id,
+                            "char_start": 0,
+                            "char_end": 7,
+                            "expected_text": "cmd.exe",
+                        }
+                    ],
+                }
+            ],
+        )
+
+        assert result["status"] == "error"
+        assert result["error_type"] == "provenance"
+        assert case_db.get_findings() == []
+
+    def test_confirmed_atomic_claim_requires_independent_root_sources(
+        self, case_db: CaseDB, audit_log: AuditLog
+    ) -> None:
+        sid = case_db.register_source("volatility.pslist", "/evidence/a", "one-root", "text", 1)
+        case_db.insert_windows(
+            sid,
+            [
+                WindowRow(
+                    source_id=sid,
+                    line_start=1,
+                    line_end=1,
+                    event_time=None,
+                    raw_text="cmd.exe",
+                )
+            ],
+        )
+        window = case_db.get_windows_by_source("volatility.pslist")[0]
         assert window.window_id is not None
 
         result = _call_submit_finding(
@@ -212,7 +369,7 @@ class TestEvidenceValidation:
             severity="high",
             confidence="confirmed",
             evidence_refs=["tc_aabbccdd"],
-            sources=["src"],
+            sources=["volatility.pslist"],
             claims=[
                 {
                     "statement": "Image is cmd.exe",

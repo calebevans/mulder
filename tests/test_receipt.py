@@ -14,6 +14,7 @@ import pytest
 from click.testing import CliRunner
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from jsonschema import Draft202012Validator
 
 from mulder import __version__
 from mulder.audit import AuditLog
@@ -170,6 +171,15 @@ def _build_sealed_case(tmp_path: Path, *, legacy_audit: bool = False) -> SealedF
 
 def _codes(result: CaseVerificationResult) -> set[str]:
     return {diagnostic.code for diagnostic in result.diagnostics}
+
+
+def test_emitted_case_manifest_matches_published_schema(tmp_path: Path) -> None:
+    sealed = _build_sealed_case(tmp_path)
+    schema_path = Path(__file__).resolve().parents[1] / "schemas" / "case-manifest-v1.schema.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    manifest = json.loads(sealed.manifest.read_text(encoding="utf-8"))
+
+    assert list(Draft202012Validator(schema).iter_errors(manifest)) == []
 
 
 def _write_key_pair(tmp_path: Path, name: str) -> tuple[Path, Path]:
