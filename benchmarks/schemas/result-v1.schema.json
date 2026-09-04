@@ -178,6 +178,7 @@
       "type": "object"
     },
     "AtomicClaim": {
+      "additionalProperties": false,
       "description": "Persisted atomic finding statement with resolved evidence anchors.",
       "properties": {
         "anchors": {
@@ -391,6 +392,13 @@
           "title": "Coverage",
           "type": "array"
         },
+        "evidence_bindings": {
+          "items": {
+            "$ref": "#/$defs/WorkflowEvidenceBinding"
+          },
+          "title": "Evidence Bindings",
+          "type": "array"
+        },
         "failure_reason": {
           "anyOf": [
             {
@@ -508,6 +516,7 @@
       "type": "object"
     },
     "ClaimVerification": {
+      "additionalProperties": false,
       "description": "Append-only persisted execution of a deterministic claim verifier.",
       "properties": {
         "claim_id": {
@@ -580,6 +589,7 @@
       "type": "object"
     },
     "CoverageKey": {
+      "additionalProperties": false,
       "description": "Stable coordinates for one evidence-domain coverage assertion.",
       "properties": {
         "check_name": {
@@ -607,6 +617,7 @@
       "type": "object"
     },
     "EvidenceAnchor": {
+      "additionalProperties": false,
       "description": "Server-resolved immutable evidence locator for an atomic claim.",
       "properties": {
         "anchor_id": {
@@ -726,6 +737,7 @@
       "type": "object"
     },
     "Finding": {
+      "additionalProperties": false,
       "description": "An investigative finding backed by evidence references.",
       "properties": {
         "case_id": {
@@ -840,6 +852,7 @@
       "type": "object"
     },
     "FindingRevision": {
+      "additionalProperties": false,
       "description": "Immutable snapshot recording one visible change to a finding.",
       "properties": {
         "actor_id": {
@@ -1237,6 +1250,7 @@
       "type": "object"
     },
     "ScopedNegativeVerdict": {
+      "additionalProperties": false,
       "description": "A negative conclusion explicitly limited to completed coverage.",
       "properties": {
         "scope": {
@@ -1376,6 +1390,54 @@
       "title": "ToolOutcomeStatus",
       "type": "string"
     },
+    "VerificationDecision": {
+      "additionalProperties": false,
+      "description": "Pure deterministic decision returned by the claim verifier module.",
+      "properties": {
+        "details": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Details",
+          "type": "object"
+        },
+        "reason_code": {
+          "title": "Reason Code",
+          "type": "string"
+        },
+        "result": {
+          "enum": [
+            "verified",
+            "contradicted",
+            "inconclusive"
+          ],
+          "title": "Result",
+          "type": "string"
+        }
+      },
+      "required": [
+        "result",
+        "reason_code"
+      ],
+      "title": "VerificationDecision",
+      "type": "object"
+    },
     "WorkflowCandidate": {
       "additionalProperties": false,
       "description": "Real Mulder domain inputs for one bounded benchmark candidate.",
@@ -1388,6 +1450,17 @@
           "minimum": 0,
           "title": "Confidence Probability",
           "type": "number"
+        },
+        "current_verification": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VerificationDecision"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "finding": {
           "$ref": "#/$defs/Finding"
@@ -1424,6 +1497,52 @@
         "confidence_probability"
       ],
       "title": "WorkflowCandidate",
+      "type": "object"
+    },
+    "WorkflowEvidenceBinding": {
+      "additionalProperties": false,
+      "description": "Content-bound mapping from a workflow anchor to a manifest artifact.",
+      "properties": {
+        "anchor_id": {
+          "minLength": 1,
+          "title": "Anchor Id",
+          "type": "string"
+        },
+        "artifact_id": {
+          "minLength": 1,
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "artifact_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Artifact Sha256",
+          "type": "string"
+        },
+        "exact_text_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Exact Text Sha256",
+          "type": "string"
+        },
+        "root_acquisition_id": {
+          "minLength": 1,
+          "title": "Root Acquisition Id",
+          "type": "string"
+        },
+        "selector": {
+          "minLength": 1,
+          "title": "Selector",
+          "type": "string"
+        }
+      },
+      "required": [
+        "anchor_id",
+        "artifact_id",
+        "artifact_sha256",
+        "selector",
+        "exact_text_sha256",
+        "root_acquisition_id"
+      ],
+      "title": "WorkflowEvidenceBinding",
       "type": "object"
     },
     "WorkflowGateCheck": {

@@ -5,7 +5,13 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal, TypeAlias
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+class StrictDomainModel(BaseModel):
+    """Domain value object that refuses lossy forward/inward projections."""
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
 
 class ToolOutcomeStatus(str, Enum):
@@ -90,7 +96,7 @@ class ToolOutcome(BaseModel):
         return self
 
 
-class CoverageKey(BaseModel):
+class CoverageKey(StrictDomainModel):
     """Stable coordinates for one evidence-domain coverage assertion."""
 
     system_name: str = Field(min_length=1)
@@ -109,7 +115,7 @@ class CoverageRecord(BaseModel):
     recorded_at: str
 
 
-class ScopedNegativeVerdict(BaseModel):
+class ScopedNegativeVerdict(StrictDomainModel):
     """A negative conclusion explicitly limited to completed coverage."""
 
     verdict: Literal["NO_EVIL_WITHIN_COVERAGE"] = "NO_EVIL_WITHIN_COVERAGE"
@@ -153,7 +159,7 @@ class CaseMetadataRow(BaseModel):
     narrative: str | None = None
 
 
-class Finding(BaseModel):
+class Finding(StrictDomainModel):
     """An investigative finding backed by evidence references."""
 
     finding_id: str
@@ -178,7 +184,7 @@ class Finding(BaseModel):
         return self
 
 
-class FindingRevision(BaseModel):
+class FindingRevision(StrictDomainModel):
     """Immutable snapshot recording one visible change to a finding."""
 
     revision_id: str
@@ -236,7 +242,7 @@ class AtomicClaimInput(BaseModel):
     anchors: list[EvidenceAnchorInput] = Field(min_length=1)
 
 
-class EvidenceAnchor(BaseModel):
+class EvidenceAnchor(StrictDomainModel):
     """Server-resolved immutable evidence locator for an atomic claim."""
 
     anchor_id: str
@@ -259,7 +265,7 @@ class EvidenceAnchor(BaseModel):
     role: Literal["supports", "contradicts"] = "supports"
 
 
-class AtomicClaim(BaseModel):
+class AtomicClaim(StrictDomainModel):
     """Persisted atomic finding statement with resolved evidence anchors."""
 
     claim_id: str
@@ -276,7 +282,7 @@ class AtomicClaim(BaseModel):
     anchors: list[EvidenceAnchor] = Field(default_factory=list)
 
 
-class VerificationDecision(BaseModel):
+class VerificationDecision(StrictDomainModel):
     """Pure deterministic decision returned by the claim verifier module."""
 
     result: Literal["verified", "contradicted", "inconclusive"]

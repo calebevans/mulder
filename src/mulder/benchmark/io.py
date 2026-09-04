@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from pathlib import Path
 from typing import TypeVar
 
@@ -46,8 +48,65 @@ def _load(path: Path, model: type[ModelT]) -> ModelT:
 
 
 def load_manifest(path: Path) -> BenchmarkManifest:
-    """Load a versioned JSON/YAML benchmark manifest without external I/O."""
-    return _load(path, BenchmarkManifest)
+    """Load and content-verify a local versioned benchmark manifest."""
+    manifest = _load(path, BenchmarkManifest)
+    _verify_manifest_evidence(path.parent, manifest)
+    return manifest
+
+
+_TEXT_SELECTOR = re.compile(r"line=(?P<line>[1-9][0-9]*)[; ]+field=(?P<field>[A-Za-z0-9_.-]+)")
+
+
+def resolve_text_selector(path: Path, selector: str) -> str:
+    """Resolve the bounded key-value text selector used by local fixtures."""
+    match = _TEXT_SELECTOR.fullmatch(selector)
+    if match is None:
+        raise BenchmarkInputError(f"unsupported evidence selector {selector!r}")
+    lines = path.read_text(encoding="utf-8").splitlines()
+    line_number = int(match.group("line"))
+    if line_number > len(lines):
+        raise BenchmarkInputError(f"selector {selector!r} is outside {path}")
+    field = re.escape(match.group("field"))
+    value = re.search(rf"(?:^|\s){field}=([^\s]+)", lines[line_number - 1])
+    if value is None and match.group("field") == "format":
+        return lines[line_number - 1].split(maxsplit=1)[0]
+    if value is None:
+        raise BenchmarkInputError(f"selector {selector!r} does not resolve in {path}")
+    return value.group(1)
+
+
+def _verify_manifest_evidence(root: Path, manifest: BenchmarkManifest) -> None:
+    for case in manifest.cases:
+        artifacts = {artifact.artifact_id: artifact for artifact in case.evidence}
+        paths: dict[str, Path] = {}
+        for artifact in case.evidence:
+            if artifact.redistribution != "redistributable":
+                continue
+            evidence_path = (root / artifact.path).resolve()
+            try:
+                content = evidence_path.read_bytes()
+            except OSError as exc:
+                raise BenchmarkInputError(
+                    f"cannot verify evidence artifact {artifact.artifact_id!r}: {exc}"
+                ) from exc
+            if hashlib.sha256(content).hexdigest() != artifact.sha256:
+                raise BenchmarkInputError(
+                    f"evidence artifact {artifact.artifact_id!r} sha256 does not match"
+                )
+            if artifact.size_bytes is not None and len(content) != artifact.size_bytes:
+                raise BenchmarkInputError(
+                    f"evidence artifact {artifact.artifact_id!r} size does not match"
+                )
+            paths[artifact.artifact_id] = evidence_path
+        for anchor in case.anchors:
+            artifact = artifacts[anchor.artifact_id]
+            if artifact.redistribution != "redistributable":
+                continue
+            exact_text = resolve_text_selector(paths[artifact.artifact_id], anchor.selector)
+            if hashlib.sha256(exact_text.encode("utf-8")).hexdigest() != anchor.exact_text_sha256:
+                raise BenchmarkInputError(
+                    f"evidence anchor {anchor.anchor_id!r} exact text hash does not match"
+                )
 
 
 def load_result(path: Path) -> BenchmarkRunResult:

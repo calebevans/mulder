@@ -47,8 +47,18 @@ def _single_revision_result(*, before: Any, after: Any | None, run_id: str) -> B
             **base.model_dump(mode="json"),
             "run_id": run_id,
             "cases": [case.model_dump(mode="json")],
+            "identity": {
+                **base.identity.model_dump(mode="json"),
+                "methodology_version": "1.0",
+            },
             "workflow_traces": [],
         }
+    )
+
+
+def _correction_manifest() -> Any:
+    return load_manifest(FIXTURES / "manifest-v1.yaml").model_copy(
+        update={"methodology_version": "1.0"}
     )
 
 
@@ -107,7 +117,7 @@ def test_same_proposition_state_changes_are_scored(
     expected_fixed: int,
     expected_introduced: int,
 ) -> None:
-    manifest = load_manifest(FIXTURES / "manifest-v1.yaml")
+    manifest = _correction_manifest()
     correct = load_result(BASE_RESULT).cases[0].claims[0]
     proposition = (
         correct
@@ -132,7 +142,7 @@ def test_removal_tombstones_score_fixed_and_introduced_errors(
     expected_fixed: int,
     expected_introduced: int,
 ) -> None:
-    manifest = load_manifest(FIXTURES / "manifest-v1.yaml")
+    manifest = _correction_manifest()
     correct = load_result(BASE_RESULT).cases[0].claims[0]
     before = (
         correct
@@ -147,8 +157,21 @@ def test_removal_tombstones_score_fixed_and_introduced_errors(
     assert removed.cases[0].revisions[0].tombstone is True
 
 
+def test_replacing_a_missing_true_claim_with_an_unverified_false_claim_does_not_fix_it() -> None:
+    manifest = _correction_manifest()
+    expected = load_result(BASE_RESULT).cases[0].claims[0]
+    before = expected.model_copy(update={"verification_state": "unverified"})
+    after = before.model_copy(update={"object_value": "false-positive.exe"})
+    changed = _single_revision_result(before=before, after=after, run_id="still-missing")
+
+    score = score_benchmark(manifest, [changed]).runs[0].overall
+    assert score.atomic_claims.false_negative == 1
+    assert score.revisions.errors_fixed == 0
+    assert score.revisions.errors_persisted == 1
+
+
 def test_duplicate_propositions_do_not_reweight_calibration() -> None:
-    manifest = load_manifest(FIXTURES / "manifest-v1.yaml")
+    manifest = _correction_manifest()
     base = load_result(BASE_RESULT)
     claim = base.cases[0].claims[0]
     duplicate = claim.model_copy(update={"claim_id": "duplicate-id"})
@@ -156,7 +179,12 @@ def test_duplicate_propositions_do_not_reweight_calibration() -> None:
         update={"claims": [claim, duplicate], "revisions": []}
     )
     duplicated = base.model_copy(
-        update={"run_id": "duplicate", "cases": [duplicated_case], "workflow_traces": []}
+        update={
+            "run_id": "duplicate",
+            "cases": [duplicated_case],
+            "identity": base.identity.model_copy(update={"methodology_version": "1.0"}),
+            "workflow_traces": [],
+        }
     )
 
     score = score_benchmark(manifest, [duplicated]).runs[0].overall
@@ -180,7 +208,8 @@ def test_duplicate_propositions_do_not_reweight_calibration() -> None:
 def test_unattached_revision_history_is_rejected() -> None:
     result = load_result(BASE_RESULT)
     payload = result.cases[0].model_dump(mode="json")
-    revision = next(item for item in payload["revisions"] if item["claim_id"] == "claim-good")
+    claim_id = result.cases[0].claims[0].claim_id
+    revision = next(item for item in payload["revisions"] if item["claim_id"] == claim_id)
     revision["after"]["object_value"] = "unpublished.exe"
     with pytest.raises(ValueError, match="revision before/after|last claim revision"):
         type(result.cases[0]).model_validate(payload)
@@ -188,7 +217,13 @@ def test_unattached_revision_history_is_rejected() -> None:
 
 def test_bounded_workflow_calls_real_mulder_components(monkeypatch: pytest.MonkeyPatch) -> None:
     trace = load_result(BASE_RESULT).workflow_traces[0]
-    calls = {"candidate": 0, "verifier": 0, "independence": 0, "narrative": 0}
+    calls = {
+        "candidate": 0,
+        "verifier": 0,
+        "independence": 0,
+        "alternative": 0,
+        "blind": 0,
+    }
 
     def spy(name: str, target: Any) -> Any:
         def wrapped(*args: Any, **kwargs: Any) -> Any:
@@ -214,14 +249,20 @@ def test_bounded_workflow_calls_real_mulder_components(monkeypatch: pytest.Monke
     )
     monkeypatch.setattr(
         ablation_engine,
-        "validate_narrative",
-        spy("narrative", ablation_engine.validate_narrative),
+        "apply_alternative_narrative_review",
+        spy("alternative", ablation_engine.apply_alternative_narrative_review),
+    )
+    monkeypatch.setattr(
+        ablation_engine,
+        "apply_blind_review",
+        spy("blind", ablation_engine.apply_blind_review),
     )
 
     result = execute_workflow_base(trace)
 
     assert all(count > 0 for count in calls.values())
-    assert [claim.claim_id for claim in result.claims] == ["claim-good"]
+    assert len(result.claims) == 1
+    assert result.claims[0].object_value == "cmd.exe"
     assert {revision.stage for revision in result.revisions} == {
         "source_finding_revision",
         "candidate_filters",
@@ -232,10 +273,71 @@ def test_bounded_workflow_calls_real_mulder_components(monkeypatch: pytest.Monke
     }
     assert any(
         revision.stage == "blind_reviewer"
-        and revision.source_revision_id == "withdraw-finding-blind"
+        and revision.claim_id
         and revision.tombstone
         for revision in result.revisions
     )
+
+
+def test_reviewer_stage_cannot_be_changed_by_relabelling_actor_kind() -> None:
+    trace = load_result(BASE_RESULT).workflow_traces[0]
+    payload = trace.model_dump(mode="json")
+    blind = next(
+        candidate
+        for candidate in payload["candidates"]
+        if candidate["finding"]["finding_id"] == "finding-blind"
+    )
+    blind["withdrawal_revision"]["actor_kind"] = "investigator"
+    blind["finding_revisions"][-1]["actor_kind"] = "investigator"
+    relabelled = type(trace).model_validate(payload)
+
+    result = execute_workflow_base(relabelled)
+    blind_claim_id = blind["claim"]["claim_id"]
+    assert blind_claim_id not in {claim.claim_id for claim in result.claims}
+    assert any(
+        revision.stage == "blind_reviewer" and revision.claim_id == blind_claim_id
+        for revision in result.revisions
+    )
+
+
+def test_nested_workflow_domain_models_reject_unknown_fields() -> None:
+    payload = load_result(BASE_RESULT).model_dump(mode="json")
+    payload["workflow_traces"][0]["candidates"][0]["claim"]["anchors"][0][
+        "unknown_provenance"
+    ] = "not allowed"
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        BenchmarkRunResult.model_validate(payload)
+
+
+def test_scorer_rejects_tampered_anchor_binding_and_fake_independence() -> None:
+    manifest = load_manifest(FIXTURES / "manifest-v1.yaml")
+    base = load_result(BASE_RESULT)
+    tampered = base.model_dump(mode="json")
+    expected_anchor_id = manifest.cases[0].anchors[0].anchor_id
+    target_binding = next(
+        item
+        for item in tampered["workflow_traces"][0]["evidence_bindings"]
+        if item["anchor_id"] == expected_anchor_id
+    )
+    target_binding["selector"] = "line=999;field=image"
+    with pytest.raises(ValueError, match="answer-key binding"):
+        score_benchmark(manifest, [BenchmarkRunResult.model_validate(tampered)])
+
+    manifest_payload = manifest.model_dump(mode="json")
+    manifest_payload["cases"][0]["evidence"][1]["root_acquisition_id"] = "acquisition-a"
+    result_payload = base.model_dump(mode="json")
+    second_artifact = manifest_payload["cases"][0]["evidence"][1]["artifact_id"]
+    binding = next(
+        item
+        for item in result_payload["workflow_traces"][0]["evidence_bindings"]
+        if item["artifact_id"] == second_artifact
+    )
+    binding["root_acquisition_id"] = "acquisition-a"
+    with pytest.raises(ValueError, match="distinct root acquisitions"):
+        score_benchmark(
+            type(manifest).model_validate(manifest_payload),
+            [BenchmarkRunResult.model_validate(result_payload)],
+        )
 
 
 @pytest.mark.parametrize("target", TARGETS)
@@ -280,15 +382,30 @@ def test_ablation_matrix_has_real_stage_specific_effects() -> None:
     def claim_ids(target: str) -> set[str]:
         return {claim.claim_id for claim in results[target].cases[0].claims}
 
-    assert claim_ids("without-candidate-filters") == {"claim-good", "claim-duplicate"}
+    trace = base.workflow_traces[0]
+    ids = {
+        candidate.finding.finding_id: candidate.claim.claim_id
+        for candidate in trace.candidates
+    }
+    retained_id = base.cases[0].claims[0].claim_id
+    assert claim_ids("without-candidate-filters") == {
+        ids["finding-good"],
+        ids["finding-duplicate"],
+    }
     assert results["without-verifier"].cases[0].verdict == "no_evil_within_coverage"
     assert claim_ids("without-verifier") == set()
-    assert claim_ids("without-independence-gate") == {"claim-good", "claim-weak"}
-    assert claim_ids("without-alternative-narrative") == {
-        "claim-good",
-        "claim-alternative",
+    assert claim_ids("without-independence-gate") == {
+        retained_id,
+        ids["finding-weak"],
     }
-    assert claim_ids("without-blind-reviewer") == {"claim-good", "claim-blind"}
+    assert claim_ids("without-alternative-narrative") == {
+        retained_id,
+        ids["finding-alternative"],
+    }
+    assert claim_ids("without-blind-reviewer") == {
+        retained_id,
+        ids["finding-blind"],
+    }
 
     scores = {run.run_id: run.overall for run in score_benchmark(manifest, results.values()).runs}
     assert scores["fixture-without-verifier"].atomic_claims.recall == 0.0
@@ -327,14 +444,19 @@ def test_scorer_rejects_a_tampered_ablated_result() -> None:
         matrix_cell="fixture/without-independence-gate",
     )
     payload = result.model_dump(mode="json")
+    weak_id = next(
+        candidate.claim.claim_id
+        for candidate in base.workflow_traces[0].candidates
+        if candidate.finding.finding_id == "finding-weak"
+    )
     claim = next(
-        item for item in payload["cases"][0]["claims"] if item["claim_id"] == "claim-weak"
+        item for item in payload["cases"][0]["claims"] if item["claim_id"] == weak_id
     )
     claim["verification_state"] = "contradicted"
     revision = next(
         item
         for item in reversed(payload["cases"][0]["revisions"])
-        if item["claim_id"] == "claim-weak"
+        if item["claim_id"] == weak_id
     )
     revision["after"]["verification_state"] = "contradicted"
     tampered = BenchmarkRunResult.model_validate(payload)

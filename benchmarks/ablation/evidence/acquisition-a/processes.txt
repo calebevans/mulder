@@ -1,0 +1,1 @@
+host=workstation-17 image=cmd.exe pid=412 parent=winword.exe acquisition=A

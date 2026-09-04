@@ -10,6 +10,7 @@ from collections.abc import Hashable, Iterable
 from dataclasses import dataclass
 from typing import Literal, TypeAlias, TypeVar
 
+from mulder.benchmark.anchors import canonical_anchor_id
 from mulder.benchmark.models import (
     AggregateScore,
     BenchmarkCase,
@@ -18,6 +19,7 @@ from mulder.benchmark.models import (
     BenchmarkScoreDocument,
     CaseRunResult,
     CaseScore,
+    CaseWorkflowTrace,
     CitationScore,
     ConfidenceCalibrationScore,
     CoverageExpectation,
@@ -91,6 +93,71 @@ def _rate(numerator: int, denominator: int, *, empty: float = 0.0) -> float:
     if denominator == 0:
         return empty
     return round(numerator / denominator, 6)
+
+
+def _validate_case_evidence_bindings(
+    manifest_case: BenchmarkCase, trace: CaseWorkflowTrace
+) -> None:
+    """Fail closed unless every workflow anchor is bound to exact manifest evidence."""
+    if trace.failure_reason is not None:
+        return
+    bindings = {binding.anchor_id: binding for binding in trace.evidence_bindings}
+    anchors = {
+        canonical_anchor_id(anchor): anchor
+        for candidate in trace.candidates
+        for anchor in candidate.claim.anchors
+    }
+    if set(bindings) != set(anchors):
+        raise ValueError(
+            f"workflow {trace.case_id!r} evidence bindings do not cover every anchor"
+        )
+    artifacts = {artifact.artifact_id: artifact for artifact in manifest_case.evidence}
+    expected_anchors = {anchor.anchor_id: anchor for anchor in manifest_case.anchors}
+    for anchor_id, anchor in anchors.items():
+        binding = bindings[anchor_id]
+        artifact = artifacts.get(binding.artifact_id)
+        if artifact is None:
+            raise ValueError(f"workflow anchor {anchor_id!r} binds an unknown artifact")
+        if (
+            binding.artifact_sha256 != artifact.sha256
+            or binding.root_acquisition_id != artifact.root_acquisition_id
+            or binding.exact_text_sha256
+            != hashlib.sha256(anchor.exact_text.encode("utf-8")).hexdigest()
+        ):
+            raise ValueError(f"workflow anchor {anchor_id!r} has inconsistent evidence binding")
+        expected = expected_anchors.get(anchor_id)
+        if expected is not None and (
+            binding.artifact_id != expected.artifact_id
+            or binding.selector != expected.selector
+            or binding.exact_text_sha256 != expected.exact_text_sha256
+        ):
+            raise ValueError(
+                f"workflow anchor {anchor_id!r} does not match the answer-key binding"
+            )
+
+    for candidate in trace.candidates:
+        by_independence: dict[str, set[tuple[str, str]]] = {}
+        for anchor in candidate.claim.anchors:
+            binding = bindings[canonical_anchor_id(anchor)]
+            by_independence.setdefault(anchor.independence_key, set()).add(
+                (binding.root_acquisition_id, binding.artifact_id)
+            )
+        resolved = [
+            next(iter(locations))
+            for locations in by_independence.values()
+            if len(locations) == 1
+        ]
+        root_ids = {root_id for root_id, _ in resolved}
+        artifact_ids = {artifact_id for _, artifact_id in resolved}
+        if (
+            len(resolved) != len(by_independence)
+            or len(root_ids) != len(by_independence)
+            or len(artifact_ids) != len(by_independence)
+        ):
+            raise ValueError(
+                f"workflow claim {candidate.claim.claim_id!r} independence is not bound "
+                "to distinct root acquisitions and artifacts"
+            )
 
 
 def _set_score(expected: set[SetKeyT], observed: set[SetKeyT]) -> SetScore:
@@ -275,6 +342,19 @@ def _score_case(manifest_case: BenchmarkCase, run_case: CaseRunResult) -> _RawCa
 
     errors_fixed = errors_introduced = correct_preserved = errors_persisted = 0
     assertion_revisions = 0
+    current_claims = {claim.claim_id: claim for claim in run_case.claims}
+    for revision in reversed(run_case.revisions):
+        current_claims[revision.claim_id] = revision.before
+
+    def assertion_errors(claims: Iterable[ObservedClaim]) -> set[tuple[str, ClaimKey]]:
+        asserted_keys = {
+            _claim_key(claim) for claim in claims if claim.verification_state == "verified"
+        }
+        return {
+            *(("false_positive", key) for key in asserted_keys - expected_claims),
+            *(("false_negative", key) for key in expected_claims - asserted_keys),
+        }
+
     for revision in run_case.revisions:
         before_key = _claim_key(revision.before)
         after_key = _claim_key(revision.after) if revision.after is not None else None
@@ -283,25 +363,22 @@ def _score_case(manifest_case: BenchmarkCase, run_case: CaseRunResult) -> _RawCa
             or before_key != after_key
             or revision.before.verification_state != revision.after.verification_state
         )
+        before_errors = assertion_errors(current_claims.values())
+        if revision.after is None:
+            current_claims.pop(revision.claim_id, None)
+        else:
+            current_claims[revision.claim_id] = revision.after
         if not decision_changed:
             continue
         assertion_revisions += 1
-        before_correct = (revision.before.verification_state == "verified") == (
-            before_key in expected_claims
-        )
-        after_correct = (
-            (revision.after.verification_state == "verified") == (after_key in expected_claims)
-            if revision.after is not None
-            else before_key not in expected_claims
-        )
-        if not before_correct and after_correct:
-            errors_fixed += 1
-        elif before_correct and not after_correct:
-            errors_introduced += 1
-        elif before_correct:
-            correct_preserved += 1
-        else:
-            errors_persisted += 1
+        after_errors = assertion_errors(current_claims.values())
+        errors_fixed += len(before_errors - after_errors)
+        errors_introduced += len(after_errors - before_errors)
+        if before_errors == after_errors:
+            if before_errors:
+                errors_persisted += len(before_errors)
+            else:
+                correct_preserved += 1
 
     return _RawCaseScore(
         case_id=manifest_case.case_id,
@@ -697,6 +774,23 @@ def score_benchmark(
                 f"run {result.run_id!r} has an incomparable case set; "
                 f"missing={missing!r}, unexpected={unexpected!r}"
             )
+        if manifest.methodology_version == "1.1":
+            from mulder.benchmark.ablations import execute_workflow_base
+
+            traces = {trace.case_id: trace for trace in result.workflow_traces}
+            if set(traces) != expected_case_ids:
+                raise ValueError(
+                    f"run {result.run_id!r} methodology 1.1 requires complete workflow traces"
+                )
+            for case_id, manifest_case in manifest_cases.items():
+                _validate_case_evidence_bindings(manifest_case, traces[case_id])
+                if (
+                    result.ablation_receipt is None
+                    and execute_workflow_base(traces[case_id]) != result_cases[case_id]
+                ):
+                    raise ValueError(
+                        f"workflow trace for {case_id!r} does not reproduce the base result"
+                    )
         raw = [
             _score_case(manifest_case, result_cases[case_id])
             for case_id, manifest_case in sorted(manifest_cases.items())

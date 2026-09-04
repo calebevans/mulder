@@ -60,6 +60,7 @@ from mulder.reasoning import _define_reasoning_tables
 if TYPE_CHECKING:
     from mulder.graph import EdgeProvenance, GraphBuildResult, GraphSnapshot
     from mulder.graph_query import GraphQueryRequest, GraphQueryResult
+    from mulder.models import VerificationDecision
     from mulder.plugin_packs import PluginActivation, PluginActivationRequest
     from mulder.reasoning import (
         ReasoningCommand,
@@ -1627,6 +1628,65 @@ class CaseDB:
             return results
 
         return self._wq.submit(_do_verify)
+
+    def evaluate_finding_claims(self, finding_id: str) -> dict[str, VerificationDecision]:
+        """Re-open current evidence and verify claims without mutating the case DB.
+
+        This is the read-only verification seam used by exporters. Stored
+        verification rows are history, not proof that the current window bytes
+        still match the immutable anchor.
+        """
+        from mulder.models import VerificationDecision
+        from mulder.verification.claims import verify_claim
+
+        decisions: dict[str, VerificationDecision] = {}
+        claims = self.get_claims(finding_id)
+        with self._engine.connect() as conn:
+            for claim in claims:
+                evidence_problem: str | None = None
+                for anchor in claim.anchors:
+                    row = conn.execute(
+                        select(
+                            windows_t.c.source_id,
+                            windows_t.c.raw_text,
+                            sources_t.c.source_name,
+                            sources_t.c.source_hash,
+                        )
+                        .select_from(
+                            windows_t.join(
+                                sources_t,
+                                windows_t.c.source_id == sources_t.c.source_id,
+                            )
+                        )
+                        .where(windows_t.c.window_id == anchor.window_id)
+                    ).fetchone()
+                    if row is None:
+                        evidence_problem = "anchor_window_missing"
+                        break
+                    if (
+                        int(row.source_id) != anchor.source_id
+                        or str(row.source_name) != anchor.source_name
+                        or str(row.source_hash) != anchor.source_hash
+                    ):
+                        evidence_problem = "anchor_provenance_changed"
+                        break
+                    raw_text = str(row.raw_text)
+                    if anchor.char_end > len(raw_text):
+                        evidence_problem = "anchor_range_invalid"
+                        break
+                    if raw_text[anchor.char_start : anchor.char_end] != anchor.exact_text:
+                        evidence_problem = "anchor_text_changed"
+                        break
+                decisions[claim.claim_id] = (
+                    VerificationDecision(
+                        result="inconclusive",
+                        reason_code=evidence_problem,
+                        details={},
+                    )
+                    if evidence_problem is not None
+                    else verify_claim(claim)
+                )
+        return decisions
 
     def get_claim_verifications(self, finding_id: str) -> list[ClaimVerification]:
         """Return append-only verification history for a finding's claims."""

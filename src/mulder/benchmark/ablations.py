@@ -29,8 +29,11 @@ from mulder.benchmark.models import (
     WorkflowCandidate,
 )
 from mulder.models import AtomicClaim, Finding, ToolOutcomeStatus
-from mulder.orchestrator.gates import validate_narrative
-from mulder.orchestrator.phases import ALTERNATIVE_NARRATIVE
+from mulder.review.adjudication import (
+    apply_alternative_narrative_review,
+    apply_blind_review,
+    withdrawal_stage,
+)
 from mulder.review.candidates import group_duplicate_findings, representative_finding
 from mulder.verification.claims import verify_claim
 from mulder.verification.policy import assess_confirmation
@@ -154,18 +157,18 @@ def _real_case_execution(
     disabled: frozenset[BenchmarkStage],
 ) -> tuple[CaseRunResult, dict[BenchmarkStage, int]]:
     """Execute actual deterministic Mulder policies over bounded domain inputs."""
-    if trace.trace_version != 2 or trace.alternative_narrative is None:
-        if trace.trace_version == 2 and trace.failure_reason is not None:
-            return (
-                CaseRunResult(
-                    case_id=trace.case_id,
-                    verdict="no_verdict",
-                    cell_status="failed",
-                    failure_reason=trace.failure_reason,
-                ),
-                {stage: 0 for stage in STAGE_ORDER},
-            )
+    if trace.trace_version != 2:
         raise ValueError("new executable ablations require v2 real-component traces")
+    if trace.failure_reason is not None:
+        return (
+            CaseRunResult(
+                case_id=trace.case_id,
+                verdict="no_verdict",
+                cell_status="failed",
+                failure_reason=trace.failure_reason,
+            ),
+            {stage: 0 for stage in STAGE_ORDER},
+        )
     candidates = {item.claim.claim_id: item for item in trace.candidates}
     effective_findings = {
         claim_id: _effective_finding(candidate) for claim_id, candidate in candidates.items()
@@ -248,10 +251,7 @@ def _real_case_execution(
         }
         for claim_id, candidate in candidates.items():
             source_withdrawal = candidate.withdrawal_revision
-            filtered_by_source = (
-                source_withdrawal is not None
-                and source_withdrawal.actor_kind in {"system", "deterministic_rule"}
-            )
+            filtered_by_source = withdrawal_stage(source_withdrawal) == "candidate_filters"
             if candidate.finding.finding_id not in retained_finding_ids or filtered_by_source:
                 transition(
                     claim_id,
@@ -277,12 +277,17 @@ def _real_case_execution(
     if "verifier" not in disabled:
         for claim_id in sorted(claims):
             candidate = candidates[claim_id]
-            decision = verify_claim(candidate.claim)
-            history = candidate.source_verifications
-            if history and history[-1].result != decision.result:
+            semantic_decision = verify_claim(candidate.claim)
+            decision = candidate.current_verification or semantic_decision
+            if (
+                candidate.current_verification is not None
+                and not candidate.current_verification.reason_code.startswith("anchor_")
+                and candidate.current_verification != semantic_decision
+            ):
                 raise ValueError(
-                    f"source verification for {claim_id!r} disagrees with current real verifier"
+                    f"current verification for {claim_id!r} disagrees with real verifier"
                 )
+            history = candidate.source_verifications
             if history:
                 for source in history:
                     transition(
@@ -294,7 +299,10 @@ def _real_case_execution(
                         reason=source.reason_code,
                         source_revision_id=source.verification_id,
                     )
-            else:
+            if not history or (
+                history[-1].result != decision.result
+                or history[-1].reason_code != decision.reason_code
+            ):
                 transition(
                     claim_id,
                     stage="verifier",
@@ -332,16 +340,12 @@ def _real_case_execution(
                     )
 
     if "alternative_narrative" not in disabled:
-        narrative_input = trace.alternative_narrative
-        gate = validate_narrative(
-            {"remaining_work": narrative_input.remaining_work},
-            {"gates": [check.model_dump(mode="json") for check in narrative_input.checks]},
-        )
-        if gate.phase_name != ALTERNATIVE_NARRATIVE.name or not gate.passed:
-            raise ValueError("real Alternative Narrative gate rejected the benchmark workflow")
         for claim_id in sorted(tuple(claims)):
             withdrawal = candidates[claim_id].withdrawal_revision
-            if withdrawal is not None and withdrawal.actor_kind in {"investigator", "human"}:
+            if apply_alternative_narrative_review(
+                effective_findings[claim_id], withdrawal
+            ):
+                assert withdrawal is not None
                 transition(
                     claim_id,
                     stage="alternative_narrative",
@@ -354,7 +358,8 @@ def _real_case_execution(
     if "blind_reviewer" not in disabled:
         for claim_id in sorted(tuple(claims)):
             withdrawal = candidates[claim_id].withdrawal_revision
-            if withdrawal is not None and withdrawal.actor_kind == "blind_reviewer":
+            if apply_blind_review(effective_findings[claim_id], withdrawal):
+                assert withdrawal is not None
                 transition(
                     claim_id,
                     stage="blind_reviewer",

@@ -10,15 +10,48 @@ cases:
     applicability: [control:executable-ablation]
     expected_verdict: positive
     evidence:
-      - artifact_id: incident-log
-        path: ../fixtures/evidence/incident.txt
-        sha256: 0cd48f94949318355fe751c163699c667c95c39aa7b5349311716fc8301f6bfa
+      - artifact_id: acquisition-a-processes
+        path: evidence/acquisition-a/processes.txt
+        sha256: 8495a0f43bdf29a772fac78c7a09b7cca9f351542a7959eef708dec86d0a984e
         origin: synthetic
         redistribution: redistributable
         license:
           name: Creative Commons Zero v1.0 Universal
           spdx_id: CC0-1.0
-        size_bytes: 106
+        size_bytes: 75
+        root_acquisition_id: acquisition-a
+      - artifact_id: acquisition-b-processes
+        path: evidence/acquisition-b/processes.txt
+        sha256: f5d168b3ea888d91b16de0a51aa53d1c2eed56d4f48efedeab4c10e133525279
+        origin: synthetic
+        redistribution: redistributable
+        license: {name: Creative Commons Zero v1.0 Universal, spdx_id: CC0-1.0}
+        size_bytes: 75
+        root_acquisition_id: acquisition-b
+      - artifact_id: acquisition-c-processes
+        path: evidence/acquisition-c/processes.txt
+        sha256: 6d33c5f6afceb54d1bbc1b9b49ecbcfe48ae20cb7b8f2c30fccff2c2b884f96c
+        origin: synthetic
+        redistribution: redistributable
+        license: {name: Creative Commons Zero v1.0 Universal, spdx_id: CC0-1.0}
+        size_bytes: 72
+        root_acquisition_id: acquisition-c
+      - artifact_id: acquisition-d-network
+        path: evidence/acquisition-d/network.txt
+        sha256: 713c896185da46c28d2dd0ee7bbef002a243df378a9a036b7243603ec7967872
+        origin: synthetic
+        redistribution: redistributable
+        license: {name: Creative Commons Zero v1.0 Universal, spdx_id: CC0-1.0}
+        size_bytes: 55
+        root_acquisition_id: acquisition-d
+      - artifact_id: acquisition-e-processes
+        path: evidence/acquisition-e/processes.txt
+        sha256: e7b0438b6d82ccb8fee6ebe8e0540b386f10bfb24fc5685ee0518d099b483fe1
+        origin: synthetic
+        redistribution: redistributable
+        license: {name: Creative Commons Zero v1.0 Universal, spdx_id: CC0-1.0}
+        size_bytes: 60
+        root_acquisition_id: acquisition-e
     coverage:
       - domain: process_memory
         applicability: applicable
@@ -32,13 +65,13 @@ cases:
         object_value: cmd.exe
         severity: high
     anchors:
-      - anchor_id: anchor:4ec06814020c40103e65284a01e12310335038f3266578b0e53a9043280eac83
-        artifact_id: incident-log
+      - anchor_id: anchor:c0cd15d3cff72a2875aedc060bd1638c584ded0e26de384d3532b73bbba8e7d4
+        artifact_id: acquisition-a-processes
         selector: line=1;field=image
         exact_text_sha256: 7371f071a9a4e653a5afd134bce9c735ef74b0421d6988958e5c6d8a34feaa3b
         supports_claim_ids: [expected-process]
-      - anchor_id: anchor:b83785fc4f25a50a3d09021995bb0791a7a28b6d64007c4f87660fbb4540df46
-        artifact_id: incident-log
-        selector: line=1;field=image;independent-copy=2
+      - anchor_id: anchor:de23f27558b964567b24e5179154f6e78be7a36e801ef2ffa96e947eb97ea856
+        artifact_id: acquisition-b-processes
+        selector: line=1;field=image
         exact_text_sha256: 7371f071a9a4e653a5afd134bce9c735ef74b0421d6988958e5c6d8a34feaa3b
         supports_claim_ids: [expected-process]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from pathlib import Path
 from urllib.parse import quote
@@ -9,16 +10,17 @@ from urllib.parse import quote
 from mulder.benchmark.ablations import execute_workflow_base
 from mulder.benchmark.anchors import canonical_anchor_id as canonical_anchor_id
 from mulder.benchmark.models import (
-    AlternativeNarrativeWorkflowInput,
+    BenchmarkCase,
     BenchmarkManifest,
     BenchmarkRunResult,
     CaseRunResult,
     CaseWorkflowTrace,
+    EvidenceArtifact,
     ObservedCoverage,
     ResourceUsage,
     RunIdentity,
     WorkflowCandidate,
-    WorkflowGateCheck,
+    WorkflowEvidenceBinding,
 )
 from mulder.db import CaseDB
 from mulder.models import ClaimVerification, FindingRevision
@@ -29,7 +31,13 @@ def canonical_coverage_domain(system: str, domain: str, check: str) -> str:
     return "/".join(quote(part, safe="") for part in (system, domain, check))
 
 
-def _extract_case_workflow(case_id: str, db_path: Path) -> tuple[CaseRunResult, CaseWorkflowTrace]:
+def _extract_case_workflow(
+    case_id: str,
+    db_path: Path,
+    *,
+    manifest_case: BenchmarkCase | None = None,
+    evidence_root: Path | None = None,
+) -> tuple[CaseRunResult, CaseWorkflowTrace]:
     if not db_path.is_file():
         raise ValueError(f"case database does not exist: {db_path}")
     with CaseDB(db_path) as db:
@@ -54,6 +62,7 @@ def _extract_case_workflow(case_id: str, db_path: Path) -> tuple[CaseRunResult, 
                 None,
             )
             verifications = db.get_claim_verifications(finding_id)
+            current_verifications = db.evaluate_finding_claims(finding_id)
             by_claim: dict[str, list[ClaimVerification]] = {}
             for verification in verifications:
                 by_claim.setdefault(verification.claim_id, []).append(verification)
@@ -66,6 +75,7 @@ def _extract_case_workflow(case_id: str, db_path: Path) -> tuple[CaseRunResult, 
                             0.95 if current.confidence == "confirmed" else 0.5
                         ),
                         source_verifications=by_claim.get(claim.claim_id, []),
+                        current_verification=current_verifications[claim.claim_id],
                         finding_revisions=revisions,
                         withdrawal_revision=withdrawal,
                     )
@@ -82,21 +92,14 @@ def _extract_case_workflow(case_id: str, db_path: Path) -> tuple[CaseRunResult, 
             )
             for record in db.get_coverage()
         ]
+        bindings = _evidence_bindings(db, candidates, manifest_case, evidence_root)
 
     trace = CaseWorkflowTrace(
         case_id=case_id,
         trace_version=2,
         candidates=candidates,
         coverage=sorted(coverage, key=lambda item: item.domain),
-        alternative_narrative=AlternativeNarrativeWorkflowInput(
-            checks=[
-                WorkflowGateCheck(
-                    name="case_database_projection",
-                    passed=True,
-                    detail="Real CaseDB state was projected into the bounded workflow.",
-                )
-            ]
-        ),
+        evidence_bindings=bindings,
     )
     return execute_workflow_base(trace), trace
 
@@ -117,12 +120,14 @@ def extract_run_result(
     system_version: str,
     identity: RunIdentity,
     resources: ResourceUsage,
+    evidence_root: Path | None = None,
 ) -> BenchmarkRunResult:
     """Normalize a complete benchmark run from DB cells and explicit failures."""
     overlap = set(case_databases) & set(failed_cases)
     if overlap:
         raise ValueError(f"cases cannot be both databases and failures: {sorted(overlap)!r}")
-    expected = {case.case_id for case in manifest.cases}
+    manifest_cases = {case.case_id: case for case in manifest.cases}
+    expected = set(manifest_cases)
     supplied = set(case_databases) | set(failed_cases)
     if supplied != expected:
         raise ValueError(
@@ -149,7 +154,12 @@ def extract_run_result(
                 )
             )
         else:
-            case, trace = _extract_case_workflow(case_id, case_databases[case_id])
+            case, trace = _extract_case_workflow(
+                case_id,
+                case_databases[case_id],
+                manifest_case=manifest_cases[case_id],
+                evidence_root=evidence_root,
+            )
             cases.append(case)
             workflow_traces.append(trace)
     return BenchmarkRunResult(
@@ -162,3 +172,69 @@ def extract_run_result(
         resources=resources,
         workflow_traces=workflow_traces,
     )
+
+
+def _evidence_bindings(
+    db: CaseDB,
+    candidates: list[WorkflowCandidate],
+    manifest_case: BenchmarkCase | None,
+    evidence_root: Path | None,
+) -> list[WorkflowEvidenceBinding]:
+    if manifest_case is None:
+        return []
+    if evidence_root is None:
+        raise ValueError("manifest evidence root is required for case database export")
+    sources = {source.source_id: source for source in db.get_sources()}
+    artifacts_by_digest: dict[str, list[EvidenceArtifact]] = {}
+    for artifact in manifest_case.evidence:
+        artifacts_by_digest.setdefault(artifact.sha256, []).append(artifact)
+    expected_anchors = {anchor.anchor_id: anchor for anchor in manifest_case.anchors}
+    bindings: dict[str, WorkflowEvidenceBinding] = {}
+    for candidate in candidates:
+        for anchor in candidate.claim.anchors:
+            digest = anchor.source_hash.removeprefix("sha256:")
+            matches = artifacts_by_digest.get(digest, [])
+            if len(matches) != 1:
+                raise ValueError(
+                    f"anchor {anchor.anchor_id!r} does not bind one manifest artifact"
+                )
+            artifact = matches[0]
+            source = sources.get(anchor.source_id)
+            if source is None:
+                raise ValueError(f"anchor {anchor.anchor_id!r} source is missing")
+            artifact_path = (evidence_root / artifact.path).resolve()
+            if Path(source.source_path).resolve() != artifact_path:
+                raise ValueError(
+                    f"anchor {anchor.anchor_id!r} source path does not match manifest artifact"
+                )
+            current_digest = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+            if current_digest != artifact.sha256:
+                raise ValueError(
+                    f"anchor {anchor.anchor_id!r} artifact bytes no longer match manifest"
+                )
+            canonical_id = canonical_anchor_id(anchor)
+            expected = expected_anchors.get(canonical_id)
+            selector = (
+                expected.selector
+                if expected is not None
+                else f"line={anchor.line_start};chars={anchor.char_start}:{anchor.char_end}"
+            )
+            root_id = artifact.root_acquisition_id
+            if root_id is None:
+                raise ValueError(
+                    f"artifact {artifact.artifact_id!r} lacks root acquisition identity"
+                )
+            binding = WorkflowEvidenceBinding(
+                    anchor_id=canonical_id,
+                    artifact_id=artifact.artifact_id,
+                    artifact_sha256=artifact.sha256,
+                    selector=selector,
+                    exact_text_sha256=hashlib.sha256(
+                        anchor.exact_text.encode("utf-8")
+                    ).hexdigest(),
+                    root_acquisition_id=root_id,
+                )
+            earlier = bindings.setdefault(canonical_id, binding)
+            if earlier != binding:
+                raise ValueError(f"anchor {canonical_id!r} has conflicting artifact bindings")
+    return sorted(bindings.values(), key=lambda item: item.anchor_id)

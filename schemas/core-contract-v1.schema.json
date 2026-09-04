@@ -1,6 +1,7 @@
 {
   "$defs": {
     "AtomicClaim": {
+      "additionalProperties": false,
       "description": "Persisted atomic finding statement with resolved evidence anchors.",
       "properties": {
         "anchors": {
@@ -104,6 +105,7 @@
       "type": "object"
     },
     "ClaimVerification": {
+      "additionalProperties": false,
       "description": "Append-only persisted execution of a deterministic claim verifier.",
       "properties": {
         "claim_id": {
@@ -176,6 +178,7 @@
       "type": "object"
     },
     "CoverageKey": {
+      "additionalProperties": false,
       "description": "Stable coordinates for one evidence-domain coverage assertion.",
       "properties": {
         "check_name": {
@@ -368,6 +371,7 @@
       "type": "object"
     },
     "EvidenceAnchor": {
+      "additionalProperties": false,
       "description": "Server-resolved immutable evidence locator for an atomic claim.",
       "properties": {
         "anchor_id": {
@@ -541,6 +545,7 @@
       "type": "object"
     },
     "Finding": {
+      "additionalProperties": false,
       "description": "An investigative finding backed by evidence references.",
       "properties": {
         "case_id": {
@@ -655,6 +660,7 @@
       "type": "object"
     },
     "FindingRevision": {
+      "additionalProperties": false,
       "description": "Immutable snapshot recording one visible change to a finding.",
       "properties": {
         "actor_id": {
@@ -770,6 +776,7 @@
       "type": "object"
     },
     "ScopedNegativeVerdict": {
+      "additionalProperties": false,
       "description": "A negative conclusion explicitly limited to completed coverage.",
       "properties": {
         "scope": {

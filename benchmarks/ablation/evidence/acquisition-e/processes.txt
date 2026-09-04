@@ -1,0 +1,1 @@
+image=evil.exe pid=777 signature=trusted disposition=benign

@@ -264,3 +264,17 @@ def test_unknown_fields_are_rejected() -> None:
     payload["surprise"] = True
     with pytest.raises(ValueError, match="Extra inputs are not permitted"):
         BenchmarkRunResult.model_validate(payload)
+
+
+def test_manifest_loader_rejects_nonexistent_or_digest_mismatched_evidence(
+    tmp_path: Path,
+) -> None:
+    payload = load_manifest(FIXTURES / "manifest-v1.yaml").model_dump(mode="json")
+    artifact = payload["cases"][0]["evidence"][0]
+    artifact["path"] = "evidence/does-not-exist.txt"
+    artifact["sha256"] = "f" * 64
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(BenchmarkInputError, match="cannot verify evidence artifact"):
+        load_manifest(path)

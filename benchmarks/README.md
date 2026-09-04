@@ -19,7 +19,9 @@ mulder benchmark benchmarks/ci/manifest-v1.yaml \
   --output benchmark-ci-score.json
 ```
 
-The manifest is the answer-key contract. It records case applicability tags,
+The manifest is the answer-key contract. Loading a redistributable local
+manifest re-hashes every artifact, verifies its declared size, resolves each
+bounded `line=...;field=...` selector, and checks the selected text digest. It records case applicability tags,
 clean versus nonempty ground truth, expected coverage outcomes, content hashes,
 redistribution status, and license metadata. Every evidence artifact must use
 an explicit `origin` label:
@@ -71,7 +73,9 @@ severity-adjudicated are counted separately, never silently treated as correct.
 stage, reason, source revision ID, and an explicit removal tombstone. The answer
 key—not a self-reported outcome—determines
 `errors_fixed`, `errors_introduced`, preserved correct assertions, and persistent
-errors, including verification-state changes that retain the same proposition
+errors. These counts compare the complete assertion error set before and after
+each revision, so replacing one missing true claim with an unverified false
+claim cannot receive false correction credit. They include verification-state changes that retain the same proposition
 and removals whose `after` value is null. Duplicate propositions contribute one
 calibration sample; conflicting confidence or severity labels fail closed.
 Results written for methodology `1.0` remain valid; missing optional inputs
@@ -98,10 +102,20 @@ The extractor opens case databases without applying migrations and projects
 stored confidence/severity, complete finding and claim-verification histories,
 withdrawal tombstones, and coverage into a v2 executable workflow trace. It
 runs the bounded workflow through the current verifier, independence policy,
-candidate policy, Alternative Narrative gate, and stored reviewer decisions.
+candidate policy, explicit Alternative Narrative refutations, and explicit
+blind-review decisions. Review stages are bound by stable decision reason codes,
+not inferred from an actor label.
 Because the current case schema stores categorical confidence, export maps
 `confirmed` to `0.95` and `inference` to `0.50`; the trace retains the original
 finding snapshots so that conversion remains auditable.
+Before export, every anchor is reopened against the current CaseDB window. A
+changed range, source identity, or exact text produces a current inconclusive
+verification rather than reusing stale history. Export also re-hashes the
+manifest artifact at its source path and emits a strict binding containing the
+artifact ID/hash, selector, selected-text hash, and root acquisition ID.
+Methodology 1.1 requires those bindings. The scorer replays the unablated
+workflow, checks every binding against the answer key, and requires independent
+anchors to come from distinct artifacts and distinct root acquisitions.
 Citation IDs
 derive from source coordinates and evidence text rather than database UUIDs;
 coverage domains use URL-escaped `system/domain/check` components. This makes
@@ -124,7 +138,9 @@ mulder benchmark-ablate benchmarks/ablation/result-real-base-v2.json \
 The supported switches are `without-verifier`, `without-independence-gate`,
 `without-alternative-narrative`, `without-blind-reviewer`, and
 `without-candidate-filters`. New ablations require v2 domain inputs rather than
-hand-authored output transformations. The engine first proves that the current
+hand-authored output transformations. The committed fixture is built through a
+real CaseDB from five content-addressed evidence files; only clock and ID
+adapters are fixed to make its immutable history byte-reproducible. The engine first proves that the current
 real Mulder components reproduce the base result, then executes them again while
 skipping the selected stage. Verdicts, claims, coverage, revisions, and resource
 measurements are recomputed; base runtime, token, and cost values are never
@@ -137,7 +153,9 @@ rejected as inputs to new ablation runs.
 This facility changes normalized benchmark objects
 only; it has no production-runner import or production configuration switch.
 
-The strict Pydantic models in `mulder.benchmark.models` are authoritative. Their
+The strict Pydantic models in `mulder.benchmark.models` are authoritative, and
+the nested finding, revision, claim, verification, and anchor domain values also
+reject unknown fields rather than silently stripping provenance. Their
 portable JSON Schema exports are committed in `benchmarks/schemas/`; a parity
 test fails if code and exported schemas drift. Unknown fields, non-finite
 numbers, invalid hashes, duplicate IDs, invalid references, and unsupported

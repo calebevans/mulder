@@ -29,7 +29,7 @@ jobs:
       - name: Install locked dependencies
         run: uv sync --locked --extra dev
 
-      - name: Rebuild deterministic real-component input
+      - name: Build real CaseDB evidence pipeline and verify reproducibility
         run: |
           uv run --locked --extra dev python benchmarks/ablation/build_fixture.py
           git diff --exit-code -- benchmarks/ablation/result-real-base-v2.json

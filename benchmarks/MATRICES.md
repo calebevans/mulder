@@ -41,13 +41,16 @@ components are verifier, independence gate, Alternative Narrative, blind
 reviewer, and candidate filters. A label alone is not evidence: these components
 must be disabled through `mulder benchmark-ablate`, which requires v2 bounded
 domain inputs and calls the same verifier, independence gate, candidate policy,
-Alternative Narrative gate, and persisted reviewer-decision semantics used by
+explicit Alternative Narrative refutation policy, and explicit blind-review
+decision policy used by
 Mulder. It emits a content-bound execution receipt. Unknown targets, duplicate
 targets, incomplete traces, an already-ablated base, mixed legacy/executable
 labels, and trace/result disagreement fail closed.
 
-The repository's scheduled workflow rebuilds and executes the bounded synthetic
-real-component fixture in `benchmarks/ablation/`. It produces one public-schema result for each
+The repository's scheduled workflow constructs a real CaseDB from the bounded,
+content-addressed synthetic acquisitions in `benchmarks/ablation/evidence/`,
+reopens and verifies their windows, exports the strict evidence-bound workflow,
+and then executes the fixture in `benchmarks/ablation/`. It produces one public-schema result for each
 one-factor ablation, scores them with the normal CLI, and retains input, output,
 and receipt artifacts. It makes no provider request and does not claim model
 quality; larger or nondeterministic studies may use the same contracts outside

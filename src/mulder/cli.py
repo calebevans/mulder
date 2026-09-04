@@ -2086,7 +2086,11 @@ def _benchmark_assignments(values: tuple[str, ...], option: str) -> dict[str, st
     help="SHA-256 of the exact tool configuration used by this run.",
 )
 @click.option("--orchestrator-version", required=True)
-@click.option("--methodology-version", default="1.0", show_default=True)
+@click.option(
+    "--methodology-version",
+    default=None,
+    help="Methodology version; defaults to the manifest and must match it when supplied.",
+)
 @click.option("--repeat-index", type=click.IntRange(min=0), default=0, show_default=True)
 @click.option("--seed", type=int, default=None)
 @click.option("--ablation", "ablations", multiple=True)
@@ -2113,7 +2117,7 @@ def benchmark_export_cmd(
     prompt_set_sha256: str | None,
     toolset_sha256: str | None,
     orchestrator_version: str,
-    methodology_version: str,
+    methodology_version: str | None,
     repeat_index: int,
     seed: int | None,
     ablations: tuple[str, ...],
@@ -2152,13 +2156,23 @@ def benchmark_export_cmd(
         }
         if output_path.resolve() in protected_inputs:
             raise ValueError("--output must not overwrite the manifest or a case database")
+        benchmark_manifest = load_manifest(manifest)
+        if (
+            methodology_version is not None
+            and methodology_version != benchmark_manifest.methodology_version
+        ):
+            raise ValueError(
+                f"methodology version {methodology_version!r} does not match manifest "
+                f"{benchmark_manifest.methodology_version!r}"
+            )
+        effective_methodology = methodology_version or benchmark_manifest.methodology_version
         identity = RunIdentity(
             matrix_cell=matrix_cell,
             models=models,
             prompt_set_sha256=prompt_set_sha256,
             toolset_sha256=toolset_sha256,
             orchestrator_version=orchestrator_version,
-            methodology_version=methodology_version,
+            methodology_version=effective_methodology,
             repeat_index=repeat_index,
             seed=seed,
             ablations=list(ablations),
@@ -2171,7 +2185,7 @@ def benchmark_export_cmd(
             cost_usd=cost_usd,
         )
         result = extract_run_result(
-            load_manifest(manifest),
+            benchmark_manifest,
             case_databases=case_databases,
             failed_cases=failed_cases,
             run_id=run_id,
@@ -2179,6 +2193,7 @@ def benchmark_export_cmd(
             system_version=system_version,
             identity=identity,
             resources=resources,
+            evidence_root=manifest.parent,
         )
         write_result(output_path, result)
     except (BenchmarkInputError, OSError, ValidationError, ValueError) as exc:

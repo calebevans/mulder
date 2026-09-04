@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from mulder.benchmark.ablations import execute_ablations
@@ -37,8 +39,13 @@ from mulder.models import (
 
 
 def _case_database(tmp_path: Path, case_id: str = "db-case") -> Path:
-    db = CaseDB.create(case_id, "/evidence", tmp_path)
-    source_id = db.register_source("processes", "/evidence/processes", "source-hash", "text", 1)
+    evidence_path = tmp_path / "processes.txt"
+    evidence_path.write_text("image=cmd.exe\n", encoding="utf-8")
+    source_hash = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
+    db = CaseDB.create(case_id, str(tmp_path), tmp_path)
+    source_id = db.register_source(
+        "processes", str(evidence_path), source_hash, "text", 1
+    )
     db.insert_windows(
         source_id,
         [
@@ -47,7 +54,7 @@ def _case_database(tmp_path: Path, case_id: str = "db-case") -> Path:
                 line_start=1,
                 line_end=1,
                 event_time=None,
-                raw_text="cmd.exe",
+                raw_text="image=cmd.exe",
             )
         ],
     )
@@ -76,8 +83,8 @@ def _case_database(tmp_path: Path, case_id: str = "db-case") -> Path:
                     EvidenceAnchorInput(
                         tool_call_id="tc-1",
                         window_id=window.window_id,
-                        char_start=0,
-                        char_end=7,
+                        char_start=6,
+                        char_end=13,
                         expected_text="cmd.exe",
                     )
                 ],
@@ -102,7 +109,7 @@ def _case_database(tmp_path: Path, case_id: str = "db-case") -> Path:
     return tmp_path / f"{case_id}.db"
 
 
-def _manifest(result_anchor: str) -> BenchmarkManifest:
+def _manifest(result_anchor: str, artifact_path: Path) -> BenchmarkManifest:
     return BenchmarkManifest.model_validate(
         {
             "benchmark_id": "db-extraction",
@@ -118,11 +125,13 @@ def _manifest(result_anchor: str) -> BenchmarkManifest:
                     "evidence": [
                         {
                             "artifact_id": "source",
-                            "path": "generated-in-test",
-                            "sha256": "1" * 64,
+                            "path": artifact_path.name,
+                            "sha256": hashlib.sha256(artifact_path.read_bytes()).hexdigest(),
                             "origin": "synthetic",
                             "redistribution": "redistributable",
                             "license": {"name": "CC0-1.0", "spdx_id": "CC0-1.0"},
+                            "size_bytes": artifact_path.stat().st_size,
+                            "root_acquisition_id": "acquisition-db",
                         }
                     ],
                     "coverage": [
@@ -148,8 +157,10 @@ def _manifest(result_anchor: str) -> BenchmarkManifest:
                         {
                             "anchor_id": result_anchor,
                             "artifact_id": "source",
-                            "selector": "case-db canonical anchor",
-                            "exact_text_sha256": "2" * 64,
+                            "selector": "line=1;field=image",
+                            "exact_text_sha256": hashlib.sha256(
+                                b"cmd.exe"
+                            ).hexdigest(),
                             "supports_claim_ids": ["expected"],
                         }
                     ],
@@ -187,10 +198,20 @@ def test_case_database_extraction_uses_stable_citations_and_coverage(tmp_path: P
     assert hashlib.sha256(db_path.read_bytes()).hexdigest() == digest_before
 
 
+def test_case_database_extraction_rechecks_current_anchor_bytes(tmp_path: Path) -> None:
+    db_path = _case_database(tmp_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("UPDATE windows SET raw_text = 'image=evil.ex'")
+
+    result = extract_case_result("db-case", db_path)
+    assert result.claims[0].verification_state == "inconclusive"
+    assert result.verdict == "no_verdict"
+
+
 def test_benchmark_export_cli_writes_stamped_normalized_result(tmp_path: Path) -> None:
     db_path = _case_database(tmp_path)
     extracted = extract_case_result("db-case", db_path)
-    manifest = _manifest(extracted.claims[0].citations[0])
+    manifest = _manifest(extracted.claims[0].citations[0], tmp_path / "processes.txt")
     manifest_path = tmp_path / "manifest.json"
     manifest_path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
     output = tmp_path / "result.json"
@@ -254,6 +275,105 @@ def test_benchmark_export_cli_writes_stamped_normalized_result(tmp_path: Path) -
     assert ablated.cases[0].claims[0].verification_state == "unverified"
 
 
+def test_export_rejects_explicit_methodology_mismatch(tmp_path: Path) -> None:
+    evidence_path = tmp_path / "processes.txt"
+    evidence_path.write_text("image=cmd.exe\n", encoding="utf-8")
+    manifest = _manifest("unused-anchor", evidence_path).model_copy(
+        update={"methodology_version": "1.1"}
+    )
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
+    derived_output = tmp_path / "derived.json"
+    derived = CliRunner().invoke(
+        cli,
+        [
+            "benchmark-export",
+            str(manifest_path),
+            "--failed-case",
+            "db-case=fixture failure",
+            "--run-id",
+            "derived",
+            "--system-version",
+            "test",
+            "--matrix-cell",
+            "test/default",
+            "--model",
+            "analyst=fixture",
+            "--orchestrator-version",
+            "test",
+            "--prompt-set-sha256",
+            "a" * 64,
+            "--toolset-sha256",
+            "b" * 64,
+            "--output",
+            str(derived_output),
+        ],
+    )
+    assert derived.exit_code == 0, derived.output
+    assert json.loads(derived_output.read_text(encoding="utf-8"))["identity"][
+        "methodology_version"
+    ] == "1.1"
+    invocation = CliRunner().invoke(
+        cli,
+        [
+            "benchmark-export",
+            str(manifest_path),
+            "--failed-case",
+            "db-case=fixture failure",
+            "--run-id",
+            "mismatch",
+            "--system-version",
+            "test",
+            "--matrix-cell",
+            "test/default",
+            "--model",
+            "analyst=fixture",
+            "--orchestrator-version",
+            "test",
+            "--prompt-set-sha256",
+            "a" * 64,
+            "--toolset-sha256",
+            "b" * 64,
+            "--methodology-version",
+            "1.0",
+            "--output",
+            str(tmp_path / "result.json"),
+        ],
+    )
+    assert invocation.exit_code != 0
+    assert "methodology" in invocation.output
+
+
+def test_run_export_rejects_case_source_path_that_is_not_the_bound_artifact(
+    tmp_path: Path,
+) -> None:
+    db_path = _case_database(tmp_path)
+    extracted = extract_case_result("db-case", db_path)
+    manifest = _manifest(extracted.claims[0].citations[0], tmp_path / "processes.txt")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("UPDATE sources SET source_path = '/different/acquisition/processes.txt'")
+
+    with pytest.raises(ValueError, match="source path does not match manifest artifact"):
+        extract_run_result(
+            manifest,
+            case_databases={"db-case": db_path},
+            failed_cases={},
+            run_id="misbound",
+            system_name="mulder",
+            system_version="test",
+            identity=RunIdentity(
+                matrix_cell="test/default",
+                models={"analyst": "fixture"},
+                prompt_set_sha256="a" * 64,
+                toolset_sha256="b" * 64,
+                orchestrator_version="test",
+                methodology_version=manifest.methodology_version,
+            ),
+            resources=ResourceUsage(),
+            evidence_root=tmp_path,
+        )
+
+
 def test_withdrawn_case_db_reviewer_decision_feeds_real_ablation(tmp_path: Path) -> None:
     db_path = _case_database(tmp_path)
     with CaseDB(db_path) as db:
@@ -270,7 +390,7 @@ def test_withdrawn_case_db_reviewer_decision_feeds_real_ablation(tmp_path: Path)
     assert extracted.revisions[-1].tombstone is True
 
     run = extract_run_result(
-        _manifest(anchor_id),
+        _manifest(anchor_id, tmp_path / "processes.txt"),
         case_databases={"db-case": db_path},
         failed_cases={},
         run_id="withdrawn-base",
@@ -285,6 +405,7 @@ def test_withdrawn_case_db_reviewer_decision_feeds_real_ablation(tmp_path: Path)
             methodology_version="1.1",
         ),
         resources=ResourceUsage(),
+        evidence_root=tmp_path,
     )
     restored = execute_ablations(
         run,
@@ -297,7 +418,9 @@ def test_withdrawn_case_db_reviewer_decision_feeds_real_ablation(tmp_path: Path)
 
 
 def test_export_accepts_explicit_failed_cells_without_a_database(tmp_path: Path) -> None:
-    manifest = _manifest("unused-anchor")
+    evidence_path = tmp_path / "processes.txt"
+    evidence_path.write_text("image=cmd.exe\n", encoding="utf-8")
+    manifest = _manifest("unused-anchor", evidence_path)
     manifest_path = tmp_path / "manifest.json"
     manifest_path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
     output = tmp_path / "failed.json"

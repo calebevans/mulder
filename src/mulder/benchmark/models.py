@@ -7,6 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from mulder.benchmark.anchors import canonical_anchor_id
 from mulder.models import (
     AtomicClaim,
     ClaimVerification,
@@ -14,6 +15,7 @@ from mulder.models import (
     FindingRevision,
     JsonScalar,
     ToolOutcomeStatus,
+    VerificationDecision,
 )
 
 SCHEMA_VERSION: Literal[1] = 1
@@ -91,6 +93,7 @@ class EvidenceArtifact(StrictModel):
     license: EvidenceLicense
     size_bytes: int | None = Field(default=None, ge=0)
     source_url: str | None = Field(default=None, min_length=1)
+    root_acquisition_id: str | None = Field(default=None, min_length=1)
 
 
 class CoverageExpectation(StrictModel):
@@ -228,6 +231,18 @@ class BenchmarkManifest(StrictModel):
         case_ids = [case.case_id for case in self.cases]
         if len(set(case_ids)) != len(case_ids):
             raise ValueError("case_id values must be unique")
+        if self.methodology_version == "1.1":
+            missing = [
+                artifact.artifact_id
+                for case in self.cases
+                for artifact in case.evidence
+                if artifact.root_acquisition_id is None
+            ]
+            if missing:
+                raise ValueError(
+                    "methodology 1.1 evidence requires root_acquisition_id: "
+                    f"{sorted(missing)!r}"
+                )
         return self
 
 
@@ -411,6 +426,7 @@ class WorkflowCandidate(StrictModel):
     claim: AtomicClaim
     confidence_probability: float = Field(ge=0, le=1)
     source_verifications: list[ClaimVerification] = Field(default_factory=list)
+    current_verification: VerificationDecision | None = None
     finding_revisions: list[FindingRevision] = Field(default_factory=list)
     withdrawal_revision: FindingRevision | None = None
 
@@ -475,6 +491,17 @@ class AlternativeNarrativeWorkflowInput(StrictModel):
     remaining_work: list[str] = Field(default_factory=list)
 
 
+class WorkflowEvidenceBinding(StrictModel):
+    """Content-bound mapping from a workflow anchor to a manifest artifact."""
+
+    anchor_id: str = Field(min_length=1)
+    artifact_id: str = Field(min_length=1)
+    artifact_sha256: Sha256 = Field(pattern=r"^[0-9a-f]{64}$")
+    selector: str = Field(min_length=1)
+    exact_text_sha256: Sha256 = Field(pattern=r"^[0-9a-f]{64}$")
+    root_acquisition_id: str = Field(min_length=1)
+
+
 class CaseWorkflowTrace(StrictModel):
     """Complete, ordered stage trace used only by the benchmark ablation engine."""
 
@@ -485,6 +512,7 @@ class CaseWorkflowTrace(StrictModel):
     candidates: list[WorkflowCandidate] = Field(default_factory=list)
     coverage: list[ObservedCoverage] = Field(default_factory=list)
     alternative_narrative: AlternativeNarrativeWorkflowInput | None = None
+    evidence_bindings: list[WorkflowEvidenceBinding] = Field(default_factory=list)
     candidate_similarity_threshold: float = Field(default=0.4, ge=0, le=1)
     failure_reason: str | None = Field(default=None, min_length=1)
 
@@ -501,17 +529,23 @@ class CaseWorkflowTrace(StrictModel):
             observed = [stage.stage for stage in self.stages]
             if observed != expected:
                 raise ValueError(f"workflow stages must be complete and ordered: {expected!r}")
-            if self.candidates or self.coverage or self.alternative_narrative is not None:
+            if (
+                self.candidates
+                or self.coverage
+                or self.alternative_narrative is not None
+                or self.evidence_bindings
+            ):
                 raise ValueError("v1 traces cannot contain v2 execution inputs")
         else:
             if self.input_claims or self.stages:
                 raise ValueError("v2 traces cannot contain hand-authored workflow operations")
             if self.failure_reason is not None and (
-                self.candidates or self.coverage or self.alternative_narrative is not None
+                self.candidates
+                or self.coverage
+                or self.alternative_narrative is not None
+                or self.evidence_bindings
             ):
                 raise ValueError("failed workflow traces cannot contain executed case inputs")
-            if self.failure_reason is None and self.alternative_narrative is None:
-                raise ValueError("v2 traces require Alternative Narrative gate inputs")
         claim_ids = (
             [claim.claim_id for claim in self.input_claims]
             if self.trace_version == 1
@@ -519,6 +553,17 @@ class CaseWorkflowTrace(StrictModel):
         )
         if len(set(claim_ids)) != len(claim_ids):
             raise ValueError("workflow input claim IDs must be unique")
+        binding_ids = [binding.anchor_id for binding in self.evidence_bindings]
+        if len(set(binding_ids)) != len(binding_ids):
+            raise ValueError("workflow evidence binding anchor IDs must be unique")
+        if self.evidence_bindings:
+            anchor_ids = {
+                canonical_anchor_id(anchor)
+                for candidate in self.candidates
+                for anchor in candidate.claim.anchors
+            }
+            if set(binding_ids) != anchor_ids:
+                raise ValueError("workflow evidence bindings must cover every anchor exactly")
         return self
 
 
