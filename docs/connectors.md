@@ -61,7 +61,7 @@ Specific TheHive, SIEM, Wazuh, syslog-gateway, and cloud deployments may require
 a reviewed adapter for their exact API version and authentication scheme. The
 transport protocols support deterministic test doubles without network access.
 
-On the PR 8.4 base commit, PR 5.3 is not yet an ancestor, so ordinary sealing
-cannot produce the required `review_approval` block. Exports consequently fail
-closed until PR 5.3 is integrated; this module recognizes that canonical block
-and does not create a second approval store.
+PR 5.3 is integrated in the roadmap build, so ordinary approved sealing emits
+the canonical `review_approval` block consumed here. Cases without that exact
+state-bound approval still fail closed; connectors recognize the shared review
+record and never create a second approval store.
