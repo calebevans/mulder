@@ -1,0 +1,48 @@
+apiVersion: audit.k8s.io/v1
+kind: Event
+auditID: clean-audit-1
+stage: ResponseComplete
+verb: list
+user: {username: alice}
+objectRef: {resource: pods, namespace: default}
+responseStatus: {code: 200}
+requestReceivedTimestamp: "2025-01-01T00:00:00Z"
+---
+apiVersion: v1
+kind: Event
+metadata: {name: scheduled, namespace: default}
+type: Normal
+reason: Scheduled
+eventTime: "2025-01-01T00:00:01Z"
+regarding: {kind: Pod, name: web}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: web, namespace: default}
+spec:
+  template:
+    spec:
+      containers:
+        - name: web
+          image: registry.example/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          securityContext: {privileged: false}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: pod-reader, namespace: default}
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: restricted-egress, namespace: default}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock: {cidr: 10.0.0.0/24}
+      ports:
+        - {protocol: TCP, port: 443}

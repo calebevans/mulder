@@ -1,0 +1,21 @@
+{
+  "Records": [
+    {
+      "eventVersion": "1.11",
+      "userIdentity": {"type": "AssumedRole", "principalId": "AROAEXAMPLE:alice", "arn": "arn:aws:sts::111122223333:assumed-role/ReadOnly/alice"},
+      "eventTime": "2025-01-01T00:00:00Z",
+      "eventSource": "cloudtrail.amazonaws.com",
+      "eventName": "DescribeTrails",
+      "awsRegion": "us-east-1",
+      "sourceIPAddress": "192.0.2.10",
+      "eventID": "11111111-1111-1111-1111-111111111111",
+      "eventType": "AwsApiCall",
+      "requestParameters": {},
+      "responseElements": null,
+      "readOnly": true,
+      "managementEvent": true,
+      "eventCategory": "Management",
+      "resources": [{"ARN": "arn:aws:cloudtrail:us-east-1:111122223333:trail/main", "type": "AWS::CloudTrail::Trail"}]
+    }
+  ]
+}

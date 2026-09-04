@@ -1,0 +1,20 @@
+{
+  "Records": [
+    {
+      "eventVersion": "1.11", "userIdentity": {"type": "IAMUser", "arn": "arn:aws:iam::111122223333:user/intruder"},
+      "eventTime": "2025-02-01T00:00:00Z", "eventSource": "cloudtrail.amazonaws.com", "eventName": "StopLogging", "awsRegion": "us-east-1", "sourceIPAddress": "198.51.100.10", "eventID": "21111111-1111-1111-1111-111111111111", "eventType": "AwsApiCall", "requestParameters": {"name": "main"}, "responseElements": null, "readOnly": false, "managementEvent": true, "eventCategory": "Management"
+    },
+    {
+      "eventVersion": "1.11", "userIdentity": {"type": "IAMUser", "arn": "arn:aws:iam::111122223333:user/intruder"},
+      "eventTime": "2025-02-01T00:01:00Z", "eventSource": "iam.amazonaws.com", "eventName": "AttachRolePolicy", "awsRegion": "us-east-1", "sourceIPAddress": "198.51.100.10", "eventID": "22222222-2222-2222-2222-222222222222", "eventType": "AwsApiCall", "requestParameters": {"roleName": "App", "policyArn": "arn:aws:iam::aws:policy/AdministratorAccess"}, "responseElements": null, "readOnly": false, "managementEvent": true, "eventCategory": "Management"
+    },
+    {
+      "eventVersion": "1.11", "userIdentity": {"type": "Root", "principalId": "111122223333", "arn": "arn:aws:iam::111122223333:root"},
+      "eventTime": "2025-02-01T00:02:00Z", "eventSource": "signin.amazonaws.com", "eventName": "ConsoleLogin", "awsRegion": "us-east-1", "sourceIPAddress": "198.51.100.10", "eventID": "23333333-3333-3333-3333-333333333333", "eventType": "AwsConsoleSignIn", "requestParameters": null, "responseElements": {"ConsoleLogin": "Success"}, "additionalEventData": {"MFAUsed": "No"}, "managementEvent": true, "eventCategory": "Management"
+    },
+    {
+      "eventVersion": "1.11", "userIdentity": {"type": "AssumedRole", "arn": "arn:aws:sts::111122223333:assumed-role/NetworkAdmin/intruder"},
+      "eventTime": "2025-02-01T00:03:00Z", "eventSource": "ec2.amazonaws.com", "eventName": "AuthorizeSecurityGroupIngress", "awsRegion": "us-east-1", "sourceIPAddress": "198.51.100.10", "eventID": "24444444-4444-4444-4444-444444444444", "eventType": "AwsApiCall", "requestParameters": {"groupId": "sg-012345", "ipPermissions": {"items": [{"fromPort": 22, "toPort": 22, "ipRanges": {"items": [{"cidrIp": "0.0.0.0/0"}]}}]}}, "responseElements": null, "readOnly": false, "managementEvent": true, "eventCategory": "Management"
+    }
+  ]
+}

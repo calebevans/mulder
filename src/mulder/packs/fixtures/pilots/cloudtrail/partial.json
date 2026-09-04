@@ -1,0 +1,11 @@
+{
+  "Records": [
+    {
+      "eventVersion": "1.11", "userIdentity": {"type": "AssumedRole", "arn": "arn:aws:sts::111122223333:assumed-role/ReadOnly/alice"},
+      "eventTime": "2025-04-01T00:00:00Z", "eventSource": "cloudtrail.amazonaws.com", "eventName": "DescribeTrails", "awsRegion": "us-east-1", "sourceIPAddress": "192.0.2.30", "eventID": "41111111-1111-1111-1111-111111111111", "eventType": "AwsApiCall", "requestParameters": {}, "responseElements": null
+    },
+    {
+      "eventVersion": "1.11", "userIdentity": {"type": "IAMUser"}, "eventTime": "2025-04-01T00:01:00Z", "eventName": "ListUsers", "awsRegion": "us-east-1", "sourceIPAddress": "192.0.2.30", "eventID": "42222222-2222-2222-2222-222222222222", "eventType": "AwsApiCall", "requestParameters": {}, "responseElements": null
+    }
+  ]
+}

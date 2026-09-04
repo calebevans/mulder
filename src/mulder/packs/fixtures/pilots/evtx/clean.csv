@@ -1,0 +1,5 @@
+TimeCreated,EventId,Channel,RecordNumber,CommandLine,ImagePath,Message
+2025-01-01T00:00:00Z,4624,Security,10,,,Successful logon
+2025-01-01T00:01:00Z,7036,System,11,,C:\Windows\System32\svchost.exe,Service entered running state
+2025-01-01T00:02:00Z,4103,Microsoft-Windows-PowerShell/Operational,12,powershell.exe Get-Date,,Ordinary command
+2025-01-01T00:03:00Z,1,Microsoft-Windows-Sysmon/Operational,13,C:\Windows\System32\whoami.exe,,Ordinary process

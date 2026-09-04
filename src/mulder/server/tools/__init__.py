@@ -11,6 +11,7 @@ from mulder.server.tools import (  # noqa: F401  # noqa: F401
     composite,
     core,
     documents,
+    domain_pilots,
     email,
     enrichment,
     extract,
