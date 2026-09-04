@@ -13,6 +13,11 @@ from mulder.packs.base import (
     domain_pack_schema,
     parse_pack_manifest,
 )
+from mulder.packs.builtin import (
+    anti_forensics_fixture_root,
+    builtin_domain_packs,
+    register_builtin_packs,
+)
 
 __all__ = [
     "DOMAIN_PACK_SCHEMA_VERSION",
@@ -26,4 +31,7 @@ __all__ = [
     "PackRuntimeInventory",
     "domain_pack_schema",
     "parse_pack_manifest",
+    "anti_forensics_fixture_root",
+    "builtin_domain_packs",
+    "register_builtin_packs",
 ]
