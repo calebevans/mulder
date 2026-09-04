@@ -1549,6 +1549,43 @@ is retained as inert provenance metadata.
 
 **Roles:** `EXTRACT_EXECUTOR` `CROSS_EXECUTOR` `NARRATIVE_EXECUTOR`
 
+### analyze_evtx_pack
+
+Apply fixed, versioned local rules to supported indexed EVTX line/CSV sources.
+Returns channel coverage, normalized events, exact record/field proof
+selectors, rule hashes, and structural findings.
+
+*No parameters.*
+
+**Returns:** `outcome`, `coverage[]`, `ruleset_hash`, `rule_hashes`,
+`observations[]`, `relationships[]`, `findings[]`
+
+**Roles:** `EXTRACT_EXECUTOR` `CROSS_EXECUTOR` `NARRATIVE_EXECUTOR`
+
+### analyze_kubernetes_pack
+
+Analyze local Kubernetes audit/events/manifests/RBAC/images/NetworkPolicy
+egress under the active evidence root. Does not contact a Kubernetes cluster.
+
+*No parameters.*
+
+**Returns:** `outcome`, `coverage[]`, `ruleset_hash`, `rule_hashes`,
+`observations[]`, `relationships[]`, `findings[]`
+
+**Roles:** `EXTRACT_EXECUTOR` `CROSS_EXECUTOR` `NARRATIVE_EXECUTOR`
+
+### analyze_cloudtrail_pack
+
+Analyze documented CloudTrail `Records` JSON or JSON-gzip exports under the
+active evidence root. Performs no AWS API, credential, or network operation.
+
+*No parameters.*
+
+**Returns:** `outcome`, `coverage[]`, `ruleset_hash`, `rule_hashes`,
+`observations[]`, `relationships[]`, `findings[]`
+
+**Roles:** `EXTRACT_EXECUTOR` `CROSS_EXECUTOR` `NARRATIVE_EXECUTOR`
+
 ---
 
 ## 15. Plaso Query Tools

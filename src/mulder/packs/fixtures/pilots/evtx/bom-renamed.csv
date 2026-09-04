@@ -1,0 +1,2 @@
+﻿Timestamp,Event ID,LogName,Record ID,CommandLine
+2025-01-01T00:00:00Z,4624,Security,30,whoami.exe

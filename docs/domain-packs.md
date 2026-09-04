@@ -6,8 +6,9 @@ tools, hunts, completion gates, benchmark fixtures, and replay commitments
 through one registry Interface. Mulder does not search for, import, or execute
 code named by a pack manifest.
 
-The core distribution includes one explicitly registered specialist pack:
-`anti-forensics.clock`. The contract remains the stable Seam on which further
+The core distribution includes four explicitly registered specialist packs:
+`anti-forensics.clock`, `windows.evtx`, `kubernetes.security`, and
+`cloud.aws-cloudtrail`. The contract remains the stable Seam on which further
 reviewed packs can be built.
 
 ## Contract
@@ -166,3 +167,67 @@ parser or a process/file-state normalizer. Those cells are reported as
 `UNAVAILABLE`. Either state makes the aggregate result `PARTIAL`, never a
 clean result. Evidence-envelope flags are preserved as handling metadata and
 cannot create a finding.
+
+## EVTX, Kubernetes, and CloudTrail pilots
+
+The three pilot packs share a small typed result Interface while retaining
+domain-specific analyzers. Every observation, relationship, and finding
+contains a proof with:
+
+- evidence-relative source identity;
+- an exact record selector and the exact field selectors used;
+- original-source, decoded-content, and canonical-record SHA-256 digests;
+- decoded encoding plus evidence-envelope handling/sensitivity flags; and
+- for findings, the version and canonical declaration hash of the matching
+  rule.
+
+Rule hashes and an aggregate ruleset hash make the deterministic rule inputs
+receipt-friendly. A match proves the structured action or configuration named
+by that rule; it does not by itself prove malicious intent. Missing families
+produce `UNAVAILABLE`, incompatible fields or versions produce
+`UNSUPPORTED_VERSION`, and mixed valid/incompatible inputs produce `PARTIAL`.
+
+### Windows EVTX
+
+`windows.evtx` retains the existing extraction/index tools and adds
+`analyze_evtx_pack`. The local Adapter understands Mulder's python-evtx line
+format and EvtxECmd-style CSV, including a UTF-8 BOM and declared header
+aliases. It requires coverage for Security, System, PowerShell, and Sysmon and
+uses fixed structural rules for log clear, encoded PowerShell, and service
+installation records. It does not expose the existing arbitrary Chainsaw
+search mode as part of the pack.
+
+### Kubernetes
+
+`kubernetes.security` reads JSON, JSON-lines, and YAML beneath the active
+evidence root. It supports the stable `audit.k8s.io/v1` event shape plus core
+events, workload pod specs, the four stable RBAC kinds, container-image
+references, and `networking.k8s.io/v1` NetworkPolicy egress. It emits explicit
+principal/action, binding, workload/image, and egress-destination
+relationships. The interpretations follow the Kubernetes documentation for
+[audit events](https://kubernetes.io/docs/reference/config-api/apiserver-audit.v1/),
+[RBAC](https://kubernetes.io/docs/reference/access-authn-authz/rbac/),
+[images](https://kubernetes.io/docs/concepts/containers/images/), and
+[NetworkPolicy](https://kubernetes.io/docs/concepts/services-networking/network-policies/).
+
+The Adapter does not contact a cluster, execute `kubectl`, resolve image tags,
+or infer runtime state absent from the supplied artifacts.
+
+### AWS CloudTrail
+
+`cloud.aws-cloudtrail` is the first cloud pilot. It parses only local JSON (or
+JSON-gzip) log files with the documented top-level `Records` array and
+CloudTrail event major version 1. AWS documents this as the delivered log
+format and recommends matching the major version while accepting additive
+minor versions: [CloudTrail record contents](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-event-reference-record-contents.html)
+and [log file examples](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-log-file-examples.html).
+
+The fixed offline rules cover trail-integrity actions, privileged IAM policy
+changes, successful root console login without MFA, and globally open security
+group ingress. Relationships retain principal, service/action, source address,
+and resource ARN. There are no AWS SDK calls, credential loading, enrichment,
+fallbacks, or generic query parameters.
+
+All three MCP tools take no parameters. Local evidence collection is capped at
+256 candidate files and 16 MiB per decoded document; exceeding a limit becomes
+typed incomplete/unsupported coverage instead of silent sampling.

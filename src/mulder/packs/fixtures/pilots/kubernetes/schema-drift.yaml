@@ -1,0 +1,7 @@
+apiVersion: audit.k8s.io/v1beta1
+kind: Event
+auditID: old-audit-1
+stage: ResponseComplete
+verb: get
+user: {username: alice}
+objectRef: {resource: pods}
