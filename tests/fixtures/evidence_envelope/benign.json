@@ -1,0 +1,22 @@
+[
+  {
+    "name": "systemd_unit",
+    "content": "[Unit]\nDescription=Nightly backup\n[Service]\nUser=backup\nExecStart=/usr/local/bin/backup --system-volume",
+    "excluded_flags": ["instruction_shaped", "html_presentation", "markdown_presentation"]
+  },
+  {
+    "name": "shell_script",
+    "content": "#!/bin/sh\nset -eu\nsystemctl status sshd\nprintf '%s\\n' completed",
+    "excluded_flags": ["instruction_shaped", "html_presentation", "markdown_presentation"]
+  },
+  {
+    "name": "json_config",
+    "content": "{\"role_name\":\"system-administrator\",\"user_name\":\"alice\",\"tool_path\":\"/usr/bin/find\"}",
+    "excluded_flags": ["instruction_shaped", "html_presentation", "markdown_presentation"]
+  },
+  {
+    "name": "comparison_expression",
+    "content": "if process_count < threshold and score > baseline: notify()",
+    "excluded_flags": ["instruction_shaped", "html_presentation", "markdown_presentation"]
+  }
+]
