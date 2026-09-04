@@ -307,7 +307,15 @@ def submit_finding(
 
     try:
         stored_claims = ctx.db.insert_finding(finding, claim_inputs)
+        verifications = (
+            ctx.db.verify_finding_claims(finding_id) if stored_claims else []
+        )
     except Exception as exc:
+        # Claim persistence and verification are separate database operations;
+        # compensate before the finding becomes visible if verification cannot
+        # complete. Exact anchor validation itself is transactional in CaseDB.
+        if ctx.db._finding_exists(finding_id):
+            ctx.db.delete_finding(finding_id)
         return error_response(
             tc_id,
             "submit_finding",
@@ -323,8 +331,11 @@ def submit_finding(
         "finding_id": finding_id,
         "status": "accepted",
         "confidence": finding.confidence,
-        "atomic_claims": [claim.model_dump() for claim in stored_claims],
-        "claim_mode": "atomic_unverified" if stored_claims else "legacy_unverified",
+        "atomic_claims": [
+            claim.model_dump() for claim in ctx.db.get_claims(finding_id)
+        ],
+        "claim_verifications": [item.model_dump() for item in verifications],
+        "claim_mode": "atomic_checked" if stored_claims else "legacy_unverified",
     }
     if thin_evidence_warning:
         result["hint"] = thin_evidence_warning
@@ -569,7 +580,17 @@ def get_findings(limit: int = 20, offset: int = 0) -> dict[str, object]:
     all_findings = ctx.db.get_findings()
     total = len(all_findings)
     page = all_findings[offset : offset + limit]
-    results = [f.model_dump() for f in page]
+    results: list[dict[str, object]] = []
+    for finding in page:
+        item = finding.model_dump()
+        item["atomic_claims"] = [
+            claim.model_dump() for claim in ctx.db.get_claims(finding.finding_id)
+        ]
+        item["claim_verifications"] = [
+            verification.model_dump()
+            for verification in ctx.db.get_claim_verifications(finding.finding_id)
+        ]
+        results.append(item)
     resp: dict[str, object] = {
         "tool_call_id": tc_id,
         "status": "success",

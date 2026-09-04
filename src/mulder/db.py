@@ -41,6 +41,7 @@ from mulder.models import (
     AtomicClaim,
     AtomicClaimInput,
     CaseMetadataRow,
+    ClaimVerification,
     EvidenceAnchor,
     Finding,
     SourceRow,
@@ -152,6 +153,25 @@ evidence_anchors_t = Table(
     Column("value_type", Text, nullable=False),
     Column("normalized_value", Text, nullable=False),
     Column("role", Text, nullable=False),
+)
+
+claim_verifications_t = Table(
+    "claim_verifications",
+    metadata,
+    Column("verification_id", Text, primary_key=True),
+    Column(
+        "claim_id",
+        Text,
+        ForeignKey("claims.claim_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column("verifier_name", Text, nullable=False),
+    Column("verifier_version", Text, nullable=False),
+    Column("result", Text, nullable=False),
+    Column("reason_code", Text, nullable=False),
+    Column("details", Text, nullable=False),
+    Column("verified_at", Text, nullable=False),
 )
 
 evidence_registry_t = Table(
@@ -357,6 +377,7 @@ def _migrate_add_claim_tables(conn: Connection) -> None:
     """Create additive atomic-claim tables for databases from older releases."""
     claims_t.create(conn, checkfirst=True)
     evidence_anchors_t.create(conn, checkfirst=True)
+    claim_verifications_t.create(conn, checkfirst=True)
 
 
 _SENTINEL = object()
@@ -1244,6 +1265,133 @@ class CaseDB:
                 anchors=by_claim[row.claim_id],
             )
             for row in claim_rows
+        ]
+
+    def verify_finding_claims(self, finding_id: str) -> list[ClaimVerification]:
+        """Reopen evidence anchors and deterministically verify all finding claims.
+
+        The current source/window identity and exact character slice are checked
+        before semantic verification. Results are append-only; the claim row
+        stores only the latest state for efficient gates and presentation.
+        """
+        from mulder.models import VerificationDecision
+        from mulder.verification.claims import (
+            VERIFIER_NAME,
+            VERIFIER_VERSION,
+            verify_claim,
+        )
+
+        claims = self.get_claims(finding_id)
+        if not claims:
+            return []
+
+        def _do_verify() -> list[ClaimVerification]:
+            verified_at = datetime.now(timezone.utc).isoformat()
+            results: list[ClaimVerification] = []
+            with self._engine.begin() as conn:
+                for claim in claims:
+                    evidence_problem: str | None = None
+                    for anchor in claim.anchors:
+                        row = conn.execute(
+                            select(
+                                windows_t.c.source_id,
+                                windows_t.c.raw_text,
+                                sources_t.c.source_name,
+                                sources_t.c.source_hash,
+                            )
+                            .select_from(
+                                windows_t.join(
+                                    sources_t,
+                                    windows_t.c.source_id == sources_t.c.source_id,
+                                )
+                            )
+                            .where(windows_t.c.window_id == anchor.window_id)
+                        ).fetchone()
+                        if row is None:
+                            evidence_problem = "anchor_window_missing"
+                            break
+                        if (
+                            int(row.source_id) != anchor.source_id
+                            or str(row.source_name) != anchor.source_name
+                            or str(row.source_hash) != anchor.source_hash
+                        ):
+                            evidence_problem = "anchor_provenance_changed"
+                            break
+                        raw_text = str(row.raw_text)
+                        if anchor.char_end > len(raw_text):
+                            evidence_problem = "anchor_range_invalid"
+                            break
+                        if raw_text[anchor.char_start : anchor.char_end] != anchor.exact_text:
+                            evidence_problem = "anchor_text_changed"
+                            break
+
+                    decision = (
+                        VerificationDecision(
+                            result="inconclusive",
+                            reason_code=evidence_problem,
+                            details={},
+                        )
+                        if evidence_problem is not None
+                        else verify_claim(claim)
+                    )
+                    result = ClaimVerification(
+                        verification_id=f"v_{uuid4().hex[:12]}",
+                        claim_id=claim.claim_id,
+                        verifier_name=VERIFIER_NAME,
+                        verifier_version=VERIFIER_VERSION,
+                        result=decision.result,
+                        reason_code=decision.reason_code,
+                        details=decision.details,
+                        verified_at=verified_at,
+                    )
+                    conn.execute(
+                        insert(claim_verifications_t).values(
+                            verification_id=result.verification_id,
+                            claim_id=result.claim_id,
+                            verifier_name=result.verifier_name,
+                            verifier_version=result.verifier_version,
+                            result=result.result,
+                            reason_code=result.reason_code,
+                            details=json.dumps(result.details, sort_keys=True),
+                            verified_at=result.verified_at,
+                        )
+                    )
+                    conn.execute(
+                        update(claims_t)
+                        .where(claims_t.c.claim_id == claim.claim_id)
+                        .values(epistemic_state=result.result)
+                    )
+                    results.append(result)
+            return results
+
+        return self._wq.submit(_do_verify)
+
+    def get_claim_verifications(self, finding_id: str) -> list[ClaimVerification]:
+        """Return append-only verification history for a finding's claims."""
+        stmt = (
+            select(claim_verifications_t)
+            .select_from(
+                claim_verifications_t.join(
+                    claims_t, claim_verifications_t.c.claim_id == claims_t.c.claim_id
+                )
+            )
+            .where(claims_t.c.finding_id == finding_id)
+            .order_by(claim_verifications_t.c.verified_at, claim_verifications_t.c.verification_id)
+        )
+        with self._engine.connect() as conn:
+            rows = conn.execute(stmt).fetchall()
+        return [
+            ClaimVerification(
+                verification_id=row.verification_id,
+                claim_id=row.claim_id,
+                verifier_name=row.verifier_name,
+                verifier_version=row.verifier_version,
+                result=row.result,
+                reason_code=row.reason_code,
+                details=json.loads(row.details),
+                verified_at=row.verified_at,
+            )
+            for row in rows
         ]
 
     def update_finding(self, finding_id: str, **kwargs: object) -> bool:
