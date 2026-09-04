@@ -16,7 +16,7 @@ from typing import Any
 import jinja2
 import markdown
 
-from mulder.models import AuditSummary, CaseMetadataRow, Finding, SourceRow
+from mulder.models import AuditSummary, CaseMetadataRow, CoverageRecord, Finding, SourceRow
 from mulder.patterns import (
     EMAIL_RE,
     IP_RE,
@@ -41,6 +41,30 @@ def _normalize_source(s: SourceRow | dict[str, Any]) -> SourceRow:
     if isinstance(s, SourceRow):
         return s
     return SourceRow(**s)
+
+
+def _normalize_coverage(c: CoverageRecord | dict[str, Any]) -> CoverageRecord:
+    """Convert a coverage dict to its validated report representation."""
+    if isinstance(c, CoverageRecord):
+        return c
+    return CoverageRecord(**c)
+
+
+def _format_coverage_scope(record: CoverageRecord) -> str:
+    """Describe examined versus total scope without implying completeness."""
+    coverage = record.outcome.coverage
+    parts: list[str] = []
+    if coverage.bytes_examined is not None:
+        total = coverage.bytes_total if coverage.bytes_total is not None else "?"
+        parts.append(f"{coverage.bytes_examined}/{total} bytes")
+    if coverage.rows_examined is not None:
+        total = coverage.rows_total if coverage.rows_total is not None else "?"
+        parts.append(f"{coverage.rows_examined}/{total} rows")
+    if coverage.sample_reason:
+        parts.append(f"sample: {coverage.sample_reason}")
+    if coverage.truncation_reason:
+        parts.append(f"truncated: {coverage.truncation_reason}")
+    return "; ".join(parts) if parts else "scope not quantified"
 
 
 _SEVERITY_ORDER = SEVERITY_ORDER
@@ -992,6 +1016,7 @@ class ReportRenderer:
         evidence_integrity: list[dict[str, object]] | None = None,
         source_windows: dict[str, list[dict[str, Any]]] | None = None,
         enrichment_windows: list[dict[str, Any]] | None = None,
+        coverage_records: Sequence[CoverageRecord | dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Assemble template variables from case metadata, findings, audit trail, and sources.
 
@@ -1006,6 +1031,7 @@ class ReportRenderer:
             source_windows: Per-source raw text windows for the HTML report.
             enrichment_windows: Raw windows from the ``enrichment.iocs``
                 DB source containing threat intel metadata for IOCs.
+            coverage_records: Persistent analysis coverage and boundary rows.
 
         Returns:
             Dict of template variables ready for Jinja2 rendering.
@@ -1014,9 +1040,15 @@ class ReportRenderer:
         normalized_sources: list[SourceRow] | None = (
             [_normalize_source(s) for s in sources_list] if sources_list else None
         )
+        normalized_coverage = [_normalize_coverage(record) for record in coverage_records or []]
         _NEG_PREFIX = "[NEGATIVE]"
-        positive_findings = [f for f in normalized_findings if not f.title.startswith(_NEG_PREFIX)]
-        negative_findings = [f for f in normalized_findings if f.title.startswith(_NEG_PREFIX)]
+        negative_findings = [
+            f
+            for f in normalized_findings
+            if f.title.startswith(_NEG_PREFIX) or f.negative_verdict is not None
+        ]
+        negative_ids = {f.finding_id for f in negative_findings}
+        positive_findings = [f for f in normalized_findings if f.finding_id not in negative_ids]
 
         sorted_findings = sorted(
             positive_findings, key=lambda f: _SEVERITY_ORDER.get(f.severity, 99)
@@ -1071,6 +1103,20 @@ class ReportRenderer:
                 ]
                 d["referencing_findings"] = referencing
                 sources_data.append(d)
+
+        coverage_data = [
+            {
+                "system_name": record.key.system_name,
+                "evidence_domain": record.key.evidence_domain,
+                "check_name": record.key.check_name,
+                "status": record.outcome.status.value,
+                "scope": _format_coverage_scope(record),
+                "reason": record.outcome.reason or "",
+                "source_name": record.source_name or "",
+                "tool_call_id": record.tool_call_id or "",
+            }
+            for record in normalized_coverage
+        ]
 
         _summary_kwargs: dict[str, Any] = dict(
             case_id=case_metadata.case_id,
@@ -1147,6 +1193,7 @@ class ReportRenderer:
             "mitre_all_tactics": all_tactics,
             "mitre_tactic_groups": active_tactic_groups,
             "source_windows": source_windows or {},
+            "coverage_records": coverage_data,
             "model_token_breakdown": self._load_model_usage(
                 Path(audit_log_path).parent, case_metadata.case_id
             ),
@@ -1347,6 +1394,7 @@ class ReportRenderer:
         sources_list: list[SourceRow] | None = None,
         evidence_integrity: list[dict[str, object]] | None = None,
         enrichment_windows: list[dict[str, Any]] | None = None,
+        coverage_records: list[CoverageRecord] | None = None,
     ) -> str:
         """Render the markdown report template (``report.md.j2``) to a string.
 
@@ -1363,6 +1411,7 @@ class ReportRenderer:
             evidence_integrity: Evidence registry entries with file hashes.
             enrichment_windows: Raw windows from the ``enrichment.iocs``
                 DB source for threat intel context.
+            coverage_records: Persistent analysis coverage and boundary rows.
 
         Returns:
             Rendered markdown report string.
@@ -1376,6 +1425,7 @@ class ReportRenderer:
             sources_list=sources_list,
             evidence_integrity=evidence_integrity,
             enrichment_windows=enrichment_windows,
+            coverage_records=coverage_records,
         )
         return self._render_markdown(ctx)
 
@@ -1390,6 +1440,7 @@ class ReportRenderer:
         evidence_integrity: list[dict[str, object]] | None = None,
         source_windows: dict[str, list[dict[str, Any]]] | None = None,
         enrichment_windows: list[dict[str, Any]] | None = None,
+        coverage_records: list[CoverageRecord] | None = None,
     ) -> str:
         """Render the HTML report with markdown descriptions converted to HTML.
 
@@ -1407,6 +1458,7 @@ class ReportRenderer:
             source_windows: Per-source raw text windows for the HTML report.
             enrichment_windows: Raw windows from the ``enrichment.iocs``
                 DB source for threat intel context.
+            coverage_records: Persistent analysis coverage and boundary rows.
 
         Returns:
             Rendered HTML report string.
@@ -1421,6 +1473,7 @@ class ReportRenderer:
             evidence_integrity=evidence_integrity,
             source_windows=source_windows,
             enrichment_windows=enrichment_windows,
+            coverage_records=coverage_records,
         )
         return self._render_html(ctx)
 
@@ -1436,6 +1489,7 @@ class ReportRenderer:
         source_windows: dict[str, list[dict[str, Any]]] | None = None,
         generate_pdf: bool = True,
         enrichment_windows: list[dict[str, Any]] | None = None,
+        coverage_records: list[CoverageRecord] | None = None,
     ) -> tuple[str, str, bytes | None]:
         """Render markdown, HTML, and optionally PDF reports.
 
@@ -1456,6 +1510,7 @@ class ReportRenderer:
             generate_pdf: Attempt PDF generation if weasyprint is available.
             enrichment_windows: Raw windows from the ``enrichment.iocs``
                 DB source for threat intel context.
+            coverage_records: Persistent analysis coverage and boundary rows.
 
         Returns:
             Tuple of (markdown_text, html_text, pdf_bytes_or_none).
@@ -1470,6 +1525,7 @@ class ReportRenderer:
             evidence_integrity=evidence_integrity,
             source_windows=source_windows,
             enrichment_windows=enrichment_windows,
+            coverage_records=coverage_records,
         )
         md_text = self._render_markdown(ctx)
         html_text = self._render_html(dict(ctx))

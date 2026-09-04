@@ -296,7 +296,7 @@ class TestAllGatesPass:
     def test_all_gates_pass(self) -> None:
         findings, metadata, sources, audit = _passing_gate_inputs()
         gates = _evaluate_finalize_gates(findings, metadata, sources, audit)
-        assert len(gates) == 5
+        assert len(gates) == 6
         for gate in gates:
             assert gate["passed"] is True, f"Gate '{gate['name']}' unexpectedly failed"
 

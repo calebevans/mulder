@@ -908,11 +908,28 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
         {% for nf in negative_findings %}
         <li style="padding:0.5em 0;border-bottom:1px solid var(--border);cursor:pointer;" onclick="var d=this.querySelector('.neg-full');if(d){d.style.display=d.style.display==='none'?'block':'none'}">
           <strong>{{ nf.title | replace("[NEGATIVE] ", "") }}</strong>
+          {% if nf.negative_verdict %}<div style="opacity:0.8;font-size:0.78em;margin-top:0.25em;"><code>{{ nf.negative_verdict.verdict }}</code> within {% for key in nf.negative_verdict.scope %}<code>{{ key.system_name }}/{{ key.evidence_domain }}/{{ key.check_name }}</code>{% if not loop.last %}, {% endif %}{% endfor %}</div>{% endif %}
           <div style="opacity:0.6;font-size:0.75em;margin-top:0.15em;">Click to expand</div>
           <div class="neg-full" style="display:none;opacity:0.85;font-size:0.88em;margin-top:0.5em;line-height:1.6;">{{ nf.description_html if nf.description_html is defined else nf.description }}</div>
         </li>
         {% endfor %}
       </ul>
+    </div>
+  </div>
+  {% endif %}
+  {% if coverage_records %}
+  <div class="card mt-2">
+    <div class="card-header">Coverage and Boundary Register</div>
+    <div class="card-body">
+      <p style="opacity:0.7;margin-bottom:1em;"><code>SUCCESS_EMPTY</code> is a completed check with no observations. Incomplete and error states are boundaries, not negative evidence.</p>
+      <div style="overflow-x:auto;">
+        <table>
+          <thead><tr><th>System</th><th>Evidence domain</th><th>Tool / check</th><th>Outcome</th><th>Examined scope</th><th>Boundary / reason</th></tr></thead>
+          <tbody>
+          {% for record in coverage_records %}<tr><td>{{ record.system_name }}</td><td>{{ record.evidence_domain }}</td><td>{{ record.check_name }}</td><td><code>{{ record.status }}</code></td><td>{{ record.scope }}</td><td>{{ record.reason or "—" }}</td></tr>{% endfor %}
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
   {% endif %}

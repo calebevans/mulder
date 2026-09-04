@@ -25,6 +25,7 @@ class ToolOutcomeStatus(str, Enum):
     TIMED_OUT = "TIMED_OUT"
     PARTIAL = "PARTIAL"
     SAMPLED = "SAMPLED"
+    NOT_RUN = "NOT_RUN"
 
 
 class FallbackAttempt(BaseModel):
@@ -88,6 +89,33 @@ class ToolOutcome(BaseModel):
             raise ValueError("SAMPLED outcomes require coverage.sample_reason")
         return self
 
+
+class CoverageKey(BaseModel):
+    """Stable coordinates for one evidence-domain coverage assertion."""
+
+    system_name: str = Field(min_length=1)
+    evidence_domain: str = Field(min_length=1)
+    check_name: str = Field(min_length=1)
+
+
+class CoverageRecord(BaseModel):
+    """Persisted result and scope for one case/system/domain/check tuple."""
+
+    case_id: str
+    key: CoverageKey
+    outcome: ToolOutcome
+    source_name: str | None = None
+    tool_call_id: str | None = None
+    recorded_at: str
+
+
+class ScopedNegativeVerdict(BaseModel):
+    """A negative conclusion explicitly limited to completed coverage."""
+
+    verdict: Literal["NO_EVIL_WITHIN_COVERAGE"] = "NO_EVIL_WITHIN_COVERAGE"
+    scope: list[CoverageKey] = Field(min_length=1)
+
+
 JsonScalar: TypeAlias = str | int | float | bool | None
 
 
@@ -139,6 +167,7 @@ class Finding(BaseModel):
     mitre_attack_ids: list[str] = []
     event_time_start: str | None = None
     event_time_end: str | None = None
+    negative_verdict: ScopedNegativeVerdict | None = None
     submitted_at: str
 
     @model_validator(mode="after")

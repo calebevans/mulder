@@ -271,8 +271,11 @@ def check_finalize_readiness() -> dict[str, object]:
     case_metadata = ctx.db.get_case_metadata()
     sources = ctx.db.get_sources()
     audit_summary = ctx.audit.summary()
+    coverage_records = ctx.db.get_coverage()
 
-    gate_results = _evaluate_finalize_gates(findings, case_metadata, sources, audit_summary)
+    gate_results = _evaluate_finalize_gates(
+        findings, case_metadata, sources, audit_summary, coverage_records
+    )
     all_passed = all(g["passed"] for g in gate_results)
 
     if all_passed:
@@ -384,7 +387,9 @@ def get_investigation_summary() -> dict[str, object]:
         severity_counts[f.severity] = severity_counts.get(f.severity, 0) + 1
 
     has_mitre = sum(1 for f in findings if f.mitre_attack_ids)
-    has_negative = sum(1 for f in findings if f.title.startswith("[NEGATIVE]"))
+    has_negative = sum(
+        1 for f in findings if f.title.startswith("[NEGATIVE]") or f.negative_verdict is not None
+    )
     has_timestamps = sum(1 for f in findings if f.event_time_start)
 
     batch_info: dict[str, object] = {
@@ -393,13 +398,18 @@ def get_investigation_summary() -> dict[str, object]:
 
     case_metadata = ctx.db.get_case_metadata()
     audit_summary = ctx.audit.summary()
+    coverage_records = ctx.db.get_coverage()
 
-    gate_results = _evaluate_finalize_gates(findings, case_metadata, sources, audit_summary)
+    gate_results = _evaluate_finalize_gates(
+        findings, case_metadata, sources, audit_summary, coverage_records
+    )
     all_passed = all(g["passed"] for g in gate_results)
     blockers: list[str] = [f"{g['name']}: {g['detail']}" for g in gate_results if not g["passed"]]
 
     remaining_work: list[str] = []
-    non_negative = [f for f in findings if not f.title.startswith("[NEGATIVE]")]
+    non_negative = [
+        f for f in findings if not f.title.startswith("[NEGATIVE]") and f.negative_verdict is None
+    ]
     if any(not f.event_time_start for f in non_negative):
         remaining_work.append("Add timestamps to non-negative findings missing event_time_start")
     if not (case_metadata.narrative and case_metadata.narrative.strip()):
@@ -429,6 +439,7 @@ def get_investigation_summary() -> dict[str, object]:
         "findings_with_mitre_ids": has_mitre,
         "findings_with_timestamps": has_timestamps,
         "negative_findings": has_negative,
+        "coverage_register": [record.model_dump(mode="json") for record in coverage_records],
         "extraction_batches": batch_info,
         "remaining_work": remaining_work,
         "ready_to_finalize": all_passed,

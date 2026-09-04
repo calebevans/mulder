@@ -92,7 +92,20 @@ No timestamped findings to build a timeline from.
 These hypotheses were explicitly tested and no supporting evidence was found.
 
 {% for f in negative_findings %}
-- **{{ f.title | replace("[NEGATIVE] ", "") }}** : {{ f.description | truncate(200) }}
+- **{{ f.title | replace("[NEGATIVE] ", "") }}**{% if f.negative_verdict %} — `{{ f.negative_verdict.verdict }}` within {% for key in f.negative_verdict.scope %}`{{ key.system_name }}/{{ key.evidence_domain }}/{{ key.check_name }}`{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}: {{ f.description | truncate(200) }}
+{% endfor %}
+{% endif %}
+
+{% if coverage_records %}
+---
+
+## Coverage and Boundary Register
+
+`SUCCESS_EMPTY` means the check completed and returned no observations. Failure, unavailable, partial, sampled, and not-run states are boundaries, not negative evidence.
+
+| System | Evidence domain | Tool / check | Outcome | Examined scope | Boundary / reason |
+|---|---|---|---|---|---|
+{% for record in coverage_records %}| {{ record.system_name }} | {{ record.evidence_domain }} | {{ record.check_name }} | `{{ record.status }}` | {{ record.scope }} | {{ record.reason or "—" }} |
 {% endfor %}
 {% endif %}
 
