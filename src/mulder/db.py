@@ -13,7 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, TypedDict, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypedDict, TypeVar, cast
 from uuid import uuid4
 
 from sqlalchemy import (
@@ -38,6 +38,7 @@ from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import DatabaseError, OperationalError
 from sqlalchemy.pool import NullPool
 
+from mulder.graph import _define_graph_tables
 from mulder.models import (
     AtomicClaim,
     AtomicClaimInput,
@@ -53,6 +54,9 @@ from mulder.models import (
     ToolOutcomeStatus,
     WindowRow,
 )
+
+if TYPE_CHECKING:
+    from mulder.graph import EdgeProvenance, GraphBuildResult, GraphSnapshot
 
 _T = TypeVar("_T")
 
@@ -224,6 +228,14 @@ claim_verifications_t = Table(
     Column("details", Text, nullable=False),
     Column("verified_at", Text, nullable=False),
 )
+
+_graph_tables = _define_graph_tables(metadata)
+graph_projections_t = _graph_tables.projections
+graph_entities_t = _graph_tables.entities
+graph_aliases_t = _graph_tables.aliases
+graph_relations_t = _graph_tables.relations
+graph_events_t = _graph_tables.events
+graph_edge_anchors_t = _graph_tables.edge_anchors
 
 evidence_registry_t = Table(
     "evidence_registry",
@@ -429,6 +441,16 @@ def _migrate_add_claim_tables(conn: Connection) -> None:
     claims_t.create(conn, checkfirst=True)
     evidence_anchors_t.create(conn, checkfirst=True)
     claim_verifications_t.create(conn, checkfirst=True)
+
+
+def _migrate_add_entity_graph(conn: Connection) -> None:
+    """Create the additive verified-claim graph projection tables."""
+    graph_projections_t.create(conn, checkfirst=True)
+    graph_entities_t.create(conn, checkfirst=True)
+    graph_aliases_t.create(conn, checkfirst=True)
+    graph_relations_t.create(conn, checkfirst=True)
+    graph_events_t.create(conn, checkfirst=True)
+    graph_edge_anchors_t.create(conn, checkfirst=True)
 
 
 def _migrate_add_coverage_register(conn: Connection) -> None:
@@ -714,6 +736,7 @@ class CaseDB:
             _migrate_add_coverage_register(conn)
             _migrate_add_negative_verdict(conn)
             _migrate_add_finding_revisions(conn)
+            _migrate_add_entity_graph(conn)
         return db
 
     def close(self) -> None:
@@ -1595,6 +1618,36 @@ class CaseDB:
             )
             for row in rows
         ]
+
+    def rebuild_entity_graph(self) -> GraphBuildResult:
+        """Rebuild the versioned graph projection from currently verified claims."""
+        from mulder.graph import _rebuild_projection
+
+        case_id = self._get_case_id()
+
+        def _do_rebuild() -> GraphBuildResult:
+            with self._engine.begin() as conn:
+                return _rebuild_projection(conn, case_id)
+
+        return self._wq.submit(_do_rebuild)
+
+    def get_entity_graph(self, *, include_superseded: bool = False) -> GraphSnapshot:
+        """Return the typed graph snapshot without exposing a SQL query surface."""
+        from mulder.graph import _read_snapshot
+
+        with self._engine.connect() as conn:
+            return _read_snapshot(
+                conn,
+                self._get_case_id(),
+                include_superseded=include_superseded,
+            )
+
+    def get_graph_edge_provenance(self, edge_id: str) -> EdgeProvenance | None:
+        """Resolve one projected edge through its claim and exact source anchors."""
+        from mulder.graph import _read_edge_provenance
+
+        with self._engine.connect() as conn:
+            return _read_edge_provenance(conn, self._get_case_id(), edge_id)
 
     def update_finding(
         self,
