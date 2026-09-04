@@ -166,6 +166,19 @@ def test_clean_case_verifies_and_binds_claims_tools_and_reports(tmp_path: Path) 
     assert [report["name"] for report in manifest["reports"]] == ["fixture.report.md"]
 
 
+def test_outbound_manifest_is_bound_as_a_standard_case_artifact(tmp_path: Path) -> None:
+    sealed = _build_sealed_case(tmp_path)
+    outbound = sealed.case_dir / "fixture.outbound.jsonl"
+    outbound.write_text('{"schema_version":1,"decision":"allow"}\n', encoding="utf-8")
+
+    manifest_path = seal_case("fixture", sealed.case_dir, overwrite=True)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    names = [report["name"] for report in manifest["reports"]]
+
+    assert "fixture.outbound.jsonl" in names
+    assert verify_case(manifest_path).ok
+
+
 @pytest.mark.parametrize(
     ("replacement", "expected_codes"),
     [

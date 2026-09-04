@@ -1,0 +1,11 @@
+{
+  "sensitive": {
+    "credential": "Authorization: Bearer secret-token-that-must-not-leave",
+    "pii": "Contact incident.owner@example.org or use SSN 123-45-6789"
+  },
+  "benign": {
+    "metadata": ["timeline", "registry", "network"],
+    "script": "#!/bin/sh\nprintf '%s\\n' 'local forensic parser'",
+    "config": "retention_days: 30\ncase_owner: ir-team"
+  }
+}

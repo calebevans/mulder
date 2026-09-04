@@ -28,6 +28,7 @@ from mulder.patterns import (
     is_external_ip,
 )
 from mulder.security.evidence_envelope import escape_report_markdown, render_safe_markdown
+from mulder.security.provider_policy import summarize_outbound_manifest
 
 logger = logging.getLogger(__name__)
 
@@ -1234,6 +1235,9 @@ class ReportRenderer:
             "model_token_breakdown": self._load_model_usage(
                 Path(audit_log_path).parent, case_metadata.case_id
             ),
+            "outbound_policy": summarize_outbound_manifest(
+                Path(audit_log_path).parent / f"{case_metadata.case_id}.outbound.jsonl"
+            ),
         }
 
         rendered_narrative = self._render_narrative_template(case_metadata.narrative or "", ctx)
@@ -1301,6 +1305,15 @@ class ReportRenderer:
         markdown_ctx = dict(ctx)
         for key in ("case_id", "evidence_root", "audit_log_path", "executive_summary_md"):
             markdown_ctx[key] = escape_report_markdown(str(markdown_ctx.get(key, "")))
+        outbound_policy = dict(ctx.get("outbound_policy", {}))
+        for key in ("providers", "models", "field_names", "denied_field_names"):
+            outbound_policy[key] = [
+                escape_report_markdown(str(value)) for value in outbound_policy.get(key, [])
+            ]
+        outbound_policy["policy"] = escape_report_markdown(
+            str(outbound_policy.get("policy", "not_recorded"))
+        )
+        markdown_ctx["outbound_policy"] = outbound_policy
         for key in ("findings", "critical_findings", "timeline_findings", "negative_findings"):
             markdown_ctx[key] = [_safe_finding(finding) for finding in ctx.get(key, [])]
         markdown_ctx["sources_list"] = [

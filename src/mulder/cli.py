@@ -71,6 +71,11 @@ def cli() -> None:
     show_default=True,
     help="CPU usage %% threshold; tools wait when exceeded (0 to disable).",
 )
+@click.option(
+    "--airgap",
+    is_flag=True,
+    help="Disable external threat intelligence and telemetry-capable egress paths.",
+)
 def serve(
     case_id: str | None,
     db_dir: str,
@@ -78,6 +83,7 @@ def serve(
     workers: int,
     mem_limit: float,
     cpu_limit: float,
+    airgap: bool,
 ) -> None:
     """Start the Mulder MCP server.
 
@@ -90,6 +96,13 @@ def serve(
     """
     from mulder.server.app import init_server
     from mulder.server.app import mcp as mcp_server
+
+    if airgap:
+        import os
+
+        from mulder.security.provider_policy import zero_egress_environment
+
+        os.environ.update(zero_egress_environment())
 
     db_dir_path = Path(db_dir).expanduser()
     db_dir_path.mkdir(parents=True, exist_ok=True)
@@ -375,6 +388,19 @@ def verify_case_cmd(
     type=click.Path(exists=True),
     help="LiteLLM config YAML for custom model routing.",
 )
+@click.option(
+    "--data-policy",
+    type=click.Choice(["local-only", "metadata-only", "sensitive-approved"]),
+    default=None,
+    help="Case policy for provider-bound data (default: sensitive-approved).",
+)
+@click.option(
+    "--airgap",
+    "zero_egress",
+    is_flag=True,
+    default=None,
+    help="Require zero egress; only verified local model routes are allowed.",
+)
 def investigate(
     evidence_path: str,
     case_id: str,
@@ -388,6 +414,8 @@ def investigate(
     cwd: str,
     workers: int,
     proxy_config: str | None,
+    data_policy: str | None,
+    zero_egress: bool | None,
 ) -> None:
     """Run a full multi-pass forensic investigation.
 
@@ -413,6 +441,29 @@ def investigate(
     from mulder.orchestrator.models import ModelConfig
     from mulder.orchestrator.runner import Orchestrator
     from mulder.orchestrator.types import EffortLevel
+
+    model_config = ModelConfig.from_args(
+        model=model,
+        planner_model=planner_model,
+        executor_model=executor_model,
+        analyst_model=analyst_model,
+        config_path=config_path,
+        data_policy=data_policy,
+        zero_egress=zero_egress,
+    )
+
+    if model_config.zero_egress:
+        import os
+
+        from mulder.security.provider_policy import preflight_zero_egress
+
+        violations = preflight_zero_egress(
+            models=model_config.all_models,
+            env=os.environ,
+            proxy_config=proxy_config,
+        )
+        if violations:
+            raise click.ClickException("zero-egress preflight failed: " + "; ".join(violations))
 
     cwd_path = Path(cwd).expanduser()
     try:
@@ -444,14 +495,6 @@ def investigate(
     root_logger.setLevel(logging.INFO)
     root_logger.addHandler(file_handler)
 
-    model_config = ModelConfig.from_args(
-        model=model,
-        planner_model=planner_model,
-        executor_model=executor_model,
-        analyst_model=analyst_model,
-        config_path=config_path,
-    )
-
     click.echo(
         f"Mulder v{__version__} \u2014 The truth is in the data.",
         err=True,
@@ -462,6 +505,15 @@ def investigate(
     click.echo(f"  Executor: {model_config.executor}", err=True)
     click.echo(f"  Analyst:  {model_config.analyst}", err=True)
     click.echo(f"Effort: {effort}, Workers: {workers}", err=True)
+    click.echo(
+        f"Data policy: {model_config.data_policy.value}, "
+        f"Zero egress: {'enabled' if model_config.zero_egress else 'disabled'}",
+        err=True,
+    )
+    click.echo(
+        f"Outbound manifest: {log_dir / f'{case_id}.outbound.jsonl'}",
+        err=True,
+    )
     click.echo(f"Logging to {log_file}", err=True)
 
     orchestrator = Orchestrator(
@@ -474,12 +526,14 @@ def investigate(
         parallel_extractions=workers,
         proxy_config=proxy_config,
         case_id=case_id,
+        db_dir=log_dir,
     )
 
     from mulder.orchestrator.errors import (
         AuthenticationError,
         ModelNotAvailableError,
     )
+    from mulder.security.provider_policy import ProviderPolicyError
 
     try:
         result = asyncio.run(orchestrator.run())
@@ -512,6 +566,10 @@ def investigate(
                 "\nSpecify a different model with --model <model-id>",
                 err=True,
             )
+        raise SystemExit(2) from None
+    except ProviderPolicyError as exc:
+        orchestrator.dashboard.stop()
+        click.echo(f"\nError: {exc}", err=True)
         raise SystemExit(2) from None
 
     orchestrator.dashboard.print_summary(result)

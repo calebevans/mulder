@@ -12,6 +12,7 @@ import logging
 import subprocess
 import tempfile
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -143,6 +144,7 @@ class ProxyManager:
         models: list[str],
         port: int | None = None,
         config_path: str | None = None,
+        process_env: Mapping[str, str] | None = None,
     ) -> None:
         """Initialize the proxy manager.
 
@@ -153,12 +155,14 @@ class ProxyManager:
             config_path: Optional path to a user-provided LiteLLM config
                 YAML. When provided, the auto-generated config is skipped
                 and this file is used instead.
+            process_env: Environment overrides for the proxy subprocess.
         """
         import os
 
         self._models = models
         self._port = port or int(os.environ.get("MULDER_PROXY_PORT", _DEFAULT_PORT))
         self._config_path = config_path
+        self._process_env = dict(process_env or {})
         self._process: subprocess.Popen[bytes] | None = None
         self._temp_config: Path | None = None
 
@@ -235,6 +239,7 @@ class ProxyManager:
         )
 
         proxy_env = os.environ.copy()
+        proxy_env.update(self._process_env)
 
         self._process = subprocess.Popen(
             cmd,

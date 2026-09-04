@@ -1240,6 +1240,25 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
     </div>
   </div>
   {% endif %}
+  <div class="card mb-2">
+    <div class="card-header">Provider-Bound Data Policy</div>
+    <div class="card-body">
+      <table class="data-table" style="font-size:0.8rem;">
+        <tbody>
+          <tr><td>Manifest status</td><td class="mono">{{ outbound_policy.status }}</td></tr>
+          <tr><td>Case policy</td><td class="mono">{{ outbound_policy.policy }}</td></tr>
+          <tr><td>Zero egress</td><td>{{ "enabled" if outbound_policy.zero_egress else "disabled" }}</td></tr>
+          <tr><td>Provider requests</td><td>{{ outbound_policy.request_count }} ({{ outbound_policy.allowed_count }} allowed, {{ outbound_policy.denied_count }} denied)</td></tr>
+          <tr><td>Allowed outbound bytes</td><td class="mono">{{ outbound_policy.allowed_byte_size }}</td></tr>
+          <tr><td>Providers</td><td>{{ outbound_policy.providers | join(", ") or "not recorded" }}</td></tr>
+          <tr><td>Models</td><td>{{ outbound_policy.models | join(", ") or "not recorded" }}</td></tr>
+          <tr><td>Fields sent</td><td>{{ outbound_policy.field_names | join(", ") or "none recorded" }}</td></tr>
+          <tr><td>Denied fields (not sent)</td><td>{{ outbound_policy.denied_field_names | join(", ") or "none" }}</td></tr>
+        </tbody>
+      </table>
+      <p class="text-muted" style="font-size:0.75rem;margin-top:0.75rem;">The append-only outbound manifest stores hashes and byte/count accounting, never field values.</p>
+    </div>
+  </div>
   
 </div>
 
