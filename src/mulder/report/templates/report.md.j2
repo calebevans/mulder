@@ -3,6 +3,16 @@
 **Case:** {{ case_id }}
 **Generated:** {{ timestamp }}
 **Evidence:** {{ evidence_root }}
+{% if run_state and not run_state.error %}
+**Run:** `{{ run_state.run_id }}` · profile `{{ run_state.profile }}` · coverage ceiling `{{ run_state.coverage_ceiling }}`
+{% if run_state.coverage_ceiling == "sampled" %}
+
+> **SAMPLED TRIAGE — NOT FULL COVERAGE.** This quick-profile report must not be interpreted as complete evidence, host, time-range, or case coverage.
+{% endif %}
+{% elif run_state and run_state.error %}
+
+> **COVERAGE UNKNOWN — DO NOT CLAIM FULL COVERAGE.** Run scope unavailable: {{ run_state.error }}
+{% endif %}
 
 ---
 

@@ -11,3 +11,5 @@
 | [Glossary](glossary.md) | Project terminology, forensic artifact definitions, and architecture concepts |
 | [Verified-claim Graph](graph-projection.md) | Deterministic projection, bounded pivots, provenance selectors, and static views |
 | [Plugin Packs](plugin-packs.md) | Opt-in declarative discovery, capability ceilings, compatibility, SBOM, and build provenance |
+| [Immutable Intake and Runs](intake-and-runs.md) | KAPE/Velociraptor intake, profiles, forecasts, durable handles, cancellation, and exact checkpoint resume |
+| [Connectors](connectors.md) | Reviewed import staging, deterministic exports, validation, provenance, and approval requirements |

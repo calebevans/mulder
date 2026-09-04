@@ -336,6 +336,19 @@ Once the container is running, launch a full autonomous investigation with `muld
 mulder investigate /evidence my-case
 ```
 
+For collector exports and long investigations, first create an immutable intake
+and use a durable run profile:
+
+```bash
+mulder intake-collection /exports/host01 my-case --format auto
+mulder investigate /exports/host01 my-case --profile full
+# The command prints a run handle. After an interruption:
+mulder investigate /exports/host01 my-case --resume-run RUN_ID
+```
+
+See [Immutable intake and restart-safe runs](intake-and-runs.md) for trust
+boundaries, cancellation semantics, archive limits, and quick-mode scope.
+
 The case ID names the output database and all derived artifacts. Choose something descriptive (e.g. the incident ticket number or a short codename).
 
 The orchestrator runs five phases in sequence:
@@ -514,6 +527,10 @@ Runs a full multi-phase forensic investigation.
 | `--proxy-config` | None | LiteLLM config YAML for custom model routing |
 | `--data-policy` | `sensitive-approved` | Provider-bound case policy: `local-only`, `metadata-only`, or `sensitive-approved` |
 | `--airgap` | off | Require verified local model routes and disable all known runtime egress paths |
+| `--profile` | `full` | `quick` sampled triage (35% role budgets) or `full` evidence-bounded workflow |
+| `--run-id` | generated | Caller-selected handle for a new durable run |
+| `--resume-run RUN_ID` | None | Resume exact-input successful checkpoints from a prior run |
+| `--require-healthy` | off | Refuse start when the local capacity forecast reports not ready |
 
 ### `mulder setup`
 
@@ -623,7 +640,7 @@ An optional human checkpoint can stop the pipeline after Alternative Narrative:
 ```bash
 mulder investigate /evidence CASE --approval-before-report
 mulder approve CASE --decision approve --reviewer examiner@example
-mulder investigate /evidence CASE --resume-after-approval
+mulder investigate /evidence CASE --resume-run RUN_ID --resume-after-approval
 ```
 
 The request binds the exact active findings, claims, anchors, verification
@@ -754,6 +771,11 @@ After an investigation completes, all artifacts are written to the cases directo
 | `{case_id}.audit.jsonl` | Append-only audit log recording every tool invocation with parameters and timestamps |
 | `{case_id}.manifest.json` | Relocatable, optionally examiner-signed case receipt produced by `mulder seal-case` |
 | `{case_id}.publication.json` | DRAFT/APPROVED publication state, fact digest, render QA, and exact audience-artifact commitments |
+| `{case_id}.intake.json` | Immutable KAPE/Velociraptor member inventory and collector provenance |
+| `{case_id}.runs.db` | Durable handles, cancellation state, phase attempts, and checkpoints |
+| `{case_id}.run.json` | Latest bounded run/profile status projection (not a report binding) |
+| `{case_id}.{run_id}.run.json` | Stable per-run profile/status projection |
+| `{case_id}.report-run.json` | Hash binding from generated report artifacts to their exact run |
 
 ### Reports
 

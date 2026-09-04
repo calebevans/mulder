@@ -13,8 +13,12 @@ citation coverage before allowing report generation.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+import os
 import re
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -923,8 +927,25 @@ def finalize_report() -> dict[str, object]:
     )
     proof_cards = review.proof_cards()
     review_data = review.model_dump(mode="json", by_alias=True)
-    renderer = ReportRenderer()
     reasoning_review = ctx.db.get_reasoning_review()
+    run_id = os.environ.get("MULDER_RUN_ID") or None
+    if run_id is not None and (not run_id or Path(run_id).name != run_id):
+        return {
+            "tool_call_id": tc_id,
+            "status": "blocked",
+            "error_message": "Cannot finalize: durable run ID is invalid.",
+        }
+    renderer = ReportRenderer(run_id=run_id)
+    run_scope = renderer._load_run_summary(report_dir, case_metadata.case_id, run_id)
+    if run_id is not None and (run_scope is None or run_scope.get("error")):
+        return {
+            "tool_call_id": tc_id,
+            "status": "blocked",
+            "error_message": (
+                "Cannot finalize: durable report/run scope is invalid: "
+                f"{run_scope.get('error') if run_scope else 'missing scope'}"
+            ),
+        }
 
     _MAX_WINDOWS_PER_SOURCE = 50
     source_names = [s.source_name for s in sources_list]
@@ -990,6 +1011,38 @@ def finalize_report() -> dict[str, object]:
     report_path.write_text(report_text, encoding="utf-8")
     if html_path is not None and html_text:
         html_path.write_text(html_text, encoding="utf-8")
+    binding_path: Path | None = None
+    binding_hash: str | None = None
+    if run_id is not None:
+        report_hashes = {
+            report_path.name: "sha256:" + hashlib.sha256(report_path.read_bytes()).hexdigest()
+        }
+        if html_path is not None and html_path.is_file():
+            report_hashes[html_path.name] = (
+                "sha256:" + hashlib.sha256(html_path.read_bytes()).hexdigest()
+            )
+        binding = {
+            "schema": "mulder.report-run-binding",
+            "version": 1,
+            "case_id": case_metadata.case_id,
+            "run_id": run_id,
+            "reports": report_hashes,
+        }
+        binding_path = report_dir / f"{case_metadata.case_id}.report-run.json"
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=report_dir,
+            prefix=f".{binding_path.name}.",
+            delete=False,
+        ) as handle:
+            temporary_binding = Path(handle.name)
+            json.dump(binding, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_binding, binding_path)
+        binding_hash = "sha256:" + hashlib.sha256(binding_path.read_bytes()).hexdigest()
 
     log_src = report_dir / "mulder.log"
     log_dest = report_dir / f"{case_metadata.case_id}.mulder.log"
@@ -1012,6 +1065,14 @@ def finalize_report() -> dict[str, object]:
     }
     if html_warning:
         result["html_warning"] = html_warning
+    if run_id is not None and binding_path is not None:
+        result.update(
+            {
+                "run_id": run_id,
+                "report_run_binding": str(binding_path),
+                "report_run_binding_sha256": binding_hash,
+            }
+        )
 
     elapsed = (time.monotonic() - t0) * 1000
     ctx.audit.log_tool_call(

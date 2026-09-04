@@ -11,12 +11,16 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import logging
 import os
+from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
+from mulder import __version__
+from mulder.adapters import IntakeError, load_intake_manifest
 from mulder.orchestrator.capabilities import identity_for_phase
 from mulder.orchestrator.display import InvestigationDashboard
 from mulder.orchestrator.errors import AuthenticationError, ModelNotAvailableError
@@ -51,6 +55,16 @@ from mulder.orchestrator.types import (
 from mulder.packs.base import DomainPackActivation
 from mulder.patterns import DEFAULT_DB_DIR, DEFAULT_WORKSPACE_DIR
 from mulder.review.events import RunEventDraft, RunEventJournal
+from mulder.run_state import (
+    PROFILES,
+    RunCancelled,
+    RunHandle,
+    RunLedger,
+    RunProfile,
+    RunStateError,
+    digest_value,
+    evidence_identity,
+)
 from mulder.security.provider_policy import (
     OutboundManifest,
     ProviderPolicy,
@@ -90,6 +104,10 @@ class Orchestrator:
         approval_before_report: bool = False,
         resume_after_approval: bool = False,
         run_event_path: str | Path | None = None,
+        run_profile: RunProfile = "full",
+        run_id: str | None = None,
+        resume_run: bool = False,
+        run_state_path: str | Path | None = None,
     ) -> None:
         """Initialize the orchestrator.
 
@@ -116,6 +134,11 @@ class Orchestrator:
             run_event_path: Optional case audit path used for durable,
                 resumable operational events. No event journal is created
                 when omitted.
+            run_profile: ``quick`` sampled triage or ``full`` evidence-bounded work.
+            run_id: Optional caller-selected durable run handle.
+            resume_run: Resume the exact persisted handle and evidence identity.
+            run_state_path: Optional SQLite run ledger. Enabling it also enables
+                phase checkpoints and cooperative cancellation.
         """
         self.evidence_path = evidence_path
         self.cwd = str(cwd)
@@ -123,11 +146,35 @@ class Orchestrator:
         self.effort = effort
         self.env = env or {}
         self._case_id: str = case_id
-        self._db_dir = Path(db_dir).expanduser()
+        self._db_dir = Path(db_dir).expanduser().resolve(strict=False)
         self._approval_before_report = approval_before_report
         self._resume_after_approval = resume_after_approval
+        profile_spec = PROFILES.get(run_profile)
+        if profile_spec is None:
+            raise RunStateError(f"unsupported run profile: {run_profile!r}")
+        if resume_run and run_id is None:
+            raise RunStateError("resume_run requires an explicit run_id")
+        if run_state_path is not None and (not self._case_id or run_event_path is None):
+            raise RunStateError(
+                "durable runs require both a safe case_id and run_event_path"
+            )
+        if resume_run and run_state_path is None:
+            raise RunStateError("resume_run requires run_state_path")
+        if resume_after_approval and run_state_path is not None and not resume_run:
+            raise RunStateError("resume_after_approval requires an explicit durable run resume")
+        self._run_profile = run_profile
+        self._run_profile_spec = profile_spec
+        self._run_scope_instruction = (
+            "RUN SCOPE: QUICK/SAMPLED TRIAGE. Treat every result as partial. "
+            "Never state or imply that the evidence, host, time range, or case "
+            "received full coverage."
+            if run_profile == "quick"
+            else "RUN SCOPE: FULL EVIDENCE-BOUNDED WORKFLOW. Do not claim full "
+            "coverage unless the durable coverage register affirmatively supports it."
+        )
         if self._case_id:
             self.env["MULDER_CASE_ID"] = self._case_id
+        self.env["MULDER_RUN_PROFILE"] = run_profile
         self.env["MULDER_DATA_POLICY"] = self.model_config.data_policy.value
         if self.model_config.zero_egress:
             self.env.update(zero_egress_environment())
@@ -153,6 +200,60 @@ class Orchestrator:
             if run_event_path is not None
             else None
         )
+        self._run_ledger: RunLedger | None = None
+        self._run_handle: RunHandle | None = None
+        self._run_summary_path: Path | None = None
+        if run_state_path is not None:
+            assert run_event_path is not None
+            resolved_run_state = Path(run_state_path).expanduser().resolve(strict=False)
+            if resolved_run_state.parent != self._db_dir:
+                raise RunStateError("run_state_path must be beside the case database")
+            resolved_run_events = Path(run_event_path).expanduser().resolve(strict=False)
+            expected_run_events = self._db_dir / f"{self._case_id}.audit.jsonl"
+            if resolved_run_events != expected_run_events:
+                raise RunStateError(
+                    "durable checkpoints require the case's standard audit path"
+                )
+            input_digest = self._resolve_run_input_digest()
+            approval_required = approval_before_report or resume_after_approval
+            if resume_after_approval:
+                from mulder.review.decisions import ReviewWorkflow, ReviewWorkflowError
+
+                try:
+                    ReviewWorkflow(self._case_id, self._db_dir).require_approved_state()
+                except ReviewWorkflowError as exc:
+                    raise RunStateError(
+                        f"approved-report resume is not authorized: {exc}"
+                    ) from exc
+            contract_digest = self._run_contract_digest(
+                approval_required=approval_required,
+            )
+            self._run_ledger = RunLedger(
+                self._case_id,
+                resolved_run_state,
+                resolved_run_events,
+            )
+            self._run_handle = self._run_ledger.open_run(
+                profile=run_profile,
+                input_digest=input_digest,
+                contract_digest=contract_digest,
+                approval_required=approval_required,
+                allow_awaiting_review_resume=resume_after_approval,
+                run_id=run_id,
+                resume=resume_run,
+            )
+            self.env["MULDER_RUN_ID"] = self._run_handle.run_id
+            self.env["MULDER_RUN_GENERATION"] = str(self._run_handle.generation)
+            self.env["MULDER_DB_DIR"] = str(self._db_dir)
+            self._run_summary_path = self._db_dir / f"{self._case_id}.run.json"
+            self._run_ledger.write_summary(
+                self._run_handle.run_id,
+                self._run_summary_path,
+            )
+            self._run_ledger.write_summary(
+                self._run_handle.run_id,
+                self._db_dir / f"{self._case_id}.{self._run_handle.run_id}.run.json",
+            )
         self.dashboard = InvestigationDashboard(event_journal=self._event_journal)
         self._session = SessionExecutor(
             dashboard=self.dashboard,
@@ -171,6 +272,8 @@ class Orchestrator:
             case_id=self._case_id,
             env=self.env,
             cwd=self.cwd,
+            budget_multiplier=profile_spec.budget_multiplier,
+            scope_instruction=self._run_scope_instruction,
         )
         self._evidence = EvidenceContext(evidence_path=evidence_path)
         self._server = ServerBridge(case_id=self._case_id)
@@ -178,6 +281,164 @@ class Orchestrator:
             dashboard=self.dashboard,
             log_path=self._db_dir / "mulder.log",
         )
+
+    @property
+    def run_handle(self) -> RunHandle | None:
+        """Return the durable job handle when run persistence is enabled."""
+        return self._run_handle
+
+    def _resolve_run_input_digest(self) -> str:
+        """Prefer a verified intake commitment over a mutable path inventory."""
+        evidence = Path(self.evidence_path).expanduser().resolve(strict=True)
+        intake_path = self._db_dir / f"{self._case_id}.intake.json"
+        if not intake_path.exists():
+            return evidence_identity(evidence)
+        try:
+            intake = load_intake_manifest(intake_path)
+        except IntakeError as exc:
+            raise RunStateError(f"cannot bind run to intake: {exc}") from exc
+        if intake.case_id != self._case_id:
+            raise RunStateError("intake manifest belongs to a different case")
+        intake_source = Path(intake.source_path).expanduser().resolve(strict=False)
+        if intake_source != evidence:
+            raise RunStateError(
+                "evidence path does not match the case's immutable intake source"
+            )
+        return intake.collection_digest
+
+    def _run_contract_digest(self, *, approval_required: bool) -> str:
+        """Bind every execution-policy input that can change phase semantics."""
+        proxy: dict[str, object] | None = None
+        if self._proxy_config:
+            proxy_path = Path(self._proxy_config).expanduser().resolve(strict=False)
+            proxy = {"path": str(proxy_path), "sha256": None}
+            if proxy_path.is_file():
+                proxy["sha256"] = "sha256:" + hashlib.sha256(proxy_path.read_bytes()).hexdigest()
+        packs = (
+            self._pack_activation.receipt.model_dump(mode="json")
+            if self._pack_activation is not None
+            else None
+        )
+        return digest_value(
+            "mulder.run-contract:v1",
+            {
+                "profile": self._run_profile,
+                "models": {
+                    "planner": self.model_config.planner,
+                    "executor": self.model_config.executor,
+                    "analyst": self.model_config.analyst,
+                    "phase_overrides": self.model_config.phase_overrides,
+                },
+                "effort": self.effort,
+                "parallel_extractions": self._parallel_extractions,
+                "data_policy": self.model_config.data_policy.value,
+                "zero_egress": self.model_config.zero_egress,
+                "proxy": proxy,
+                "packs": packs,
+                "approval_required": approval_required,
+            },
+        )
+
+    def _finish_durable_run(
+        self,
+        status: Literal["awaiting_review", "completed", "failed", "cancelled"],
+    ) -> None:
+        """Persist terminal status and refresh the receipt-friendly summary."""
+        if self._run_ledger is None or self._run_handle is None:
+            return
+        self._run_handle = self._run_ledger.finish(
+            self._run_handle.run_id,
+            status,
+            generation=self._run_handle.generation,
+        )
+        if self._run_summary_path is not None:
+            self._run_ledger.write_summary(
+                self._run_handle.run_id,
+                self._run_summary_path,
+            )
+            self._run_ledger.write_summary(
+                self._run_handle.run_id,
+                self._db_dir / f"{self._case_id}.{self._run_handle.run_id}.run.json",
+            )
+
+    def _checkpoint_identity(
+        self,
+        phase: PhaseConfig,
+        prompt_vars: dict[str, str] | None,
+    ) -> tuple[str, str]:
+        """Bind a logical phase step to exact run input and prompt variables."""
+        if self._run_handle is None:
+            raise RunStateError("checkpoint requested without a durable run")
+        input_digest = digest_value(
+            "mulder.phase-input:v1",
+            {
+                "run_input": self._run_handle.input_digest,
+                "run_contract": self._run_handle.contract_digest,
+                "profile": self._run_profile,
+                "phase": phase.name,
+                "phase_config": asdict(phase),
+                "models": {
+                    "planner": self.model_config.resolve(phase.name, "planner"),
+                    "executor": self.model_config.resolve(phase.name, "executor"),
+                    "analyst": self.model_config.resolve(phase.name, "analyst"),
+                },
+                "effort": self.effort,
+                "parallel_extractions": self._parallel_extractions,
+                "data_policy": self.model_config.data_policy.value,
+                "zero_egress": self.model_config.zero_egress,
+                "approval_required": self._run_handle.approval_required,
+                "mulder_version": __version__,
+                "prompt_vars": dict(sorted((prompt_vars or {}).items())),
+            },
+        )
+        return f"{phase.name}:{input_digest.removeprefix('sha256:')[:20]}", input_digest
+
+    def _resume_or_begin_checkpoint(
+        self,
+        phase: PhaseConfig,
+        prompt_vars: dict[str, str] | None,
+    ) -> tuple[PhaseResult | None, str | None]:
+        """Restore an exact successful phase or open a new durable attempt."""
+        if self._run_ledger is None or self._run_handle is None:
+            return None, None
+        step_key, input_digest = self._checkpoint_identity(phase, prompt_vars)
+        restored = self._run_ledger.resume_phase(
+            self._run_handle.run_id,
+            generation=self._run_handle.generation,
+            step_key=step_key,
+            input_digest=input_digest,
+        )
+        if restored is not None:
+            self.dashboard.log_info(f"Resumed completed checkpoint: {step_key}")
+            return restored, None
+        attempt_id = self._run_ledger.begin_phase(
+            self._run_handle.run_id,
+            generation=self._run_handle.generation,
+            step_key=step_key,
+            phase_name=phase.name,
+            input_digest=input_digest,
+        )
+        return None, attempt_id
+
+    def _complete_checkpoint(self, attempt_id: str | None, result: PhaseResult) -> None:
+        """Commit only gate-passing results; failed attempts must be rerun."""
+        if attempt_id is None or not result.success or self._run_ledger is None:
+            return
+        if self._run_handle is None:
+            raise RunStateError("checkpoint completion has no durable run handle")
+        self._run_ledger.assert_active(
+            self._run_handle.run_id,
+            generation=self._run_handle.generation,
+        )
+        self._run_ledger.complete_phase(
+            attempt_id,
+            result,
+            generation=self._run_handle.generation,
+        )
+
+    def _scoped_prompt(self, prompt: str) -> str:
+        """Make profile limits explicit in every single-agent invocation."""
+        return f"{self._run_scope_instruction}\n\n{prompt}"
 
     async def run(self) -> InvestigationResult:
         """Execute the full investigation pipeline.
@@ -189,33 +450,58 @@ class Orchestrator:
         Returns:
             InvestigationResult with all phase results and aggregate metrics.
         """
-        result = InvestigationResult()
+        result = InvestigationResult(
+            run_id=self._run_handle.run_id if self._run_handle is not None else None,
+            profile=self._run_profile,
+            coverage_ceiling=self._run_profile_spec.coverage_ceiling,
+        )
         pack_phase_count = (
             len(self._pack_activation.workflow_steps) if self._pack_activation else 0
         )
         self._total_phases = 5 + pack_phase_count
         self._phase_counter = 0
 
-        self._preflight_provider_routes()
-        self._start_proxy_if_needed()
-        self._running = True
-        self._log_tailer.start(is_running=lambda: self._running)
-        self.dashboard.start()
-        if self._event_journal is not None:
-            self._event_journal.append(
-                RunEventDraft(
-                    kind="investigation_started",
-                    total_phases=self._total_phases,
-                    message="Investigation run started",
-                )
-            )
-
         try:
+            self._preflight_provider_routes()
+            self._start_proxy_if_needed()
+            self._running = True
+            self._log_tailer.start(is_running=lambda: self._running)
+            self.dashboard.start()
+            if self._event_journal is not None:
+                self._event_journal.append(
+                    RunEventDraft(
+                        kind="investigation_started",
+                        total_phases=self._total_phases,
+                        message=(
+                            f"Investigation run started ({self._run_profile}, "
+                            f"{self._run_profile_spec.coverage_ceiling})"
+                        ),
+                    )
+                )
             completed = (
                 await self._run_approved_report(result)
                 if self._resume_after_approval
                 else await self._run_pipeline(result)
             )
+            if self._run_ledger is not None and self._run_handle is not None:
+                self._run_ledger.assert_active(
+                    self._run_handle.run_id,
+                    generation=self._run_handle.generation,
+                )
+        except RunCancelled:
+            if self._event_journal is not None:
+                self._event_journal.append(
+                    RunEventDraft(
+                        kind="investigation_finished",
+                        total_phases=self._total_phases,
+                        turns=result.total_turns,
+                        success=False,
+                        message="Investigation run cancelled at a safe boundary",
+                    )
+                )
+            with contextlib.suppress(Exception):
+                self._finish_durable_run("cancelled")
+            raise
         except BaseException:
             if self._event_journal is not None:
                 self._event_journal.append(
@@ -227,6 +513,8 @@ class Orchestrator:
                         message="Investigation run terminated before completion",
                     )
                 )
+            with contextlib.suppress(Exception):
+                self._finish_durable_run("failed")
             raise
         else:
             if self._event_journal is not None:
@@ -239,6 +527,16 @@ class Orchestrator:
                         message="Investigation run finished",
                     )
                 )
+            terminal_status: Literal[
+                "awaiting_review", "completed", "failed", "cancelled"
+            ] = (
+                "awaiting_review"
+                if completed.review_state == "awaiting_review"
+                else "completed"
+                if completed.success
+                else "failed"
+            )
+            self._finish_durable_run(terminal_status)
             return completed
         finally:
             self._running = False
@@ -598,7 +896,7 @@ class Orchestrator:
             prompt = phase.single_prompt_template.format(**effective_vars)
 
         model = self.model_config.resolve(phase.name, phase.single_role)
-        budget = phase.single_max_budget_usd
+        budget = phase.single_max_budget_usd * self._run_profile_spec.budget_multiplier
         accumulated_turns = 0
         last_result: PhaseResult | None = None
 
@@ -610,6 +908,12 @@ class Orchestrator:
             model=model,
             max_turns=phase.single_max_turns,
         )
+        restored, checkpoint_attempt = self._resume_or_begin_checkpoint(
+            phase,
+            effective_vars,
+        )
+        if restored is not None:
+            return restored
 
         for attempt in range(1 + phase.max_retries):
             if attempt > 0:
@@ -637,7 +941,7 @@ class Orchestrator:
             try:
                 phase_result = await self._session.execute(
                     system_prompt=phase.single_system_prompt,
-                    prompt=prompt,
+                    prompt=self._scoped_prompt(prompt),
                     model=model,
                     allowed_tools=phase.single_allowed_tools,
                     disallowed_tools=phase.disallowed_tools,
@@ -661,7 +965,7 @@ class Orchestrator:
                 compact_prompt = self._build_compaction_prompt(phase, effective_vars)
                 continuation = await self._session.execute(
                     system_prompt=phase.single_system_prompt,
-                    prompt=compact_prompt,
+                    prompt=self._scoped_prompt(compact_prompt),
                     model=model,
                     allowed_tools=phase.single_allowed_tools,
                     disallowed_tools=phase.disallowed_tools,
@@ -686,6 +990,7 @@ class Orchestrator:
                     phase.name,
                     accumulated_turns,
                 )
+                self._complete_checkpoint(checkpoint_attempt, phase_result)
                 return phase_result
 
             last_result = phase_result
@@ -744,6 +1049,13 @@ class Orchestrator:
                 max_turns=phase.executor_max_turns,
             )
 
+        restored, checkpoint_attempt = self._resume_or_begin_checkpoint(
+            phase,
+            prompt_vars,
+        )
+        if restored is not None:
+            return restored
+
         combined_result = PhaseResult(phase_name=phase.name)
 
         for attempt in range(1 + phase.max_retries):
@@ -780,6 +1092,7 @@ class Orchestrator:
                         for item in exec_results.results
                         if item.get("tool")
                     )
+                    combined_result.batch_ids.update(exec_results.batch_ids)
 
                     # Step 2.5: Wait for all background batches to finish
                     await self._roles.ensure_batches_complete(exec_results, log_prefix)
@@ -838,6 +1151,7 @@ class Orchestrator:
                     combined_result.plans_executed,
                     combined_result.follow_ups_used,
                 )
+                self._complete_checkpoint(checkpoint_attempt, combined_result)
                 return combined_result
 
             self.dashboard.log_gate_fail(f"Gate failed: {'; '.join(gate.gaps)}")

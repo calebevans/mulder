@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, cast
+from typing import IO, TYPE_CHECKING, Literal, cast
 
 from mulder.models import (
     AuditSummary,
@@ -76,6 +76,16 @@ class AuditIntegrityResult:
     def cryptographically_verified(self) -> bool:
         """Whether the file has a stored chain head covering all present entries."""
         return self.status in {"verified", "verified_with_legacy_anchor"}
+
+
+@dataclass(frozen=True)
+class AuditFileSnapshot:
+    """One locked audit-file observation and its semantic verification result."""
+
+    integrity: AuditIntegrityResult
+    entries: tuple[dict[str, object], ...]
+    sha256: str
+    size_bytes: int
 
 
 @dataclass(frozen=True)
@@ -146,9 +156,26 @@ def _invalid_result(
     )
 
 
-def _scan_audit_file(log_path: Path) -> _AuditScan:
+@contextmanager
+def _audit_read_handle(
+    log_path: Path,
+    locked_handle: IO[bytes] | None,
+) -> Iterator[IO[bytes]]:
+    """Yield the caller's locked descriptor or own a fresh read descriptor."""
+    if locked_handle is not None:
+        yield locked_handle
+        return
+    with open(log_path, "rb") as handle:
+        yield handle
+
+
+def _scan_audit_file(
+    log_path: Path,
+    *,
+    locked_handle: IO[bytes] | None = None,
+) -> _AuditScan:
     """Parse and verify ``log_path``, retaining the first broken-link detail."""
-    if not log_path.exists():
+    if locked_handle is None and not log_path.exists():
         result = AuditIntegrityResult(
             ok=True,
             status="empty",
@@ -169,7 +196,9 @@ def _scan_audit_file(log_path: Path) -> _AuditScan:
     first_error: AuditIntegrityResult | None = None
     saw_native = False
 
-    with open(log_path, "rb") as fh:
+    with _audit_read_handle(log_path, locked_handle) as fh:
+        if locked_handle is not None:
+            fh.seek(0)
         for line_number, raw_line in enumerate(fh, start=1):
             try:
                 stripped = raw_line.decode("utf-8").strip()
@@ -417,15 +446,27 @@ def _scan_audit_file(log_path: Path) -> _AuditScan:
 
 
 @contextmanager
-def _shared_file_lock(log_path: Path) -> Iterator[None]:
+def _shared_file_lock(log_path: Path) -> Iterator[IO[bytes] | None]:
     """Hold a cooperative read lock while a caller scans an existing log."""
-    if not log_path.exists():
-        yield
+    try:
+        fh = open(log_path, "rb")  # noqa: SIM115 - owned by the context below
+    except FileNotFoundError:
+        yield None
         return
-    with open(log_path, "rb") as fh:
+    with fh:
+        locked_stat = os.fstat(fh.fileno())
         fcntl.flock(fh.fileno(), fcntl.LOCK_SH)
         try:
-            yield
+            yield fh
+            try:
+                current_stat = log_path.stat()
+            except FileNotFoundError as exc:
+                raise RuntimeError("Audit log was removed while being verified") from exc
+            if (current_stat.st_dev, current_stat.st_ino) != (
+                locked_stat.st_dev,
+                locked_stat.st_ino,
+            ):
+                raise RuntimeError("Audit log was replaced while being verified")
         finally:
             fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
 
@@ -482,13 +523,21 @@ class AuditLog:
             return None
         return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
 
-    def _load_existing(self, *, writer_lock_held: bool = False) -> None:
+    def _load_existing(
+        self,
+        *,
+        writer_lock_held: bool = False,
+        locked_handle: IO[bytes] | None = None,
+    ) -> None:
         """Populate in-memory indexes from an existing JSONL file."""
         if writer_lock_held:
-            scan = _scan_audit_file(self._log_path)
+            scan = _scan_audit_file(self._log_path, locked_handle=locked_handle)
         else:
-            with _shared_file_lock(self._log_path):
-                scan = _scan_audit_file(self._log_path)
+            with _shared_file_lock(self._log_path) as shared_handle:
+                scan = _scan_audit_file(
+                    self._log_path,
+                    locked_handle=shared_handle,
+                )
         self._append_hash = scan.append_hash
         self._next_sequence = scan.next_sequence
         self._legacy_entries = scan.result.legacy_entries
@@ -521,8 +570,51 @@ class AuditLog:
         Detecting removal of a complete final suffix requires an external head
         commitment or sealed case manifest and is deliberately out of scope.
         """
-        with _shared_file_lock(self._log_path):
-            return _scan_audit_file(self._log_path).result
+        with _shared_file_lock(self._log_path) as shared_handle:
+            return _scan_audit_file(
+                self._log_path,
+                locked_handle=shared_handle,
+            ).result
+
+    def read_verified_snapshot(
+        self,
+    ) -> tuple[AuditIntegrityResult, tuple[dict[str, object], ...]]:
+        """Return integrity and entries from one cooperatively locked scan.
+
+        Consumers that bind semantics to an entry must not verify the file and
+        reopen it later: a replacement between those operations would create a
+        time-of-check/time-of-use gap.  This method keeps both observations in
+        the same shared-lock snapshot.
+        """
+        snapshot = self.read_verified_file_snapshot()
+        return snapshot.integrity, snapshot.entries
+
+    def read_verified_file_snapshot(self) -> AuditFileSnapshot:
+        """Hash and verify the exact same cooperatively locked audit bytes."""
+        with self.hold_verified_file_snapshot() as snapshot:
+            return snapshot
+
+    @contextmanager
+    def hold_verified_file_snapshot(self) -> Iterator[AuditFileSnapshot]:
+        """Yield one verified snapshot while preventing cooperative appends."""
+        with _shared_file_lock(self._log_path) as shared_handle:
+            scan = _scan_audit_file(
+                self._log_path,
+                locked_handle=shared_handle,
+            )
+            digest = hashlib.sha256()
+            size = 0
+            if shared_handle is not None:
+                shared_handle.seek(0)
+                while chunk := shared_handle.read(1024 * 1024):
+                    digest.update(chunk)
+                    size += len(chunk)
+            yield AuditFileSnapshot(
+                integrity=scan.result,
+                entries=scan.entries,
+                sha256=_HASH_PREFIX + digest.hexdigest(),
+                size_bytes=size,
+            )
 
     def _index_entry(self, entry: dict[str, object]) -> None:
         """Index a parsed audit entry by type and update summary accumulators."""
@@ -557,16 +649,31 @@ class AuditLog:
             self._finding_entries[fid] = entry
             self._total_findings += 1
 
-    def _append(self, entry: dict[str, object]) -> dict[str, object]:
+    def _append(
+        self,
+        entry: dict[str, object],
+        *,
+        bind_previous_as: str | None = None,
+    ) -> dict[str, object]:
         """Append ``entry`` and return the exact chained record written to disk."""
         with self._lock:
             self._log_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self._log_path, "a+", encoding="utf-8") as fh:
                 fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
                 try:
+                    descriptor_stat = os.fstat(fh.fileno())
+                    current_stat = self._log_path.stat()
+                    if (descriptor_stat.st_dev, descriptor_stat.st_ino) != (
+                        current_stat.st_dev,
+                        current_stat.st_ino,
+                    ):
+                        raise RuntimeError("Audit log was replaced during append")
                     if self._fingerprint() != self._file_fingerprint:
                         self._reset_indexes()
-                        self._load_existing(writer_lock_held=True)
+                        self._load_existing(
+                            writer_lock_held=True,
+                            locked_handle=cast(IO[bytes], fh.buffer),
+                        )
                     if self._append_blocked_reason is not None:
                         raise RuntimeError(
                             "Refusing to append to an invalid audit log: "
@@ -579,6 +686,12 @@ class AuditLog:
                         )
 
                     chained_entry = dict(entry)
+                    if bind_previous_as is not None:
+                        if bind_previous_as in chained_entry:
+                            raise ValueError(
+                                f"Audit event may not set {bind_previous_as}; it is chain-bound"
+                            )
+                        chained_entry[bind_previous_as] = self._append_hash
                     chained_entry.update(
                         {
                             "schema": _AUDIT_SCHEMA,
@@ -634,6 +747,44 @@ class AuditLog:
             }
         )
 
+    def log_checkpoint_event(
+        self,
+        case_id: str,
+        event: Mapping[str, object],
+    ) -> dict[str, object]:
+        """Append one restart checkpoint proposal to the case audit chain.
+
+        The run ledger is operational and mutable.  This audit entry binds the
+        phase identity, exact input, and result digest to tamper-evident case
+        state so a forged SQLite row cannot be accepted during resume.  The
+        proposal is not completion by itself: only an exact, committed SQLite
+        row that cites its entry hash completes the checkpoint.
+        """
+        reserved = _CHAIN_FIELDS.union(
+            {
+                "type",
+                "timestamp",
+                "case_id",
+                "checkpoint_state",
+                "result_parent_audit_head",
+            }
+        )
+        collision = reserved.intersection(event)
+        if collision:
+            raise ValueError(
+                f"Checkpoint event may not set reserved fields: {sorted(collision)}"
+            )
+        return self._append(
+            {
+                "type": "run_checkpoint",
+                "checkpoint_state": "proposed",
+                "case_id": case_id,
+                **dict(event),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
+            bind_previous_as="result_parent_audit_head",
+        )
+
     def read_run_event_entries(
         self,
         *,
@@ -650,8 +801,11 @@ class AuditLog:
             raise ValueError("after_sequence must be non-negative")
         if not 1 <= limit <= 1000:
             raise ValueError("limit must be between 1 and 1000")
-        with _shared_file_lock(self._log_path):
-            scan = _scan_audit_file(self._log_path)
+        with _shared_file_lock(self._log_path) as shared_handle:
+            scan = _scan_audit_file(
+                self._log_path,
+                locked_handle=shared_handle,
+            )
         selected: list[dict[str, object]] = []
         high_watermark = 0
         skipped_legacy = 0

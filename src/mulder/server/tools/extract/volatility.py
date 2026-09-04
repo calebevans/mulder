@@ -14,7 +14,7 @@ from mulder.extractors.volatility import (
     _find_vol_binary,
     _plugin_short_name,
 )
-from mulder.server.app import mcp
+from mulder.server.app import _active_run_tool_lease, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
     adaptive_timeout,
@@ -328,10 +328,12 @@ def _run_batch_plugin(
     plugin_name: str,
     memory_path: str,
 ) -> dict[str, Any]:
-    """Execute a single Volatility plugin within an existing batch context.
+    """Compute one Volatility plugin result without committing it to the case.
 
     Constructs the plugin against the shared context, runs it, renders
-    the TreeGrid output to text, and indexes the result.
+    the TreeGrid output to text, and returns that text to the timed caller.
+    Keeping indexing outside the worker prevents a timed-out thread from
+    changing the case after its parent tool has already returned.
 
     Args:
         vol_ctx: Pre-built Volatility context.
@@ -341,8 +343,8 @@ def _run_batch_plugin(
         memory_path: Path to the memory dump file (for indexing metadata).
 
     Returns:
-        Result dict with plugin output summary on success, or a status dict
-        indicating empty output.
+        Internal raw-output result on success, or a status dict indicating
+        empty output.
 
     Raises:
         Exception: Propagates any exception from plugin construction or execution.
@@ -385,14 +387,12 @@ def _run_batch_plugin(
             ),
         }
 
-    summary = extract_and_index(
-        raw_output=stripped,
-        source_name=f"volatility.{short}",
-        source_path=memory_path,
-        extractor_name="volatility3",
-    )
-    summary["plugin"] = plugin_name
-    return summary
+    return {
+        "plugin": plugin_name,
+        "status": "ready_to_index",
+        "source_name": f"volatility.{short}",
+        "_raw_output": stripped,
+    }
 
 
 def _run_netscan_fallback_batch(
@@ -466,8 +466,8 @@ def _run_batch_plugin_timed(
     """Execute a batch plugin with a per-plugin timeout via thread pool.
 
     If the plugin exceeds *timeout* seconds, returns an error dict.  The
-    underlying thread may continue running in the background, but the
-    batch is not blocked.
+    underlying thread may continue running in the background, but it retains
+    the durable-run lease until its tool-side effects have ended.
 
     Args:
         vol_ctx: Pre-built Volatility context.
@@ -482,11 +482,30 @@ def _run_batch_plugin_timed(
     """
     short = _plugin_short_name(plugin_name)
     executor = _ThreadPoolExecutor(max_workers=1)
-    future = executor.submit(
-        _run_batch_plugin, vol_ctx, automagics, plugin_class, plugin_name, memory_path
-    )
+    def run_with_lease() -> dict[str, Any]:
+        with _active_run_tool_lease():
+            return _run_batch_plugin(
+                vol_ctx,
+                automagics,
+                plugin_class,
+                plugin_name,
+                memory_path,
+            )
+
+    future = executor.submit(run_with_lease)
     try:
         result: dict[str, Any] = future.result(timeout=timeout)
+        raw_output = result.pop("_raw_output", None)
+        if isinstance(raw_output, str):
+            with _active_run_tool_lease():
+                summary = extract_and_index(
+                    raw_output=raw_output,
+                    source_name=f"volatility.{short}",
+                    source_path=memory_path,
+                    extractor_name="volatility3",
+                )
+            summary["plugin"] = plugin_name
+            return summary
         return result
     except (_FuturesTimeoutError, TimeoutError):
         logger.warning(

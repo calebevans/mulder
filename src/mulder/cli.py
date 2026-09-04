@@ -369,6 +369,7 @@ def verify_release_metadata_cmd(
 @click.option(
     "--db-dir",
     default=DEFAULT_DB_DIR,
+    envvar="MULDER_DB_DIR",
     show_default=True,
     help="Directory containing per-case databases.",
 )
@@ -492,6 +493,13 @@ def report(case_id: str, db_dir: str) -> None:
 
     if not db_path.exists():
         raise click.ClickException(f"Case database not found: {db_path}")
+    run_ledger_path = db_dir_path / f"{case_id}.runs.db"
+    report_binding_path = db_dir_path / f"{case_id}.report-run.json"
+    if run_ledger_path.exists() or report_binding_path.exists():
+        raise click.ClickException(
+            "Durable run state exists; regenerate reports through the investigation "
+            "finalize step so report/run commitments remain exact"
+        )
 
     click.echo(f"Loading case '{case_id}' from {db_path} ...")
 
@@ -1117,6 +1125,139 @@ def verify_linux_live_cmd(bundle_path: Path, json_output: bool) -> None:
         raise click.exceptions.Exit(exit_code)
 
 
+@cli.command("intake-collection")
+@click.argument("source", type=click.Path(path_type=Path, exists=True))
+@click.argument("case_id")
+@click.option(
+    "--format",
+    "collection_format",
+    type=click.Choice(["auto", "kape", "velociraptor"]),
+    default="auto",
+    show_default=True,
+)
+@click.option("--collector-version", help="Examiner-asserted collector version.")
+@click.option("--collection-id", help="Examiner-asserted collector run/flow identifier.")
+@click.option("--host", help="Examiner-asserted collected host identifier.")
+@click.option("--db-dir", default=DEFAULT_DB_DIR, show_default=True)
+def intake_collection_cmd(
+    source: Path,
+    case_id: str,
+    collection_format: str,
+    collector_version: str | None,
+    collection_id: str | None,
+    host: str | None,
+    db_dir: str,
+) -> None:
+    """Immutably inventory and register a KAPE or Velociraptor export."""
+    from typing import Literal, cast
+
+    from mulder.adapters import IntakeError, ingest_collection
+
+    try:
+        result = ingest_collection(
+            source,
+            case_id,
+            Path(db_dir),
+            collection_format=cast(
+                "Literal['auto', 'kape', 'velociraptor']", collection_format
+            ),
+            collector_version=collector_version,
+            collection_id=collection_id,
+            host=host,
+        )
+    except (IntakeError, OSError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(result.model_dump_json(indent=2))
+
+
+@cli.command("run-status")
+@click.argument("case_id")
+@click.argument("run_id")
+@click.option("--db-dir", default=DEFAULT_DB_DIR, show_default=True)
+def run_status_cmd(case_id: str, run_id: str, db_dir: str) -> None:
+    """Show a durable investigation run handle and completed checkpoints."""
+    from mulder.run_state import RunLedger, RunStateError
+
+    root = Path(db_dir).expanduser()
+    ledger_path = root / f"{case_id}.runs.db"
+    if not ledger_path.is_file():
+        raise click.ClickException(f"Run ledger not found: {ledger_path}")
+    try:
+        handle = RunLedger(
+            case_id,
+            ledger_path,
+            root / f"{case_id}.audit.jsonl",
+        ).status(run_id)
+    except (RunStateError, OSError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(handle.model_dump_json(indent=2))
+
+
+@cli.command("cancel-run")
+@click.argument("case_id")
+@click.argument("run_id")
+@click.option("--requested-by", required=True, help="Examiner requesting cancellation.")
+@click.option("--db-dir", default=DEFAULT_DB_DIR, show_default=True)
+def cancel_run_cmd(case_id: str, run_id: str, requested_by: str, db_dir: str) -> None:
+    """Request cooperative cancellation at the next safe phase boundary."""
+    from mulder.run_state import RunLedger, RunStateError
+
+    root = Path(db_dir).expanduser()
+    ledger_path = root / f"{case_id}.runs.db"
+    if not ledger_path.is_file():
+        raise click.ClickException(f"Run ledger not found: {ledger_path}")
+    try:
+        handle = RunLedger(
+            case_id,
+            ledger_path,
+            root / f"{case_id}.audit.jsonl",
+        ).request_cancel(run_id, requested_by=requested_by)
+    except (RunStateError, OSError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(handle.model_dump_json(indent=2))
+
+
+@cli.command("forecast-run")
+@click.argument("evidence_path", type=click.Path(path_type=Path, exists=True))
+@click.option(
+    "--profile",
+    type=click.Choice(["quick", "full"]),
+    default="full",
+    show_default=True,
+)
+@click.option(
+    "--db-dir",
+    default=DEFAULT_DB_DIR,
+    show_default=True,
+    type=click.Path(path_type=Path, file_okay=False),
+    help="Planned case-database output directory whose filesystem is measured.",
+)
+@click.option(
+    "--cwd",
+    default=DEFAULT_WORKSPACE_DIR,
+    show_default=True,
+    type=click.Path(path_type=Path, file_okay=False),
+    help="Planned workspace output directory whose filesystem is measured.",
+)
+def forecast_run_cmd(
+    evidence_path: Path,
+    profile: str,
+    db_dir: Path,
+    cwd: Path,
+) -> None:
+    """Print a conservative local capacity forecast without starting a model."""
+    from typing import cast
+
+    from mulder.run_state import RunProfile, forecast_health
+
+    forecast = forecast_health(
+        evidence_path,
+        cast("RunProfile", profile),
+        working_paths=(db_dir, cwd),
+    )
+    click.echo(forecast.model_dump_json(indent=2))
+
+
 @cli.command()
 @click.argument("evidence_path")
 @click.argument("case_id")
@@ -1202,6 +1343,24 @@ def verify_linux_live_cmd(bundle_path: Path, json_output: bool) -> None:
     is_flag=True,
     help="Validate a persisted approval and run only the report phase.",
 )
+@click.option(
+    "--profile",
+    type=click.Choice(["quick", "full"]),
+    default=None,
+    help="Run profile (new runs default to full; resumes inherit their profile).",
+)
+@click.option("--run-id", default=None, help="Caller-selected handle for a new run.")
+@click.option(
+    "--resume-run",
+    "resume_run_id",
+    default=None,
+    help="Resume this durable run handle after validating its input and profile.",
+)
+@click.option(
+    "--require-healthy",
+    is_flag=True,
+    help="Refuse to start when the conservative capacity forecast is not ready.",
+)
 def investigate(
     evidence_path: str,
     case_id: str,
@@ -1219,6 +1378,10 @@ def investigate(
     zero_egress: bool | None,
     approval_before_report: bool,
     resume_after_approval: bool,
+    profile: str | None,
+    run_id: str | None,
+    resume_run_id: str | None,
+    require_healthy: bool,
 ) -> None:
     """Run a full multi-pass forensic investigation.
 
@@ -1244,11 +1407,23 @@ def investigate(
     from mulder.orchestrator.models import ModelConfig
     from mulder.orchestrator.runner import Orchestrator
     from mulder.orchestrator.types import EffortLevel
+    from mulder.run_state import (
+        RunCancelled,
+        RunHandle,
+        RunLedger,
+        RunProfile,
+        RunStateError,
+        forecast_health,
+    )
 
     if approval_before_report and resume_after_approval:
         raise click.UsageError(
             "--approval-before-report and --resume-after-approval are mutually exclusive"
         )
+    if resume_after_approval and resume_run_id is None:
+        raise click.UsageError("--resume-after-approval requires --resume-run RUN_ID")
+    if run_id is not None and resume_run_id is not None:
+        raise click.UsageError("--run-id and --resume-run are mutually exclusive")
 
     model_config = ModelConfig.from_args(
         model=model,
@@ -1296,6 +1471,53 @@ def investigate(
 
     log_dir = Path(db_dir).expanduser()
     log_dir.mkdir(parents=True, exist_ok=True)
+    selected_profile = cast("RunProfile", profile or "full")
+    if resume_run_id is not None:
+        ledger_path = log_dir / f"{case_id}.runs.db"
+        if not ledger_path.is_file():
+            raise click.ClickException(f"Run ledger not found: {ledger_path}")
+        try:
+            persisted = RunLedger(
+                case_id,
+                ledger_path,
+                log_dir / f"{case_id}.audit.jsonl",
+            ).status(resume_run_id)
+        except (RunStateError, OSError) as exc:
+            raise click.ClickException(str(exc)) from exc
+        if profile is not None and profile != persisted.profile:
+            raise click.UsageError(
+                f"--profile {profile} does not match resumed profile {persisted.profile}"
+            )
+        selected_profile = persisted.profile
+
+    evidence = Path(evidence_path).expanduser()
+    if evidence.is_file() or evidence.is_dir():
+        try:
+            health = forecast_health(
+                evidence,
+                selected_profile,
+                working_paths=(log_dir, cwd_path),
+            )
+        except (OSError, RunStateError) as exc:
+            raise click.ClickException(f"Health forecast failed: {exc}") from exc
+        click.echo(
+            "Health forecast: "
+            f"{'ready' if health.ready else 'not ready'}, "
+            f"{health.evidence_files} files, "
+            f"{health.estimated_minutes_low}-{health.estimated_minutes_high} min",
+            err=True,
+        )
+        for warning in health.warnings:
+            click.echo(f"  Warning: {warning}", err=True)
+        if require_healthy and not health.ready:
+            raise click.ClickException("Capacity forecast is not ready")
+    elif require_healthy:
+        raise click.ClickException(f"Evidence path is unavailable: {evidence}")
+    else:
+        click.echo(
+            f"Health forecast unavailable: evidence path does not exist: {evidence}",
+            err=True,
+        )
     log_file = log_dir / "orchestrator.log"
     file_handler = logging.FileHandler(str(log_file), mode="a")
     file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
@@ -1312,7 +1534,10 @@ def investigate(
     click.echo(f"  Planner:  {model_config.planner}", err=True)
     click.echo(f"  Executor: {model_config.executor}", err=True)
     click.echo(f"  Analyst:  {model_config.analyst}", err=True)
-    click.echo(f"Effort: {effort}, Workers: {workers}", err=True)
+    click.echo(
+        f"Effort: {effort}, Workers: {workers}, Profile: {selected_profile}",
+        err=True,
+    )
     click.echo(
         f"Data policy: {model_config.data_policy.value}, "
         f"Zero egress: {'enabled' if model_config.zero_egress else 'disabled'}",
@@ -1324,21 +1549,32 @@ def investigate(
     )
     click.echo(f"Logging to {log_file}", err=True)
 
-    orchestrator = Orchestrator(
-        evidence_path=evidence_path,
-        cwd=cwd,
-        model_config=model_config,
-        # click.Choice above is the validation boundary for this value.
-        effort=cast("EffortLevel", effort),
-        env={},
-        parallel_extractions=workers,
-        proxy_config=proxy_config,
-        case_id=case_id,
-        db_dir=log_dir,
-        approval_before_report=approval_before_report,
-        resume_after_approval=resume_after_approval,
-        run_event_path=log_dir / f"{case_id}.audit.jsonl",
-    )
+    try:
+        orchestrator = Orchestrator(
+            evidence_path=evidence_path,
+            cwd=cwd,
+            model_config=model_config,
+            # click.Choice above is the validation boundary for this value.
+            effort=cast("EffortLevel", effort),
+            env={},
+            parallel_extractions=workers,
+            proxy_config=proxy_config,
+            case_id=case_id,
+            db_dir=log_dir,
+            approval_before_report=approval_before_report,
+            resume_after_approval=resume_after_approval,
+            run_event_path=log_dir / f"{case_id}.audit.jsonl",
+            run_profile=selected_profile,
+            run_id=resume_run_id or run_id,
+            resume_run=resume_run_id is not None,
+            run_state_path=log_dir / f"{case_id}.runs.db",
+        )
+    except (OSError, RunStateError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    durable_handle = orchestrator.run_handle
+    if isinstance(durable_handle, RunHandle):
+        click.echo(f"Run handle: {durable_handle.run_id}", err=True)
 
     from mulder.orchestrator.errors import (
         AuthenticationError,
@@ -1387,6 +1623,14 @@ def investigate(
         orchestrator.dashboard.stop()
         click.echo(f"\nError: {exc}", err=True)
         raise SystemExit(2) from None
+    except RunCancelled as exc:
+        orchestrator.dashboard.stop()
+        click.echo(f"\nCancelled: {exc}", err=True)
+        raise SystemExit(1) from None
+    except RunStateError as exc:
+        orchestrator.dashboard.stop()
+        click.echo(f"\nRun state error: {exc}", err=True)
+        raise SystemExit(2) from None
 
     orchestrator.dashboard.print_summary(result)
 
@@ -1399,7 +1643,7 @@ def investigate(
             )
         click.echo(
             f"After approval, resume with: mulder investigate {evidence_path} {case_id} "
-            "--resume-after-approval",
+            f"--resume-run {result.run_id} --resume-after-approval",
             err=True,
         )
 

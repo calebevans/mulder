@@ -145,6 +145,9 @@ class InvestigationResult:
         success: Whether the full investigation succeeded.
         review_state: Optional durable approval checkpoint state.
         approval_request_id: Request to approve before a report-only resume.
+        run_id: Durable restart handle when run persistence is enabled.
+        profile: Investigation resource profile.
+        coverage_ceiling: Strongest coverage statement the profile permits.
     """
 
     phases: list[PhaseResult] = field(default_factory=list)
@@ -152,6 +155,9 @@ class InvestigationResult:
     success: bool = False
     review_state: str = "not_required"
     approval_request_id: str | None = None
+    run_id: str | None = None
+    profile: Literal["quick", "full"] = "full"
+    coverage_ceiling: Literal["sampled", "evidence_bounded"] = "evidence_bounded"
 
 
 def extract_json_plan(messages: list[str]) -> dict[str, Any] | None:
