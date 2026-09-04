@@ -8,3 +8,4 @@
 | [Usage Guide](usage-guide.md) | Try-it-out instructions: pulling the image, configuring providers, running investigations |
 | [Glossary](glossary.md) | Project terminology, forensic artifact definitions, and architecture concepts |
 | [Verified-claim Graph](graph-projection.md) | Deterministic projection, bounded pivots, provenance selectors, and static views |
+| [Plugin Packs](plugin-packs.md) | Opt-in declarative discovery, capability ceilings, compatibility, SBOM, and build provenance |

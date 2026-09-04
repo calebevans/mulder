@@ -1,0 +1,6 @@
+{
+  "tools": ["search"],
+  "path_scopes": ["pack_read"],
+  "write_scopes": [],
+  "max_network": "none"
+}

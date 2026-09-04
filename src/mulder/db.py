@@ -54,11 +54,13 @@ from mulder.models import (
     ToolOutcomeStatus,
     WindowRow,
 )
+from mulder.plugin_packs import _define_plugin_tables
 from mulder.reasoning import _define_reasoning_tables
 
 if TYPE_CHECKING:
     from mulder.graph import EdgeProvenance, GraphBuildResult, GraphSnapshot
     from mulder.graph_query import GraphQueryRequest, GraphQueryResult
+    from mulder.plugin_packs import PluginActivation, PluginActivationRequest
     from mulder.reasoning import (
         ReasoningCommand,
         ReasoningReviewProjection,
@@ -251,6 +253,9 @@ hypothesis_test_results_t = _reasoning_tables.test_results
 hypothesis_contradictions_t = _reasoning_tables.contradictions
 contradiction_resolutions_t = _reasoning_tables.contradiction_resolutions
 review_verdicts_t = _reasoning_tables.review_verdicts
+
+_plugin_tables = _define_plugin_tables(metadata)
+plugin_activations_t = _plugin_tables.activations
 
 evidence_registry_t = Table(
     "evidence_registry",
@@ -476,6 +481,11 @@ def _migrate_add_reasoning_review(conn: Connection) -> None:
     hypothesis_contradictions_t.create(conn, checkfirst=True)
     contradiction_resolutions_t.create(conn, checkfirst=True)
     review_verdicts_t.create(conn, checkfirst=True)
+
+
+def _migrate_add_plugin_activations(conn: Connection) -> None:
+    """Create the additive examiner-approved pack activation ledger."""
+    plugin_activations_t.create(conn, checkfirst=True)
 
 
 def _migrate_add_coverage_register(conn: Connection) -> None:
@@ -763,6 +773,7 @@ class CaseDB:
             _migrate_add_finding_revisions(conn)
             _migrate_add_entity_graph(conn)
             _migrate_add_reasoning_review(conn)
+            _migrate_add_plugin_activations(conn)
         return db
 
     def close(self) -> None:
@@ -1713,6 +1724,27 @@ class CaseDB:
 
         with self._engine.connect() as conn:
             return _read_review_projection(conn, self._get_case_id())
+
+    def activate_plugin_packs(
+        self, request: PluginActivationRequest
+    ) -> tuple[PluginActivation, ...]:
+        """Validate and persist explicitly selected declarative plugin packs."""
+        from mulder.plugin_packs import _persist_activations
+
+        case_id = self._get_case_id()
+
+        def _do_activate() -> tuple[PluginActivation, ...]:
+            with self._engine.begin() as conn:
+                return _persist_activations(conn, case_id, request)
+
+        return self._wq.submit(_do_activate)
+
+    def get_plugin_activations(self) -> tuple[PluginActivation, ...]:
+        """Return immutable plugin activation metadata for this case."""
+        from mulder.plugin_packs import _read_activations
+
+        with self._engine.connect() as conn:
+            return _read_activations(conn, self._get_case_id())
 
     def update_finding(
         self,

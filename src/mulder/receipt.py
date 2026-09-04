@@ -10,7 +10,7 @@ import sqlite3
 import stat
 import tempfile
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, cast
@@ -77,6 +77,9 @@ class ReplayInventory:
     extractor_versions: Mapping[str, str]
     tool_versions: Mapping[str, str]
     parser_versions: Mapping[str, str]
+    binary_versions: Mapping[str, str] = field(default_factory=dict)
+    component_digests: Mapping[str, str] = field(default_factory=dict)
+    plugin_digests: Mapping[str, str] = field(default_factory=dict)
 
     @classmethod
     def current(cls) -> ReplayInventory:
@@ -103,6 +106,9 @@ class ReplayInventory:
             versions("extractor_versions"),
             versions("tool_versions"),
             versions("parser_versions"),
+            versions("binary_versions"),
+            versions("component_digests"),
+            versions("plugin_digests"),
         )
 
 
@@ -506,6 +512,9 @@ def _replay_contract(case_id: str, db_path: Path, db_dir: Path) -> dict[str, obj
     """Record versioned inputs without running a parser, model, or forensic tool."""
     tools: dict[str, str] = {}
     parsers: dict[str, str] = {}
+    binaries: dict[str, str] = {}
+    component_digests: dict[str, str] = {}
+    plugin_digests: dict[str, str] = {}
     unknown: list[str] = []
     connection = _connect_read_only(db_path)
     try:
@@ -554,6 +563,56 @@ def _replay_contract(case_id: str, db_path: Path, db_dir: Path) -> dict[str, obj
                     tools[key] = verifier_version
                 else:
                     unknown.append(f"tool:{key}")
+        if "plugin_activations" in table_names:
+            rows = connection.execute(
+                "SELECT plugin_id, plugin_version, plugin_digest, components "
+                "FROM plugin_activations ORDER BY plugin_id"
+            ).fetchall()
+            for plugin_id, plugin_version, plugin_digest, components_json in rows:
+                plugin_key = f"{plugin_id}@{plugin_version}"
+                if isinstance(plugin_digest, str):
+                    plugin_digests[plugin_key] = plugin_digest
+                else:
+                    unknown.append(f"plugin:{plugin_key}:digest")
+                try:
+                    components = json.loads(cast(str, components_json))
+                except (json.JSONDecodeError, TypeError):
+                    unknown.append(f"plugin:{plugin_key}:components_invalid")
+                    continue
+                if not isinstance(components, list):
+                    unknown.append(f"plugin:{plugin_key}:components_invalid")
+                    continue
+                for index, component in enumerate(components):
+                    if not isinstance(component, dict):
+                        unknown.append(f"plugin:{plugin_key}:component:{index}:invalid")
+                        continue
+                    kind = component.get("kind")
+                    name = component.get("name")
+                    version = component.get("version")
+                    digest = component.get("digest")
+                    if not all(
+                        isinstance(value, str) and value for value in (kind, name, version)
+                    ):
+                        unknown.append(f"plugin:{plugin_key}:component:{index}:invalid")
+                        continue
+                    component_key = f"plugin:{plugin_key}/{kind}:{name}"
+                    target = (
+                        tools
+                        if kind == "tool"
+                        else parsers
+                        if kind == "parser"
+                        else binaries
+                        if kind == "binary"
+                        else None
+                    )
+                    if target is None:
+                        unknown.append(f"plugin:{plugin_key}:component:{index}:kind")
+                        continue
+                    target[component_key] = cast(str, version)
+                    if isinstance(digest, str) and digest:
+                        component_digests[component_key] = digest
+                    else:
+                        unknown.append(f"plugin:{plugin_key}:component:{index}:digest")
     finally:
         connection.close()
 
@@ -581,9 +640,59 @@ def _replay_contract(case_id: str, db_path: Path, db_dir: Path) -> dict[str, obj
         "extractor_versions": {},  # filled from the transactional DB snapshot
         "tool_versions": dict(sorted(tools.items())),
         "parser_versions": dict(sorted(parsers.items())),
+        "binary_versions": dict(sorted(binaries.items())),
+        "component_digests": dict(sorted(component_digests.items())),
+        "plugin_digests": dict(sorted(plugin_digests.items())),
         "model_inputs": sorted(set(models)),
         "unknown_versions": sorted(set(unknown)),
     }
+
+
+def _receipt_plugin_activations(db_path: Path) -> tuple[dict[str, object], ...]:
+    """Read the immutable activation ledger for visible receipt metadata."""
+    connection = _connect_read_only(db_path)
+    try:
+        exists = connection.execute(
+            "SELECT 1 FROM sqlite_schema WHERE type = 'table' "
+            "AND name = 'plugin_activations'"
+        ).fetchone()
+        if exists is None:
+            return ()
+        rows = connection.execute(
+            "SELECT activation_id, plugin_id, plugin_name, plugin_version, "
+            "plugin_license, manifest_digest, plugin_digest, capabilities, "
+            "components, manifest_path, activated_at FROM plugin_activations "
+            "ORDER BY plugin_id"
+        ).fetchall()
+        activations: list[dict[str, object]] = []
+        for row in rows:
+            try:
+                capabilities = json.loads(cast(str, row[7]))
+                components = json.loads(cast(str, row[8]))
+            except (json.JSONDecodeError, TypeError) as exc:
+                raise SealError(f"Plugin activation metadata is invalid: {row[0]}") from exc
+            if not isinstance(capabilities, dict) or not isinstance(components, list):
+                raise SealError(f"Plugin activation metadata is invalid: {row[0]}")
+            activations.append(
+                {
+                    "activation_id": row[0],
+                    "plugin": {
+                        "plugin_id": row[1],
+                        "name": row[2],
+                        "version": row[3],
+                        "license": row[4],
+                    },
+                    "manifest_digest": row[5],
+                    "plugin_digest": row[6],
+                    "capabilities": capabilities,
+                    "components": components,
+                    "manifest_path": row[9],
+                    "activated_at": row[10],
+                }
+            )
+        return tuple(activations)
+    finally:
+        connection.close()
 
 
 def assess_replay(
@@ -630,24 +739,33 @@ def assess_replay(
         reasons.append(
             f"mulder version drift: recorded {recorded_mulder}, current {current.mulder_version}"
         )
-    for field, observed in (
+    legacy_required = {"extractor_versions", "tool_versions", "parser_versions"}
+    for inventory_field, observed in (
         ("extractor_versions", current.extractor_versions),
         ("tool_versions", current.tool_versions),
         ("parser_versions", current.parser_versions),
+        ("binary_versions", current.binary_versions),
+        ("component_digests", current.component_digests),
+        ("plugin_digests", current.plugin_digests),
     ):
-        recorded = contract.get(field)
+        recorded = contract.get(inventory_field)
+        if recorded is None and inventory_field not in legacy_required:
+            # Version-1 manifests sealed before plugin packs lacked these additive
+            # inventories.  They remain verifiable under their original contract.
+            continue
         if not isinstance(recorded, dict) or not all(
             isinstance(key, str) and isinstance(value, str) for key, value in recorded.items()
         ):
-            missing.append(f"recorded {field} inventory is invalid")
+            missing.append(f"recorded {inventory_field} inventory is invalid")
             continue
         for name, version in cast(dict[str, str], recorded).items():
             current_version = observed.get(name)
             if current_version is None:
-                missing.append(f"current {field}:{name} is unavailable")
+                missing.append(f"current {inventory_field}:{name} is unavailable")
             elif current_version != version:
                 reasons.append(
-                    f"{field}:{name} drift: recorded {version}, current {current_version}"
+                    f"{inventory_field}:{name} drift: recorded {version}, "
+                    f"current {current_version}"
                 )
     if missing:
         return ReplayAssessment("UNSUPPORTED", tuple(missing))
@@ -826,6 +944,7 @@ def seal_case(
 
     replay = _replay_contract(case_id, db_path, db_dir)
     replay["extractor_versions"] = dict(sorted(database.extractor_versions.items()))
+    plugin_activations = _receipt_plugin_activations(db_path)
     manifest: dict[str, object] = {
         "schema": MANIFEST_SCHEMA,
         "version": MANIFEST_VERSION,
@@ -869,6 +988,7 @@ def seal_case(
             "mulder_version": __version__,
             "extractor_versions": database.extractor_versions,
             "audit_tool_counts": dict(sorted(tool_counts.items())),
+            "plugin_activations": list(plugin_activations),
             "replay": replay,
         },
         "reports": reports,
