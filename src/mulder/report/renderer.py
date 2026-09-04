@@ -1093,6 +1093,21 @@ class ReportRenderer:
         )
         normalized_coverage = [_normalize_coverage(record) for record in coverage_records or []]
         proof_card_data = [dict(card) for card in proof_cards or ()]
+        case_review_data = dict(case_review) if case_review is not None else None
+        if graph_results is None and case_review_data is not None:
+            graph_state = case_review_data.get("graph")
+            if isinstance(graph_state, Mapping):
+                graph_items = graph_state.get("items")
+                if isinstance(graph_items, (list, tuple)):
+                    graph_results = cast(
+                        Sequence[GraphQueryResult | dict[str, Any]], graph_items
+                    )
+        if reasoning_review is None and case_review_data is not None:
+            reasoning_state = case_review_data.get("reasoning")
+            if isinstance(reasoning_state, Mapping):
+                projection = reasoning_state.get("projection")
+                if isinstance(projection, dict):
+                    reasoning_review = projection
         graph_visualizations = [
             render_graph_visualization(
                 result
@@ -1279,7 +1294,7 @@ class ReportRenderer:
             "coverage_records": coverage_data,
             "proof_cards": proof_card_data,
             "proof_cards_by_id": proof_cards_by_id,
-            "case_review": dict(case_review) if case_review is not None else None,
+            "case_review": case_review_data,
             "graph_visualizations": graph_visualizations,
             "reasoning_review": reasoning_review_data,
             "has_reasoning_review": has_reasoning_review,

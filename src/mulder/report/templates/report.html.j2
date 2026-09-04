@@ -1082,7 +1082,7 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
           <tbody>{% for phase in case_review.phases %}<tr><td>{{ phase.name }}</td><td><code>{{ phase.state }}</code></td><td>{{ phase.basis | join('; ') or 'No durable state' }}</td></tr>{% endfor %}</tbody>
         </table>
       </div>
-      <p style="opacity:0.7;margin-top:0.75rem;">Placeholders — contradictions: <code>{{ case_review.contradictions.status }}</code>; follow-ups: <code>{{ case_review.follow_ups.status }}</code>; graph: <code>{{ case_review.graph.status }}</code>.</p>
+      <p style="opacity:0.7;margin-top:0.75rem;">Reasoning: <code>{{ case_review.reasoning.status }}</code> ({{ case_review.reasoning.projection.hypotheses | length }} hypotheses; {{ case_review.contradictions["items"] | length }} contradictions). Verified-claim graph: <code>{{ case_review.graph.status }}</code> ({{ case_review.graph["items"] | length }} bounded views). Follow-ups: <code>{{ case_review.follow_ups.status }}</code>.</p>
     </div>
   </div>
   {% endif %}

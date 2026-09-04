@@ -20,6 +20,13 @@ from mulder.cli import cli
 from mulder.db import CaseDB
 from mulder.models import AtomicClaimInput, EvidenceAnchorInput, Finding, WindowRow
 from mulder.orchestrator.display import InvestigationDashboard
+from mulder.reasoning import (
+    CreateHypothesis,
+    EstimatedCost,
+    HypothesisDiscriminatorInput,
+    RecordContradiction,
+    RecordReviewVerdict,
+)
 from mulder.review.events import RunEventDraft, RunEventJournal
 from mulder.review.model import ReviewQuery, query_case_review
 from mulder.review.web import ReviewConsoleConfig, ReviewConsoleError, create_review_app
@@ -157,7 +164,7 @@ def _build_case(tmp_path: Path, case_id: str = "console-case") -> ConsoleFixture
             AtomicClaimInput(
                 statement="A script-shaped literal was observed",
                 subject="source:host.events",
-                predicate="contains_literal",
+                predicate="image_name",
                 object_value=malicious_text,
                 anchors=[
                     EvidenceAnchorInput(
@@ -166,6 +173,7 @@ def _build_case(tmp_path: Path, case_id: str = "console-case") -> ConsoleFixture
                         char_start=start,
                         char_end=start + len(malicious_text),
                         expected_text=malicious_text,
+                        normalized_value=malicious_text,
                     )
                 ],
             )
@@ -173,6 +181,44 @@ def _build_case(tmp_path: Path, case_id: str = "console-case") -> ConsoleFixture
     )
     claims = db.get_claims(finding_id)
     anchor_id = claims[0].anchors[0].anchor_id
+    assert db.verify_finding_claims(finding_id)[0].result == "verified"
+    hypothesis = db.record_reasoning(
+        CreateHypothesis(
+            competing_group=f"browser-review-{case_id}",
+            title=f"Alternative {malicious_title}",
+            statement=f"Review the literal {malicious_text} as a competing explanation.",
+            discriminators=(
+                HypothesisDiscriminatorInput(
+                    expected_observation="A second independently anchored event is present.",
+                    falsifier="No independent event is recovered.",
+                    estimated_cost=EstimatedCost(amount=3, unit="minutes"),
+                ),
+            ),
+            author_id="counter-analyst",
+        )
+    )
+    contradiction = db.record_reasoning(
+        RecordContradiction(
+            hypothesis_id=hypothesis.hypothesis_id,
+            description=f"Unresolved {malicious_text}",
+            material=True,
+            claim_ids=(claims[0].claim_id,),
+            author_id="contradiction-reviewer",
+        )
+    )
+    db.record_reasoning(
+        RecordReviewVerdict(
+            seat="contradiction",
+            target_kind="contradiction",
+            target_id=contradiction.contradiction_id,
+            verdict="concern",
+            rationale=f"Do not execute {malicious_text}",
+            reviewer_id="specialist",
+            material=True,
+            claim_ids=(claims[0].claim_id,),
+        )
+    )
+    db.rebuild_entity_graph()
     db.close()
     return ConsoleFixture(
         case_id=case_id,
@@ -337,12 +383,47 @@ async def test_console_uses_review_model_and_escapes_evidence_html(tmp_path: Pat
     assert api_response.status_code == 200
     assert api_response.json() == direct.model_dump(mode="json", by_alias=True)
     assert api_response.headers["x-content-type-options"] == "nosniff"
+    assert direct.reasoning.status == "available"
+    assert direct.contradictions.items
+    assert direct.graph.status == "available"
+    assert direct.graph.items[0].edges[0].evidence_selector.anchors[0].anchor_id == (
+        fixture.anchor_id
+    )
+
+    reasoning_response = await _request(
+        app, "GET", f"/api/cases/{fixture.case_id}/reasoning"
+    )
+    graph_response = await _request(app, "GET", f"/api/cases/{fixture.case_id}/graph")
+    assert reasoning_response.json() == direct.reasoning.model_dump(mode="json")
+    assert graph_response.json() == direct.graph.model_dump(mode="json")
+    entity_id = direct.graph.items[0].nodes[0].entity.entity_id
+    selected_graph = await _request(
+        app,
+        "GET",
+        f"/api/cases/{fixture.case_id}/graph?entity_id={entity_id}&depth=1&limit=1",
+    )
+    selected_payload = selected_graph.json()
+    assert isinstance(selected_payload, dict)
+    assert selected_payload["items"][0]["limits"]["result_limit"] == 1
+    assert (
+        await _request(
+            app,
+            "GET",
+            f"/api/cases/{fixture.case_id}/graph?entity_id={entity_id}&limit=101",
+        )
+    ).status_code == 400
 
     page = await _request(app, "GET", f"/cases/{fixture.case_id}")
     assert page.status_code == 200
     assert fixture.malicious_title not in page.text
     assert "&lt;img src=x onerror=alert" in page.text
     assert fixture.malicious_text not in page.text
+    assert "Competing hypotheses and specialist review" in page.text
+    assert "Verified-claim graph" in page.text
+    assert f"anchor {fixture.anchor_id}" in page.text
+    assert "&lt;script&gt;alert" in page.text
+    evidence_href = f'/cases/{fixture.case_id}/evidence/{fixture.anchor_id}'
+    assert page.text.count(f'href="{evidence_href}"') >= 2
     match = re.search(r'href="([^"]+/evidence/([^"]+))"', page.text)
     assert match is not None
     assert match.group(2) == fixture.anchor_id
@@ -373,6 +454,8 @@ async def test_cross_case_isolation_and_no_mutating_routes(tmp_path: Path) -> No
     second = _build_case(tmp_path, "case-b")
     app = create_review_app(ReviewConsoleConfig(first.case_id, first.case_dir))
     before = first.database.read_bytes()
+    second_review = query_case_review(ReviewQuery(second.case_id, second.case_dir))
+    foreign_entity_id = second_review.graph.items[0].nodes[0].entity.entity_id
 
     assert (await _request(app, "GET", f"/api/cases/{second.case_id}")).status_code == 404
     assert (
@@ -382,6 +465,16 @@ async def test_cross_case_isolation_and_no_mutating_routes(tmp_path: Path) -> No
     ).status_code == 404
     first_page = await _request(app, "GET", f"/cases/{first.case_id}")
     assert second.malicious_title not in first_page.text
+    foreign_graph = await _request(
+        app,
+        "GET",
+        f"/api/cases/{first.case_id}/graph?entity_id={foreign_entity_id}",
+    )
+    foreign_payload = foreign_graph.json()
+    assert isinstance(foreign_payload, dict)
+    assert foreign_payload["items"][0]["nodes"] == []
+    assert foreign_payload["items"][0]["edges"] == []
+    assert "case-b" not in foreign_graph.text
 
     case_path = f"/api/cases/{first.case_id}"
     for method in ("POST", "PUT", "PATCH", "DELETE"):
@@ -390,4 +483,5 @@ async def test_cross_case_isolation_and_no_mutating_routes(tmp_path: Path) -> No
     for route in app.routes:
         methods = getattr(route, "methods", set())
         assert methods <= {"GET", "HEAD"}
+        assert "tool" not in getattr(route, "path", "")
     assert first.database.read_bytes() == before

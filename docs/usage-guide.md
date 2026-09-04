@@ -621,11 +621,20 @@ starts MCP, a model, a web server, or a network client.
 Finding rows, exact evidence anchors, and immutable revision snapshots have independent
 offset/limit controls. Defaults are 100 findings, 200 anchors, and 200 revisions; enforced maxima
 are 500, 1000, and 1000. Page metadata always reports returned and total counts. Legacy missing
-tables and unavailable contradiction/follow-up/graph projections are explicit states, never empty
-facts interpreted as a completed or clean investigation.
+tables remain explicit states, never empty facts interpreted as a completed or clean investigation.
+The same document also carries the authoritative competing-hypothesis projection, contradictions,
+separate specialist-review seats, and one server-bounded graph query result. Graph results retain
+claim, verification, source, window, and anchor selectors. The immutable review path verifies the
+persisted graph digest against current verified claims and withholds stale or never-built graph rows
+instead of refreshing the projection or presenting them as current.
 
 The database must be quiescent: a non-empty SQLite WAL or rollback journal is rejected. Review
 uses immutable read mode so it cannot migrate the schema or create SQLite sidecars.
+
+`mulder review-console` renders those same reasoning and graph fields. Its GET-only JSON routes are
+`/api/cases/{case_id}/reasoning` and `/api/cases/{case_id}/graph`; the graph route optionally accepts
+an exact `entity_id` plus validated `depth`, `direction`, and `limit` parameters. The browser has no
+reasoning write, graph rebuild, arbitrary query-language, or tool-dispatch endpoint.
 
 Review actions are separate append-only events. Record an examiner decision or
 follow-up without rewriting a finding:

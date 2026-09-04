@@ -65,6 +65,16 @@ The four MCP tools—`neighbors`, `path_between`, `events_for_entity`, and
 report roles. They accept scalar typed parameters rather than query-language
 text.
 
+The read-only case-review projection and loopback console reuse the same
+`GraphQueryResult` type for a deterministic depth-one neighborhood (or an
+examiner-selected entity through the bounded GET route). Unlike the authorized
+`CaseDB.query_entity_graph` seam, review never rebuilds or writes the graph. It
+first derives the current verified-claim input digest inside the immutable case
+snapshot and compares it with the active persisted projection. Missing and stale
+projections are reported as `not_built` or `stale`, and their rows are withheld.
+Available edges retain their proof selectors and link to the console's exact
+case-scoped evidence drill-down.
+
 ## Projection convention
 
 Every verified atomic claim projects one directed relation from its `subject`

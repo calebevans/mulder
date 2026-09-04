@@ -86,10 +86,86 @@
       <ol id="run-events" class="event-list" aria-live="polite"></ol>
     </section>
 
+    <section>
+      <div class="section-heading">
+        <h2>Competing hypotheses and specialist review</h2>
+        <a href="{{ reasoning_url }}">JSON</a>
+      </div>
+      <p class="muted">{{ review.reasoning.status }} · {{ review.reasoning.note }}</p>
+      {% for hypothesis in review.reasoning.projection.hypotheses %}
+      <article class="proof-card">
+        <h3>{{ hypothesis.title }}</h3>
+        <p>{{ hypothesis.statement }}</p>
+        <p class="muted">Competing group: {{ hypothesis.competing_group }}</p>
+        {% for discriminator in hypothesis.discriminators %}
+        <div class="claim">
+          <p><strong>Expected:</strong> {{ discriminator.expected_observation }}</p>
+          <p><strong>Falsifier:</strong> {{ discriminator.falsifier }}</p>
+          <p class="muted">Estimated check: {{ discriminator.estimated_cost.amount }} {{ discriminator.estimated_cost.unit }}</p>
+          {% for result in discriminator.test_results %}
+          <p><span class="badge">{{ result.outcome }}</span> {{ result.summary }}</p>
+          {% endfor %}
+        </div>
+        {% endfor %}
+      </article>
+      {% else %}
+      <p>No competing hypotheses are recorded.</p>
+      {% endfor %}
+
+      <h3>Contradictions</h3>
+      {% for contradiction in review.contradictions.items %}
+      <article class="claim">
+        <p>
+          {% if contradiction.material and not contradiction.resolution %}<span class="badge">unresolved material</span>{% endif %}
+          {{ contradiction.description }}
+        </p>
+        {% if contradiction.resolution %}<p class="muted">{{ contradiction.resolution.disposition }} · {{ contradiction.resolution.rationale }}</p>{% endif %}
+      </article>
+      {% else %}
+      <p>No contradictions are recorded.</p>
+      {% endfor %}
+
+      <h3>Independent reviewer seats</h3>
+      <div class="placeholder-grid">
+      {% for seat in review.reasoning.projection.review_seats %}
+        <article>
+          <h4>{{ seat.seat }}</h4>
+          {% for verdict in seat.verdicts %}<p><span class="badge">{{ verdict.verdict }}</span> {{ verdict.rationale }}</p>{% else %}<p class="muted">No verdicts recorded.</p>{% endfor %}
+        </article>
+      {% endfor %}
+      </div>
+    </section>
+
+    <section>
+      <div class="section-heading">
+        <h2>Verified-claim graph</h2>
+        <a href="{{ graph_url }}">JSON</a>
+      </div>
+      <p class="muted">{{ review.graph.status }} · {{ review.graph.note }}</p>
+      {% for result in review.graph.items %}
+      <p>{{ result.edges|length }} edge(s), {{ result.nodes|length }} node(s); limit {{ result.limits.result_limit }}{% if result.limits.truncated %} (truncated){% endif %}</p>
+      {% for edge in result.edges %}
+      <article class="claim">
+        <p>
+          <a href="{{ graph_url }}?entity_id={{ edge.relation.source_entity_id|urlencode }}">{{ graph_node_labels.get(edge.relation.source_entity_id, edge.relation.source_entity_id) }}</a>
+          · {{ edge.relation.predicate }} ·
+          <a href="{{ graph_url }}?entity_id={{ edge.relation.target_entity_id|urlencode }}">{{ graph_node_labels.get(edge.relation.target_entity_id, edge.relation.target_entity_id) }}</a>
+          <span class="badge">{{ edge.visibility }}</span>
+        </p>
+        <ul class="anchor-list">
+        {% for anchor in edge.evidence_selector.anchors %}
+          <li><a href="{{ anchor_urls.get(anchor.anchor_id, '#') }}">{{ anchor.source.source_name }} lines {{ anchor.line_start }}–{{ anchor.line_end }} · claim {{ edge.evidence_selector.claim_id }} · anchor {{ anchor.anchor_id }}</a></li>
+        {% endfor %}
+        </ul>
+      </article>
+      {% else %}
+      <p>No relations are returned by this bounded graph view.</p>
+      {% endfor %}
+      {% endfor %}
+    </section>
+
     <section class="placeholder-grid">
-      <article><h2>Contradictions</h2><p>{{ review.contradictions.status }}</p></article>
-      <article><h2>Follow-ups</h2><p>{{ review.follow_ups.status }}</p></article>
-      <article><h2>Graph</h2><p>{{ review.graph.status }}</p></article>
+      <article><h2>Follow-ups</h2><p>{{ review.follow_ups.status }} · {{ review.follow_ups.note }}</p></article>
     </section>
   </main>
   <script src="/static/review.js" defer></script>

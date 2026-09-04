@@ -13,12 +13,14 @@ from pathlib import Path
 from urllib.parse import quote
 
 from jinja2 import Environment, PackageLoader, StrictUndefined
+from pydantic import ValidationError
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from mulder.graph_query import GraphQueryRequest, NeighborsQuery
 from mulder.review.events import MAX_RUN_EVENT_PAGE, RunEventError, RunEventJournal, encode_sse
 from mulder.review.model import (
     MAX_EVIDENCE_LIMIT,
@@ -156,13 +158,18 @@ def _case_matches(request: Request, config: ReviewConsoleConfig) -> bool:
     return request.path_params.get("case_id") == config.case_id
 
 
-def _review_query(config: ReviewConsoleConfig) -> ReviewQuery:
+def _review_query(
+    config: ReviewConsoleConfig,
+    *,
+    graph_query: GraphQueryRequest | None = None,
+) -> ReviewQuery:
     return ReviewQuery(
         case_id=config.case_id,
         db_dir=config.db_dir,
         finding_limit=MAX_FINDING_LIMIT,
         evidence_limit=MAX_EVIDENCE_LIMIT,
         revision_limit=MAX_REVISION_LIMIT,
+        graph_query=graph_query,
     )
 
 
@@ -199,11 +206,26 @@ def create_review_app(config: ReviewConsoleConfig) -> Starlette:
             for claim in finding.claims
             for anchor in claim.anchors
         }
+        graph_node_labels = {
+            node.entity.entity_id: node.entity.display_value
+            for result in review.graph.items
+            for node in result.nodes
+        }
+        for result in review.graph.items:
+            for edge in result.edges:
+                for anchor in edge.evidence_selector.anchors:
+                    anchor_urls[anchor.anchor_id] = (
+                        f"/cases/{quote(config.case_id, safe='')}/evidence/"
+                        f"{quote(anchor.anchor_id, safe='')}"
+                    )
         body = _TEMPLATES.get_template("console.html.j2").render(
             review=review,
             proof_cards=review.proof_cards(),
             anchor_urls=anchor_urls,
+            graph_node_labels=graph_node_labels,
             event_url=f"/api/cases/{quote(config.case_id, safe='')}/events",
+            graph_url=f"/api/cases/{quote(config.case_id, safe='')}/graph",
+            reasoning_url=f"/api/cases/{quote(config.case_id, safe='')}/reasoning",
         )
         return HTMLResponse(body)
 
@@ -231,6 +253,41 @@ def create_review_app(config: ReviewConsoleConfig) -> Starlette:
                 "cards": review.proof_cards(),
             }
         )
+
+    async def graph_json(request: Request) -> Response:
+        if not _case_matches(request, config):
+            return Response(status_code=404)
+        graph_query: GraphQueryRequest | None = None
+        entity_id = request.query_params.get("entity_id")
+        if entity_id is not None:
+            try:
+                graph_query = NeighborsQuery.model_validate(
+                    {
+                        "entity_id": entity_id,
+                        "depth": int(request.query_params.get("depth", "1")),
+                        "direction": request.query_params.get("direction", "both"),
+                        "limit": int(request.query_params.get("limit", "50")),
+                    }
+                )
+            except (TypeError, ValueError, ValidationError):
+                return JSONResponse(
+                    {"detail": "invalid bounded graph query parameters"},
+                    status_code=400,
+                )
+        try:
+            review = query_case_review(_review_query(config, graph_query=graph_query))
+        except CaseReviewError as exc:
+            return _error_response(exc, html=False)
+        return JSONResponse(review.graph.model_dump(mode="json"))
+
+    async def reasoning_json(request: Request) -> Response:
+        if not _case_matches(request, config):
+            return Response(status_code=404)
+        try:
+            review = query_case_review(_review_query(config))
+        except CaseReviewError as exc:
+            return _error_response(exc, html=False)
+        return JSONResponse(review.reasoning.model_dump(mode="json"))
 
     def evidence(request: Request) -> EvidenceDetail:
         return query_evidence_detail(
@@ -331,6 +388,8 @@ def create_review_app(config: ReviewConsoleConfig) -> Starlette:
         ),
         Route("/api/cases/{case_id}", review_json, methods=["GET"]),
         Route("/api/cases/{case_id}/proof-cards", proof_cards_json, methods=["GET"]),
+        Route("/api/cases/{case_id}/graph", graph_json, methods=["GET"]),
+        Route("/api/cases/{case_id}/reasoning", reasoning_json, methods=["GET"]),
         Route(
             "/api/cases/{case_id}/evidence/{anchor_id}",
             evidence_json,

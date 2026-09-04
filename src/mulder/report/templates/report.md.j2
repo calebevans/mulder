@@ -90,7 +90,7 @@ the review CLI. Phase rows report durable observations, not phase-completion cla
 {% for phase in case_review.phases %}| {{ phase.name }} | `{{ phase.state }}` | {{ phase.basis | join("; ") or "No durable state" }} |
 {% endfor %}
 
-Future projections remain explicit placeholders: contradictions `{{ case_review.contradictions.status }}`, follow-ups `{{ case_review.follow_ups.status }}`, graph `{{ case_review.graph.status }}`.
+Reasoning is `{{ case_review.reasoning.status }}` with {{ case_review.reasoning.projection.hypotheses | length }} hypothesis record(s) and {{ case_review.contradictions["items"] | length }} contradiction record(s). The verified-claim graph is `{{ case_review.graph.status }}` with {{ case_review.graph["items"] | length }} bounded view(s). Follow-ups remain `{{ case_review.follow_ups.status }}`.
 {% endif %}
 {% if evidence_integrity %}
 ---

@@ -530,7 +530,6 @@ def report(case_id: str, db_dir: str) -> None:
         coverage_records = [cell.record for cell in review.coverage.matrix]
         proof_cards = review.proof_cards()
         review_data = review.model_dump(mode="json", by_alias=True)
-        reasoning_review = case_db.get_reasoning_review()
 
         audit = AuditLog(audit_path)
         audit_summary = audit.summary()
@@ -550,7 +549,6 @@ def report(case_id: str, db_dir: str) -> None:
             coverage_records=coverage_records,
             proof_cards=proof_cards,
             case_review=review_data,
-            reasoning_review=reasoning_review,
         )
         md_path.write_text(md_text, encoding="utf-8")
         click.echo(f"  Markdown: {md_path}")
@@ -585,7 +583,6 @@ def report(case_id: str, db_dir: str) -> None:
                 coverage_records=coverage_records,
                 proof_cards=proof_cards,
                 case_review=review_data,
-                reasoning_review=reasoning_review,
             )
             html_path.write_text(html_text, encoding="utf-8")
             click.echo(f"  HTML:     {html_path}")

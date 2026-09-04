@@ -26,6 +26,13 @@ from mulder.models import (
     ToolOutcomeStatus,
     WindowRow,
 )
+from mulder.reasoning import (
+    CreateHypothesis,
+    EstimatedCost,
+    HypothesisDiscriminatorInput,
+    RecordContradiction,
+    RecordReviewVerdict,
+)
 from mulder.receipt import seal_case
 from mulder.report.renderer import ReportRenderer
 from mulder.review.model import CaseReviewError, ReviewQuery, query_case_review
@@ -86,7 +93,7 @@ def _build_case(tmp_path: Path) -> ReviewFixture:
     window = db.get_windows_by_source("host.processes")[0]
     assert window.window_id is not None
     active = _finding("active", submitted_at="2026-01-01T00:00:00Z")
-    db.insert_finding(
+    active_claim = db.insert_finding(
         active,
         [
             AtomicClaimInput(
@@ -106,7 +113,7 @@ def _build_case(tmp_path: Path) -> ReviewFixture:
                 ],
             )
         ],
-    )
+    )[0]
     db.verify_finding_claims("active")
 
     key = CoverageKey(system_name="host-a", evidence_domain="process", check_name="scan")
@@ -136,6 +143,43 @@ def _build_case(tmp_path: Path) -> ReviewFixture:
     assert db.delete_finding("withdrawn", actor_kind="human", actor_id="reviewer")
     db.record_progress("host-a", ["scan"], ["Q1"], "Observed activity only")
     db.set_narrative("Preserve inference wording.")
+    hypothesis = db.record_reasoning(
+        CreateHypothesis(
+            competing_group="execution-explanation",
+            title="Interactive execution",
+            statement="An operator launched the observed process.",
+            discriminators=(
+                HypothesisDiscriminatorInput(
+                    expected_observation="An interactive parent process is present.",
+                    falsifier="The process was launched by a scheduled service.",
+                    estimated_cost=EstimatedCost(amount=5, unit="minutes"),
+                ),
+            ),
+            author_id="counter-analyst",
+        )
+    )
+    contradiction = db.record_reasoning(
+        RecordContradiction(
+            hypothesis_id=hypothesis.hypothesis_id,
+            description="Parent-process evidence is incomplete.",
+            material=True,
+            claim_ids=(active_claim.claim_id,),
+            author_id="contradiction-reviewer",
+        )
+    )
+    db.record_reasoning(
+        RecordReviewVerdict(
+            seat="inference",
+            target_kind="contradiction",
+            target_id=contradiction.contradiction_id,
+            verdict="concern",
+            rationale="The conclusion remains provisional.",
+            reviewer_id="inference-reviewer",
+            material=True,
+            claim_ids=(active_claim.claim_id,),
+        )
+    )
+    db.rebuild_entity_graph()
     db.close()
 
     audit_path = case_dir / "review-case.audit.jsonl"
@@ -193,8 +237,23 @@ def test_fixture_projects_authoritative_state_without_strengthening(tmp_path: Pa
     assert review.audit.integrity_status == "verified"
     assert [item.model for item in review.costs.recorded_model_usage] == ["model-a", "model-b"]
     assert review.follow_ups.status == "not_implemented"
-    assert review.contradictions.status == "not_implemented"
-    assert review.graph.status == "not_implemented"
+    assert review.reasoning.status == "available"
+    assert review.reasoning.projection.hypotheses[0].title == "Interactive execution"
+    assert review.reasoning.projection.review_seats[3].seat == "inference"
+    assert review.reasoning.projection.review_seats[3].verdicts[0].verdict == "concern"
+    assert review.contradictions.status == "available"
+    assert review.contradictions.items[0].description == (
+        "Parent-process evidence is incomplete."
+    )
+    assert review.contradictions.unresolved_material_ids == (
+        review.contradictions.items[0].contradiction_id,
+    )
+    assert review.graph.status == "available"
+    graph = review.graph.items[0]
+    assert graph.limits.result_limit == 50
+    assert graph.limits.depth_limit == 1
+    assert graph.edges[0].evidence_selector.claim_id == claim.claim_id
+    assert graph.edges[0].evidence_selector.anchors[0].anchor_id == claim.anchors[0].anchor_id
     assert all(not phase.completion_claimed for phase in review.phases)
 
 
@@ -289,6 +348,20 @@ def test_query_is_physically_read_only(tmp_path: Path) -> None:
     assert (wal.read_bytes() if wal.exists() else None) == wal_before
 
 
+def test_stale_graph_rows_are_withheld_without_rebuilding(tmp_path: Path) -> None:
+    fixture = _build_case(tmp_path)
+    database = CaseDB.open("review-case", fixture.case_dir)
+    assert database.delete_finding("active", actor_kind="human", actor_id="reviewer")
+    database.close()
+    before = fixture.database.read_bytes()
+
+    review = query_case_review(ReviewQuery("review-case", fixture.case_dir))
+
+    assert review.graph.status == "stale"
+    assert review.graph.items == ()
+    assert fixture.database.read_bytes() == before
+
+
 def test_query_rejects_non_quiescent_database_instead_of_ignoring_wal(tmp_path: Path) -> None:
     fixture = _build_case(tmp_path)
     wal = Path(str(fixture.database) + "-wal")
@@ -334,6 +407,9 @@ def test_legacy_case_is_explicit_and_never_migrated(tmp_path: Path) -> None:
     assert review.case.state == "legacy_compatible"
     assert review.findings.active[0].claim_state == "legacy_unavailable"
     assert review.coverage.status == "legacy_unavailable"
+    assert review.reasoning.status == "legacy_unavailable"
+    assert review.contradictions.status == "legacy_unavailable"
+    assert review.graph.status == "legacy_unavailable"
     assert "claims_absent" in review.case.legacy_states
     assert "finding_revisions_absent" in review.case.legacy_states
     assert review.audit.presence == "absent"
@@ -381,7 +457,9 @@ def test_cli_json_text_and_static_report_share_review_calculation(tmp_path: Path
     assert "Case Review Snapshot" in markdown
     assert "mulder.case-review" in markdown
     assert "cmd.exe was observed" in markdown
-    assert "not_implemented" in markdown
+    assert "Verified Entity Graph Views" in markdown
+    assert "Competing Hypotheses and Specialist Review" in markdown
+    assert "Interactive execution" in markdown
 
     report_result = runner.invoke(
         cli,

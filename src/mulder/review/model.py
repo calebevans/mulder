@@ -16,8 +16,18 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import Connection, Engine, create_engine
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.pool import StaticPool
 
 from mulder.audit import AuditLog
+from mulder.graph import _derive_relations, _projection_input_sha256
+from mulder.graph_query import (
+    GraphQueryRequest,
+    GraphQueryResult,
+    NeighborsQuery,
+    _query_graph,
+)
 from mulder.models import (
     AuditSummary,
     ClaimConfirmation,
@@ -30,6 +40,12 @@ from mulder.models import (
     FindingRevision,
     ToolOutcome,
     ToolOutcomeStatus,
+)
+from mulder.reasoning import (
+    Contradiction,
+    ReasoningReviewProjection,
+    _empty_projection,
+    _read_review_projection,
 )
 from mulder.receipt import ReplayInventory, verify_case
 from mulder.review.decisions import ReviewWorkflow, ReviewWorkflowError
@@ -215,6 +231,34 @@ class ProjectionPlaceholder(_FrozenModel):
     note: str
 
 
+class ContradictionReviewState(_FrozenModel):
+    """Authoritative case-local contradictions from the reasoning projection."""
+
+    status: Literal["available", "legacy_unavailable"]
+    items: tuple[Contradiction, ...]
+    unresolved_material_ids: tuple[str, ...]
+    note: str
+
+
+class ReasoningReviewState(_FrozenModel):
+    """The authoritative hypothesis and independent-review projection."""
+
+    status: Literal["available", "legacy_unavailable"]
+    projection: ReasoningReviewProjection
+    note: str
+
+
+class GraphReviewState(_FrozenModel):
+    """Bounded graph-query results whose persisted projection is current."""
+
+    status: Literal[
+        "available", "legacy_unavailable", "not_built", "stale"
+    ]
+    projection_id: str | None = None
+    items: tuple[GraphQueryResult, ...] = ()
+    note: str
+
+
 class ReviewActionState(_FrozenModel):
     sequence: int = Field(ge=1)
     event_id: str
@@ -254,9 +298,10 @@ class CaseReviewModel(_FrozenModel):
     costs: CostsState
     review_actions: tuple[ReviewActionState, ...]
     approval: ApprovalReviewState
-    contradictions: ProjectionPlaceholder
+    reasoning: ReasoningReviewState
+    contradictions: ContradictionReviewState
     follow_ups: ProjectionPlaceholder
-    graph: ProjectionPlaceholder
+    graph: GraphReviewState
 
     def proof_cards(self) -> list[dict[str, object]]:
         """Adapt the same bounded finding facts to the static-report interface."""
@@ -373,6 +418,7 @@ class ReviewQuery:
     evidence_root: Path | None = None
     public_key_path: Path | None = None
     replay_inventory: ReplayInventory | Mapping[str, object] | None = None
+    graph_query: GraphQueryRequest | None = None
 
     def __post_init__(self) -> None:
         if not self.case_id or Path(self.case_id).name != self.case_id:
@@ -447,6 +493,143 @@ def _open_read_only(path: Path) -> sqlite3.Connection:
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA query_only=ON")
     return connection
+
+
+def _open_read_only_snapshot(path: Path) -> tuple[Engine, Connection, sqlite3.Connection]:
+    """Open one immutable transaction through sqlite3 and SQLAlchemy adapters."""
+    engine = create_engine(
+        "sqlite+pysqlite://",
+        creator=lambda: _open_read_only(path),
+        poolclass=StaticPool,
+    )
+    sqlalchemy_connection = engine.connect()
+    try:
+        sqlalchemy_connection.begin()
+        raw = cast(sqlite3.Connection, sqlalchemy_connection.connection.driver_connection)
+        # Pysqlite does not start a read transaction for SELECT statements.
+        # Begin explicitly so both adapters observe one stable database snapshot.
+        raw.execute("BEGIN")
+    except Exception:
+        sqlalchemy_connection.close()
+        engine.dispose()
+        raise
+    return engine, sqlalchemy_connection, raw
+
+
+_REASONING_TABLES = frozenset(
+    {
+        "hypotheses",
+        "hypothesis_discriminators",
+        "hypothesis_test_results",
+        "hypothesis_contradictions",
+        "contradiction_resolutions",
+        "review_verdicts",
+    }
+)
+_GRAPH_TABLES = frozenset(
+    {
+        "claims",
+        "claim_verifications",
+        "evidence_anchors",
+        "windows",
+        "sources",
+        "graph_projections",
+        "graph_entities",
+        "graph_aliases",
+        "graph_relations",
+        "graph_events",
+        "graph_edge_anchors",
+    }
+)
+
+
+def _reasoning_state(
+    connection: Connection,
+    case_id: str,
+    tables: set[str],
+) -> ReasoningReviewState:
+    missing = sorted(_REASONING_TABLES.difference(tables))
+    if missing:
+        return ReasoningReviewState(
+            status="legacy_unavailable",
+            projection=_empty_projection(case_id),
+            note="Reasoning projection unavailable; missing tables: " + ", ".join(missing),
+        )
+    return ReasoningReviewState(
+        status="available",
+        projection=_read_review_projection(connection, case_id),
+        note=(
+            "Authoritative competing hypotheses, contradictions, test results, and "
+            "independent reviewer seats."
+        ),
+    )
+
+
+def _graph_state(
+    sqlalchemy_connection: Connection,
+    raw_connection: sqlite3.Connection,
+    case_id: str,
+    tables: set[str],
+    request: GraphQueryRequest | None,
+) -> GraphReviewState:
+    missing = sorted(_GRAPH_TABLES.difference(tables))
+    if missing:
+        return GraphReviewState(
+            status="legacy_unavailable",
+            note="Graph projection unavailable; missing tables: " + ", ".join(missing),
+        )
+
+    relations, _watermark = _derive_relations(sqlalchemy_connection, case_id)
+    expected_input = _projection_input_sha256(relations)
+    active = raw_connection.execute(
+        "SELECT projection_id, input_sha256 FROM graph_projections "
+        "WHERE case_id = ? AND state = 'active' ORDER BY projection_id LIMIT 1",
+        (case_id,),
+    ).fetchone()
+    if active is None:
+        return GraphReviewState(
+            status="not_built",
+            note=(
+                "No persisted graph projection exists for the current verified claims; "
+                "the read-only review path does not build one."
+            ),
+        )
+    projection_id = cast(str, active["projection_id"])
+    if active["input_sha256"] != expected_input:
+        return GraphReviewState(
+            status="stale",
+            projection_id=projection_id,
+            note=(
+                "The persisted graph does not match the current verified claims; stale rows "
+                "are withheld until an authorized graph rebuild occurs."
+            ),
+        )
+
+    selected_request = request
+    if selected_request is None:
+        first_entity = raw_connection.execute(
+            "SELECT entity_id FROM graph_entities WHERE case_id = ? AND state = 'active' "
+            "AND last_seen_projection_id = ? ORDER BY entity_id LIMIT 1",
+            (case_id, projection_id),
+        ).fetchone()
+        if first_entity is None:
+            return GraphReviewState(
+                status="available",
+                projection_id=projection_id,
+                note="The current authoritative graph projection contains no relations.",
+            )
+        selected_request = NeighborsQuery(
+            entity_id=cast(str, first_entity["entity_id"]),
+            depth=1,
+            limit=50,
+        )
+    result = _query_graph(sqlalchemy_connection, case_id, selected_request)
+    return GraphReviewState(
+        status="available",
+        projection_id=projection_id,
+        items=(result,),
+        note="Bounded query over the current authoritative verified-claim graph projection.",
+    )
 
 
 def _tables(connection: sqlite3.Connection) -> set[str]:
@@ -663,9 +846,8 @@ def query_case_review(query: ReviewQuery) -> CaseReviewModel:
         raise CaseReviewError(f"case database not found: {db_path}")
 
     legacy: list[str] = []
-    connection = _open_read_only(db_path)
+    engine, sqlalchemy_connection, connection = _open_read_only_snapshot(db_path)
     try:
-        connection.execute("BEGIN")
         tables = _tables(connection)
         if "case_metadata" not in tables or "findings" not in tables:
             raise CaseReviewError("database is not a readable Mulder case")
@@ -1056,13 +1238,27 @@ def query_case_review(query: ReviewQuery) -> CaseReviewModel:
                     coverage=relevant_coverage,
                 )
             )
-        connection.rollback()
-    except (sqlite3.Error, KeyError, TypeError, ValueError) as exc:
+        if not _REASONING_TABLES.issubset(tables):
+            legacy.append("reasoning_tables_absent")
+        if not _GRAPH_TABLES.issubset(tables):
+            legacy.append("graph_tables_absent")
+        reasoning = _reasoning_state(sqlalchemy_connection, query.case_id, tables)
+        graph = _graph_state(
+            sqlalchemy_connection,
+            connection,
+            query.case_id,
+            tables,
+            query.graph_query,
+        )
+    except (sqlite3.Error, SQLAlchemyError, KeyError, TypeError, ValueError) as exc:
         if isinstance(exc, CaseReviewError):
             raise
         raise CaseReviewError(f"cannot read case review from {db_path}: {exc}") from exc
     finally:
-        connection.close()
+        if sqlalchemy_connection.in_transaction():
+            sqlalchemy_connection.rollback()
+        sqlalchemy_connection.close()
+        engine.dispose()
 
     audit = _audit_state(query.case_id, case_dir)
     receipt = _receipt_state(query, case_dir)
@@ -1200,11 +1396,17 @@ def query_case_review(query: ReviewQuery) -> CaseReviewModel:
         ),
         review_actions=review_actions,
         approval=approval,
-        contradictions=ProjectionPlaceholder(
+        reasoning=reasoning,
+        contradictions=ContradictionReviewState(
+            status=reasoning.status,
+            items=reasoning.projection.contradictions,
+            unresolved_material_ids=(
+                reasoning.projection.unresolved_material_contradiction_ids
+            ),
             note=(
-                "No first-class contradiction table exists yet; claim epistemic states, "
-                "contradicting anchor roles, and verification results are preserved verbatim."
-            )
+                "Authoritative contradictions from the same reasoning projection; an empty "
+                "available collection means none are recorded, not that review is complete."
+            ),
         ),
         follow_ups=ProjectionPlaceholder(
             status="available" if "review_events" in tables else "not_implemented",
@@ -1219,9 +1421,7 @@ def query_case_review(query: ReviewQuery) -> CaseReviewModel:
                 else "No durable follow-up store exists yet; absence is not completion."
             ),
         ),
-        graph=ProjectionPlaceholder(
-            note="No authoritative graph projection exists yet; no entities or edges are inferred."
-        ),
+        graph=graph,
     )
 
 
