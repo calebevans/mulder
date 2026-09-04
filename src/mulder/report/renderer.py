@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import html
 import json
 import logging
 import re
@@ -14,7 +15,8 @@ from types import SimpleNamespace
 from typing import Any
 
 import jinja2
-import markdown
+from jinja2.sandbox import SandboxedEnvironment
+from markupsafe import Markup
 
 from mulder.models import AuditSummary, CaseMetadataRow, CoverageRecord, Finding, SourceRow
 from mulder.patterns import (
@@ -25,8 +27,23 @@ from mulder.patterns import (
     format_token_count,
     is_external_ip,
 )
+from mulder.security.evidence_envelope import escape_report_markdown, render_safe_markdown
 
 logger = logging.getLogger(__name__)
+
+_NARRATIVE_TEMPLATE_FIELDS = frozenset(
+    {
+        "finding_count",
+        "negative_count",
+        "confirmed_count",
+        "inference_count",
+        "critical_count",
+        "high_count",
+        "medium_count",
+        "sources_count",
+        "total_tool_calls",
+    }
+)
 
 
 def _normalize_finding(f: Finding | dict[str, Any]) -> Finding:
@@ -476,7 +493,7 @@ def _build_executive_summary(
     if tl:
         earliest, latest = _timeline_date_range(tl)
         if earliest and latest:
-            first_event = tl[0].title
+            first_event = html.escape(tl[0].title)
             first_ts = tl[0].event_time_start
             narrative = f"The attack timeline spans <strong>{earliest}</strong>"
             if earliest != latest:
@@ -488,14 +505,14 @@ def _build_executive_summary(
 
             crit_tl = [f for f in tl if f.severity == "critical"]
             if len(crit_tl) > 1:
-                mid_titles = [f.title for f in crit_tl[1:4]]
+                mid_titles = [html.escape(f.title) for f in crit_tl[1:4]]
                 narrative += (
                     " The investigation subsequently uncovered "
                     + "; ".join(f"<em>{t}</em>" for t in mid_titles)
                     + "."
                 )
 
-            last_event = tl[-1].title
+            last_event = html.escape(tl[-1].title)
             if len(tl) > 1 and last_event != first_event:
                 last_ts = tl[-1].event_time_start
                 narrative += f" The most recent activity was <em>{last_event}</em>"
@@ -505,7 +522,7 @@ def _build_executive_summary(
             sections.append(f"<p>{narrative}</p>")
 
     if critical_findings:
-        items = "".join(f"<li>{f.title}</li>" for f in critical_findings[:5])
+        items = "".join(f"<li>{html.escape(f.title)}</li>" for f in critical_findings[:5])
         sections.append(
             f'<div class="exec-threats"><strong>Key Threats</strong><ul>{items}</ul></div>'
         )
@@ -965,19 +982,31 @@ class ReportRenderer:
     """Renders validated findings into markdown and HTML investigation reports."""
 
     def __init__(self) -> None:
-        """Configure Jinja to load package templates.
+        """Configure format-specific Jinja template environments.
 
-        ``autoescape=False`` preserves markdown until HTML conversion.
+        Markdown must remain unescaped until its own presentation pass.  HTML
+        uses autoescaping; the two HTML fragments produced by
+        :func:`render_safe_markdown` are explicitly marked trusted only after
+        that structural conversion.
         """
-        self._env = jinja2.Environment(
+        self._markdown_env = jinja2.Environment(
             loader=jinja2.PackageLoader("mulder", "report/templates"),
             autoescape=False,
             keep_trailing_newline=True,
         )
-        self._env.filters["attack_url"] = _attack_id_to_url
-        self._env.filters["basename"] = lambda p: Path(str(p)).name
-        self._env.filters["filesizeformat"] = _filesizeformat
-        self._env.filters["tokformat"] = format_token_count
+        self._html_env = jinja2.Environment(
+            loader=jinja2.PackageLoader("mulder", "report/templates"),
+            # Package template names end in ``.html.j2``, so extension-based
+            # selection would see only ``j2``.  This environment loads HTML
+            # exclusively and can therefore enable escaping unconditionally.
+            autoescape=True,
+            keep_trailing_newline=True,
+        )
+        for env in (self._markdown_env, self._html_env):
+            env.filters["attack_url"] = _attack_id_to_url
+            env.filters["basename"] = lambda p: Path(str(p)).name
+            env.filters["filesizeformat"] = _filesizeformat
+            env.filters["tokformat"] = format_token_count
 
     @staticmethod
     def _render_narrative_template(narrative: str, ctx: dict[str, Any]) -> str:
@@ -999,9 +1028,17 @@ class ReportRenderer:
         if not narrative:
             return narrative
         try:
-            env = jinja2.Environment(undefined=jinja2.Undefined)
+            # The narrative is model-authored and may quote attacker-provided
+            # evidence.  Give it only the documented aggregate values and a
+            # sandboxed template evaluator; never expose Finding objects or
+            # arbitrary Python attributes to narrative placeholders.
+            safe_ctx = {
+                key: value for key, value in ctx.items() if key in _NARRATIVE_TEMPLATE_FIELDS
+            }
+            safe_ctx["mitre_techniques"] = (None,) * len(ctx.get("mitre_techniques", ()))
+            env = SandboxedEnvironment(undefined=jinja2.Undefined)
             template = env.from_string(narrative)
-            return template.render(**ctx)
+            return template.render(**safe_ctx)
         except Exception:
             return narrative
 
@@ -1200,12 +1237,9 @@ class ReportRenderer:
         }
 
         rendered_narrative = self._render_narrative_template(case_metadata.narrative or "", ctx)
-        ctx["narrative"] = rendered_narrative
+        ctx["narrative"] = escape_report_markdown(rendered_narrative)
         ctx["narrative_html"] = (
-            markdown.markdown(
-                rendered_narrative,
-                extensions=["fenced_code", "tables", "nl2br"],
-            )
+            Markup(render_safe_markdown(rendered_narrative))
             if rendered_narrative
             else ""
         )
@@ -1252,8 +1286,70 @@ class ReportRenderer:
         Returns:
             Rendered markdown report string.
         """
-        template = self._env.get_template("report.md.j2")
-        return template.render(**ctx)
+        def _safe_finding(finding: Finding) -> SimpleNamespace:
+            return SimpleNamespace(
+                **{
+                    **finding.model_dump(),
+                    "title": escape_report_markdown(finding.title),
+                    "description": escape_report_markdown(finding.description),
+                    "sources": [
+                        escape_report_markdown(source) for source in finding.sources
+                    ],
+                }
+            )
+
+        markdown_ctx = dict(ctx)
+        for key in ("case_id", "evidence_root", "audit_log_path", "executive_summary_md"):
+            markdown_ctx[key] = escape_report_markdown(str(markdown_ctx.get(key, "")))
+        for key in ("findings", "critical_findings", "timeline_findings", "negative_findings"):
+            markdown_ctx[key] = [_safe_finding(finding) for finding in ctx.get(key, [])]
+        markdown_ctx["sources_list"] = [
+            {
+                **source,
+                "source_name": escape_report_markdown(str(source.get("source_name", ""))),
+                "extractor": escape_report_markdown(str(source.get("extractor", ""))),
+            }
+            for source in ctx.get("sources_list", [])
+        ]
+        markdown_ctx["evidence_integrity"] = [
+            {
+                **entry,
+                "file_path": escape_report_markdown(str(entry.get("file_path", ""))),
+            }
+            for entry in ctx.get("evidence_integrity", [])
+        ]
+        markdown_ctx["network_iocs"] = [
+            SimpleNamespace(
+                **{
+                    **ioc,
+                    "value": escape_report_markdown(str(ioc.get("value", ""))),
+                    "context": escape_report_markdown(str(ioc.get("context", ""))),
+                }
+            )
+            for ioc in ctx.get("network_iocs", [])
+        ]
+        markdown_ctx["file_iocs"] = [
+            SimpleNamespace(
+                **{
+                    **ioc,
+                    "value": escape_report_markdown(str(ioc.get("value", ""))),
+                    "context": escape_report_markdown(str(ioc.get("context", ""))),
+                }
+            )
+            for ioc in ctx.get("file_iocs", [])
+        ]
+        markdown_ctx["email_iocs"] = [
+            SimpleNamespace(
+                **{
+                    **ioc,
+                    "value": escape_report_markdown(str(ioc.get("value", ""))),
+                    "context": escape_report_markdown(str(ioc.get("context", ""))),
+                }
+            )
+            for ioc in ctx.get("email_iocs", [])
+        ]
+        template = self._markdown_env.get_template("report.md.j2")
+        return template.render(**markdown_ctx)
 
     @staticmethod
     def _build_print_css(case_id: str) -> str:
@@ -1356,32 +1452,24 @@ class ReportRenderer:
         Returns:
             Rendered HTML report string.
         """
-        md_extensions = ["fenced_code", "tables", "nl2br"]
         html_findings = []
         for f in ctx["findings"]:
             fd = f.model_dump()
             cleaned_desc = _clean_finding_description(fd.get("description", ""))
-            fd["description_html"] = markdown.markdown(cleaned_desc, extensions=md_extensions)
+            fd["description_html"] = Markup(render_safe_markdown(cleaned_desc))
             html_findings.append(SimpleNamespace(**fd))
         ctx["findings"] = html_findings
 
-        for f in ctx.get("critical_findings", []):
-            if not hasattr(f, "description_html"):
-                ctx["critical_findings"] = [
-                    SimpleNamespace(**g.model_dump(), description_html="")
-                    for g in ctx["critical_findings"]
-                ]
-                break
+        html_by_id = {f.finding_id: f for f in html_findings}
+        ctx["critical_findings"] = [
+            html_by_id[g.finding_id] for g in ctx.get("critical_findings", [])
+        ]
+        ctx["timeline_findings"] = [
+            html_by_id[g.finding_id] for g in ctx.get("timeline_findings", [])
+        ]
+        ctx["executive_summary"] = Markup(ctx["executive_summary"])
 
-        for f in ctx.get("timeline_findings", []):
-            if not hasattr(f, "description_html"):
-                ctx["timeline_findings"] = [
-                    SimpleNamespace(**g.model_dump(), description_html="")
-                    for g in ctx["timeline_findings"]
-                ]
-                break
-
-        template = self._env.get_template("report.html.j2")
+        template = self._html_env.get_template("report.html.j2")
         return template.render(**ctx)
 
     def render(

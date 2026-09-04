@@ -220,6 +220,12 @@ class TestRenderNarrativeTemplate:
         result = renderer._render_narrative_template(narrative, ctx)
         assert result == narrative
 
+    def test_model_narrative_cannot_traverse_python_objects(self) -> None:
+        renderer = ReportRenderer()
+        narrative = "Quoted evidence: {{ ''.__class__.__mro__ }}"
+        result = renderer._render_narrative_template(narrative, {"finding_count": 1})
+        assert "<class" not in result
+
 
 class TestCleanFindingDescription:
     def test_literal_backslash_n_becomes_newline(self) -> None:
@@ -265,6 +271,55 @@ class TestRenderAll:
         assert "dual" in md_text
         assert len(html_text) > 0
         assert "dual" in html_text
+
+    def test_report_makes_html_markdown_and_active_links_inert(self, tmp_path: Path) -> None:
+        renderer = ReportRenderer()
+        meta = CaseMetadataRow(
+            case_id="presentation-safety",
+            ingested_at="2025-01-01T00:00:00Z",
+            evidence_root="/evidence/<script>root()</script>",
+            extractor_versions={},
+            narrative=(
+                "Narrative <script>alert('n')</script> "
+                "![pixel](https://attacker.invalid/narrative) "
+                "[run](javascript:alert)"
+            ),
+        )
+        finding = _make_finding(
+            title="Finding <img src=x onerror=alert(1)>",
+            sources=["source');alert('attribute-breakout');//"],
+            description=(
+                "Evidence <script>alert('d')</script> "
+                "![pixel](https://attacker.invalid/finding) "
+                "[run](javascript:alert)"
+            ),
+        )
+        summary = AuditSummary(
+            total_tool_calls=1,
+            total_findings=1,
+            tool_call_counts={"search": 1},
+            total_duration_ms=100,
+            first_timestamp="2025-01-01T00:00:00Z",
+            last_timestamp="2025-01-01T00:00:01Z",
+        )
+        audit_path = tmp_path / "audit.jsonl"
+        audit_path.write_text("")
+
+        md_text, html_text, _pdf = renderer.render_all(meta, [finding], summary, audit_path)
+
+        assert "<script>alert" not in md_text
+        assert "<script>alert" not in html_text
+        assert "<img src=x" not in html_text
+        assert "https://attacker.invalid/finding" in html_text
+        assert "https://attacker.invalid/narrative" in html_text
+        assert 'href="javascript:' not in html_text
+        assert "javascript:alert" in html_text
+        assert "&lt;script&gt;" in html_text
+        safe_onclick = (
+            "navigateToEvidence(&#34;source\\u0027);alert("
+            "\\u0027attribute-breakout\\u0027);//&#34;)"
+        )
+        assert safe_onclick in html_text
 
 
 class TestSourceCountReconciliation:

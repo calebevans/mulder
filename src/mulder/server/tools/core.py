@@ -19,6 +19,7 @@ from typing import Any
 from sqlalchemy import select as sa_select
 
 from mulder.db import windows_t
+from mulder.security.evidence_envelope import envelope_evidence
 from mulder.server import source_names as _sn
 from mulder.server.app import get_ctx, mcp
 from mulder.server.helpers import (
@@ -52,6 +53,7 @@ _SRC_FILESCAN = _sn.SRC_FILESCAN
 _RAW_TEXT_SEARCH_CAP = 300
 _RAW_TEXT_CORRELATE_CAP = 200
 _CORRELATE_WINDOW_CAP = 20
+_MODEL_EVIDENCE_CHAR_CAP = 100_000
 
 
 def _truncated_window(w: Any, cap: int = _RAW_TEXT_SEARCH_CAP) -> dict[str, object]:
@@ -897,6 +899,24 @@ def get_raw_output(
     raw_text = "\n".join(w.raw_text for w in page)
 
     next_after = page[-1].window_id if page else after_id
+    window_ids = [w.window_id for w in page if w.window_id is not None]
+    selector = json.dumps(
+        {
+            "after_window_id": after_id,
+            "returned_window_ids": window_ids,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    envelope = envelope_evidence(
+        raw_text,
+        source_id=source_name,
+        source_name=source_name,
+        source_record_ids=[w.source_id for w in page],
+        selector=selector,
+        max_characters=_MODEL_EVIDENCE_CHAR_CAP,
+    )
+    model_representation = envelope.for_model()
 
     result: dict[str, object] = {
         "status": "success",
@@ -905,13 +925,27 @@ def get_raw_output(
         "returned_windows": len(page),
         "next_after_id": next_after,
         "has_more": len(page) == limit,
-        "raw_text": raw_text,
+        # Backwards-compatible string field, now carrying a delimited JSON
+        # packet rather than executable-looking evidence text.  The complete
+        # raw value remains unchanged in the case DB and committed by digest.
+        "raw_text": envelope.to_model_packet(),
+        "evidence_envelope": model_representation.model_dump(
+            mode="json", exclude={"content"}
+        ),
     }
-    if total > 5000:
+    if envelope.truncation.truncated:
+        result["content_truncated"] = True
         result["hint"] = (
+            "This evidence page exceeded the model presentation cap. "
+            "Use search() to narrow the evidence or request fewer windows; "
+            "the envelope digest still commits to the complete page."
+        )
+    if total > 5000:
+        scale_hint = (
             f"This source has {total} windows. Use search(query, source='{source_name}') "
             "to find specific content efficiently instead of paginating."
         )
+        result["hint"] = f"{result.get('hint', '')} {scale_hint}".strip()
     return result
 
 

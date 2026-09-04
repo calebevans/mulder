@@ -668,7 +668,7 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
     <div class="card-body">
       <ul class="critical-list">
         {% for f in critical_findings %}
-        <li onclick="navigateToFinding('{{ f.finding_id }}')">
+        <li onclick="navigateToFinding({{ f.finding_id | tojson | forceescape }})">
           <strong>{{ f.title }}</strong>
           {% if f.event_time_start %}<div class="crit-time">{{ f.event_time_start }}{% if f.event_time_end %} &mdash; {{ f.event_time_end }}{% endif %}</div>{% endif %}
         </li>
@@ -798,7 +798,7 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
       {% for f in timeline_findings %}
       {% set day = f.event_time_start[:10] if f.event_time_start and f.event_time_start|length >= 10 else 'Unknown' %}
       {% if day != ns.last_day %}{% set ns.last_day = day %}<div class="tl-group-label">{{ day }}</div>{% endif %}
-      <div class="tl-item sev-{{ f.severity }}" data-severity="{{ f.severity }}" onclick="toggleTimelineDetail('tld_{{ f.finding_id }}')">
+      <div class="tl-item sev-{{ f.severity }}" data-severity="{{ f.severity }}" onclick="toggleTimelineDetail({{ ('tld_' ~ f.finding_id) | tojson | forceescape }})">
         <div class="tl-time">{{ f.event_time_start }}{% if f.event_time_end %} &mdash; {{ f.event_time_end }}{% endif %}</div>
         <div class="tl-title">{{ f.title }}</div>
         <div class="tl-badges">
@@ -810,7 +810,7 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
       <div class="tl-detail-panel" id="tld_{{ f.finding_id }}">
         {{ f.description_html }}
         <div style="margin-top:0.75rem;">
-          <a style="color:var(--accent);cursor:pointer;font-size:0.8rem;" onclick="event.stopPropagation();navigateToFinding('{{ f.finding_id }}')">View full finding &rarr;</a>
+          <a style="color:var(--accent);cursor:pointer;font-size:0.8rem;" onclick="event.stopPropagation();navigateToFinding({{ f.finding_id | tojson | forceescape }})">View full finding &rarr;</a>
         </div>
       </div>
       {% endfor %}
@@ -865,12 +865,12 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
       <div class="finding-related">
         <span style="font-size:0.7rem;color:var(--text-dim);margin-right:0.3rem;">Related:</span>
         {% for rt in related_titles[f.finding_id] %}
-        <a class="finding-related-link" onclick="navigateToFinding('{{ rt.finding_id }}')">{{ rt.title | truncate(50) }}</a>
+        <a class="finding-related-link" onclick="navigateToFinding({{ rt.finding_id | tojson | forceescape }})">{{ rt.title | truncate(50) }}</a>
         {% endfor %}
       </div>
       {% endif %}
       <div class="finding-source-pills">
-        {% for src in f.sources %}<span class="source-pill" onclick="navigateToEvidence('{{ src }}')">{{ src | truncate(40) }}</span>{% endfor %}
+        {% for src in f.sources %}<span class="source-pill" onclick="navigateToEvidence({{ src | tojson | forceescape }})">{{ src | truncate(40) }}</span>{% endfor %}
       </div>
       {% if f.mitre_attack_ids %}
       <div class="finding-source-pills">
@@ -881,7 +881,7 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
       <div class="evidence-chain">
         <h4>Evidence Chain</h4>
         {% for ev in pc.evidence %}
-        <div class="ev-item" onclick="openDrawer('{{ ev.tool_call_id }}')">
+        <div class="ev-item" onclick="openDrawer({{ ev.tool_call_id | tojson | forceescape }})">
           <span class="ev-id">{{ ev.tool_call_id }}</span>
           <span class="ev-tool">{{ ev.tool_name }}</span>
           <span class="ev-duration">{{ "%.0f" | format(ev.duration_ms) }}ms</span>
@@ -949,7 +949,7 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
   </div>
   {% if mitre_all_tactics %}
   <div class="tactic-grid">
-    {% for tac in mitre_all_tactics %}<div class="tactic-pill{% if tac.active %} active{% endif %}"{% if tac.active %} onclick="toggleTacticSection('tactic-section-{{ tac.id }}')"{% endif %}>{{ tac.name }}{% if tac.active %}<span class="tactic-badge">{{ tac.technique_count }}</span>{% endif %}</div>{% endfor %}
+    {% for tac in mitre_all_tactics %}<div class="tactic-pill{% if tac.active %} active{% endif %}"{% if tac.active %} onclick="toggleTacticSection({{ ('tactic-section-' ~ tac.id) | tojson | forceescape }})"{% endif %}>{{ tac.name }}{% if tac.active %}<span class="tactic-badge">{{ tac.technique_count }}</span>{% endif %}</div>{% endfor %}
   </div>
   <div class="tactic-accordion">
     {% for grp in mitre_tactic_groups %}
@@ -966,7 +966,7 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
             {% if t.name %}<div class="technique-name">{{ t.name }}</div>{% endif %}
             <div class="technique-findings">
               {% for af in t.findings %}
-              <div class="technique-finding-link" onclick="navigateToFinding('{{ af.finding_id }}')">{{ af.title | truncate(80) }}</div>
+              <div class="technique-finding-link" onclick="navigateToFinding({{ af.finding_id | tojson | forceescape }})">{{ af.title | truncate(80) }}</div>
               {% endfor %}
             </div>
           </div>
@@ -992,7 +992,7 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
             {% if t.name %}<div class="technique-name">{{ t.name }}</div>{% endif %}
             <div class="technique-findings">
               {% for af in t.findings %}
-              <div class="technique-finding-link" onclick="navigateToFinding('{{ af.finding_id }}')">{{ af.title | truncate(80) }}</div>
+              <div class="technique-finding-link" onclick="navigateToFinding({{ af.finding_id | tojson | forceescape }})">{{ af.title | truncate(80) }}</div>
               {% endfor %}
             </div>
           </div>
@@ -1038,7 +1038,7 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
         <td class="text-muted" style="font-size:0.75rem;">{{ ioc.enrichment | default('') }}</td>
         <td class="text-muted" style="font-size:0.78rem;">{{ ioc.context }}</td>
         <td>
-          <button class="ioc-copy-btn" onclick="copyText('{{ ioc.value }}')" title="Copy">&#128203;</button>
+          <button class="ioc-copy-btn" onclick="copyText({{ ioc.value | tojson | forceescape }})" title="Copy">&#128203;</button>
           {% if 'IP' in ioc.type %}<a class="ioc-lookup" href="https://www.virustotal.com/gui/ip-address/{{ ioc.value }}" target="_blank" rel="noopener" title="VirusTotal">VT</a>{% endif %}
         </td>
       </tr>
@@ -1061,7 +1061,7 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
         <td class="text-muted" style="font-size:0.75rem;">{{ ioc.enrichment | default('') }}</td>
         <td class="text-muted" style="font-size:0.78rem;">{{ ioc.context }}</td>
         <td>
-          <button class="ioc-copy-btn" onclick="copyText('{{ ioc.value }}')" title="Copy">&#128203;</button>
+          <button class="ioc-copy-btn" onclick="copyText({{ ioc.value | tojson | forceescape }})" title="Copy">&#128203;</button>
           {% if ioc.type in ['SHA256','SHA1','MD5'] %}<a class="ioc-lookup" href="https://www.virustotal.com/gui/search/{{ ioc.value }}" target="_blank" rel="noopener" title="VirusTotal">VT</a>{% endif %}
         </td>
       </tr>
@@ -1083,7 +1083,7 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
         <td><code>{{ ioc.value }}</code></td>
         <td class="text-muted" style="font-size:0.75rem;">{{ ioc.enrichment | default('') }}</td>
         <td class="text-muted" style="font-size:0.78rem;">{{ ioc.context }}</td>
-        <td><button class="ioc-copy-btn" onclick="copyText('{{ ioc.value }}')" title="Copy">&#128203;</button></td>
+        <td><button class="ioc-copy-btn" onclick="copyText({{ ioc.value | tojson | forceescape }})" title="Copy">&#128203;</button></td>
       </tr>
       {% endfor %}
       </tbody>
@@ -1141,7 +1141,7 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
     </thead>
     <tbody>
     {% for s in sources_list %}
-      <tr style="cursor:pointer" onclick="navigateToEvidence('{{ s.source_name }}')">
+      <tr style="cursor:pointer" onclick="navigateToEvidence({{ s.source_name | tojson | forceescape }})">
         <td><strong>{{ s.source_name }}</strong></td>
         <td class="mono">{{ s.extractor }}</td>
         <td class="mono" style="text-align:right;">{{ s.line_count | string }}</td>
@@ -1275,7 +1275,7 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
           <td><strong>{{ entry.tool_name }}</strong></td>
           <td class="mono" style="text-align:right;">{{ "%.0f" | format(entry.duration_ms) }}ms</td>
           <td class="mono" style="font-size:0.68rem;">{{ entry.timestamp[:19] if entry.timestamp else '' }}</td>
-          <td><button class="btn-sm" onclick="openDrawer('{{ entry.tool_call_id }}')" style="font-size:0.68rem;">Inspect</button></td>
+          <td><button class="btn-sm" onclick="openDrawer({{ entry.tool_call_id | tojson | forceescape }})" style="font-size:0.68rem;">Inspect</button></td>
         </tr>
       {% endfor %}
       </tbody>
@@ -1347,14 +1347,14 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
 /* ========== DATA ========== */
 var AUDIT_DATA = {{ audit_entries | tojson }};
 var TOOL_COUNTS = {{ tool_call_counts | tojson }};
-var FINDINGS_TITLES = { {% for f in findings %}"{{ f.finding_id }}": {{ f.title | tojson }}{% if not loop.last %},{% endif %}{% endfor %} };
+var FINDINGS_TITLES = { {% for f in findings %}{{ f.finding_id | tojson }}: {{ f.title | tojson }}{% if not loop.last %},{% endif %}{% endfor %} };
 var SOURCE_WINDOWS = {{ source_windows | tojson }};
-var SOURCES_META = { {% for s in sources_list %}"{{ s.source_name }}": {"extractor":"{{ s.extractor }}","line_count":{{ s.line_count }},"hash":"{{ s.source_hash[:16] }}"}{% if not loop.last %},{% endif %}{% endfor %} };
+var SOURCES_META = { {% for s in sources_list %}{{ s.source_name | tojson }}: {"extractor":{{ s.extractor | tojson }},"line_count":{{ s.line_count }},"hash":{{ s.source_hash[:16] | tojson }}}{% if not loop.last %},{% endif %}{% endfor %} };
 
 var AUDIT_INDEX = {};
 AUDIT_DATA.forEach(function(e) { AUDIT_INDEX[e.tool_call_id] = e; });
 var FINDING_REFS = {};
-{% for f in findings %}FINDING_REFS["{{ f.finding_id }}"] = {{ f.evidence_refs | tojson }};
+{% for f in findings %}FINDING_REFS[{{ f.finding_id | tojson }}] = {{ f.evidence_refs | tojson }};
 {% endfor %}
 var TC_TO_FINDINGS = {};
 Object.keys(FINDING_REFS).forEach(function(fid) {
@@ -1755,7 +1755,7 @@ function renderThroughputChart() {
   /* Per-model token data */
   var models=[
     {% for entry in model_token_breakdown %}
-    {name:'{{ entry.model }}',total:{{ entry.input + entry.output }}},
+    {name:{{ entry.model | tojson }},total:{{ entry.input + entry.output }}},
     {% endfor %}
   ];
   var totalTok=0;
