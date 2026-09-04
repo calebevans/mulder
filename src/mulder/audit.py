@@ -9,7 +9,8 @@ import logging
 import os
 import threading
 from collections import defaultdict
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -415,6 +416,20 @@ def _scan_audit_file(log_path: Path) -> _AuditScan:
     )
 
 
+@contextmanager
+def _shared_file_lock(log_path: Path) -> Iterator[None]:
+    """Hold a cooperative read lock while a caller scans an existing log."""
+    if not log_path.exists():
+        yield
+        return
+    with open(log_path, "rb") as fh:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_SH)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
 class AuditLog:
     """Append-only JSONL audit log for a case investigation.
 
@@ -467,9 +482,13 @@ class AuditLog:
             return None
         return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
 
-    def _load_existing(self) -> None:
+    def _load_existing(self, *, writer_lock_held: bool = False) -> None:
         """Populate in-memory indexes from an existing JSONL file."""
-        scan = _scan_audit_file(self._log_path)
+        if writer_lock_held:
+            scan = _scan_audit_file(self._log_path)
+        else:
+            with _shared_file_lock(self._log_path):
+                scan = _scan_audit_file(self._log_path)
         self._append_hash = scan.append_hash
         self._next_sequence = scan.next_sequence
         self._legacy_entries = scan.result.legacy_entries
@@ -502,7 +521,8 @@ class AuditLog:
         Detecting removal of a complete final suffix requires an external head
         commitment or sealed case manifest and is deliberately out of scope.
         """
-        return _scan_audit_file(self._log_path).result
+        with _shared_file_lock(self._log_path):
+            return _scan_audit_file(self._log_path).result
 
     def _index_entry(self, entry: dict[str, object]) -> None:
         """Index a parsed audit entry by type and update summary accumulators."""
@@ -537,8 +557,8 @@ class AuditLog:
             self._finding_entries[fid] = entry
             self._total_findings += 1
 
-    def _append(self, entry: dict[str, object]) -> None:
-        """Append ``entry`` to the JSONL log file and update in-memory indexes."""
+    def _append(self, entry: dict[str, object]) -> dict[str, object]:
+        """Append ``entry`` and return the exact chained record written to disk."""
         with self._lock:
             self._log_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self._log_path, "a+", encoding="utf-8") as fh:
@@ -546,7 +566,7 @@ class AuditLog:
                 try:
                     if self._fingerprint() != self._file_fingerprint:
                         self._reset_indexes()
-                        self._load_existing()
+                        self._load_existing(writer_lock_held=True)
                     if self._append_blocked_reason is not None:
                         raise RuntimeError(
                             "Refusing to append to an invalid audit log: "
@@ -588,6 +608,64 @@ class AuditLog:
                     )
                 finally:
                     fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        return chained_entry
+
+    def log_run_event(
+        self,
+        case_id: str,
+        event: Mapping[str, object],
+    ) -> dict[str, object]:
+        """Append one typed review-console run event to the audit chain.
+
+        The review event schema is owned by :mod:`mulder.review.events`; this
+        low-level method only supplies the audit timestamp and durable chain
+        sequence.  Callers cannot override audit or event envelope fields.
+        """
+        reserved = _CHAIN_FIELDS.union({"type", "timestamp", "case_id"})
+        collision = reserved.intersection(event)
+        if collision:
+            raise ValueError(f"Run event may not set reserved fields: {sorted(collision)}")
+        return self._append(
+            {
+                "type": "run_event",
+                "case_id": case_id,
+                **dict(event),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+
+    def read_run_event_entries(
+        self,
+        *,
+        after_sequence: int = 0,
+        limit: int = 1000,
+    ) -> tuple[AuditIntegrityResult, tuple[dict[str, object], ...], int, int]:
+        """Read a stable bounded page of native run-event audit entries.
+
+        Returns the complete audit integrity result, selected entries, the
+        highest native run-event sequence currently present, and the number of
+        legacy run-event entries skipped because they have no durable ID.
+        """
+        if after_sequence < 0:
+            raise ValueError("after_sequence must be non-negative")
+        if not 1 <= limit <= 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        with _shared_file_lock(self._log_path):
+            scan = _scan_audit_file(self._log_path)
+        selected: list[dict[str, object]] = []
+        high_watermark = 0
+        skipped_legacy = 0
+        for entry in scan.entries:
+            if entry.get("type") != "run_event":
+                continue
+            sequence = entry.get("sequence")
+            if type(sequence) is not int:
+                skipped_legacy += 1
+                continue
+            high_watermark = max(high_watermark, sequence)
+            if sequence > after_sequence and len(selected) < limit:
+                selected.append(entry)
+        return scan.result, tuple(selected), high_watermark, skipped_legacy
 
     def log_tool_call(
         self,

@@ -1,0 +1,45 @@
+:root {
+  color-scheme: dark;
+  --bg: #0c1013;
+  --panel: #151c20;
+  --line: #314047;
+  --text: #e8efed;
+  --muted: #9aaca7;
+  --accent: #78dcca;
+  --mark: #725b18;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.55 system-ui, sans-serif; }
+header, main { width: min(1180px, calc(100% - 2rem)); margin: 0 auto; }
+header { display: flex; align-items: end; justify-content: space-between; padding: 2rem 0 1rem; border-bottom: 1px solid var(--line); }
+main { padding: 1rem 0 4rem; }
+section, article { background: var(--panel); border: 1px solid var(--line); border-radius: .45rem; }
+section { margin-top: 1rem; padding: 1rem; }
+article { padding: .85rem; }
+h1, h2, h3, p { margin-top: 0; }
+h1 { margin-bottom: 0; }
+a { color: var(--accent); }
+code { overflow-wrap: anywhere; }
+.eyebrow, .muted { color: var(--muted); }
+.eyebrow { margin-bottom: .15rem; text-transform: uppercase; letter-spacing: .09em; font-size: .78rem; }
+.status { color: var(--accent); }
+.summary-grid, .placeholder-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: .75rem; }
+.summary-grid article p, .placeholder-grid article p { margin-bottom: 0; }
+.section-heading { display: flex; justify-content: space-between; gap: 1rem; align-items: baseline; }
+.proof-card { margin-top: .75rem; }
+.claim { border-top: 1px solid var(--line); padding-top: .75rem; margin-top: .75rem; }
+.badge { display: inline-block; border: 1px solid var(--line); border-radius: 999px; padding: .05rem .45rem; color: var(--accent); }
+.phase-list, .anchor-list, .event-list { padding-left: 1.5rem; }
+.phase-list li { display: grid; grid-template-columns: minmax(10rem, 1fr) 2fr; gap: 1rem; padding: .3rem 0; }
+.anchor-list li, .event-list li { margin: .45rem 0; }
+dl { display: grid; grid-template-columns: minmax(8rem, max-content) 1fr; gap: .25rem 1rem; }
+dt { color: var(--muted); }
+dd { margin: 0; }
+.evidence-window { padding: 1rem; overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: #080b0d; border: 1px solid var(--line); }
+mark { background: var(--mark); color: var(--text); }
+
+@media (max-width: 600px) {
+  header, .section-heading { align-items: start; flex-direction: column; }
+  .phase-list li, dl { grid-template-columns: 1fr; }
+}

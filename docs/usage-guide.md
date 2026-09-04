@@ -38,6 +38,7 @@ Try-it-out instructions for running Mulder, the forensic investigation platform.
     - [`mulder serve`](#mulder-serve)
     - [`mulder report`](#mulder-report)
     - [`mulder review`](#mulder-review)
+    - [`mulder review-console`](#mulder-review-console)
     - [`mulder seal-case`](#mulder-seal-case)
     - [`mulder verify-case`](#mulder-verify-case)
     - [`mulder export-iocs`](#mulder-export-iocs)
@@ -176,8 +177,9 @@ mulder --version
 | `forensics` | `orjson`, `xxhash`, `colorama`, `tqdm`, `evtx` | Zircolite's runtime dependencies. Recommended for everyone. |
 | `pdf` | `weasyprint` | PDF report rendering via `mulder report` |
 | `stix` | `stix2` | STIX 2.1 bundle export via `mulder export-iocs` |
+| `web` | `starlette`, `uvicorn` | Local read-only browser review via `mulder review-console` |
 
-Combine them as `pipx install "mulder-dfir[forensics,pdf,stix]"`, or add one later without reinstalling:
+Combine them as `pipx install "mulder-dfir[forensics,pdf,stix,web]"`, or add one later without reinstalling:
 
 ```bash
 pipx inject mulder-dfir weasyprint
@@ -543,6 +545,29 @@ facts interpreted as a completed or clean investigation.
 
 The database must be quiescent: a non-empty SQLite WAL or rollback journal is rejected. Review
 uses immutable read mode so it cannot migrate the schema or create SQLite sidecars.
+
+### `mulder review-console`
+
+```
+mulder review-console <case_id> [--db-dir PATH] [--host HOST] [--port PORT]
+```
+
+Serves a server-rendered browser view, read-only JSON endpoints, exact citation drill-down, proof
+cards, and Server-Sent Events over the same `mulder.case-review` calculation used by the CLI and
+static report. Install the optional dependency first with
+`pipx install "mulder-dfir[forensics,web]"` (or inject `starlette` and `uvicorn`). The default bind
+is `127.0.0.1:8765`; it makes no model, MCP, or remote-network calls.
+
+Binding any non-loopback address is rejected unless an examiner supplies `--auth-token` or sets
+`MULDER_REVIEW_TOKEN`. JSON clients use `Authorization: Bearer TOKEN`; browser-native HTTP Basic
+authentication uses username `mulder` and the token as its password. Tokens are never generated or
+written by Mulder. All console routes are GET/HEAD only—there is no evidence mutation, arbitrary
+SQL, or generic tool invocation route.
+
+`mulder investigate` appends typed operational observations to the existing case audit chain. Its
+durable audit sequence is the SSE event ID. Browsers reconnect with standard `Last-Event-ID`, and
+the server replays only later events before following the live tail. These events are operational
+observations, not evidence or inferred phase-completion claims. A corrupt audit chain blocks replay.
 
 ### `mulder seal-case`
 

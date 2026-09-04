@@ -65,6 +65,10 @@ dependencies = [
 [project.optional-dependencies]
 pdf = ["weasyprint>=60.0"]
 stix = ["stix2>=3.0"]
+web = [
+    "starlette>=0.41",
+    "uvicorn>=0.30",
+]
 # Zircolite's runtime dependencies. Verified against
 # https://github.com/wagga40/Zircolite/blob/2.20.0/requirements.txt (the four
 # required entries) plus `evtx`, which Zircolite imports optionally and which

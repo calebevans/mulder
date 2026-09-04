@@ -29,6 +29,7 @@ from rich.table import Table
 from rich.text import Text
 
 from mulder.patterns import format_token_count
+from mulder.review.events import RunEventDraft, RunEventJournal
 
 logger = logging.getLogger(__name__)
 
@@ -118,7 +119,7 @@ class InvestigationDashboard:
     subprocess writing its own ANSI sequences.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, event_journal: RunEventJournal | None = None) -> None:
         """Initialize the dashboard."""
         # Duplicate the real stderr fd so the Console can reach the
         # terminal even after we redirect fd 2 to /dev/null.
@@ -162,6 +163,13 @@ class InvestigationDashboard:
 
         self._system_color_map: dict[str, str] = {}
         self._next_color_idx: int = 0
+        self._event_journal = event_journal
+
+    def _record_event(self, event: RunEventDraft) -> None:
+        """Append a typed operational observation when journaling is enabled."""
+        if self._event_journal is None:
+            return
+        self._event_journal.append(event)
 
     def _get_system_color(self, system: str) -> str:
         """Return a consistent color for a system name.
@@ -266,6 +274,16 @@ class InvestigationDashboard:
             model,
             max_turns,
         )
+        self._record_event(
+            RunEventDraft(
+                kind="phase_changed",
+                phase=label,
+                phase_index=phase_num,
+                total_phases=total_phases,
+                model=model,
+                max_turns=max_turns,
+            )
+        )
 
         self._log_lines.append(Text())
         separator = Text(f"{'━' * 58}", style="dim")
@@ -291,6 +309,9 @@ class InvestigationDashboard:
         self._extraction_done = done
         self._extraction_active = active
         self._phase_label = f"Phase 2: Extraction ({done}/{total} done, {active} active)"
+        self._record_event(
+            RunEventDraft(kind="extraction_progress", total=total, done=done, active=active)
+        )
 
     def log(self, text: str) -> None:
         """Append a line of assistant reasoning to the log panel.
@@ -324,6 +345,7 @@ class InvestigationDashboard:
         """
         self._tool_count += 1
         self._log_and_display(f"  ▸ {name}", style="dim green")
+        self._record_event(RunEventDraft(kind="tool_observed", tool=name))
 
     def log_finding(self, severity: str, title: str) -> None:
         """Log a finding submission with color-coded severity.
@@ -343,6 +365,9 @@ class InvestigationDashboard:
         line.append(f"  {dot} [{label}] ", style=style)
         line.append(title)
         self._log_lines.append(line)
+        self._record_event(
+            RunEventDraft(kind="finding_observed", severity=severity, title=title)
+        )
 
     def log_phase_done(self, tool_count: int, turns: int, tokens: int) -> None:
         """Log phase completion stats in the scrolling panel.
@@ -358,6 +383,9 @@ class InvestigationDashboard:
         logger.info("[dashboard] %s", msg.strip())
         line = Text(msg, style="bold dim")
         self._log_lines.append(line)
+        self._record_event(
+            RunEventDraft(kind="session_metrics", turns=turns, tokens=tokens)
+        )
 
     def log_gate_pass(self, label: str, turns: int) -> None:
         """Log a successful gate check.
@@ -367,6 +395,9 @@ class InvestigationDashboard:
             turns: Total turns for the phase.
         """
         self._log_and_display(f"  ✓ {label} ({turns} turns)", style="bold green")
+        self._record_event(
+            RunEventDraft(kind="gate_result", phase=label, turns=turns, success=True)
+        )
 
     def log_gate_fail(self, message: str) -> None:
         """Log a failed gate check.
@@ -375,6 +406,7 @@ class InvestigationDashboard:
             message: Failure description.
         """
         self._log_and_display(f"  ✗ {message}", style="bold red")
+        self._record_event(RunEventDraft(kind="gate_result", message=message, success=False))
 
     def log_info(self, text: str) -> None:
         """Log an informational message (retries, limits, etc.).
@@ -383,6 +415,7 @@ class InvestigationDashboard:
             text: Message to display.
         """
         self._log_and_display(f"  · {text}", style="dim yellow")
+        self._record_event(RunEventDraft(kind="info", message=text))
 
     def set_tasks(self, system: str, tools: list[str]) -> None:
         """Register pending tasks for a system in the progress panel.
@@ -396,6 +429,11 @@ class InvestigationDashboard:
         """
         for tool in tools:
             self._tasks.append(TaskItem(tool=tool, system=system))
+            self._record_event(
+                RunEventDraft(
+                    kind="task_registered", system=system, tool=tool, status="pending"
+                )
+            )
         self._tasks_active = True
 
     def update_task(
@@ -427,6 +465,16 @@ class InvestigationDashboard:
                 task.status = status
                 task.elapsed_seconds = elapsed
                 task.error = error
+                self._record_event(
+                    RunEventDraft(
+                        kind="task_state",
+                        system=system,
+                        tool=tool,
+                        status=status,
+                        elapsed_seconds=elapsed,
+                        message=error,
+                    )
+                )
                 return
 
         self._tasks.append(
@@ -439,6 +487,16 @@ class InvestigationDashboard:
             )
         )
         self._tasks_active = True
+        self._record_event(
+            RunEventDraft(
+                kind="task_state",
+                system=system,
+                tool=tool,
+                status=status,
+                elapsed_seconds=elapsed,
+                message=error,
+            )
+        )
 
     def complete_one_running_task(
         self,
@@ -466,12 +524,23 @@ class InvestigationDashboard:
                 task.status = status
                 task.elapsed_seconds = elapsed
                 task.error = error
+                self._record_event(
+                    RunEventDraft(
+                        kind="task_state",
+                        system=task.system,
+                        tool=tool,
+                        status=status,
+                        elapsed_seconds=elapsed,
+                        message=error,
+                    )
+                )
                 return
 
     def clear_tasks(self) -> None:
         """Remove all tasks and hide the progress panel."""
         self._tasks = []
         self._tasks_active = False
+        self._record_event(RunEventDraft(kind="tasks_cleared", status="cleared"))
 
     def clear_system_tasks(self, system: str) -> None:
         """Remove all tasks for a specific system from the panel.
@@ -482,6 +551,9 @@ class InvestigationDashboard:
         self._tasks = [t for t in self._tasks if t.system != system]
         if not self._tasks:
             self._tasks_active = False
+        self._record_event(
+            RunEventDraft(kind="tasks_cleared", system=system, status="cleared")
+        )
 
     def add_tokens(self, input_tokens: int, output_tokens: int) -> None:
         """Accumulate token usage.

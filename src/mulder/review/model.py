@@ -275,6 +275,57 @@ class CaseReviewModel(_FrozenModel):
         return cards
 
 
+class EvidenceCitation(_FrozenModel):
+    """Exact selector used by every evidence-detail adapter."""
+
+    anchor_id: str
+    claim_id: str
+    finding_id: str
+    source_name: str
+    window_id: int = Field(gt=0)
+    line_start: int
+    line_end: int
+    char_start: int = Field(ge=0)
+    char_end: int = Field(gt=0)
+    exact_text: str
+
+
+class EvidenceWindowDetail(_FrozenModel):
+    """Authoritative source window with a validated exact-anchor selection."""
+
+    source_id: int = Field(gt=0)
+    source_name: str
+    source_path: str
+    source_hash: str
+    extractor: str
+    window_id: int = Field(gt=0)
+    line_start: int
+    line_end: int
+    event_time: str | None
+    raw_text: str
+    text_before: str
+    selected_text: str
+    text_after: str
+
+
+class EvidenceDetail(_FrozenModel):
+    """Typed, read-only drill-down for one exact claim anchor."""
+
+    detail_schema: Literal["mulder.evidence-detail"] = Field(
+        default="mulder.evidence-detail", alias="schema"
+    )
+    version: Literal[1] = 1
+    case_id: str
+    finding_title: str
+    finding_confidence: str
+    finding_active: bool
+    claim_statement: str
+    claim_epistemic_state: EpistemicState
+    anchor: EvidenceAnchor
+    citation: EvidenceCitation
+    window: EvidenceWindowDetail
+
+
 @dataclass(frozen=True)
 class ReviewQuery:
     """Bounded parameters for :func:`query_case_review`.
@@ -311,6 +362,20 @@ class ReviewQuery:
             value = cast(int, getattr(self, name))
             if value < 1 or value > maximum:
                 raise CaseReviewError(f"{name} must be between 1 and {maximum}")
+
+
+@dataclass(frozen=True)
+class EvidenceReviewQuery:
+    """Locator for one case-scoped exact citation drill-down."""
+
+    case_id: str
+    anchor_id: str
+    db_dir: Path
+
+    def __post_init__(self) -> None:
+        for name, value in (("case_id", self.case_id), ("anchor_id", self.anchor_id)):
+            if not value or len(value) > 256 or Path(value).name != value or value in {".", ".."}:
+                raise CaseReviewError(f"{name} must be one safe path segment")
 
 
 def _read_manifest_hash(path: Path) -> str | None:
@@ -1076,6 +1141,143 @@ def query_case_review(query: ReviewQuery) -> CaseReviewModel:
             note="No authoritative graph projection exists yet; no entities or edges are inferred."
         ),
     )
+
+
+def query_evidence_detail(query: EvidenceReviewQuery) -> EvidenceDetail:
+    """Resolve one exact anchor through its case, claim, source, and window.
+
+    The join is case-scoped at both the finding and source rows.  Stored anchor
+    coordinates must still select the stored exact text from the authoritative
+    window; a mismatch is diagnosed instead of rendered as a citation.
+    """
+    db_path = Path(query.db_dir).expanduser() / f"{query.case_id}.db"
+    if not db_path.is_file():
+        raise CaseReviewError(f"case database not found: {db_path}")
+    connection = _open_read_only(db_path)
+    try:
+        connection.execute("BEGIN")
+        tables = _tables(connection)
+        required = {
+            "case_metadata",
+            "findings",
+            "claims",
+            "evidence_anchors",
+            "sources",
+            "windows",
+        }
+        missing = sorted(required.difference(tables))
+        if missing:
+            raise CaseReviewError(
+                "exact evidence drill-down is unavailable for this legacy case: "
+                + ", ".join(missing)
+            )
+        source_columns = _columns(connection, "sources")
+        finding_columns = _columns(connection, "findings")
+        if "case_id" not in source_columns:
+            raise CaseReviewError(
+                "exact evidence drill-down is unavailable: source case ownership is not recorded"
+            )
+        deleted = "f.is_deleted" if "is_deleted" in finding_columns else "0"
+        row = connection.execute(
+            "SELECT f.case_id, f.title AS finding_title, f.confidence, "
+            f"{deleted} AS is_deleted, "
+            "c.finding_id, c.statement, c.epistemic_state, "
+            "a.anchor_id, a.claim_id, a.tool_call_id, a.source_id, a.source_name, "
+            "a.source_hash, a.window_id, a.line_start AS anchor_line_start, "
+            "a.line_end AS anchor_line_end, a.char_start, a.char_end, a.exact_text, "
+            "a.artifact_family, a.extractor_family, a.independence_key, a.value_type, "
+            "a.normalized_value, a.role, s.source_path, s.source_hash AS current_source_hash, "
+            "s.extractor, w.line_start AS window_line_start, w.line_end AS window_line_end, "
+            "w.event_time, w.raw_text "
+            "FROM evidence_anchors a "
+            "JOIN claims c ON c.claim_id = a.claim_id "
+            "JOIN findings f ON f.finding_id = c.finding_id "
+            "JOIN sources s ON s.source_id = a.source_id "
+            "JOIN windows w ON w.window_id = a.window_id AND w.source_id = s.source_id "
+            "WHERE a.anchor_id = ? AND f.case_id = ? AND s.case_id = ?",
+            (query.anchor_id, query.case_id, query.case_id),
+        ).fetchone()
+        if row is None:
+            raise CaseReviewError(
+                f"evidence anchor not found in case {query.case_id}: {query.anchor_id}"
+            )
+        raw_text = cast(str, row["raw_text"])
+        char_start = cast(int, row["char_start"])
+        char_end = cast(int, row["char_end"])
+        exact_text = cast(str, row["exact_text"])
+        if char_start < 0 or char_end <= char_start or char_end > len(raw_text):
+            raise CaseReviewError("evidence anchor has invalid character coordinates")
+        selected_text = raw_text[char_start:char_end]
+        if selected_text != exact_text:
+            raise CaseReviewError(
+                "evidence anchor text no longer matches its authoritative source window"
+            )
+        if row["source_hash"] != row["current_source_hash"]:
+            raise CaseReviewError("evidence anchor source hash does not match its source row")
+        anchor = EvidenceAnchor(
+            anchor_id=row["anchor_id"],
+            claim_id=row["claim_id"],
+            tool_call_id=row["tool_call_id"],
+            source_id=row["source_id"],
+            source_name=row["source_name"],
+            source_hash=row["source_hash"],
+            window_id=row["window_id"],
+            line_start=row["anchor_line_start"],
+            line_end=row["anchor_line_end"],
+            char_start=char_start,
+            char_end=char_end,
+            exact_text=exact_text,
+            artifact_family=row["artifact_family"],
+            extractor_family=row["extractor_family"],
+            independence_key=row["independence_key"],
+            value_type=row["value_type"],
+            normalized_value=_read_json(
+                row["normalized_value"], "anchor normalized value", object
+            ),
+            role=row["role"],
+        )
+        citation = EvidenceCitation(
+            anchor_id=anchor.anchor_id,
+            claim_id=anchor.claim_id,
+            finding_id=row["finding_id"],
+            source_name=anchor.source_name,
+            window_id=anchor.window_id,
+            line_start=anchor.line_start,
+            line_end=anchor.line_end,
+            char_start=anchor.char_start,
+            char_end=anchor.char_end,
+            exact_text=anchor.exact_text,
+        )
+        return EvidenceDetail(
+            case_id=query.case_id,
+            finding_title=row["finding_title"],
+            finding_confidence=row["confidence"],
+            finding_active=not bool(row["is_deleted"]),
+            claim_statement=row["statement"],
+            claim_epistemic_state=row["epistemic_state"],
+            anchor=anchor,
+            citation=citation,
+            window=EvidenceWindowDetail(
+                source_id=anchor.source_id,
+                source_name=anchor.source_name,
+                source_path=row["source_path"],
+                source_hash=row["current_source_hash"],
+                extractor=row["extractor"],
+                window_id=anchor.window_id,
+                line_start=row["window_line_start"],
+                line_end=row["window_line_end"],
+                event_time=row["event_time"],
+                raw_text=raw_text,
+                text_before=raw_text[:char_start],
+                selected_text=selected_text,
+                text_after=raw_text[char_end:],
+            ),
+        )
+    except sqlite3.Error as exc:
+        raise CaseReviewError(f"cannot read exact evidence citation: {exc}") from exc
+    finally:
+        connection.rollback()
+        connection.close()
 
 
 def format_case_review(review: CaseReviewModel) -> str:
