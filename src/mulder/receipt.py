@@ -44,6 +44,7 @@ _STANDARD_ARTIFACT_SUFFIXES = (
     ".report.pdf",
     ".model_usage.json",
     ".outbound.jsonl",
+    ".packs.json",
     ".iocs.csv",
     ".iocs.stix.json",
     ".navigator.json",

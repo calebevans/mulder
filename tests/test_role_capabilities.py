@@ -86,3 +86,13 @@ def test_deterministic_verifier_has_no_model_tool_authority() -> None:
     assert authorize_tool_list(VERIFIER_IDENTITY, []) == []
     with pytest.raises(CapabilityViolation):
         authorize_tool_list(VERIFIER_IDENTITY, ["mcp__mulder__search"])
+
+
+def test_preflighted_pack_seats_retain_extraction_role_boundaries() -> None:
+    identity = identity_for_phase("pack.anti-forensics.clock", "executor")
+
+    assert identity.name == "pack.anti-forensics.clock-executor"
+    assert identity.role is Role.EXTRACT_EXECUTOR
+    assert Capability.FORENSIC_EXECUTION in identity.capabilities
+    with pytest.raises(CapabilityViolation, match="pack identity"):
+        identity_for_phase("pack.anti-forensics.clock", "publisher")

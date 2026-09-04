@@ -159,6 +159,15 @@ VERIFIER_IDENTITY = AgentIdentity(
 
 def identity_for_phase(phase_name: str, seat: str) -> AgentIdentity:
     """Resolve the declared identity for a phase seat, failing closed."""
+    if phase_name.startswith("pack."):
+        template = IDENTITIES.get(("extraction", seat))
+        if template is None:
+            raise CapabilityViolation(f"no pack identity declared for seat {seat!r}")
+        return AgentIdentity(
+            name=f"{phase_name}-{seat}",
+            role=template.role,
+            capabilities=template.capabilities,
+        )
     try:
         return IDENTITIES[(phase_name, seat)]
     except KeyError as exc:

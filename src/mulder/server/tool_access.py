@@ -75,6 +75,10 @@ def get_registered_tool_roles(tool_name: str) -> Role | None:
     (``search``) are accepted.  Returning ``None`` for unknown tools keeps
     authorization fail-closed without exposing the mutable registry.
     """
-    prefix = "mcp__mulder__"
-    registry_name = tool_name[len(prefix) :] if tool_name.startswith(prefix) else tool_name
-    return _registry.get(registry_name)
+    return get_tool_access(tool_name)
+
+
+def get_tool_access(tool_name: str) -> Role | None:
+    """Resolve one short or MCP-qualified tool name through the registry."""
+    short_name = tool_name.removeprefix("mcp__mulder__")
+    return _registry.get(short_name)
