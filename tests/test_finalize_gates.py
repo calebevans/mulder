@@ -15,7 +15,14 @@ import mulder.server.tools.findings  # noqa: F401 ensure tools are registered
 import mulder.server.tools.review  # noqa: F401
 from mulder.audit import AuditLog
 from mulder.db import CaseDB
-from mulder.models import AuditSummary, CaseMetadataRow, Finding, SourceRow
+from mulder.models import (
+    AuditSummary,
+    CaseMetadataRow,
+    ClaimConfirmation,
+    ConfirmationAssessment,
+    Finding,
+    SourceRow,
+)
 from mulder.server.app import _tool_dispatch_sync
 from mulder.server.tools.findings import _evaluate_finalize_gates
 
@@ -99,6 +106,33 @@ def _passing_gate_inputs() -> tuple[list[Finding], CaseMetadataRow, list[SourceR
     ]
     audit = _make_audit_summary()
     return findings, metadata, sources, audit
+
+
+class TestAtomicConfirmationGate:
+    def test_fails_when_persisted_atomic_policy_no_longer_passes(self) -> None:
+        findings, metadata, sources, audit = _passing_gate_inputs()
+        assessment = ConfirmationAssessment(
+            accepted=False,
+            claims=[
+                ClaimConfirmation(
+                    claim_id="c_1",
+                    accepted=False,
+                    reason_code="insufficient_independent_sources",
+                    independent_sources=1,
+                    required_sources=2,
+                )
+            ],
+        )
+        gates = _evaluate_finalize_gates(
+            findings,
+            metadata,
+            sources,
+            audit,
+            {"f_001": assessment},
+        )
+        gate = next(item for item in gates if item["name"] == "atomic_confirmation")
+        assert gate["passed"] is False
+        assert "f_001" in str(gate["detail"])
 
 
 class TestGateMinimumFindings:
@@ -296,7 +330,7 @@ class TestAllGatesPass:
     def test_all_gates_pass(self) -> None:
         findings, metadata, sources, audit = _passing_gate_inputs()
         gates = _evaluate_finalize_gates(findings, metadata, sources, audit)
-        assert len(gates) == 5
+        assert len(gates) == 6
         for gate in gates:
             assert gate["passed"] is True, f"Gate '{gate['name']}' unexpectedly failed"
 

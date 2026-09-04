@@ -21,12 +21,20 @@ from pathlib import Path
 from typing import Any, Literal, cast
 from uuid import uuid4
 
-from mulder.models import AtomicClaimInput, AuditSummary, CaseMetadataRow, Finding, SourceRow
+from mulder.models import (
+    AtomicClaimInput,
+    AuditSummary,
+    CaseMetadataRow,
+    ConfirmationAssessment,
+    Finding,
+    SourceRow,
+)
 from mulder.patterns import SEVERITY_ORDER, source_is_cited
 from mulder.report.renderer import ReportRenderer
 from mulder.server.app import get_ctx, get_job_store, mcp
 from mulder.server.helpers import error_response, hash_output, make_tool_call_id
 from mulder.server.tool_access import ANALYSTS, Role, tool_access
+from mulder.verification.policy import assess_confirmation
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +49,7 @@ def _evaluate_finalize_gates(
     case_metadata: CaseMetadataRow,
     sources: list[SourceRow],
     audit_summary: AuditSummary,
+    confirmation_assessments: dict[str, ConfirmationAssessment] | None = None,
 ) -> list[dict[str, object]]:
     """Evaluate all finalize_report hard gates and return per-gate results.
 
@@ -148,6 +157,26 @@ def _evaluate_finalize_gates(
         passed = True
         detail = "No non-empty sources to check"
     gates.append({"name": "evidence_citation_coverage", "passed": passed, "detail": detail})
+
+    # Gate 6: Atomic confirmed findings still satisfy deterministic policy.
+    # Legacy findings have no assessment and remain explicitly outside this
+    # additive gate until migrated; new atomic findings cannot bypass it.
+    assessments = confirmation_assessments or {}
+    failed_confirmations = [
+        finding_id for finding_id, item in assessments.items() if not item.accepted
+    ]
+    passed = not failed_confirmations
+    if passed:
+        detail = (
+            f"{len(assessments)} atomic confirmed finding(s) satisfy "
+            "verification and independence policy"
+        )
+    else:
+        detail = (
+            "Atomic confirmed findings no longer satisfy verification/independence "
+            f"policy: {failed_confirmations}"
+        )
+    gates.append({"name": "atomic_confirmation", "passed": passed, "detail": detail})
 
     return gates
 
@@ -310,6 +339,25 @@ def submit_finding(
         verifications = (
             ctx.db.verify_finding_claims(finding_id) if stored_claims else []
         )
+        persisted_claims = ctx.db.get_claims(finding_id)
+        confirmation = assess_confirmation(persisted_claims) if persisted_claims else None
+        if (
+            finding.confidence == "confirmed"
+            and confirmation is not None
+            and not confirmation.accepted
+        ):
+            ctx.db.delete_finding(finding_id)
+            response = error_response(
+                tc_id,
+                "submit_finding",
+                {"title": title, "evidence_refs": evidence_refs},
+                "Confirmed atomic finding failed deterministic verification or "
+                "independent-source policy",
+                (time.monotonic() - t0) * 1000,
+                error_type="confirmation_policy",
+            )
+            response["confirmation_assessment"] = confirmation.model_dump()
+            return response
     except Exception as exc:
         # Claim persistence and verification are separate database operations;
         # compensate before the finding becomes visible if verification cannot
@@ -335,6 +383,7 @@ def submit_finding(
             claim.model_dump() for claim in ctx.db.get_claims(finding_id)
         ],
         "claim_verifications": [item.model_dump() for item in verifications],
+        "confirmation_assessment": confirmation.model_dump() if confirmation else None,
         "claim_mode": "atomic_checked" if stored_claims else "legacy_unverified",
     }
     if thin_evidence_warning:
@@ -659,7 +708,24 @@ def finalize_report() -> dict[str, object]:
     audit_summary = ctx.audit.summary()
     sources_list = ctx.db.get_sources()
 
-    gate_results = _evaluate_finalize_gates(findings, case_metadata, sources_list, audit_summary)
+    confirmation_assessments: dict[str, ConfirmationAssessment] = {}
+    for finding in findings:
+        if finding.confidence != "confirmed":
+            continue
+        atomic_claims = ctx.db.get_claims(finding.finding_id)
+        if not atomic_claims:
+            continue
+        ctx.db.verify_finding_claims(finding.finding_id)
+        confirmation_assessments[finding.finding_id] = assess_confirmation(
+            ctx.db.get_claims(finding.finding_id)
+        )
+    gate_results = _evaluate_finalize_gates(
+        findings,
+        case_metadata,
+        sources_list,
+        audit_summary,
+        confirmation_assessments,
+    )
     for gate in gate_results:
         if not gate["passed"]:
             return {

@@ -244,6 +244,23 @@ class ClaimVerification(VerificationDecision):
     verified_at: str
 
 
+class ClaimConfirmation(BaseModel):
+    """Policy decision for one claim in a confirmed finding."""
+
+    claim_id: str
+    accepted: bool
+    reason_code: str
+    independent_sources: int = Field(ge=0)
+    required_sources: int = Field(ge=1)
+
+
+class ConfirmationAssessment(BaseModel):
+    """Server-owned corroboration decision for an entire finding."""
+
+    accepted: bool
+    claims: list[ClaimConfirmation] = Field(default_factory=list)
+
+
 class ToolCallEntry(BaseModel):
     """A single tool invocation recorded in the audit log."""
 

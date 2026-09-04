@@ -16,6 +16,7 @@ from mulder.models import (
     WindowRow,
 )
 from mulder.verification.claims import verify_claim
+from mulder.verification.policy import assess_confirmation
 
 
 def _claim(
@@ -100,6 +101,39 @@ class TestPureClaimVerifier:
         result = verify_claim(_claim(role="contradicts"))
         assert result.result == "contradicted"
         assert result.reason_code == "contradicting_anchor_matched"
+
+
+class TestConfirmationPolicy:
+    def test_two_distinct_root_sources_are_required(self) -> None:
+        claim = _claim().model_copy(update={"epistemic_state": "verified"})
+        first = claim.anchors[0]
+        second = first.model_copy(
+            update={
+                "anchor_id": "a_2",
+                "source_id": 2,
+                "source_hash": "hash-2",
+                "independence_key": "source:hash-2",
+            }
+        )
+        assessment = assess_confirmation(
+            [claim.model_copy(update={"anchors": [first, second]})]
+        )
+        assert assessment.accepted is True
+        assert assessment.claims[0].independent_sources == 2
+
+    def test_repeated_anchor_from_same_root_counts_once(self) -> None:
+        claim = _claim().model_copy(update={"epistemic_state": "verified"})
+        duplicate = claim.anchors[0].model_copy(update={"anchor_id": "a_2"})
+        assessment = assess_confirmation(
+            [claim.model_copy(update={"anchors": [claim.anchors[0], duplicate]})]
+        )
+        assert assessment.accepted is False
+        assert assessment.claims[0].reason_code == "insufficient_independent_sources"
+
+    def test_non_verified_claim_cannot_be_confirmed(self) -> None:
+        assessment = assess_confirmation([_claim()])
+        assert assessment.accepted is False
+        assert assessment.claims[0].reason_code == "claim_unverified"
 
 
 class TestPersistedVerification:
