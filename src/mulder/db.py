@@ -8,11 +8,13 @@ import logging
 import queue
 import re
 import threading
+from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TypedDict, TypeVar, cast
+from uuid import uuid4
 
 from sqlalchemy import (
     Column,
@@ -35,7 +37,15 @@ from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import DatabaseError, OperationalError
 from sqlalchemy.pool import NullPool
 
-from mulder.models import CaseMetadataRow, Finding, SourceRow, WindowRow
+from mulder.models import (
+    AtomicClaim,
+    AtomicClaimInput,
+    CaseMetadataRow,
+    EvidenceAnchor,
+    Finding,
+    SourceRow,
+    WindowRow,
+)
 
 _T = TypeVar("_T")
 
@@ -93,6 +103,55 @@ findings_t = Table(
     Column("event_time_start", Text),
     Column("event_time_end", Text),
     Column("submitted_at", Text, nullable=False),
+)
+
+claims_t = Table(
+    "claims",
+    metadata,
+    Column("claim_id", Text, primary_key=True),
+    Column(
+        "finding_id",
+        Text,
+        ForeignKey("findings.finding_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column("ordinal", Integer, nullable=False),
+    Column("statement", Text, nullable=False),
+    Column("subject", Text, nullable=False),
+    Column("predicate", Text, nullable=False),
+    Column("object_value", Text, nullable=False),
+    Column("qualifiers", Text, nullable=False),
+    Column("epistemic_state", Text, nullable=False),
+)
+
+evidence_anchors_t = Table(
+    "evidence_anchors",
+    metadata,
+    Column("anchor_id", Text, primary_key=True),
+    Column(
+        "claim_id",
+        Text,
+        ForeignKey("claims.claim_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column("tool_call_id", Text, nullable=False, index=True),
+    Column("source_id", Integer, ForeignKey("sources.source_id"), nullable=False, index=True),
+    Column("source_name", Text, nullable=False),
+    Column("source_hash", Text, nullable=False),
+    Column("window_id", Integer, ForeignKey("windows.window_id"), nullable=False, index=True),
+    Column("line_start", Integer, nullable=False),
+    Column("line_end", Integer, nullable=False),
+    Column("char_start", Integer, nullable=False),
+    Column("char_end", Integer, nullable=False),
+    Column("exact_text", Text, nullable=False),
+    Column("artifact_family", Text, nullable=False),
+    Column("extractor_family", Text, nullable=False),
+    Column("independence_key", Text, nullable=False, index=True),
+    Column("value_type", Text, nullable=False),
+    Column("normalized_value", Text, nullable=False),
+    Column("role", Text, nullable=False),
 )
 
 evidence_registry_t = Table(
@@ -294,6 +353,12 @@ def _migrate_add_kv_store(conn: Connection) -> None:
     )
 
 
+def _migrate_add_claim_tables(conn: Connection) -> None:
+    """Create additive atomic-claim tables for databases from older releases."""
+    claims_t.create(conn, checkfirst=True)
+    evidence_anchors_t.create(conn, checkfirst=True)
+
+
 _SENTINEL = object()
 
 
@@ -444,6 +509,7 @@ class CaseDB:
             _migrate_add_bookmarks(conn)
             _migrate_add_progress(conn)
             _migrate_add_kv_store(conn)
+            _migrate_add_claim_tables(conn)
         return db
 
     def close(self) -> None:
@@ -958,11 +1024,21 @@ class CaseDB:
 
         self._wq.submit(_do_update)
 
-    def insert_finding(self, finding: Finding) -> None:
-        """Persist a Finding to the database."""
+    def insert_finding(
+        self,
+        finding: Finding,
+        claims: list[AtomicClaimInput] | None = None,
+    ) -> list[AtomicClaim]:
+        """Persist a finding and optional atomic claims in one transaction.
 
-        def _do_insert() -> None:
-            """Persist a single finding row."""
+        Exact evidence text and provenance are resolved from the case database;
+        callers cannot inject source hashes or independence keys.  If an anchor
+        is stale, out of bounds, or does not match its expected text, the whole
+        write is rejected and no finding row is committed.
+        """
+
+        def _do_insert() -> list[AtomicClaim]:
+            """Persist a finding and its claim graph atomically."""
             with self._engine.begin() as conn:
                 conn.execute(
                     insert(findings_t).values(
@@ -981,7 +1057,194 @@ class CaseDB:
                     )
                 )
 
-        self._wq.submit(_do_insert)
+                stored: list[AtomicClaim] = []
+                resolved_source_names: set[str] = set()
+                for ordinal, claim_input in enumerate(claims or []):
+                    claim_id = f"c_{uuid4().hex[:12]}"
+                    claim = AtomicClaim(
+                        claim_id=claim_id,
+                        finding_id=finding.finding_id,
+                        ordinal=ordinal,
+                        statement=claim_input.statement,
+                        subject=claim_input.subject,
+                        predicate=claim_input.predicate,
+                        object_value=claim_input.object_value,
+                        qualifiers=claim_input.qualifiers,
+                        epistemic_state="unverified",
+                        anchors=[],
+                    )
+                    conn.execute(
+                        insert(claims_t).values(
+                            claim_id=claim.claim_id,
+                            finding_id=claim.finding_id,
+                            ordinal=claim.ordinal,
+                            statement=claim.statement,
+                            subject=claim.subject,
+                            predicate=claim.predicate,
+                            object_value=json.dumps(claim.object_value),
+                            qualifiers=json.dumps(claim.qualifiers),
+                            epistemic_state=claim.epistemic_state,
+                        )
+                    )
+
+                    resolved_anchors: list[EvidenceAnchor] = []
+                    for anchor_input in claim_input.anchors:
+                        row = conn.execute(
+                            select(
+                                windows_t.c.window_id,
+                                windows_t.c.source_id,
+                                windows_t.c.line_start,
+                                windows_t.c.line_end,
+                                windows_t.c.raw_text,
+                                sources_t.c.source_name,
+                                sources_t.c.source_hash,
+                                sources_t.c.extractor,
+                            )
+                            .select_from(
+                                windows_t.join(
+                                    sources_t,
+                                    windows_t.c.source_id == sources_t.c.source_id,
+                                )
+                            )
+                            .where(windows_t.c.window_id == anchor_input.window_id)
+                        ).fetchone()
+                        if row is None:
+                            raise ValueError(
+                                "Evidence anchor window_id "
+                                f"{anchor_input.window_id} does not exist"
+                            )
+                        raw_text = str(row.raw_text)
+                        if anchor_input.char_end > len(raw_text):
+                            raise ValueError(
+                                "Evidence anchor character range is outside window "
+                                f"{anchor_input.window_id} (length {len(raw_text)})"
+                            )
+                        exact_text = raw_text[
+                            anchor_input.char_start : anchor_input.char_end
+                        ]
+                        if exact_text != anchor_input.expected_text:
+                            raise ValueError(
+                                "Evidence anchor text does not match the immutable window at "
+                                f"{anchor_input.window_id}:{anchor_input.char_start}-"
+                                f"{anchor_input.char_end}"
+                            )
+
+                        extractor = str(row.extractor)
+                        source_hash = str(row.source_hash)
+                        anchor = EvidenceAnchor(
+                            anchor_id=f"a_{uuid4().hex[:12]}",
+                            claim_id=claim_id,
+                            tool_call_id=anchor_input.tool_call_id,
+                            source_id=int(row.source_id),
+                            source_name=str(row.source_name),
+                            source_hash=source_hash,
+                            window_id=int(row.window_id),
+                            line_start=int(row.line_start),
+                            line_end=int(row.line_end),
+                            char_start=anchor_input.char_start,
+                            char_end=anchor_input.char_end,
+                            exact_text=exact_text,
+                            artifact_family=anchor_input.artifact_family or extractor,
+                            extractor_family=extractor,
+                            independence_key=f"source:{source_hash}",
+                            value_type=anchor_input.value_type,
+                            normalized_value=anchor_input.normalized_value,
+                            role=anchor_input.role,
+                        )
+                        resolved_source_names.add(anchor.source_name)
+                        conn.execute(
+                            insert(evidence_anchors_t).values(
+                                anchor_id=anchor.anchor_id,
+                                claim_id=anchor.claim_id,
+                                tool_call_id=anchor.tool_call_id,
+                                source_id=anchor.source_id,
+                                source_name=anchor.source_name,
+                                source_hash=anchor.source_hash,
+                                window_id=anchor.window_id,
+                                line_start=anchor.line_start,
+                                line_end=anchor.line_end,
+                                char_start=anchor.char_start,
+                                char_end=anchor.char_end,
+                                exact_text=anchor.exact_text,
+                                artifact_family=anchor.artifact_family,
+                                extractor_family=anchor.extractor_family,
+                                independence_key=anchor.independence_key,
+                                value_type=anchor.value_type,
+                                normalized_value=json.dumps(anchor.normalized_value),
+                                role=anchor.role,
+                            )
+                        )
+                        resolved_anchors.append(anchor)
+                    stored.append(claim.model_copy(update={"anchors": resolved_anchors}))
+                if stored:
+                    conn.execute(
+                        update(findings_t)
+                        .where(findings_t.c.finding_id == finding.finding_id)
+                        .values(sources=json.dumps(sorted(resolved_source_names)))
+                    )
+                return stored
+
+        return self._wq.submit(_do_insert)
+
+    def get_claims(self, finding_id: str) -> list[AtomicClaim]:
+        """Return a finding's atomic claims with exact anchors, in stable order."""
+        with self._engine.connect() as conn:
+            claim_rows = conn.execute(
+                select(claims_t)
+                .where(claims_t.c.finding_id == finding_id)
+                .order_by(claims_t.c.ordinal, claims_t.c.claim_id)
+            ).fetchall()
+            anchor_rows = conn.execute(
+                select(evidence_anchors_t)
+                .select_from(
+                    evidence_anchors_t.join(
+                        claims_t, evidence_anchors_t.c.claim_id == claims_t.c.claim_id
+                    )
+                )
+                .where(claims_t.c.finding_id == finding_id)
+                .order_by(evidence_anchors_t.c.anchor_id)
+            ).fetchall()
+
+        by_claim: dict[str, list[EvidenceAnchor]] = defaultdict(list)
+        for row in anchor_rows:
+            by_claim[row.claim_id].append(
+                EvidenceAnchor(
+                    anchor_id=row.anchor_id,
+                    claim_id=row.claim_id,
+                    tool_call_id=row.tool_call_id,
+                    source_id=row.source_id,
+                    source_name=row.source_name,
+                    source_hash=row.source_hash,
+                    window_id=row.window_id,
+                    line_start=row.line_start,
+                    line_end=row.line_end,
+                    char_start=row.char_start,
+                    char_end=row.char_end,
+                    exact_text=row.exact_text,
+                    artifact_family=row.artifact_family,
+                    extractor_family=row.extractor_family,
+                    independence_key=row.independence_key,
+                    value_type=row.value_type,
+                    normalized_value=json.loads(row.normalized_value),
+                    role=row.role,
+                )
+            )
+
+        return [
+            AtomicClaim(
+                claim_id=row.claim_id,
+                finding_id=row.finding_id,
+                ordinal=row.ordinal,
+                statement=row.statement,
+                subject=row.subject,
+                predicate=row.predicate,
+                object_value=json.loads(row.object_value),
+                qualifiers=json.loads(row.qualifiers),
+                epistemic_state=row.epistemic_state,
+                anchors=by_claim[row.claim_id],
+            )
+            for row in claim_rows
+        ]
 
     def update_finding(self, finding_id: str, **kwargs: object) -> bool:
         """Update fields on an existing finding. Returns True if found.

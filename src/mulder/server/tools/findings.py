@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 from uuid import uuid4
 
-from mulder.models import AuditSummary, CaseMetadataRow, Finding, SourceRow
+from mulder.models import AtomicClaimInput, AuditSummary, CaseMetadataRow, Finding, SourceRow
 from mulder.patterns import SEVERITY_ORDER, source_is_cited
 from mulder.report.renderer import ReportRenderer
 from mulder.server.app import get_ctx, get_job_store, mcp
@@ -186,6 +186,7 @@ def submit_finding(
     mitre_attack_ids: list[str] | None = None,
     event_time_start: str | None = None,
     event_time_end: str | None = None,
+    claims: list[dict[str, Any]] | None = None,
 ) -> dict[str, object]:
     """Record a forensic finding with validated evidence references and metadata.
 
@@ -200,6 +201,13 @@ def submit_finding(
     pass null rather than fabricating. Day-precision placeholders are
     auto-nullified.
 
+    New callers should also submit atomic ``claims``. Each claim points to an
+    exact character range in an indexed evidence window and repeats the text
+    expected at that immutable location. The server resolves source identity,
+    hashes, extractor family, and independence key rather than trusting those
+    values from the caller. Omitting ``claims`` remains supported for legacy
+    clients; such prose is not promoted to a verified atomic claim.
+
     Returns finding_id on acceptance. Severity must be
     critical/high/medium/low/info. Confidence must be "confirmed"
     (corroborated by 2+ sources) or "inference".
@@ -208,7 +216,26 @@ def submit_finding(
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
-    invalid_refs = [ref for ref in evidence_refs if not ctx.audit.has_tool_call(ref)]
+    try:
+        claim_inputs = [AtomicClaimInput.model_validate(raw) for raw in claims or []]
+    except Exception as exc:
+        return error_response(
+            tc_id,
+            "submit_finding",
+            {"title": title, "evidence_refs": evidence_refs},
+            f"Atomic claim validation error: {exc}",
+            (time.monotonic() - t0) * 1000,
+            error_type="validation",
+        )
+
+    claim_refs = {
+        anchor.tool_call_id for claim in claim_inputs for anchor in claim.anchors
+    }
+    invalid_refs = [
+        ref
+        for ref in sorted(set(evidence_refs) | claim_refs)
+        if not ctx.audit.has_tool_call(ref)
+    ]
     if invalid_refs:
         recent_ids = sorted(ctx.audit.tool_call_ids)[-10:]
         resp = error_response(
@@ -220,6 +247,17 @@ def submit_finding(
         )
         resp["valid_refs"] = recent_ids
         return resp
+
+    if claim_inputs and claim_refs != set(evidence_refs):
+        return error_response(
+            tc_id,
+            "submit_finding",
+            {"title": title, "evidence_refs": evidence_refs},
+            "Atomic claim tool_call_ids must exactly match evidence_refs; "
+            "uncited or unanchored references are not accepted",
+            (time.monotonic() - t0) * 1000,
+            error_type="validation",
+        )
 
     case_metadata = ctx.db.get_case_metadata()
     finding_id = f"f_{uuid4().hex[:8]}"
@@ -267,7 +305,17 @@ def submit_finding(
             "Consider whether 'inference' is more appropriate."
         )
 
-    ctx.db.insert_finding(finding)
+    try:
+        stored_claims = ctx.db.insert_finding(finding, claim_inputs)
+    except Exception as exc:
+        return error_response(
+            tc_id,
+            "submit_finding",
+            {"title": title, "evidence_refs": evidence_refs},
+            f"Evidence anchor validation error: {exc}",
+            (time.monotonic() - t0) * 1000,
+            error_type="validation",
+        )
     ctx.audit.log_finding_submission(finding_id, evidence_refs)
 
     result: dict[str, object] = {
@@ -275,6 +323,8 @@ def submit_finding(
         "finding_id": finding_id,
         "status": "accepted",
         "confidence": finding.confidence,
+        "atomic_claims": [claim.model_dump() for claim in stored_claims],
+        "claim_mode": "atomic_unverified" if stored_claims else "legacy_unverified",
     }
     if thin_evidence_warning:
         result["hint"] = thin_evidence_warning
@@ -292,6 +342,7 @@ def submit_finding(
             "evidence_refs": evidence_refs,
             "sources": sources,
             "mitre_attack_ids": mitre_attack_ids or [],
+            "claim_count": len(stored_claims),
         },
         output_hash=hash_output(result),
         duration_ms=elapsed,

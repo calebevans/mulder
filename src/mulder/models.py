@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Literal
+from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -88,6 +88,8 @@ class ToolOutcome(BaseModel):
             raise ValueError("SAMPLED outcomes require coverage.sample_reason")
         return self
 
+JsonScalar: TypeAlias = str | int | float | bool | None
+
 
 class WindowRow(BaseModel):
     """A single windowed slice of evidence text from an indexed source."""
@@ -145,6 +147,83 @@ class Finding(BaseModel):
         if not self.evidence_refs:
             raise ValueError("evidence_refs must contain at least one tool_call_id")
         return self
+
+
+class EvidenceAnchorInput(BaseModel):
+    """Caller-supplied locator for an exact quote in an evidence window.
+
+    The caller identifies a previously returned window and the exact character
+    range it is relying on.  Source identity, hashes, extractor family, and the
+    independence key are resolved by :class:`CaseDB`; callers cannot assert
+    those provenance fields themselves.
+    """
+
+    tool_call_id: str = Field(min_length=1)
+    window_id: int = Field(gt=0)
+    char_start: int = Field(ge=0)
+    char_end: int = Field(gt=0)
+    expected_text: str = Field(min_length=1)
+    artifact_family: str | None = None
+    value_type: str = "text"
+    normalized_value: JsonScalar = None
+    role: Literal["supports", "contradicts"] = "supports"
+
+    @model_validator(mode="after")
+    def _check_character_range(self) -> EvidenceAnchorInput:
+        if self.char_end <= self.char_start:
+            raise ValueError("char_end must be greater than char_start")
+        return self
+
+
+class AtomicClaimInput(BaseModel):
+    """A material statement and the exact evidence anchors offered for it."""
+
+    statement: str = Field(min_length=1)
+    subject: str = Field(min_length=1)
+    predicate: str = Field(min_length=1)
+    object_value: JsonScalar
+    qualifiers: dict[str, JsonScalar] = Field(default_factory=dict)
+    anchors: list[EvidenceAnchorInput] = Field(min_length=1)
+
+
+class EvidenceAnchor(BaseModel):
+    """Server-resolved immutable evidence locator for an atomic claim."""
+
+    anchor_id: str
+    claim_id: str
+    tool_call_id: str
+    source_id: int
+    source_name: str
+    source_hash: str
+    window_id: int
+    line_start: int
+    line_end: int
+    char_start: int
+    char_end: int
+    exact_text: str
+    artifact_family: str
+    extractor_family: str
+    independence_key: str
+    value_type: str
+    normalized_value: JsonScalar = None
+    role: Literal["supports", "contradicts"] = "supports"
+
+
+class AtomicClaim(BaseModel):
+    """Persisted atomic finding statement with resolved evidence anchors."""
+
+    claim_id: str
+    finding_id: str
+    ordinal: int = Field(ge=0)
+    statement: str
+    subject: str
+    predicate: str
+    object_value: JsonScalar
+    qualifiers: dict[str, JsonScalar] = Field(default_factory=dict)
+    epistemic_state: Literal[
+        "legacy_unverified", "unverified", "verified", "contradicted", "inconclusive"
+    ] = "unverified"
+    anchors: list[EvidenceAnchor] = Field(default_factory=list)
 
 
 class ToolCallEntry(BaseModel):
