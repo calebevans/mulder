@@ -182,6 +182,58 @@ class TestEvidenceValidation:
         assert result.get("error_type") == "validation"
         assert "exactly match" in str(result.get("error_message"))
 
+    def test_confirmed_atomic_claim_requires_independent_root_sources(
+        self, case_db: CaseDB, audit_log: AuditLog
+    ) -> None:
+        sid = case_db.register_source("src", "/evidence/a", "one-root", "text", 1)
+        case_db.insert_windows(
+            sid,
+            [
+                WindowRow(
+                    source_id=sid,
+                    line_start=1,
+                    line_end=1,
+                    event_time=None,
+                    raw_text="cmd.exe",
+                )
+            ],
+        )
+        window = case_db.get_windows_by_source("src")[0]
+        assert window.window_id is not None
+
+        result = _call_submit_finding(
+            case_db,
+            audit_log,
+            title="Single-source execution claim",
+            description="cmd.exe executed",
+            severity="high",
+            confidence="confirmed",
+            evidence_refs=["tc_aabbccdd"],
+            sources=["src"],
+            claims=[
+                {
+                    "statement": "Image is cmd.exe",
+                    "subject": "process:1",
+                    "predicate": "image_name",
+                    "object_value": "cmd.exe",
+                    "anchors": [
+                        {
+                            "tool_call_id": "tc_aabbccdd",
+                            "window_id": window.window_id,
+                            "char_start": 0,
+                            "char_end": 7,
+                            "expected_text": "cmd.exe",
+                        }
+                    ],
+                }
+            ],
+        )
+
+        assert result["status"] == "error"
+        assert result["error_type"] == "confirmation_policy"
+        assert result["confirmation_assessment"]["claims"][0]["independent_sources"] == 1
+        assert case_db.get_findings() == []
+
 
 class TestTimestampSanitization:
     """Tests for _sanitize_event_time timestamp validation."""
