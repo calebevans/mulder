@@ -98,6 +98,38 @@ class TestAnyQueryConstruction:
     def test_single_term(self) -> None:
         assert _fts5_any_query("4625") == "4625"
 
+    def test_a_quoted_phrase_stays_one_operand(self) -> None:
+        """Splitting on whitespace would yield ``"brute OR force"``.
+
+        That is an FTS5 syntax error, which ``search_windows`` catches and
+        turns into an empty result -- the very failure this mode exists to
+        prevent.
+        """
+        assert _fts5_any_query('"brute force" 4625') == '"brute force" OR 4625'
+
+    def test_a_phrase_the_sanitizer_produced_stays_one_operand(self) -> None:
+        assert _fts5_any_query("c:/windows/temp 4625") == '"c:/windows/temp" OR 4625'
+
+
+class TestQuotedPhrasesAgainstARealDatabase:
+    """A phrase query must reach FTS5 intact, not collapse to zero results."""
+
+    def test_a_phrase_bag_finds_the_signal(self, case_db: CaseDB) -> None:
+        results = case_db.search_windows(
+            '"brute force" 4625', source_name="evtx.security", match="any"
+        )
+        assert results
+        assert results[0][0].raw_text == SIGNAL
+
+    def test_a_phrase_absent_from_the_corpus_matches_nothing(self, case_db: CaseDB) -> None:
+        """Proves the phrase is honoured as a phrase, not OR-ed into words.
+
+        Both words are present in the corpus; the adjacent pair is not.
+        """
+        assert (
+            case_db.search_windows('"force logon"', source_name="evtx.security", match="any") == []
+        )
+
 
 class TestKeywordBagAgainstARealDatabase:
     def test_implicit_and_matches_nothing(self, case_db: CaseDB) -> None:

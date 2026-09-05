@@ -189,7 +189,9 @@ def _fts5_any_query(query: str) -> str:
     Operators, parenthesis and already-quoted phrases the sanitizer produced
     are preserved; only adjacent operands get an ``OR`` between them.
     """
-    tokens = _sanitize_fts5_query(query).split()
+    # Re-tokenize with the same regex the sanitizer used: ``str.split()``
+    # would cut a quoted phrase in half and produce ``"brute OR force"``.
+    tokens = _FTS5_TOKEN_RE.findall(_sanitize_fts5_query(query))
     parts: list[str] = []
     for token in tokens:
         if parts and token not in _FTS5_OPERATORS and parts[-1] not in _FTS5_OPERATORS:
