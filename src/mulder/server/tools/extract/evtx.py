@@ -5,7 +5,6 @@ from __future__ import annotations
 import atexit
 import contextlib
 import logging
-import re
 import shutil
 import subprocess
 import tempfile
@@ -14,6 +13,7 @@ import time
 from pathlib import Path
 from typing import cast
 
+from mulder.patterns import fls_file_entries
 from mulder.server.app import get_cfg, get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
@@ -66,21 +66,19 @@ def _extract_evtx_from_image(image_path: str, dest_dir: str) -> list[Path]:
     if not chunk_groups:
         return []
 
-    evtx_re = re.compile(
-        r"^[rd]/[rd*]\s+(\d+(?:-\d+-\d+)?):\s+(.+\.evtx)\s*$", re.IGNORECASE | re.MULTILINE
-    )
-
     extracted: list[Path] = []
     seen: set[str] = set()
     for chunks, offset in chunk_groups:
         for chunk in chunks:
-            for m in evtx_re.finditer(chunk):
-                inode_str = m.group(1).split("-")[0]
+            for entry in fls_file_entries(chunk):
+                if not entry.path.lower().endswith(".evtx"):
+                    continue
+                inode_str = entry.base_inode
                 dedup_key = f"{offset}:{inode_str}"
                 if dedup_key in seen:
                     continue
                 seen.add(dedup_key)
-                rel_path = m.group(2).strip()
+                rel_path = entry.path
                 safe_name = rel_path.replace("/", "_").replace("\\", "_")
                 out_path = Path(dest_dir) / safe_name
                 cmd = ["icat"]

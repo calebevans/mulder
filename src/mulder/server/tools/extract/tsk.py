@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import contextlib
 import logging
-import re
 import shutil
 import subprocess
 import tempfile
@@ -12,7 +11,7 @@ import threading
 import time
 from pathlib import Path
 
-from mulder.patterns import parse_mmls_rows
+from mulder.patterns import fls_file_entries, parse_mmls_rows
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
@@ -401,10 +400,6 @@ def _tsk_extract_files(
         return []
 
     ctx = get_ctx()
-    inode_re = re.compile(
-        r"^[rd]/[rd*]\s+(\d+(?:-\d+-\d+)?):\s+(.+)\s*$",
-        re.IGNORECASE | re.MULTILINE,
-    )
 
     extract_dir: Path | None = None
     extracted: list[tuple[str, Path]] = []
@@ -412,9 +407,9 @@ def _tsk_extract_files(
 
     for chunks, offset in chunk_groups:
         for chunk in chunks:
-            for m in inode_re.finditer(chunk):
-                inode_str = m.group(1).split("-")[0]
-                rel_path = m.group(2).strip()
+            for entry in fls_file_entries(chunk):
+                inode_str = entry.base_inode
+                rel_path = entry.path
                 rel_lower = rel_path.lower().replace("\\", "/")
 
                 if not any(pat.lower() in rel_lower for pat in path_patterns):

@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from mulder.patterns import fls_file_entries
 from mulder.server.app import mcp
 from mulder.server.extract_helpers import extract_and_index, mount_disk_image
 from mulder.server.helpers import (
@@ -153,11 +154,6 @@ def _discover_user_hives_via_tsk(
     if not chunk_groups:
         return [], None
 
-    inode_re = re.compile(
-        r"^[rd]/[rd*]\s+(\d+(?:-\d+-\d+)?):\s+(.+)\s*$",
-        re.IGNORECASE | re.MULTILINE,
-    )
-
     ntuser_patterns = [
         "documents and settings/",
         "users/",
@@ -171,9 +167,9 @@ def _discover_user_hives_via_tsk(
 
     for chunks, chunk_offset in chunk_groups:
         for chunk in chunks:
-            for m in inode_re.finditer(chunk):
-                inode_str = m.group(1).split("-")[0]
-                rel_path = m.group(2).strip()
+            for entry in fls_file_entries(chunk):
+                inode_str = entry.base_inode
+                rel_path = entry.path
                 rel_lower = rel_path.lower().replace("\\", "/")
 
                 hive_type: str | None = None

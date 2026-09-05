@@ -47,7 +47,6 @@ class TestFindMatchingFiles:
             [_SAMPLE_FLS],
             "Program Files/mIRC",
             frozenset({".ini"}),
-            max_file_size_kb=512,
             offset=0,
         )
         paths = [m[1] for m in matches]
@@ -63,7 +62,6 @@ class TestFindMatchingFiles:
             [_SAMPLE_FLS],
             "Program Files/mIRC",
             _DEFAULT_EXTENSIONS,
-            max_file_size_kb=512,
             offset=0,
         )
         paths = [m[1] for m in matches]
@@ -80,7 +78,6 @@ class TestFindMatchingFiles:
             [_MULTI_USER_FLS],
             "Documents and Settings/*/Application Data/Thunderbird",
             frozenset({".ini", ".cfg", ".txt"}),
-            max_file_size_kb=512,
             offset=0,
         )
         paths = [m[1] for m in matches]
@@ -101,7 +98,6 @@ class TestFindMatchingFiles:
             [fls],
             "AppDir",
             frozenset({".sqlite", ".db"}),
-            max_file_size_kb=512,
             offset=0,
         )
         paths = [m[1] for m in matches]
@@ -110,8 +106,16 @@ class TestFindMatchingFiles:
         assert "AppDir/cache.db" in paths
         assert "AppDir/config.ini" not in paths
 
-    def test_size_limit_with_tab_delimited_sizes(self) -> None:
-        """Files with tab-delimited sizes above threshold are excluded."""
+    def test_listing_alone_cannot_apply_a_size_limit(self) -> None:
+        """``fls -r -p`` prints no size column, so nothing is filtered here.
+
+        This test used to be called ``test_size_limit_with_tab_delimited_sizes``
+        and claimed that "files with tab-delimited sizes above threshold are
+        excluded" -- while asserting that all three files came back, from a
+        fixture that contained no sizes at all. It documented a feature that
+        never worked: sizes require ``fls -l``. The threshold is now applied
+        to the bytes ``icat`` returns; see ``TestSizeLimitIsEnforced``.
+        """
         fls = (
             "r/r 4001:\tSmallDir/small.txt\n"
             "r/r 4002:\tSmallDir/medium.txt\n"
@@ -121,12 +125,9 @@ class TestFindMatchingFiles:
             [fls],
             "SmallDir",
             frozenset({".txt"}),
-            max_file_size_kb=512,
             offset=0,
         )
         assert len(matches) == 3
-        paths = [m[1] for m in matches]
-        assert "SmallDir/small.txt" in paths
 
     def test_empty_pattern_no_matches(self) -> None:
         """Pattern matching no directory returns empty list."""
@@ -134,7 +135,6 @@ class TestFindMatchingFiles:
             [_SAMPLE_FLS],
             "NonExistent/Directory",
             _DEFAULT_EXTENSIONS,
-            max_file_size_kb=512,
             offset=0,
         )
         assert matches == []
@@ -146,7 +146,6 @@ class TestFindMatchingFiles:
             [duplicate_fls],
             "AppDir",
             frozenset({".ini"}),
-            max_file_size_kb=512,
             offset=0,
         )
         assert len(matches) == 1
@@ -158,7 +157,6 @@ class TestFindMatchingFiles:
             [fls],
             "program files/myapp",
             frozenset({".ini"}),
-            max_file_size_kb=512,
             offset=0,
         )
         assert len(matches) == 1
@@ -396,3 +394,39 @@ class TestIndexAppFilesTool:
         assert result["status"] == "success"
         assert result["results"]["files_discovered"] == 2
         assert ".ini" not in str(result["results"]["sample_files"])
+
+
+class TestSizeLimitIsEnforced:
+    """`max_file_size_kb` is applied to the bytes icat returns.
+
+    It used to be checked against a size field parsed out of the fls
+    listing with a ``\\t(digits)\\t`` regex. ``fls -r -p`` prints one tab
+    per line and no size column -- sizes need ``fls -l`` -- so that search
+    never matched and the threshold never skipped anything.
+    """
+
+    @staticmethod
+    def _read(payload: bytes, max_size_bytes: int | None):  # type: ignore[no-untyped-def]
+        import subprocess
+        from unittest.mock import patch
+
+        from mulder.server.tools.extract import app_files as af
+
+        proc = subprocess.CompletedProcess(args=[], returncode=0, stdout=payload)
+        with (
+            patch.object(af.shutil, "which", return_value="/usr/bin/icat"),
+            patch.object(af.subprocess, "run", return_value=proc),
+        ):
+            return af._extract_and_read_file("/img.raw", "710", 0, max_size_bytes=max_size_bytes)
+
+    def test_a_file_over_the_threshold_is_skipped(self) -> None:
+        assert self._read(b"x" * 2048, 1024) is None
+
+    def test_a_file_under_the_threshold_is_read(self) -> None:
+        assert self._read(b"hello world", 1024) == "hello world"
+
+    def test_a_file_exactly_at_the_threshold_is_read(self) -> None:
+        assert self._read(b"x" * 1024, 1024) is not None
+
+    def test_no_threshold_reads_everything(self) -> None:
+        assert self._read(b"x" * 100_000, None) is not None

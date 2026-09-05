@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import fnmatch
 import logging
-import re
 import shutil
 import subprocess
 import time
 from typing import Any
 
+from mulder.patterns import fls_file_entries
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
@@ -57,15 +57,6 @@ _DEFAULT_EXTENSIONS: frozenset[str] = frozenset(
 _ICAT_TIMEOUT = 30
 _MAX_TEXT_BYTES = 512 * 1024
 
-_FLS_ENTRY_RE = re.compile(
-    r"^[rd]/[rd*]\s+(\d+(?:-\d+-\d+)?):\s+(.+)\s*$",
-    re.IGNORECASE | re.MULTILINE,
-)
-"""Matches fls output entries, capturing inode and relative path."""
-
-_FLS_SIZE_RE = re.compile(r"\t(\d+)\t")
-"""Attempts to extract file size from fls output fields."""
-
 
 def _derive_source_name(directory_pattern: str) -> str:
     """Generate a source identifier from the directory pattern.
@@ -91,7 +82,6 @@ def _find_matching_files(
     fls_chunks: list[str],
     directory_pattern: str,
     extensions: frozenset[str],
-    max_file_size_kb: int,
     offset: int,
 ) -> list[tuple[str, str, int]]:
     """Search TSK file listing for text files under matching directories.
@@ -103,22 +93,24 @@ def _find_matching_files(
         fls_chunks: Text chunks from the TSK file listing.
         directory_pattern: Glob-style directory pattern to match paths.
         extensions: Set of allowed file extensions (lowercase, with dot).
-        max_file_size_kb: Maximum file size threshold in KB.
         offset: Partition sector offset for icat extraction.
+
+    The size threshold is not applied here: ``fls -r -p`` prints no size
+    column (that needs ``fls -l``), so it is enforced on the bytes ``icat``
+    returns instead.
 
     Returns:
         List of ``(inode_str, relative_path, partition_offset)`` tuples
         for files matching the criteria.
     """
     glob_pattern = directory_pattern.lower().replace("\\", "/").rstrip("/") + "/*"
-    max_size_bytes = max_file_size_kb * 1024
     matches: list[tuple[str, str, int]] = []
     seen_inodes: set[str] = set()
 
     for chunk in fls_chunks:
-        for m in _FLS_ENTRY_RE.finditer(chunk):
-            inode_str = m.group(1).split("-")[0]
-            rel_path = m.group(2).strip()
+        for entry in fls_file_entries(chunk):
+            inode_str = entry.base_inode
+            rel_path = entry.path
             rel_lower = rel_path.lower().replace("\\", "/")
 
             if not fnmatch.fnmatch(rel_lower, glob_pattern):
@@ -130,12 +122,6 @@ def _find_matching_files(
             ext = rel_lower[dot_pos:]
             if ext not in extensions:
                 continue
-
-            size_match = _FLS_SIZE_RE.search(m.group(0))
-            if size_match:
-                file_size = int(size_match.group(1))
-                if file_size > max_size_bytes:
-                    continue
 
             dedup_key = f"{offset}:{inode_str}"
             if dedup_key in seen_inodes:
@@ -163,6 +149,7 @@ def _extract_and_read_file(
     image_path: str,
     inode_str: str,
     offset: int,
+    max_size_bytes: int | None = None,
 ) -> str | None:
     """Extract a file via icat and return its text content.
 
@@ -173,10 +160,14 @@ def _extract_and_read_file(
         image_path: Path to the disk image.
         inode_str: TSK inode identifier.
         offset: Partition sector offset.
+        max_size_bytes: Skip the file when it is larger than this. The
+            caller's ``max_file_size_kb`` used to be checked against a size
+            field parsed out of the fls listing, but ``fls -r -p`` does not
+            print one, so nothing was ever skipped.
 
     Returns:
-        Decoded text content or None if extraction fails or file
-        is binary.
+        Decoded text content or None if extraction fails, the file is
+        binary, or it exceeds *max_size_bytes*.
     """
     if not shutil.which("icat"):
         return None
@@ -197,6 +188,9 @@ def _extract_and_read_file(
         return None
 
     if proc.returncode != 0 or not proc.stdout:
+        return None
+
+    if max_size_bytes is not None and len(proc.stdout) > max_size_bytes:
         return None
 
     if _is_binary_content(proc.stdout):
@@ -282,9 +276,7 @@ def index_app_files(
 
     all_matches: list[tuple[str, str, int]] = []
     for chunks, offset in chunk_groups:
-        matches = _find_matching_files(
-            chunks, directory_pattern, ext_set, max_file_size_kb, offset
-        )
+        matches = _find_matching_files(chunks, directory_pattern, ext_set, offset)
         all_matches.extend(matches)
 
     if not all_matches:
@@ -315,7 +307,9 @@ def index_app_files(
     skipped_binary = 0
 
     for inode_str, rel_path, offset in capped:
-        content = _extract_and_read_file(image_path, inode_str, offset)
+        content = _extract_and_read_file(
+            image_path, inode_str, offset, max_size_bytes=max_file_size_kb * 1024
+        )
         if content is None:
             skipped_binary += 1
             continue
