@@ -23,6 +23,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from mulder.patterns import parse_mmls_rows
 from mulder.server.app import get_cfg, get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import hash_output, make_tool_call_id
@@ -104,9 +105,7 @@ def _resolve_image_and_offset() -> tuple[str, int]:
         windows = ctx.db.get_windows_by_source("tsk.partitions")
 
         mmls_text = "\n".join(w.raw_text for w in windows)
-        row_re = re.compile(r"^\d+:\d+\s+(\d+)\s+\d+\s+(\d+)\s+(.+)$", re.MULTILINE)
-        for m in row_re.finditer(mmls_text):
-            start, length, desc = int(m.group(1)), int(m.group(2)), m.group(3).strip().lower()
+        for start, length, desc in parse_mmls_rows(mmls_text):
             if any(ind in desc for ind in ("ntfs", "0x07", "hfs", "apfs")) and length > 0:
                 offset = start
                 break

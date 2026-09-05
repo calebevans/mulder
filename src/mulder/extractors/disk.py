@@ -15,14 +15,12 @@ import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from mulder.patterns import parse_mmls_rows
+
 logger = logging.getLogger(__name__)
 _EVTX_EXTS = frozenset({".evtx"})
 
 _SECTOR_SIZE = 512
-_MMLS_ROW_RE = re.compile(
-    r"^\d+:\d+\s+(\d+)\s+\d+\s+(\d+)\s+(.+)$",
-    re.MULTILINE,
-)
 _NTFS_INDICATORS = ("ntfs", "exfat", "0x07", "win95 fat", "0x0b", "0x0c")
 _LINUX_INDICATORS = ("linux", "0x83", "ext", "0x8e")
 
@@ -120,17 +118,10 @@ def _detect_mount_offset(image_path: str) -> int:
         logger.debug("mmls found no partition table in %s", image_path)
         return 0
 
-    rows: list[tuple[int, int, str]] = []
-    for m in _MMLS_ROW_RE.finditer(proc.stdout):
-        start_sector = int(m.group(1))
-        length = int(m.group(2))
-        desc = m.group(3).strip()
-        rows.append((start_sector, length, desc))
+    annotated = parse_mmls_rows(proc.stdout)
 
-    if not rows:
+    if not annotated:
         return 0
-
-    annotated = [(s, sz, d.lower()) for s, sz, d in rows]
 
     for start, length, dl in annotated:
         if any(ind in dl for ind in _NTFS_INDICATORS) and length > 0:
