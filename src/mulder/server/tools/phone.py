@@ -18,12 +18,13 @@ import subprocess
 import tempfile
 import time
 import xml.etree.ElementTree as ET
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from mulder.assets.paths import asset_display_path, register_cache_clear
 from mulder.server.app import get_ctx, mcp
-from mulder.server.extract_helpers import extract_and_index
+from mulder.server.extract_helpers import extract_and_index, format_records
 from mulder.server.helpers import (
     error_response,
     interpreter_candidates,
@@ -978,6 +979,35 @@ def _classify_artifact_category(artifact_type: str) -> str:
     return "other"
 
 
+# How many rows per artifact the tool response carries back. The index is not
+# bounded by this.
+_MAX_LEAPP_ROWS = 100
+
+
+def _leapp_artifact_lines(artifact: Mapping[str, Any]) -> list[str]:
+    """Render one parsed LEAPP artifact as indexable text.
+
+    ``_parse_tsv_file`` zips headers to values non-strictly, so a short row
+    yields a short dict. Taking the union of keys in first-seen order keeps
+    every row on the same columns instead of letting one truncated row shift
+    the whole artifact.
+    """
+    rows = artifact.get("data") or []
+    if not rows:
+        return []
+
+    fields: dict[str, None] = {}
+    for row in rows:
+        for key in row:
+            fields.setdefault(key, None)
+    columns = list(fields)
+
+    lines = [f"[{artifact.get('category', '')}] {artifact.get('artifact_type', '')}"]
+    lines.append("\t".join(columns))
+    lines.extend(format_records(rows, columns))
+    return lines
+
+
 def _parse_tsv_file(tsv_path: Path) -> list[dict[str, str]]:
     """Parse a TSV file into a list of row dicts.
 
@@ -1060,7 +1090,9 @@ def _parse_leapp_output(
                 "category": category,
                 "artifact_type": artifact_type,
                 "record_count": record_count,
-                "data": records[:100],
+                # Not truncated here: the caller indexes these and truncates
+                # for the response, so the case database sees every row.
+                "data": records,
                 "source_files": [str(tsv_file)],
             }
         )
@@ -1223,9 +1255,19 @@ def run_aleapp(
         for cat, count in result.get("categories", {}).items():
             text_parts.append(f"  {cat}: {count} records")
 
+        # Index the parsed rows. Without this the case database learned that
+        # ALEAPP found 12000 records and nothing about what they said -- no
+        # phone number, URL, filename or timestamp was searchable.
+        for artifact in result.get("artifacts", []):
+            text_parts.extend(_leapp_artifact_lines(artifact))
+
         summary = extract_and_index(
             "\n".join(text_parts), "phone.aleapp", extraction_path, "aleapp"
         )
+
+        # The response stays bounded; the index does not.
+        for artifact in result.get("artifacts", []):
+            artifact["data"] = artifact["data"][:_MAX_LEAPP_ROWS]
         summary.update(result)
 
     elapsed = (time.monotonic() - t0) * 1000
@@ -1381,9 +1423,19 @@ def run_ileapp(
         for cat, count in result.get("categories", {}).items():
             text_parts.append(f"  {cat}: {count} records")
 
+        # Index the parsed rows. Without this the case database learned that
+        # iLEAPP found 12000 records and nothing about what they said -- no
+        # phone number, URL, filename or timestamp was searchable.
+        for artifact in result.get("artifacts", []):
+            text_parts.extend(_leapp_artifact_lines(artifact))
+
         summary = extract_and_index(
             "\n".join(text_parts), "phone.ileapp", extraction_path, "ileapp"
         )
+
+        # The response stays bounded; the index does not.
+        for artifact in result.get("artifacts", []):
+            artifact["data"] = artifact["data"][:_MAX_LEAPP_ROWS]
         summary.update(result)
 
     elapsed = (time.monotonic() - t0) * 1000

@@ -14,7 +14,7 @@ from typing import Any, Literal
 from mulder.assets.paths import asset_display_path, asset_path, asset_search_summary
 from mulder.patterns import DISK_IMAGE_EXTS
 from mulder.server.app import get_ctx, mcp
-from mulder.server.extract_helpers import extract_and_index
+from mulder.server.extract_helpers import extract_and_index, format_records
 from mulder.server.helpers import (
     adaptive_timeout,
     classify_tool_exit,
@@ -33,6 +33,33 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 _CHAINSAW_TIMEOUT = 600
+
+# How many records the tool response carries back. The index is not bounded by
+# this: the records are indexed first and truncated only for the response.
+_MAX_DETECTIONS = 500
+_MAX_TIMELINE = 1000
+
+# Field order for the indexed lines. Timestamp first, so per-window timestamp
+# extraction picks up the record's own time rather than whatever appears first.
+_DETECTION_FIELDS = (
+    "timestamp",
+    "rule_level",
+    "rule_name",
+    "computer",
+    "channel",
+    "event_id",
+    "sigma_id",
+    "mitre_attack",
+    "source",
+    "event_data",
+)
+_SRUM_FIELDS = (
+    "timestamp",
+    "application",
+    "user_sid",
+    "bytes_sent",
+    "bytes_received",
+)
 
 
 def _chainsaw_binary() -> str | None:
@@ -367,7 +394,9 @@ def _parse_chainsaw_hunt_results(results_path: Path) -> dict[str, Any]:
         )
 
     return {
-        "detections": detections[:500],
+        # Not truncated here: the caller indexes these and then truncates for
+        # the response, so the case database sees every detection.
+        "detections": detections,
         "total_findings": len(detections),
         "severity_counts": severity_counts,
         "mitre_techniques": sorted(mitre_techniques),
@@ -407,7 +436,7 @@ def _parse_chainsaw_srum_results(results_path: Path) -> dict[str, Any]:
         )
 
     return {
-        "srum_entries": entries[:500],
+        "srum_entries": entries,
         "total_entries": len(entries),
     }
 
@@ -433,7 +462,7 @@ def _parse_chainsaw_timeline_results(results_path: Path) -> dict[str, Any]:
         raw = [raw] if raw else []
 
     return {
-        "timeline_entries": raw[:1000],
+        "timeline_entries": raw,
         "total_entries": len(raw),
     }
 
@@ -660,12 +689,26 @@ def run_chainsaw(
             text_parts.append(f"Total findings: {result.get('total_findings', 0)}")
             for level, count in result.get("severity_counts", {}).items():
                 text_parts.append(f"  {level}: {count}")
+            records_key, record_cap = "detections", _MAX_DETECTIONS
+            fields: tuple[str, ...] | None = _DETECTION_FIELDS
         elif mode == "srum":
             text_parts.append(f"SRUM entries: {result.get('total_entries', 0)}")
+            records_key, record_cap = "srum_entries", _MAX_DETECTIONS
+            fields = _SRUM_FIELDS
         else:
             text_parts.append(f"Timeline entries: {result.get('total_entries', 0)}")
+            records_key, record_cap = "timeline_entries", _MAX_TIMELINE
+            fields = None
+
+        # Index the detections themselves. Indexing only the counts above is
+        # why a hunt that found 412 things left nothing searchable behind.
+        records = result.get(records_key, [])
+        text_parts.extend(format_records(records, fields))
 
         summary = extract_and_index("\n".join(text_parts), source_name, evidence_path, "chainsaw")
+
+        # The response stays bounded; the index does not.
+        result[records_key] = records[:record_cap]
         summary.update(result)
 
     elapsed = (time.monotonic() - t0) * 1000

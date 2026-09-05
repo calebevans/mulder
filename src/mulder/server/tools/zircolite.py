@@ -14,7 +14,7 @@ from typing import Any, Literal
 
 from mulder.assets.paths import asset_display_path, asset_path, asset_search_summary
 from mulder.server.app import mcp
-from mulder.server.extract_helpers import extract_and_index
+from mulder.server.extract_helpers import extract_and_index, format_records
 from mulder.server.helpers import (
     classify_tool_exit,
     error_response,
@@ -62,6 +62,23 @@ _FORMAT_FLAGS: dict[str, list[str]] = {
 }
 
 _LEVEL_ORDER = ["informational", "low", "medium", "high", "critical"]
+
+# How many detections the tool response carries back. The index is not bounded
+# by this: detections are indexed first and truncated only for the response.
+_MAX_DETECTIONS = 500
+
+# Field order for the indexed lines. Timestamp first, so per-window timestamp
+# extraction picks up the detection's own time.
+_DETECTION_FIELDS = (
+    "timestamp",
+    "rule_level",
+    "rule_title",
+    "rule_id",
+    "count",
+    "mitre_attack",
+    "rule_description",
+    "matched_fields",
+)
 
 
 def _missing_zircolite_modules() -> list[str]:
@@ -241,7 +258,9 @@ def _parse_zircolite_output(
     return {
         "events_path": events_path,
         "log_format": log_format,
-        "detections": detections[:500],
+        # Not truncated here: run_zircolite indexes these before truncating
+        # for the response.
+        "detections": detections,
         "total_detections": len(detections),
         "total_events_processed": sum(level_counts.values()),
         "level_counts": level_counts,
@@ -417,9 +436,16 @@ def run_zircolite(
             for tactic, techniques in result["mitre_coverage"].items():
                 text_parts.append(f"  {tactic}: {', '.join(techniques[:5])}")
 
+        # Index the detections themselves, not just how many there were.
+        detections = result.get("detections", [])
+        text_parts.extend(format_records(detections, _DETECTION_FIELDS))
+
         summary = extract_and_index(
             "\n".join(text_parts), "zircolite.detections", events_path, "zircolite"
         )
+
+        # The response stays bounded; the index does not.
+        result["detections"] = detections[:_MAX_DETECTIONS]
         summary.update(result)
 
     elapsed = (time.monotonic() - t0) * 1000

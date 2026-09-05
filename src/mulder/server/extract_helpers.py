@@ -8,13 +8,14 @@ mounting E01/raw disk images with thread-safe caching).
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import re
 import shutil
 import tempfile
 import threading
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -26,6 +27,56 @@ from mulder.models import WindowRow
 logger = logging.getLogger(__name__)
 
 _WINDOW_CHAR_BUDGET = 4096
+
+_RECORD_FIELD_CHARS = 400
+
+
+def _record_field(value: object) -> str:
+    """Render one field of a structured record as a single-line string."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        text = value
+    elif isinstance(value, (bool, int, float)):
+        text = str(value)
+    else:
+        text = json.dumps(value, default=str, separators=(",", ":"), sort_keys=True)
+    text = text.replace("\t", " ").replace("\r", " ").replace("\n", " ")
+    return text[:_RECORD_FIELD_CHARS]
+
+
+def format_records(
+    records: Sequence[Mapping[str, object]],
+    fields: Sequence[str] | None = None,
+) -> list[str]:
+    """Render structured tool output as one tab-separated line per record.
+
+    ``extract_and_index`` stores exactly the text it is handed. Several tools
+    handed it a summary -- "Total findings: 412" -- so not one rule name, host
+    or command line ever reached the case database, and the FTS index could
+    not answer the questions the tool was run to answer. This turns the
+    records themselves into indexable text.
+
+    One record per line matters twice over: the window builder splits on line
+    boundaries, so no detection is cut in half, and timestamp extraction runs
+    per window rather than finding a single timestamp for a whole summary.
+
+    Args:
+        records: The parsed records.
+        fields: Field order to emit. When *None* each record uses its own key
+            order, which is what tabular sources (LEAPP TSV) want.
+
+    Returns:
+        One tab-separated line per record. Non-scalar values are JSON-encoded
+        so nested event data stays searchable; every field is truncated to
+        keep one pathological value from filling a window.
+    """
+    lines: list[str] = []
+    for record in records:
+        keys = list(record) if fields is None else fields
+        lines.append("\t".join(_record_field(record.get(k)) for k in keys))
+    return lines
+
 
 _ISO_RE = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}")
 _PLASO_DATE_RE = re.compile(r"(\d{2})/(\d{2})/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})")
