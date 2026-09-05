@@ -5,9 +5,13 @@ from __future__ import annotations
 import email as email_lib
 import email.parser
 import logging
+import re
 import subprocess
 import tempfile
 import time
+from datetime import datetime, timezone
+from email.header import decode_header, make_header
+from email.utils import getaddresses, parsedate_to_datetime
 from pathlib import Path
 
 from mulder.server.app import mcp
@@ -54,24 +58,63 @@ _SUSPICIOUS_EXTENSIONS: set[str] = {
 
 _VALID_PST_SUFFIXES: set[str] = {".pst", ".ost"}
 
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_HTML_WS_RE = re.compile(r"[ \t]*\n[ \t]*")
+
 
 # ---------------------------------------------------------------------------
 # Parsing helpers
 # ---------------------------------------------------------------------------
 
 
+def _decode_header_value(raw: str | None) -> str:
+    """Decode an RFC 2047 header into text.
+
+    Subjects and display names arrive as ``=?utf-8?B?...?=``. Reading them
+    raw means a keyword search for "wire transfer" cannot match a subject
+    that says "wire transfer", and the report shows base64.
+    """
+    if not raw:
+        return ""
+    try:
+        return str(make_header(decode_header(raw)))
+    except (UnicodeDecodeError, LookupError, ValueError):
+        return raw
+
+
 def _parse_recipients(raw: str) -> list[str]:
-    """Parse a comma-separated recipient string into individual addresses.
+    """Parse a To/Cc header into individual addresses.
+
+    Splitting on "," is wrong: a display name may legitimately contain one.
+    ``"Doe, John" <john@example.com>, jane@example.com`` split that way
+    yields ``'"Doe'``, ``'John" <john@example.com>'`` and
+    ``'jane@example.com'`` -- two of the three are not addresses at all, so
+    recipient search and address IOC extraction both miss them.
 
     Args:
         raw: Raw To/CC header value.
 
     Returns:
-        List of individual email addresses or display names.
+        One entry per recipient, ``Display Name <addr>`` when a name is
+        present and the bare address otherwise.
     """
     if not raw:
         return []
-    return [r.strip() for r in raw.split(",") if r.strip()]
+    out: list[str] = []
+    for name, addr in getaddresses([raw]):
+        display = _decode_header_value(name)
+        if addr and display:
+            out.append(f"{display} <{addr}>")
+        elif addr:
+            out.append(addr)
+        elif display:
+            out.append(display)
+    return out
+
+
+def _recipient_addresses(recipients: list[str]) -> list[str]:
+    """The bare addresses out of ``_parse_recipients`` output."""
+    return [addr for _name, addr in getaddresses(recipients) if addr]
 
 
 def _get_body(
@@ -87,20 +130,101 @@ def _get_body(
     Returns:
         Body text or None if no matching part found.
     """
-    if msg.is_multipart():
-        for part in msg.walk():
-            if part.get_content_type() == content_type:
-                payload = part.get_payload(decode=True)
-                if isinstance(payload, bytes):
-                    charset = part.get_content_charset() or "utf-8"
-                    return payload.decode(charset, errors="replace")
-    else:
-        if msg.get_content_type() == content_type:
-            payload = msg.get_payload(decode=True)
-            if isinstance(payload, bytes):
-                charset = msg.get_content_charset() or "utf-8"
+    for part in msg.walk():
+        if part.is_multipart():
+            continue
+        if part.get_content_disposition() == "attachment":
+            continue
+        if part.get_content_type() != content_type:
+            continue
+        payload = part.get_payload(decode=True)
+        if isinstance(payload, bytes):
+            charset = part.get_content_charset() or "utf-8"
+            try:
                 return payload.decode(charset, errors="replace")
+            except LookupError:
+                return payload.decode("utf-8", errors="replace")
     return None
+
+
+def _html_to_text(html: str) -> str:
+    """Strip tags from an HTML body so its words are searchable."""
+    text = re.sub(r"(?is)<(script|style).*?</\1>", " ", html)
+    text = _HTML_TAG_RE.sub(" ", text)
+    for entity, char in (
+        ("&nbsp;", " "),
+        ("&amp;", "&"),
+        ("&lt;", "<"),
+        ("&gt;", ">"),
+        ("&quot;", '"'),
+        ("&#39;", "'"),
+    ):
+        text = text.replace(entity, char)
+    return _HTML_WS_RE.sub("\n", text).strip()
+
+
+def _get_searchable_body(msg: email_lib.message.Message) -> str | None:
+    """The message body as text, whatever it was sent as.
+
+    ``text/plain`` when present, otherwise ``text/html`` with the tags
+    stripped. An HTML-only message -- most phishing -- previously had no
+    body at all, so no keyword could match it and nothing was indexed.
+    """
+    plain = _get_body(msg, "text/plain")
+    if plain and plain.strip():
+        return plain
+    html = _get_body(msg, "text/html")
+    if html and html.strip():
+        return _html_to_text(html)
+    return plain or html
+
+
+def _message_date(raw: str | None) -> datetime | None:
+    """Parse an RFC 5322 ``Date`` header into an aware datetime."""
+    if not raw:
+        return None
+    try:
+        parsed = parsedate_to_datetime(raw)
+    except (TypeError, ValueError):
+        return None
+    if parsed is None:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _in_date_range(raw: str | None, start: str | None, end: str | None) -> bool:
+    """Whether a message's ``Date`` falls within an inclusive YYYY-MM-DD range.
+
+    The header is RFC 5322 -- ``Mon, 11 Mar 2024 09:14:02 +0100`` -- and was
+    previously compared to the bounds as a string. ``"Mon, ..." > "2024-12-31"``
+    is true for every message ever sent, because ``M`` sorts above any digit,
+    so ``date_end`` discarded the entire mailbox and ``date_start`` discarded
+    nothing. Any date-bounded search returned zero results.
+
+    A message whose date is missing or unparseable is kept, so a malformed
+    header cannot silently hide evidence.
+    """
+    if not start and not end:
+        return True
+    when = _message_date(raw)
+    if when is None:
+        return True
+    day = when.date()
+    if start:
+        try:
+            if day < datetime.strptime(start, "%Y-%m-%d").date():
+                return False
+        except ValueError:
+            pass
+    if end:
+        try:
+            if day > datetime.strptime(end, "%Y-%m-%d").date():
+                return False
+        except ValueError:
+            pass
+    return True
 
 
 def _matches_search(
@@ -109,15 +233,20 @@ def _matches_search(
     body: str | None,
     recipients: list[str],
     search_term: str,
+    attachments: list[str] | None = None,
 ) -> bool:
     """Check whether an email matches the search keyword.
 
     Args:
-        subject: Email subject line.
+        subject: Email subject line, already RFC 2047 decoded.
         sender: Sender address.
-        body: Plain text body (may be None).
-        recipients: List of recipient addresses.
+        body: Body text (may be None).
+        recipients: Every recipient -- To *and* Cc. Cc was parsed and then
+            never searched, so a search naming a copied recipient missed
+            the message.
         search_term: Keyword to search for (case insensitive).
+        attachments: Attachment filenames, which is how an analyst looks
+            for a named payload.
 
     Returns:
         True if the term appears in any searchable field.
@@ -129,7 +258,9 @@ def _matches_search(
         return True
     if body and term in body.lower():
         return True
-    return any(term in r.lower() for r in recipients)
+    if any(term in r.lower() for r in recipients):
+        return True
+    return any(term in a.lower() for a in attachments or [])
 
 
 def _parse_email_message(
@@ -149,21 +280,35 @@ def _parse_email_message(
     has_suspicious = False
 
     for part in msg.walk():
-        if part.get_content_disposition() == "attachment":
-            filename = part.get_filename() or "unnamed"
-            attachments.append(filename)
-            ext = Path(filename).suffix.lower()
-            if ext in _SUSPICIOUS_EXTENSIONS:
+        if part.is_multipart():
+            continue
+        filename = part.get_filename()
+        disposition = part.get_content_disposition()
+        # An attachment is anything carrying a filename, not only what
+        # declares `Content-Disposition: attachment`. Malicious payloads
+        # arrive as `inline` or with no disposition header at all, and both
+        # were previously invisible -- including to the suspicious-extension
+        # check, which is the point of this function.
+        if disposition == "attachment" or filename:
+            name = _decode_header_value(filename) or "unnamed"
+            attachments.append(name)
+            if Path(name).suffix.lower() in _SUSPICIOUS_EXTENSIONS:
                 has_suspicious = True
+
+    when = _message_date(msg.get("Date"))
 
     return {
         "message_id": msg.get("Message-ID"),
-        "subject": msg.get("Subject", "(no subject)"),
-        "sender": msg.get("From", ""),
+        "subject": _decode_header_value(msg.get("Subject")) or "(no subject)",
+        "sender": _decode_header_value(msg.get("From")),
         "recipients_to": _parse_recipients(msg.get("To", "")),
         "recipients_cc": _parse_recipients(msg.get("Cc", "")),
+        "recipients_bcc": _parse_recipients(msg.get("Bcc", "")),
+        "reply_to": _parse_recipients(msg.get("Reply-To", "")),
         "date": msg.get("Date"),
-        "body_text": _get_body(msg, "text/plain"),
+        # A sortable, comparable form alongside the header as sent.
+        "date_iso": when.isoformat() if when else None,
+        "body_text": _get_searchable_body(msg),
         "attachments": attachments,
         "folder": folder,
         "importance": msg.get("Importance", "normal"),
@@ -214,10 +359,7 @@ def _parse_extracted_emails(
 
         parsed = _parse_email_message(msg, folder)
 
-        date_val = str(parsed.get("date") or "")
-        if date_start and date_val and date_val < date_start:
-            continue
-        if date_end and date_val and date_val > date_end:
+        if not _in_date_range(str(parsed.get("date") or ""), date_start, date_end):
             continue
 
         if search_term:
@@ -225,9 +367,14 @@ def _parse_extracted_emails(
             sender = str(parsed.get("sender", ""))
             body_val = parsed.get("body_text")
             body_str = str(body_val) if body_val is not None else None
-            to_val = parsed.get("recipients_to")
-            to_list = [str(r) for r in to_val] if isinstance(to_val, list) else []
-            if not _matches_search(subject, sender, body_str, to_list, search_term):
+            recipients: list[str] = []
+            for key in ("recipients_to", "recipients_cc", "recipients_bcc"):
+                val = parsed.get(key)
+                if isinstance(val, list):
+                    recipients.extend(str(r) for r in val)
+            att_names = parsed.get("attachments")
+            att_list = [str(a) for a in att_names] if isinstance(att_names, list) else []
+            if not _matches_search(subject, sender, body_str, recipients, search_term, att_list):
                 continue
 
         if parsed.get("has_suspicious_attachment"):
