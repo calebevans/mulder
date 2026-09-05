@@ -10,7 +10,12 @@ from typing import TYPE_CHECKING
 import click
 
 from mulder import __version__
-from mulder.patterns import DEFAULT_DB_DIR, DEFAULT_WORKSPACE_DIR
+from mulder.patterns import (
+    DB_DIR_ENV_VAR,
+    DEFAULT_DB_DIR,
+    DEFAULT_WORKSPACE_DIR,
+    resolve_db_dir,
+)
 
 if TYPE_CHECKING:  # heavy imports stay inside the command bodies
     from rich.console import Console
@@ -43,8 +48,9 @@ def cli() -> None:
 @click.option(
     "--db-dir",
     default=DEFAULT_DB_DIR,
+    envvar=DB_DIR_ENV_VAR,
     show_default=True,
-    help="Directory containing per-case databases.",
+    help="Directory containing per-case databases (env: MULDER_DB_DIR).",
 )
 @click.option(
     "--transport",
@@ -131,8 +137,9 @@ def serve(
 @click.option(
     "--db-dir",
     default=DEFAULT_DB_DIR,
+    envvar=DB_DIR_ENV_VAR,
     show_default=True,
-    help="Directory containing per-case databases.",
+    help="Directory containing per-case databases (env: MULDER_DB_DIR).",
 )
 def report(case_id: str, db_dir: str) -> None:
     """Generate HTML + Markdown reports from an existing case database.
@@ -255,8 +262,9 @@ def report(case_id: str, db_dir: str) -> None:
 @click.option(
     "--db-dir",
     default=DEFAULT_DB_DIR,
+    envvar=DB_DIR_ENV_VAR,
     show_default=True,
-    help="Case database directory.",
+    help="Case database directory (env: MULDER_DB_DIR).",
 )
 @click.option(
     "--cwd",
@@ -337,7 +345,7 @@ def investigate(
             ) from exc
         click.echo(f"Created default MCP configuration at {mcp_config_file}", err=True)
 
-    log_dir = Path(db_dir).expanduser()
+    log_dir = resolve_db_dir(db_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / "orchestrator.log"
     file_handler = logging.FileHandler(str(log_file), mode="a")
@@ -376,6 +384,7 @@ def investigate(
         parallel_extractions=workers,
         proxy_config=proxy_config,
         case_id=case_id,
+        db_dir=log_dir,
     )
 
     from mulder.orchestrator.errors import (
@@ -675,8 +684,9 @@ def _human_bytes(count: int) -> str:
 @click.option(
     "--db-dir",
     default=DEFAULT_DB_DIR,
+    envvar=DB_DIR_ENV_VAR,
     show_default=True,
-    help="Directory containing per-case databases.",
+    help="Directory containing per-case databases (env: MULDER_DB_DIR).",
 )
 def export_iocs_cmd(case_id: str, fmt: str, output_dir: str | None, db_dir: str) -> None:
     """Export IOCs from a completed investigation as STIX 2.1 or CSV."""
@@ -720,8 +730,9 @@ def export_iocs_cmd(case_id: str, fmt: str, output_dir: str | None, db_dir: str)
 @click.option(
     "--db-dir",
     default=DEFAULT_DB_DIR,
+    envvar=DB_DIR_ENV_VAR,
     show_default=True,
-    help="Directory containing per-case databases.",
+    help="Directory containing per-case databases (env: MULDER_DB_DIR).",
 )
 def export_navigator_cmd(case_id: str, output_dir: str | None, domain: str, db_dir: str) -> None:
     """Export a MITRE ATT&CK Navigator layer from investigation findings."""
