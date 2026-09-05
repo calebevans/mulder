@@ -938,6 +938,36 @@ def run_chkrootkit(target_path: str | None = None) -> dict[str, object]:
 # ---------------------------------------------------------------------------
 
 
+R2_SANDBOX_PREFIX = "e cfg.sandbox=true;"
+"""Enables radare2's sandbox as the first command of every batch.
+
+``commands`` is an r2 script, and r2's command language can leave r2:
+
+``!cmd``
+    runs ``cmd`` in a shell. ``#!pipe sh -c cmd`` does the same by another
+    route.
+``oo+`` then ``w``
+    reopens the target read-write and patches it, even though mulder does not
+    pass ``-w`` -- so a command string can modify the evidence it was asked to
+    examine.
+``o /some/path``
+    opens any other file the server can read.
+
+Enabling the sandbox closes all of these. It has to be the first *command*
+rather than a ``-e`` flag: ``r2 -e cfg.sandbox=true`` is applied before the
+target is opened, and then refuses to open it ("Cannot open ..."), so the tool
+would return nothing at all. Set this way it takes effect once the file is
+open, and r2 refuses to switch it back off ("Cannot disable sandbox"), so
+appending it to an attacker-chosen command string is not something the rest of
+that string can undo.
+"""
+
+
+def _sandboxed(commands: str) -> str:
+    """Prefix an r2 command batch with the irreversible sandbox setting."""
+    return R2_SANDBOX_PREFIX + commands
+
+
 @mcp.tool()
 @tool_access(Role.EXTRACT_EXECUTOR)
 def run_radare2(
@@ -953,6 +983,9 @@ def run_radare2(
     Args:
         target_path: Path to the binary to analyze.
         commands: Semicolon-separated r2 commands to run (batch mode).
+            Run under radare2's sandbox, so commands that shell out (``!``,
+            ``#!pipe``), open other files, or reopen the target read-write
+            (``oo+``) are refused.
     """
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
@@ -978,7 +1011,7 @@ def run_radare2(
 
     try:
         proc = subprocess.run(
-            ["r2", "-q", "-c", commands, target_path],
+            ["r2", "-q", "-c", _sandboxed(commands), target_path],
             capture_output=True,
             text=True,
             timeout=TOOL_TIMEOUT,
