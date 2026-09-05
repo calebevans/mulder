@@ -408,6 +408,15 @@ def tool_response(
         resp["line_count"] = line_count
     if windows_indexed is not None:
         resp["windows_indexed"] = windows_indexed
+    # A degraded run has to survive the compaction. Everything else in
+    # *results* is recoverable with search() or get_raw_output(), but an agent
+    # that never learns the analysis was incomplete will not go looking: it
+    # reads the preview, sees no findings, and concludes the evidence is clean.
+    if isinstance(results, dict):
+        for key in ("warning", "partial"):
+            value = results.get(key)
+            if value:
+                resp[key] = value
     return resp
 
 

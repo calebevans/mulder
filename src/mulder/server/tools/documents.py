@@ -332,6 +332,24 @@ def _analyze_macros_olevba(
     return macros, indicators, has_vba
 
 
+_DDE_EXECUTORS: frozenset[str] = frozenset(
+    {
+        "cmd.exe",
+        "powershell",
+        "mshta",
+        "regsvr32",
+        "rundll32",
+        "wscript",
+        "cscript",
+        "certutil",
+        "bitsadmin",
+        "msiexec",
+        "curl",
+    }
+)
+"""Command interpreters and LOLBins a DDE link is used to reach."""
+
+
 def _assess_office_risk(
     macros: list[dict[str, object]],
     has_vba: bool,
@@ -356,6 +374,9 @@ def _assess_office_risk(
     links = list(dde_links or [])
     auto_exec = any(m.get("is_auto_exec") for m in macros)
     dde_auto = any("DDEAUTO" in str(link.get("field_type", "")).upper() for link in links)
+    dde_executor = any(
+        exe in str(link.get("command", "")).lower() for link in links for exe in _DDE_EXECUTORS
+    )
 
     has_suspicious = any(m.get("suspicious_keywords") for m in macros)
 
@@ -388,12 +409,16 @@ def _assess_office_risk(
         reasons.append(
             f"{len(links)} DDE link(s) present"
             + (" including an auto-executing one" if dde_auto else "")
+            + (" invoking a command interpreter" if dde_executor else "")
         )
 
     if links:
         # A DDE link executes a command when the document is opened (DDEAUTO)
         # or when the user accepts one prompt. Either way this is not clean.
-        risk_level = "malicious" if dde_auto else "high"
+        # "malicious" is reserved for the combination the VBA path also
+        # reserves it for -- an automatic trigger meeting an executor -- since
+        # a DDEAUTO pointing at another spreadsheet is legitimate, if rare.
+        risk_level = "malicious" if (dde_auto and dde_executor) else "high"
     elif not has_vba:
         risk_level = "clean"
     elif auto_exec and (has_execute or has_download):

