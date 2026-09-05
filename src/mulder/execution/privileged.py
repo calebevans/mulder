@@ -123,6 +123,10 @@ class MountBroker(Protocol):
         """Unmount one existing mount directory."""
         ...
 
+    def is_unmounted(self, mount_point: Path) -> bool:
+        """Return whether the target currently has no related mount."""
+        ...
+
 
 class MountRollbackError(RuntimeError):
     """A failed or unverifiable mount could not be proven unmounted."""
@@ -225,3 +229,7 @@ class SubprocessMountBroker:
     def unmount(self, mount_point: Path) -> bool:
         """Ask the helper to unmount the fixed target path."""
         return self._invoke("unmount", (PathArgument(mount_point, PathAccess.WRITE),))
+
+    def is_unmounted(self, mount_point: Path) -> bool:
+        """Verify that neither the target nor its EWF child is mounted."""
+        return _verified_unmounted(mount_point)

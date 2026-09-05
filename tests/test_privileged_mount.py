@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -400,3 +402,279 @@ def test_mount_cache_interrupted_waiter_releases_its_reference(
     owner.__exit__(None, None, None)
     assert cache._entries == {}
     assert broker.unmount_calls == 1
+
+
+def test_mount_cache_retries_cancellation_before_release_starts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    image = tmp_path / "disk.raw"
+    image.write_bytes(b"image")
+
+    class SuccessfulBroker:
+        unmount_calls = 0
+
+        def mount_read_only(self, _image_path: Path, _mount_point: Path) -> bool:
+            return True
+
+        def unmount(self, _mount_point: Path) -> bool:
+            self.unmount_calls += 1
+            return True
+
+    broker = SuccessfulBroker()
+    cache = _MountCache(broker)
+    acquisition = cache.acquire(str(image))
+    acquisition.__enter__()
+    release = cache._release
+    attempts = 0
+
+    def interrupt_first_release(*args: object) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise KeyboardInterrupt
+        release(*args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(cache, "_release", interrupt_first_release)
+    with pytest.raises(KeyboardInterrupt):
+        acquisition.__exit__(None, None, None)
+
+    assert attempts == 2
+    assert broker.unmount_calls == 1
+    assert cache._entries == {}
+
+
+def test_mount_cache_retries_trace_cancellation_on_finally_entry(
+    tmp_path: Path,
+) -> None:
+    image = tmp_path / "disk.raw"
+    image.write_bytes(b"image")
+
+    class SuccessfulBroker:
+        unmount_calls = 0
+
+        def mount_read_only(self, _image_path: Path, _mount_point: Path) -> bool:
+            return True
+
+        def unmount(self, _mount_point: Path) -> bool:
+            self.unmount_calls += 1
+            return True
+
+    broker = SuccessfulBroker()
+    cache = _MountCache(broker)
+    acquisition = cache.acquire(str(image))
+    acquisition.__enter__()
+    generator_frame = acquisition.gen.gi_frame
+    fired = False
+
+    def interrupt_first_resumed_line(
+        frame: object, event: str, _arg: object
+    ) -> object:
+        nonlocal fired
+        if not fired and frame is generator_frame and event == "line":
+            fired = True
+            raise KeyboardInterrupt
+        return interrupt_first_resumed_line
+
+    sys.settrace(interrupt_first_resumed_line)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            acquisition.__exit__(None, None, None)
+    finally:
+        sys.settrace(None)
+
+    assert fired
+    assert broker.unmount_calls == 1
+    assert cache._entries == {}
+
+
+def test_mount_cache_retries_cancellation_in_release_prologue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    image = tmp_path / "disk.raw"
+    image.write_bytes(b"image")
+
+    class SuccessfulBroker:
+        unmount_calls = 0
+
+        def mount_read_only(self, _image_path: Path, _mount_point: Path) -> bool:
+            return True
+
+        def unmount(self, _mount_point: Path) -> bool:
+            self.unmount_calls += 1
+            return True
+
+    broker = SuccessfulBroker()
+    cache = _MountCache(broker)
+    acquisition = cache.acquire(str(image))
+    acquisition.__enter__()
+    release_once = cache._release_once
+    attempts = 0
+
+    def interrupt_first_attempt(*args: object) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise KeyboardInterrupt
+        release_once(*args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(cache, "_release_once", interrupt_first_attempt)
+    with pytest.raises(KeyboardInterrupt):
+        acquisition.__exit__(None, None, None)
+
+    assert attempts >= 2
+    assert broker.unmount_calls == 1
+    assert cache._entries == {}
+
+
+def test_mount_cache_does_not_repeat_interrupted_unmount_on_replacement(
+    tmp_path: Path,
+) -> None:
+    image = tmp_path / "disk.raw"
+    image.write_bytes(b"image")
+
+    class RemountedBroker:
+        unmount_calls = 0
+        replacement_live = False
+
+        def mount_read_only(self, _image_path: Path, _mount_point: Path) -> bool:
+            return True
+
+        def unmount(self, _mount_point: Path) -> bool:
+            self.unmount_calls += 1
+            if self.unmount_calls == 1:
+                self.replacement_live = True
+                raise KeyboardInterrupt
+            self.replacement_live = False
+            return True
+
+        def is_unmounted(self, _mount_point: Path) -> bool:
+            return not self.replacement_live
+
+    broker = RemountedBroker()
+    cache = _MountCache(broker)
+    acquisition = cache.acquire(str(image))
+    acquisition.__enter__()
+
+    with pytest.raises(KeyboardInterrupt):
+        acquisition.__exit__(None, None, None)
+
+    assert broker.unmount_calls == 1
+    assert broker.replacement_live
+    assert cache._entries == {}
+
+
+def test_mount_cache_retries_eviction_after_interrupted_close_signal(
+    tmp_path: Path,
+) -> None:
+    image = tmp_path / "disk.raw"
+    image.write_bytes(b"image")
+
+    class SuccessfulBroker:
+        unmount_calls = 0
+
+        def mount_read_only(self, _image_path: Path, _mount_point: Path) -> bool:
+            return True
+
+        def unmount(self, _mount_point: Path) -> bool:
+            self.unmount_calls += 1
+            return True
+
+    class InterruptingClose:
+        def __init__(self) -> None:
+            self._event = threading.Event()
+            self.calls = 0
+
+        def set(self) -> None:
+            self.calls += 1
+            self._event.set()
+            if self.calls == 1:
+                raise KeyboardInterrupt
+
+        def wait(self) -> None:
+            self._event.wait()
+
+        def is_set(self) -> bool:
+            return self._event.is_set()
+
+    broker = SuccessfulBroker()
+    cache = _MountCache(broker)
+    acquisition = cache.acquire(str(image))
+    acquisition.__enter__()
+    entry = next(iter(cache._entries.values()))
+    close_signal = InterruptingClose()
+    entry.closed = close_signal  # type: ignore[assignment]
+
+    with pytest.raises(KeyboardInterrupt):
+        acquisition.__exit__(None, None, None)
+
+    assert close_signal.calls == 2
+    assert broker.unmount_calls == 1
+    assert cache._entries == {}
+
+
+def test_mount_cache_signals_close_before_new_owner_can_overtake(
+    tmp_path: Path,
+) -> None:
+    image = tmp_path / "disk.raw"
+    image.write_bytes(b"image")
+
+    class SuccessfulBroker:
+        mount_calls = 0
+        unmount_calls = 0
+
+        def mount_read_only(self, _image_path: Path, _mount_point: Path) -> bool:
+            self.mount_calls += 1
+            return True
+
+        def unmount(self, _mount_point: Path) -> bool:
+            self.unmount_calls += 1
+            return True
+
+    class GatedClose:
+        def __init__(self) -> None:
+            self._event = threading.Event()
+            self.called = threading.Event()
+            self.allow = threading.Event()
+
+        def set(self) -> None:
+            self.called.set()
+            assert self.allow.wait(timeout=5)
+            self._event.set()
+
+        def wait(self) -> None:
+            self._event.wait()
+
+        def is_set(self) -> bool:
+            return self._event.is_set()
+
+    broker = SuccessfulBroker()
+    cache = _MountCache(broker)
+    first = cache.acquire(str(image))
+    first.__enter__()
+    entry = next(iter(cache._entries.values()))
+    gated_close = GatedClose()
+    entry.closed = gated_close  # type: ignore[assignment]
+
+    close_thread = threading.Thread(target=lambda: first.__exit__(None, None, None))
+    close_thread.start()
+    assert gated_close.called.wait(timeout=5)
+
+    second_entered = threading.Event()
+
+    def acquire_again() -> None:
+        with cache.acquire(str(image)):
+            second_entered.set()
+
+    second_thread = threading.Thread(target=acquire_again)
+    second_thread.start()
+    assert not second_entered.wait(timeout=0.05)
+    assert broker.mount_calls == 1
+
+    gated_close.allow.set()
+    close_thread.join(timeout=5)
+    second_thread.join(timeout=5)
+    assert not close_thread.is_alive()
+    assert not second_thread.is_alive()
+    assert second_entered.is_set()
+    assert broker.mount_calls == 2
+    assert broker.unmount_calls == 2

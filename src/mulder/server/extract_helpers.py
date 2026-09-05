@@ -203,6 +203,7 @@ class _MountEntry:
     mount_attempted: bool = False
     closing: bool = False
     cleanup_lease: object | None = None
+    cleanup_started: bool = False
     cleanup_verified: bool | None = None
 
     @property
@@ -252,66 +253,78 @@ class _MountCache:
         is_owner = False
         entered = False
         try:
-            while True:
-                wait_for_close: threading.Event | None = None
-                with self._lock:
-                    entry = self._entries.get(canonical)
-                    if entry is None:
-                        mount_dir = Path(tempfile.mkdtemp(prefix="mulder_mount_"))
-                        entry = _MountEntry(
-                            mount_dir=mount_dir,
-                            leases={lease},
+            try:
+                while True:
+                    wait_for_close: threading.Event | None = None
+                    with self._lock:
+                        entry = self._entries.get(canonical)
+                        if entry is None:
+                            mount_dir = Path(tempfile.mkdtemp(prefix="mulder_mount_"))
+                            entry = _MountEntry(
+                                mount_dir=mount_dir,
+                                leases={lease},
+                            )
+                            is_owner = True
+                            self._entries[canonical] = entry
+                        elif entry.closing:
+                            wait_for_close = entry.closed
+                        else:
+                            entry.leases.add(lease)
+                    if wait_for_close is None:
+                        break
+                    entry = None
+                    wait_for_close.wait()
+
+                if is_owner:
+                    # Once a mount attempt begins, cleanup must conservatively prove
+                    # the target unmounted.  A broker can fail after the helper has
+                    # already mounted, so its False return is not absence proof.
+                    entry.mount_attempted = True
+                    try:
+                        mounted = self._broker.mount_read_only(
+                            Path(image_path), entry.mount_dir
                         )
-                        is_owner = True
-                        self._entries[canonical] = entry
-                    elif entry.closing:
-                        wait_for_close = entry.closed
-                    else:
-                        entry.leases.add(lease)
-                if wait_for_close is None:
-                    break
-                entry = None
-                wait_for_close.wait()
+                    except Exception as exc:
+                        failure = RuntimeError(
+                            f"Failed to mount disk image: {image_path}"
+                        )
+                        entry.error = failure
+                        raise failure from exc
+                    except BaseException as exc:
+                        entry.error = exc
+                        raise
+                    if not mounted:
+                        failure = RuntimeError(
+                            f"Failed to mount disk image: {image_path}"
+                        )
+                        entry.error = failure
+                        raise failure
+                    entry.ready.set()
+                else:
+                    entry.ready.wait()
+                    if entry.error is not None:
+                        raise RuntimeError(
+                            f"Failed to mount disk image: {image_path}"
+                        ) from entry.error
 
-            if is_owner:
-                # Once a mount attempt begins, cleanup must conservatively prove
-                # the target unmounted.  A broker can fail after the helper has
-                # already mounted, so its False return is not absence proof.
-                entry.mount_attempted = True
-                try:
-                    mounted = self._broker.mount_read_only(
-                        Path(image_path), entry.mount_dir
-                    )
-                except Exception as exc:
-                    failure = RuntimeError(f"Failed to mount disk image: {image_path}")
-                    entry.error = failure
-                    raise failure from exc
-                except BaseException as exc:
-                    entry.error = exc
-                    raise
-                if not mounted:
-                    failure = RuntimeError(f"Failed to mount disk image: {image_path}")
-                    entry.error = failure
-                    raise failure
-                entry.ready.set()
-            else:
-                entry.ready.wait()
-                if entry.error is not None:
-                    raise RuntimeError(
-                        f"Failed to mount disk image: {image_path}"
-                    ) from entry.error
-
-            entered = True
-            yield str(entry.mount_dir)
+                entered = True
+                yield str(entry.mount_dir)
+            except BaseException as exc:
+                if entry is not None and is_owner and not entered:
+                    if entry.error is None:
+                        entry.error = exc
+                    entry.ready.set()
+                raise
+            finally:
+                if entry is not None:
+                    self._release(canonical, entry, lease)
         except BaseException as exc:
-            if entry is not None and is_owner and not entered:
-                if entry.error is None:
-                    entry.error = exc
-                entry.ready.set()
-            raise
-        finally:
-            if entry is not None:
+            # This handler is established before a lease can be registered.
+            # It therefore catches a one-shot cancellation on the first line
+            # of the inner finally block or at the _release() invocation itself.
+            if entry is not None and not isinstance(exc, Exception):
                 self._release(canonical, entry, lease)
+            raise
 
     def _release(self, canonical: str, entry: _MountEntry, lease: object) -> None:
         """Release one lease and finish last-user cleanup before cancellation.
@@ -320,19 +333,32 @@ class _MountCache:
             canonical: Canonical (realpath) cache key.
             entry: The mount entry being released.
         """
-        pending_cancellation: BaseException | None = None
-        while True:
-            try:
-                if self._mark_lease_released(canonical, entry, lease):
-                    self._finish_cleanup(canonical, entry)
-                break
-            except BaseException as exc:
-                if isinstance(exc, Exception):
-                    raise
-                if pending_cancellation is None:
-                    pending_cancellation = exc
-        if pending_cancellation is not None:
-            raise pending_cancellation
+        try:
+            self._release_once(canonical, entry, lease)
+        except BaseException as exc:
+            if isinstance(exc, Exception):
+                raise
+            # Retry after a cancellation at any boundary, including the first
+            # executable line of this method.  The transaction is idempotent,
+            # so a partially completed attempt safely resumes here.
+            while True:
+                try:
+                    self._release_once(canonical, entry, lease)
+                    break
+                except BaseException as retry_exc:
+                    if isinstance(retry_exc, Exception):
+                        raise
+            raise exc
+
+    def _release_once(
+        self,
+        canonical: str,
+        entry: _MountEntry,
+        lease: object,
+    ) -> None:
+        """Run one idempotent attempt at the lease-release transaction."""
+        if self._mark_lease_released(canonical, entry, lease):
+            self._finish_cleanup(canonical, entry)
 
     def _mark_lease_released(
         self,
@@ -344,24 +370,48 @@ class _MountCache:
         with self._lock:
             current = self._entries.get(canonical)
             if current is not entry:
-                return entry.cleanup_lease is lease and not entry.closed.is_set()
+                return False
             if lease in entry.leases:
                 if len(entry.leases) == 1:
                     entry.closing = True
                     entry.cleanup_lease = lease
                 entry.leases.remove(lease)
-            return entry.cleanup_lease is lease and not entry.closed.is_set()
+            # Even if close notification was published just before a
+            # cancellation, the cleanup owner must retry until this same
+            # entry has actually been evicted from the protected cache.
+            return entry.cleanup_lease is lease
 
     def _finish_cleanup(self, canonical: str, entry: _MountEntry) -> None:
         """Idempotently unmount, preserve the path, and publish cache closure."""
         if entry.cleanup_verified is None:
-            try:
-                entry.cleanup_verified = (
-                    not entry.mount_attempted or self._broker.unmount(entry.mount_dir)
-                )
-            except Exception:
-                logger.exception("Mount broker raised during cleanup: %s", entry.mount_dir)
-                entry.cleanup_verified = False
+            if not entry.mount_attempted:
+                entry.cleanup_verified = True
+            elif entry.cleanup_started:
+                # The prior call may have unmounted successfully before an
+                # asynchronous cancellation prevented its result being stored.
+                # Never repeat that pathname side effect: a replacement mount
+                # could now occupy the intentionally retained directory.
+                try:
+                    entry.cleanup_verified = self._broker.is_unmounted(
+                        entry.mount_dir
+                    )
+                except Exception:
+                    logger.exception(
+                        "Mount broker could not verify interrupted cleanup: %s",
+                        entry.mount_dir,
+                    )
+                    entry.cleanup_verified = False
+            else:
+                # Commit the one-shot side effect before invoking the broker.
+                # A retry may verify its outcome, but must not unmount again.
+                entry.cleanup_started = True
+                try:
+                    entry.cleanup_verified = self._broker.unmount(entry.mount_dir)
+                except Exception:
+                    logger.exception(
+                        "Mount broker raised during cleanup: %s", entry.mount_dir
+                    )
+                    entry.cleanup_verified = False
         if entry.cleanup_verified:
             logger.debug(
                 "Preserving verified-unmounted mount point to avoid "
@@ -374,9 +424,12 @@ class _MountCache:
                 entry.mount_dir,
             )
         with self._lock:
+            # Publish closure while eviction is still protected by the cache
+            # lock.  Waiters cannot overtake this transition and create a new
+            # mount between eviction and the close notification.
+            entry.closed.set()
             if self._entries.get(canonical) is entry:
                 self._entries.pop(canonical)
-        entry.closed.set()
 
 
 _mount_cache = _MountCache()
