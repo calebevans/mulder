@@ -172,3 +172,48 @@ class TestZircoliteExitStatus:
 
         assert result["status"] == "error"
         assert result["error_type"] == "tool_failed"
+
+
+class TestReadpstExitStatus:
+    """A failed readpst reported an empty mailbox, not a failure."""
+
+    @staticmethod
+    def _run(tmp_path: Path, returncode: int, write_eml: bool) -> dict[str, object]:
+        from mulder.server.tools import email as em
+
+        pst = tmp_path / "archive.pst"
+        pst.write_bytes(b"!BDN")
+
+        def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+            out = Path(cmd[cmd.index("-o") + 1])
+            if write_eml:
+                folder = out / "Inbox"
+                folder.mkdir(parents=True, exist_ok=True)
+                (folder / "1.eml").write_text(
+                    "Subject: hello\r\nFrom: a@x\r\nTo: b@x\r\n"
+                    "Date: Mon, 11 Mar 2024 09:14:02 +0100\r\n"
+                    "Content-Type: text/plain\r\n\r\nbody\r\n"
+                )
+            return _completed(returncode, stderr="Error: cannot read PST header")
+
+        with (
+            patch.object(em, "require_binary", return_value="/usr/bin/readpst"),
+            patch.object(em, "extract_and_index", return_value={}),
+            patch.object(em.subprocess, "run", side_effect=fake_run),
+        ):
+            return em.parse_pst.__wrapped__("case-1", str(pst))  # type: ignore[attr-defined]
+
+    def test_a_failed_extraction_is_an_error_not_an_empty_mailbox(self, tmp_path: Path) -> None:
+        result = self._run(tmp_path, returncode=1, write_eml=False)
+        assert result["status"] == "error"
+        assert result["error_type"] == "tool_failed"
+
+    def test_a_clean_run_succeeds(self, tmp_path: Path) -> None:
+        result = self._run(tmp_path, returncode=0, write_eml=True)
+        assert result["status"] == "success"
+
+    def test_a_partial_extraction_keeps_the_messages(self, tmp_path: Path) -> None:
+        """readpst exits non-zero on one unreadable folder; the rest is real."""
+        result = self._run(tmp_path, returncode=1, write_eml=True)
+        assert result["status"] == "success"
+        assert "may be incomplete" in str(result["warning"])

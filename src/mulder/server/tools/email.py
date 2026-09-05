@@ -14,6 +14,7 @@ from mulder.server.app import mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
     adaptive_timeout,
+    classify_tool_exit,
     error_response,
     make_tool_call_id,
     require_binary,
@@ -345,7 +346,7 @@ def parse_pst(
 
         pst_timeout = adaptive_timeout(file_path, base=_READPST_TIMEOUT)
         try:
-            subprocess.run(
+            proc = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
@@ -368,6 +369,21 @@ def parse_pst(
                 params,
                 f"Failed to execute readpst: {exc}",
                 (time.monotonic() - t0) * 1000,
+            )
+
+        verdict, message = classify_tool_exit(
+            proc,
+            "readpst",
+            produced_output=any(output_dir.rglob("*.eml")),
+        )
+        if verdict == "failed":
+            return error_response(
+                tc_id,
+                "parse_pst",
+                params,
+                message,
+                (time.monotonic() - t0) * 1000,
+                error_type="tool_failed",
             )
 
         result = _parse_extracted_emails(
@@ -394,4 +410,7 @@ def parse_pst(
     summary.update(result)
 
     elapsed = (time.monotonic() - t0) * 1000
-    return tool_response(tc_id, "parse_pst", params, summary, "pst.emails", elapsed)
+    response = tool_response(tc_id, "parse_pst", params, summary, "pst.emails", elapsed)
+    if verdict == "partial":
+        response["warning"] = message
+    return response
