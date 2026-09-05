@@ -15,6 +15,7 @@ from mulder.server.app import mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
     adaptive_timeout,
+    classify_tool_exit,
     error_response,
     make_tool_call_id,
     require_binary,
@@ -135,6 +136,11 @@ def _run_rabin2(flags: str, file_path: Path) -> dict[str, Any]:
         timeout=_RABIN2_TIMEOUT,
         check=False,
     )
+    verdict, message = classify_tool_exit(
+        proc, "rabin2", produced_output=bool(proc.stdout.strip())
+    )
+    if verdict == "failed":
+        raise OSError(message)
     if not proc.stdout.strip():
         return {}
     try:
@@ -403,6 +409,7 @@ def _compute_verdict(
     suspicious_imports: dict[str, list[str]],
     timestamp: dict[str, object],
     sections: list[dict[str, object]],
+    incomplete: list[str] | None = None,
 ) -> dict[str, object]:
     """Compute an overall triage verdict from analysis results.
 
@@ -415,6 +422,8 @@ def _compute_verdict(
         suspicious_imports: Imports grouped by threat category.
         timestamp: Timestamp validity assessment dict.
         sections: Section metadata with entropy and permissions.
+        incomplete: Analyses that did not run. A score of zero derived from
+            evidence that was never collected is not a benign verdict.
 
     Returns:
         Dict with classification, confidence, and reasons.
@@ -460,6 +469,14 @@ def _compute_verdict(
     else:
         classification = "benign_indicators"
         confidence = "medium"
+
+    if incomplete:
+        # Nothing was found because nothing was looked at. Saying so is the
+        # difference between "this binary is clean" and "this binary was not
+        # examined", which the caller otherwise cannot tell apart.
+        classification = "inconclusive"
+        confidence = "none"
+        reasons.append("Analysis incomplete: " + "; ".join(incomplete))
 
     return {
         "classification": classification,
@@ -747,6 +764,8 @@ def triage_binary(
     strings_of_interest: list[dict[str, object]] = []
     hashes: dict[str, str] = {}
 
+    incomplete: list[str] = []
+
     if depth in ("standard", "deep"):
         try:
             imports_raw = _run_rabin2("i", target)
@@ -761,16 +780,22 @@ def triage_binary(
             strings_of_interest = _parse_strings(strings_raw)
             raw_parts.append(json.dumps(strings_raw, indent=2, default=str))
         except subprocess.TimeoutExpired:
+            # Imports and sections are the evidence the verdict is computed
+            # from. Losing them and then scoring zero is how a sample that was
+            # never analysed comes back as "benign_indicators".
+            incomplete.append(f"rabin2 timed out after {_RABIN2_TIMEOUT}s")
             logger.warning("rabin2 timed out during standard analysis of %s", file_path)
-        except OSError:
-            logger.warning("Failed to run rabin2 standard analysis on %s", file_path)
+        except OSError as exc:
+            incomplete.append(f"rabin2 failed: {exc}")
+            logger.warning("Failed to run rabin2 standard analysis on %s: %s", file_path, exc)
 
     if depth == "deep":
         try:
             libs_raw = _run_rabin2("l", target)
             raw_parts.append(json.dumps(libs_raw, indent=2, default=str))
-        except (subprocess.TimeoutExpired, OSError):
-            logger.warning("rabin2 library enumeration failed for %s", file_path)
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            incomplete.append(f"rabin2 library enumeration failed: {exc}")
+            logger.warning("rabin2 library enumeration failed for %s: %s", file_path, exc)
 
         if require_binary("rahash2"):
             try:
@@ -786,8 +811,9 @@ def triage_binary(
                     if m:
                         hashes[m.group(1)] = m.group(2)
                 raw_parts.append(proc.stdout)
-            except (subprocess.TimeoutExpired, OSError):
-                logger.warning("rahash2 failed for %s", file_path)
+            except (subprocess.TimeoutExpired, OSError) as exc:
+                incomplete.append(f"rahash2 failed: {exc}")
+                logger.warning("rahash2 failed for %s: %s", file_path, exc)
 
     suspicious_imports = _classify_imports(imports)
     packing_indicators = _detect_packing(sections, imports)
@@ -799,7 +825,9 @@ def triage_binary(
         raw_ts = None
     timestamp = _assess_timestamp(raw_ts)
 
-    verdict = _compute_verdict(packing_indicators, suspicious_imports, timestamp, sections)
+    verdict = _compute_verdict(
+        packing_indicators, suspicious_imports, timestamp, sections, incomplete
+    )
 
     combined_output = "\n\n".join(raw_parts)
     summary = extract_and_index(combined_output, "binary.triage", file_path, "rabin2")
@@ -813,6 +841,12 @@ def triage_binary(
     summary["hashes"] = hashes
     summary["triage_verdict"] = verdict
     summary["depth"] = depth
+    summary["analysis_complete"] = not incomplete
+    if incomplete:
+        summary["warning"] = (
+            "Triage is incomplete, so the verdict is not evidence of a clean binary: "
+            + "; ".join(incomplete)
+        )
 
     elapsed = (time.monotonic() - t0) * 1000
     return tool_response(tc_id, "triage_binary", params, summary, "binary.triage", elapsed)
