@@ -523,6 +523,7 @@ class RoleRunner:
             additional_turns += continuation.turns_used
             result.messages.extend(continuation.messages)
             result.tool_names.extend(continuation.tool_names)
+            result.tool_outcomes.extend(continuation.tool_outcomes)
             result.context_exhausted = continuation.context_exhausted
             result.batch_ids.update(continuation.batch_ids)
         return additional_turns

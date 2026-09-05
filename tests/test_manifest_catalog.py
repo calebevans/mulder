@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import zipfile
@@ -10,8 +11,14 @@ from unittest.mock import patch
 
 import pytest
 
-from mulder.adapters import IntakeError, IntakeManifest, prepare_evidence_case, scan_collection
-from mulder.adapters.catalog import CATALOG_PAGE_MAX_BYTES, manifest_catalog_page
+from mulder.adapters import (
+    IntakeError,
+    IntakeManifest,
+    prepare_evidence_case,
+    scan_collection,
+)
+from mulder.adapters.catalog import CATALOG_PAGE_MAX_BYTES, evidence_types, manifest_catalog_page
+from mulder.adapters.intake import CollectorProvenance, IntakeEntry
 from mulder.orchestrator.capabilities import (
     DELEGATION_GRANT_ENV,
     DELEGATION_SECRET_ENV,
@@ -175,6 +182,48 @@ def test_catalog_page_is_bounded_and_cursor_addressable(tmp_path: Path) -> None:
     assert second["entries"][0]["artifact_id"] != first["entries"][0]["artifact_id"]
 
 
+def test_catalog_page_advances_for_a_valid_oversized_manifest_row(tmp_path: Path) -> None:
+    relative_path = "payload-" + ("x" * 50_000) + ".log"
+    digest = "sha256:" + ("a" * 64)
+    manifest = IntakeManifest(
+        case_id="oversized",
+        source_kind="directory",
+        source_path=str(tmp_path / "evidence"),
+        source_sha256=None,
+        collection_format="generic",
+        provenance=CollectorProvenance(collector="generic", assertion_source="format_only"),
+        entries=(
+            IntakeEntry(
+                relative_path=relative_path,
+                size_bytes=1,
+                sha256=digest,
+                artifact_type="log",
+                storage="file",
+            ),
+        ),
+        file_count=1,
+        total_bytes=1,
+        collection_digest=digest,
+        created_at="2026-01-01T00:00:00+00:00",
+        integrity={"algorithm": "sha256", "manifest_hash": digest},
+    )
+
+    page = manifest_catalog_page(manifest, max_items=1, max_bytes=2048)
+    encoded = json.dumps(page, sort_keys=True, separators=(",", ":")).encode()
+
+    assert len(encoded) <= 2048
+    assert page["page_bytes"] == len(encoded)
+    assert page["next_cursor"] is None
+    assert len(page["entries"]) == 1
+    row = page["entries"][0]
+    assert row["artifact_id"] == f"{digest}:0"
+    assert row["sha256"] == digest
+    assert row["entry_truncated"] is True
+    assert row["relative_path_sha256"] == (
+        "sha256:" + hashlib.sha256(relative_path.encode()).hexdigest()
+    )
+
+
 def test_catalog_page_tool_reads_only_authenticated_manifest_after_live_mutation(
     tmp_path: Path,
 ) -> None:
@@ -257,6 +306,34 @@ def test_nested_archive_member_uses_verified_outer_materialization(tmp_path: Pat
     assert rejected["error_type"] == "intake_verification_failed"
 
 
+def test_directory_intake_nested_archive_uses_committed_materialization(
+    tmp_path: Path,
+) -> None:
+    inner_bytes = io.BytesIO()
+    with zipfile.ZipFile(inner_bytes, "w") as inner:
+        inner.writestr("payload.txt", "committed")
+    source = tmp_path / "evidence"
+    source.mkdir()
+    outer = source / "outer.zip"
+    with zipfile.ZipFile(outer, "w") as archive:
+        archive.writestr("nested/inner.zip", inner_bytes.getvalue())
+    db_dir = tmp_path / "cases"
+    prepare_evidence_case(source, "case-a", db_dir)
+    app.init_server(db_dir, mem_percent_limit=0, cpu_percent_limit=0)
+    app._tool_dispatch_sync["open_case"]("case-a")
+
+    first = app._tool_dispatch_sync["extract_archive"](str(outer))
+    assert first["status"] == "success"
+    materialized_inner = db_dir / "extracted" / "outer" / "nested" / "inner.zip"
+    second = app._tool_dispatch_sync["extract_archive"](
+        str(materialized_inner),
+        str(db_dir / "extracted" / "inner"),
+    )
+
+    assert second["status"] == "success"
+    assert (db_dir / "extracted" / "inner" / "payload.txt").read_text() == "committed"
+
+
 def test_dedicated_autoruns_seat_reads_only_committed_artifact_ids(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -280,7 +357,39 @@ def test_dedicated_autoruns_seat_reads_only_committed_artifact_ids(
 
     assert result["status"] == "success"
     assert result["result_count"] == 1
-    assert result["sources"] == ["autoruns.host-a"]
+    assert result["sources"] == [
+        "autoruns.host-a",
+        "autoruns.intake." + manifest.collection_digest.removeprefix("sha256:"),
+    ]
+
+
+def test_dedicated_autoruns_seat_requires_the_complete_exact_manifest_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "evidence"
+    source.mkdir()
+    for name in ("Autoruns-a.csv", "Autoruns-b.csv"):
+        (source / name).write_text("Entry,Image Path\nRun,C:\\good.exe\n")
+    manifest = prepare_evidence_case(source, "case-a", tmp_path / "cases")
+    app.init_server(tmp_path / "cases", mem_percent_limit=0, cpu_percent_limit=0)
+    app._tool_dispatch_sync["open_case"]("case-a")
+    secret = "dedicated-autoruns-test-secret"
+    identity = identity_for_phase("autoruns_ingest", "single")
+    monkeypatch.setenv(DELEGATION_SECRET_ENV, secret)
+    monkeypatch.setenv(DELEGATION_GRANT_ENV, create_delegation_grant(identity, secret))
+    expected = [
+        f"{manifest.collection_digest}:{index}"
+        for index, entry in enumerate(manifest.entries)
+        if "autoruns" in evidence_types(entry)
+    ]
+
+    subset = app._tool_dispatch_sync["parse_autoruns"](artifact_ids=expected[:1])
+    duplicate = app._tool_dispatch_sync["parse_autoruns"](artifact_ids=[*expected, expected[-1]])
+
+    assert subset["status"] == "error"
+    assert "every committed" in subset["error_message"]
+    assert duplicate["status"] == "error"
+    assert "exactly once" in duplicate["error_message"]
 
 
 def test_dedicated_autoruns_seat_rejects_changed_or_non_autoruns_members(
@@ -304,7 +413,7 @@ def test_dedicated_autoruns_seat_rejects_changed_or_non_autoruns_members(
         artifact_ids=[f"{manifest.collection_digest}:{by_name['notes.txt']}"]
     )
     assert wrong_type["status"] == "error"
-    assert "not an Autoruns" in wrong_type["error_message"]
+    assert "every committed" in wrong_type["error_message"]
 
     autoruns.write_text("Entry,Image Path\nRun,C:\\changed.exe\n")
     changed = app._tool_dispatch_sync["parse_autoruns"](

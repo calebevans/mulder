@@ -248,11 +248,13 @@ class _MountCache:
             entry.refcount += 1
 
         if is_owner:
+            # Once a mount attempt begins, cleanup must conservatively prove
+            # the target unmounted.  A broker can fail after the helper has
+            # already mounted, so its False return is not absence proof.
+            entry.mounted = True
             try:
                 mounted = self._broker.mount_read_only(Path(image_path), entry.mount_dir)
-                if mounted:
-                    entry.mounted = True
-                else:
+                if not mounted:
                     entry.error = RuntimeError(f"Failed to mount disk image: {image_path}")
             except Exception as exc:
                 entry.error = exc
@@ -285,10 +287,17 @@ class _MountCache:
                 do_cleanup = True
 
         if do_cleanup:
+            safe_to_remove = True
             if entry.mounted:
-                self._broker.unmount(entry.mount_dir)
-            with suppress(OSError):
-                shutil.rmtree(entry.mount_dir, ignore_errors=True)
+                safe_to_remove = self._broker.unmount(entry.mount_dir)
+            if safe_to_remove:
+                with suppress(OSError):
+                    shutil.rmtree(entry.mount_dir, ignore_errors=True)
+            else:
+                logger.error(
+                    "Preserving mount point because unmount could not be verified: %s",
+                    entry.mount_dir,
+                )
 
 
 _mount_cache = _MountCache()

@@ -40,10 +40,7 @@ def _decode_mountinfo(value: str) -> str:
 def _mount_entries() -> list[dict[str, object]]:
     """Read the current process mount namespace into minimal typed entries."""
     entries: list[dict[str, object]] = []
-    try:
-        lines = Path("/proc/self/mountinfo").read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return entries
+    lines = Path("/proc/self/mountinfo").read_text(encoding="utf-8").splitlines()
     for line in lines:
         before, separator, after = line.partition(" - ")
         left = before.split()
@@ -78,7 +75,10 @@ def _loop_backing_path(major_minor: str) -> Path | None:
 
 def _verified_mount_state(image_path: Path, mount_point: Path) -> bool:
     """Verify exact target, immutable flags, and a traceable backing image."""
-    entries = _mount_entries()
+    try:
+        entries = _mount_entries()
+    except OSError:
+        return False
     target = str(mount_point)
     entry = next((item for item in entries if item["mount_point"] == target), None)
     if entry is None or not _REQUIRED_MOUNT_FLAGS.issubset(entry["flags"]):  # type: ignore[arg-type]
@@ -105,7 +105,11 @@ def _verified_mount_state(image_path: Path, mount_point: Path) -> bool:
 def _verified_unmounted(mount_point: Path) -> bool:
     target = str(mount_point)
     ewf_target = str(mount_point / "_ewf")
-    return all(entry["mount_point"] not in {target, ewf_target} for entry in _mount_entries())
+    try:
+        entries = _mount_entries()
+    except OSError:
+        return False
+    return all(entry["mount_point"] not in {target, ewf_target} for entry in entries)
 
 
 class MountBroker(Protocol):
@@ -120,11 +124,15 @@ class MountBroker(Protocol):
         ...
 
 
+class MountRollbackError(RuntimeError):
+    """A failed or unverifiable mount could not be proven unmounted."""
+
+
 class SubprocessMountBroker:
     """Invoke the fixed helper module through the central command-policy seam."""
 
-    @staticmethod
-    def _invoke(action: str, paths: tuple[PathArgument, ...]) -> bool:
+    @classmethod
+    def _invoke(cls, action: str, paths: tuple[PathArgument, ...]) -> bool:
         if action == "mount" and len(paths) == 2:
             image = canonical_mount_path(paths[0].path, directory=False)
             mount_point = canonical_mount_path(paths[1].path, directory=True)
@@ -167,25 +175,41 @@ class SubprocessMountBroker:
             max_output_bytes=4096,
             network_class=NetworkClass.NONE,
         )
+
+        def reject_unverified_result() -> bool:
+            if action != "mount" or _verified_unmounted(mount_point):
+                return False
+            rolled_back = cls._invoke(
+                "unmount",
+                (PathArgument(mount_point, PathAccess.WRITE),),
+            )
+            if not rolled_back or not _verified_unmounted(mount_point):
+                raise MountRollbackError(
+                    f"unverified mount could not be rolled back: {mount_point}"
+                )
+            return False
+
         result = CommandRunner(
             policy,
             network_isolation=_MOUNT_NETWORK_ISOLATION,
         ).run(request)
         if result.status is not ExecutionStatus.COMPLETED or result.returncode != 0:
-            return False
+            return reject_unverified_result()
         try:
             payload = json.loads(result.stdout.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
-            return False
+            return reject_unverified_result()
         expected_response = mount_response_payload(
             request_payload,
             request_digest,
             ok=True,
         )
         if payload != expected_response:
-            return False
+            return reject_unverified_result()
         if action == "mount":
-            return image is not None and _verified_mount_state(image, mount_point)
+            if image is not None and _verified_mount_state(image, mount_point):
+                return True
+            return reject_unverified_result()
         return _verified_unmounted(mount_point)
 
     def mount_read_only(self, image_path: Path, mount_point: Path) -> bool:

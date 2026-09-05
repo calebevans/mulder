@@ -111,6 +111,9 @@ class PhaseResult:
         tool_names: MCP tool short names invoked during the phase,
             captured from ToolUseBlock events. Used by gate validators
             (e.g. report gate checks for ``finalize_report``).
+        tool_outcomes: Tool short name and returned status captured by the
+            PostToolUse hook. Security-sensitive gates use this instead of
+            treating invocation as successful execution.
         turns_used: Total tool-use turns consumed.
         session_id: Agent session identifier from the final attempt.
         gate_result: Validation gate outcome, if a gate was evaluated.
@@ -126,6 +129,7 @@ class PhaseResult:
     success: bool = False
     messages: list[str] = field(default_factory=list)
     tool_names: list[str] = field(default_factory=list)
+    tool_outcomes: list[tuple[str, str]] = field(default_factory=list)
     turns_used: int = 0
     session_id: str = ""
     gate_result: Any = None

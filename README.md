@@ -25,7 +25,7 @@ The NIST Data Leakage case has a [detailed accuracy report](https://github.com/c
 <img src="https://raw.githubusercontent.com/calebevans/mulder/main/docs/images/diagram.png" alt="Mulder Architecture and Security Boundaries" width="420">
 </p>
 
-Each investigation runs through five phases with quality gates between them. Phases 2-4 use a plan-and-execute pipeline with three specialized roles (planner, executor, analyst) that can optionally be assigned to different models for cost optimization.
+Each investigation runs through five primary phases with quality gates between them. When the committed catalog contains Autoruns artifacts, a dedicated manifest-bound ingest seat runs before Extraction. Primary phases 2-4 use a plan-and-execute pipeline with three specialized roles (planner, executor, analyst) that can optionally be assigned to different models for cost optimization.
 
 1. **Catalog** - page through committed intake, classify artifacts, identify distinct systems
 2. **Extraction** - run applicable forensic tools per system, index results into FTS5 database

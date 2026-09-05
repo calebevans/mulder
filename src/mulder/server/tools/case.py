@@ -6,6 +6,7 @@ Tier 1 tools: help the agent orient before running any extractions.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import shutil
@@ -14,7 +15,8 @@ import tempfile
 import time
 import zipfile
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
+from dataclasses import dataclass
 from pathlib import Path
 
 from mulder.adapters import (
@@ -44,6 +46,17 @@ logger = logging.getLogger(__name__)
 _EXTRACT_TIMEOUT = 600
 _INTAKE_EXTRACT_MAX_FILE_BYTES = 512 << 20
 _INTAKE_EXTRACT_MAX_TOTAL_BYTES = 8 << 30
+_ARCHIVE_MATERIALIZATION_SCHEMA = "mulder.archive-materialization:v1"
+_MAX_MATERIALIZATION_RECEIPT_BYTES = 8 << 20
+
+
+@dataclass(frozen=True)
+class _ArchiveCommitment:
+    """One archive input rooted in the active immutable intake."""
+
+    manifest: IntakeManifest
+    relative: str | None
+    content: bytes | None = None
 
 
 @mcp.tool()
@@ -499,7 +512,129 @@ def _extract_zip(archive: Path, dest: Path) -> list[str]:
     return [str(f.relative_to(dest)) for f in dest.rglob("*") if f.is_file()]
 
 
-def _intake_for_archive(archive: Path) -> tuple[IntakeManifest, str | None] | None:
+def _file_sha256(path: Path) -> str:
+    hasher = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    return "sha256:" + hasher.hexdigest()
+
+
+def _materialization_inventory(dest: Path) -> list[dict[str, object]]:
+    """Return a bounded, link-free commitment for one extracted directory."""
+    entries: list[dict[str, object]] = []
+    total_bytes = 0
+    for candidate in sorted(dest.rglob("*")):
+        relative = candidate.relative_to(dest).as_posix()
+        if candidate.is_symlink():
+            raise IntakeError(f"archive materialization contains a link: {relative}")
+        if candidate.is_dir():
+            continue
+        if not candidate.is_file():
+            raise IntakeError(f"archive materialization contains a special file: {relative}")
+        size = candidate.stat().st_size
+        if size > _INTAKE_EXTRACT_MAX_FILE_BYTES:
+            raise IntakeError(f"archive member exceeds extraction limit: {relative}")
+        total_bytes += size
+        if total_bytes > _INTAKE_EXTRACT_MAX_TOTAL_BYTES:
+            raise IntakeError("archive materialization exceeds total extraction limit")
+        entries.append(
+            {
+                "relative_path": relative,
+                "size_bytes": size,
+                "sha256": _file_sha256(candidate),
+            }
+        )
+    return entries
+
+
+def _materialization_receipt_path(dest: Path) -> Path:
+    cfg = get_cfg()
+    receipts = cfg.db_dir / "archive-materializations"
+    receipts.mkdir(parents=True, exist_ok=True)
+    name = hashlib.sha256(str(dest).encode("utf-8")).hexdigest() + ".json"
+    return receipts / name
+
+
+def _write_materialization_receipt(
+    commitment: _ArchiveCommitment,
+    archive: Path,
+    dest: Path,
+) -> None:
+    """Atomically commit extracted bytes for later nested-archive use."""
+    entries = _materialization_inventory(dest)
+    payload = {
+        "schema": _ARCHIVE_MATERIALIZATION_SCHEMA,
+        "collection_digest": commitment.manifest.collection_digest,
+        "archive_path": str(archive),
+        "destination": str(dest),
+        "entries": entries,
+    }
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    if len(encoded) > _MAX_MATERIALIZATION_RECEIPT_BYTES:
+        raise IntakeError("archive materialization receipt exceeds its size limit")
+    receipt = _materialization_receipt_path(dest)
+    fd, temporary = tempfile.mkstemp(prefix=f".{receipt.name}.", dir=receipt.parent)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, receipt)
+    finally:
+        with suppress(FileNotFoundError):
+            os.unlink(temporary)
+
+
+def _verified_derived_archive(
+    archive: Path,
+    manifest: IntakeManifest,
+) -> bytes | None:
+    """Return a derived archive only when its complete output view still matches."""
+    receipts = get_cfg().db_dir / "archive-materializations"
+    if not receipts.is_dir():
+        return None
+    matches: list[tuple[int, Path, dict[str, object]]] = []
+    for receipt in receipts.glob("*.json"):
+        try:
+            if receipt.stat().st_size > _MAX_MATERIALIZATION_RECEIPT_BYTES:
+                continue
+            payload = json.loads(receipt.read_text(encoding="utf-8"))
+            if (
+                not isinstance(payload, dict)
+                or payload.get("schema") != _ARCHIVE_MATERIALIZATION_SCHEMA
+                or payload.get("collection_digest") != manifest.collection_digest
+                or not isinstance(payload.get("destination"), str)
+            ):
+                continue
+            destination = Path(payload["destination"]).resolve(strict=True)
+            archive.relative_to(destination)
+            matches.append((len(destination.parts), destination, payload))
+        except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
+            continue
+    if not matches:
+        return None
+    _depth, destination, payload = max(matches, key=lambda item: item[0])
+    expected_entries = payload.get("entries")
+    if not isinstance(expected_entries, list):
+        raise IntakeError("archive materialization receipt has invalid entries")
+    observed_entries = _materialization_inventory(destination)
+    if observed_entries != expected_entries:
+        raise IntakeError("archive materialization changed after extraction")
+    verify_intake_source(manifest)
+    size = archive.stat().st_size
+    if size > _INTAKE_EXTRACT_MAX_FILE_BYTES:
+        raise IntakeError("derived archive exceeds extraction limit")
+    return archive.read_bytes()
+
+
+def _intake_for_archive(archive: Path) -> _ArchiveCommitment | None:
     """Resolve ``archive`` to the active manifest or reject it as uncommitted.
 
     The returned member name is ``None`` only for the committed outer ZIP
@@ -516,23 +651,27 @@ def _intake_for_archive(archive: Path) -> tuple[IntakeManifest, str | None] | No
     source = Path(manifest.source_path).resolve(strict=False)
     if archive == source:
         if manifest.source_kind == "zip":
-            return manifest, None
+            return _ArchiveCommitment(manifest, None)
         if manifest.source_kind == "file" and len(manifest.entries) == 1:
-            return manifest, manifest.entries[0].relative_path
+            return _ArchiveCommitment(manifest, manifest.entries[0].relative_path)
         raise IntakeError("selected archive is not a committed file intake")
     if manifest.source_kind == "zip":
         materialized_root = Path(ctx.db.db_path).parent / "extracted" / source.stem
         try:
             relative = archive.relative_to(materialized_root.resolve(strict=False)).as_posix()
-        except ValueError as exc:
-            raise IntakeError("archive is outside the active case intake") from exc
-        if not any(
-            entry.relative_path == relative and entry.storage == "zip_member"
-            for entry in manifest.entries
-        ):
-            raise IntakeError("archive is not committed by the active case intake")
-        _verify_intake_materialization(manifest, materialized_root)
-        return manifest, relative
+        except ValueError:
+            pass
+        else:
+            if not any(
+                entry.relative_path == relative and entry.storage == "zip_member"
+                for entry in manifest.entries
+            ):
+                raise IntakeError("archive is not committed by the active case intake")
+            _verify_intake_materialization(manifest, materialized_root)
+            return _ArchiveCommitment(manifest, relative)
+    derived = _verified_derived_archive(archive, manifest)
+    if derived is not None:
+        return _ArchiveCommitment(manifest, archive.name, derived)
     if manifest.source_kind != "directory":
         raise IntakeError("archive is not committed by the active case intake")
     try:
@@ -540,27 +679,28 @@ def _intake_for_archive(archive: Path) -> tuple[IntakeManifest, str | None] | No
     except ValueError as exc:
         raise IntakeError("archive is outside the active case intake") from exc
     if not any(
-        entry.relative_path == relative and entry.storage == "file"
-        for entry in manifest.entries
+        entry.relative_path == relative and entry.storage == "file" for entry in manifest.entries
     ):
         raise IntakeError("archive is not committed by the active case intake")
-    return manifest, relative
+    return _ArchiveCommitment(manifest, relative)
 
 
 @contextmanager
 def _committed_archive_snapshot(
-    commitment: tuple[IntakeManifest, str | None],
+    commitment: _ArchiveCommitment,
     archive: Path,
 ) -> Iterator[Path]:
     """Yield an unchanged bounded copy of one committed non-container archive."""
-    manifest, relative = commitment
+    manifest, relative = commitment.manifest, commitment.relative
     if relative is None:
         raise IntakeError("outer ZIP containers use verified intake materialization")
-    content = read_intake_member(
-        manifest,
-        relative,
-        max_bytes=_INTAKE_EXTRACT_MAX_FILE_BYTES,
-    )
+    content = commitment.content
+    if content is None:
+        content = read_intake_member(
+            manifest,
+            relative,
+            max_bytes=_INTAKE_EXTRACT_MAX_FILE_BYTES,
+        )
     with tempfile.TemporaryDirectory(prefix=".mulder-archive-") as temporary:
         snapshot = Path(temporary) / archive.name
         snapshot.write_bytes(content)
@@ -697,14 +837,14 @@ def extract_archive(
     # Idempotent: if already extracted, return the existing files
     if dest.exists() and any(dest.iterdir()):
         try:
-            if intake_commitment is not None and intake_commitment[1] is not None:
+            if intake_commitment is not None and intake_commitment.relative is not None:
                 raise IntakeError(
                     "existing nested-archive output has no immutable member manifest; "
                     "use a new empty extraction destination"
                 )
             existing_files = (
-                _verify_intake_materialization(intake_commitment[0], dest)
-                if intake_commitment is not None and intake_commitment[1] is None
+                _verify_intake_materialization(intake_commitment.manifest, dest)
+                if intake_commitment is not None and intake_commitment.relative is None
                 else [str(f.relative_to(dest)) for f in dest.rglob("*") if f.is_file()]
             )
         except IntakeError as exc:
@@ -749,9 +889,10 @@ def extract_archive(
     ext = archive.suffix.lower()
 
     try:
-        if intake_commitment is not None and intake_commitment[1] is None:
-            files = _extract_intake_zip(intake_commitment[0], dest)
+        if intake_commitment is not None and intake_commitment.relative is None:
+            files = _extract_intake_zip(intake_commitment.manifest, dest)
         else:
+
             @contextmanager
             def selected_archive() -> Iterator[Path]:
                 if intake_commitment is None:
@@ -808,6 +949,20 @@ def extract_archive(
             f"Extraction failed: {exc}",
             (time.monotonic() - t0) * 1000,
         )
+
+    if intake_commitment is not None:
+        try:
+            _write_materialization_receipt(intake_commitment, archive, dest)
+        except (IntakeError, OSError) as exc:
+            logger.error("Archive materialization commitment failed for %r: %s", archive, exc)
+            return error_response(
+                tc_id,
+                "extract_archive",
+                params,
+                f"Extraction output verification failed: {exc}",
+                (time.monotonic() - t0) * 1000,
+                error_type="intake_verification_failed",
+            )
 
     from mulder.extractors.classifier import ClassifierConfig, EvidenceClassifier
 

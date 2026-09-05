@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import secrets
 import signal
 import stat
 import subprocess
@@ -551,7 +552,8 @@ class _BoundRoot:
 
 @dataclass(frozen=True)
 class _StagedOutput:
-    path: Path
+    fd: int
+    staging_name: str
     parent_fd: int
     name: str
 
@@ -594,9 +596,17 @@ class _LaunchBindings:
                 require_metadata=True,
                 writable=False,
             )
+            executable_snapshot_fd = executable_fd
+            executable_stat = os.fstat(executable_fd)
+            if executable_stat.st_uid != 0 or executable_stat.st_mode & 0o022:
+                executable_snapshot_fd = self._snapshot_executable(
+                    executable_fd,
+                    executable_identity,
+                )
+                self._forget_and_close(executable_fd)
             self._descriptor_bindings.append(
                 DescriptorBinding(
-                    fd=executable_fd,
+                    fd=executable_snapshot_fd,
                     argv_index=0,
                     writable=False,
                     directory=False,
@@ -635,7 +645,8 @@ class _LaunchBindings:
                         index=index,
                     )
                 )
-            self.argv = (self._descriptor_path(executable_fd), *launch_arguments)
+            self.argv = (self._descriptor_path(executable_snapshot_fd), *launch_arguments)
+            self.logical_argv = (str(executable), *launch_arguments)
             self.cwd = self._bind_cwd(decision)
             self.pass_fds = tuple(sorted(set(self._fds)))
             self.descriptor_bindings = tuple(self._descriptor_bindings)
@@ -653,6 +664,57 @@ class _LaunchBindings:
     def _remember(self, fd: int) -> int:
         self._fds.append(fd)
         return fd
+
+    def _forget_and_close(self, fd: int) -> None:
+        self._fds.remove(fd)
+        os.close(fd)
+
+    def _snapshot_executable(self, source_fd: int, expected: PathIdentity) -> int:
+        """Copy the authorized executable into a private unlinked file."""
+        snapshot_path = Path(self._temporary.name) / "authorized-executable"
+        writable_fd = -1
+        try:
+            writable_fd = os.open(
+                snapshot_path,
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | os.O_CLOEXEC
+                | os.O_NOFOLLOW,
+                0o600,
+            )
+            os.lseek(source_fd, 0, os.SEEK_SET)
+            while True:
+                chunk = os.read(source_fd, 1024 * 1024)
+                if not chunk:
+                    break
+                remaining = memoryview(chunk)
+                while remaining:
+                    written = os.write(writable_fd, remaining)
+                    if written <= 0:
+                        raise OSError("failed to snapshot authorized executable")
+                    remaining = remaining[written:]
+            if not expected.same_metadata(PathIdentity.from_stat(os.fstat(source_fd))):
+                raise _LaunchBindingError(
+                    "authorized executable changed while it was being snapshotted"
+                )
+            os.fsync(writable_fd)
+            os.fchmod(writable_fd, 0o500)
+            executable_fd = os.open(
+                snapshot_path,
+                os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+            )
+            snapshot_path.unlink()
+            os.close(writable_fd)
+            writable_fd = -1
+            return self._remember(executable_fd)
+        except OSError as exc:
+            if writable_fd >= 0:
+                with suppress(OSError):
+                    os.close(writable_fd)
+            with suppress(OSError):
+                snapshot_path.unlink()
+            raise _LaunchBindingError("private executable snapshots are unavailable") from exc
 
     def _open_roots(self, policy: CommandPolicy) -> None:
         for path, expected in policy.root_pins:
@@ -813,9 +875,29 @@ class _LaunchBindings:
             pass
         else:
             raise _LaunchBindingError(f"output appeared after authorization: {path}")
-        staging = Path(self._temporary.name) / f"output-{index}-{name}"
-        self._staged_outputs.append(_StagedOutput(staging, parent_fd, name))
-        return str(staging)
+        staging_name = f".mulder-output-{secrets.token_hex(16)}"
+        try:
+            fd = self._remember(
+                os.open(
+                    staging_name,
+                    os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+                    0o600,
+                    dir_fd=parent_fd,
+                )
+            )
+        except OSError as exc:
+            raise _LaunchBindingError(f"declared output cannot be staged: {path}") from exc
+        self._staged_outputs.append(_StagedOutput(fd, staging_name, parent_fd, name))
+        self._descriptor_bindings.append(
+            DescriptorBinding(
+                fd=fd,
+                argv_index=index + 1,
+                writable=True,
+                directory=False,
+                basename=name,
+            )
+        )
+        return self._descriptor_path(fd)
 
     def _bind_cwd(self, decision: PolicyDecision) -> str | None:
         if decision.resolved_cwd is None:
@@ -835,6 +917,14 @@ class _LaunchBindings:
         missing = self.required_argv.difference(isolation.argv)
         if missing:
             raise _LaunchBindingError("network backend discarded descriptor-bound arguments")
+
+    def launch_command(
+        self, isolation: NetworkIsolationPlan
+    ) -> tuple[tuple[str, ...], str | None]:
+        """Preserve argv[0] semantics when no outer isolation wrapper is used."""
+        if isolation.argv == self.argv:
+            return self.logical_argv, self.argv[0]
+        return isolation.argv, None
 
     def verify_before_launch(self) -> None:
         """Ensure visible roots and held inputs still match their commitments."""
@@ -862,17 +952,33 @@ class _LaunchBindings:
         """Commit newly created file outputs through held parent descriptors."""
         for output in self._staged_outputs:
             try:
-                value = output.path.lstat()
+                value = os.stat(
+                    output.staging_name,
+                    dir_fd=output.parent_fd,
+                    follow_symlinks=False,
+                )
             except FileNotFoundError as exc:
                 raise _LaunchBindingError(
                     f"command did not create declared output: {output.name}"
                 ) from exc
-            if not stat.S_ISREG(value.st_mode):
+            held = os.fstat(output.fd)
+            if not stat.S_ISREG(value.st_mode) or (value.st_dev, value.st_ino) != (
+                held.st_dev,
+                held.st_ino,
+            ):
                 raise _LaunchBindingError("declared command output is not a regular file")
-            os.replace(output.path, output.name, dst_dir_fd=output.parent_fd)
+            os.replace(
+                output.staging_name,
+                output.name,
+                src_dir_fd=output.parent_fd,
+                dst_dir_fd=output.parent_fd,
+            )
 
     def close(self) -> None:
         """Close held descriptors and remove private staging data."""
+        for output in getattr(self, "_staged_outputs", []):
+            with suppress(OSError):
+                os.unlink(output.staging_name, dir_fd=output.parent_fd)
         for fd in reversed(getattr(self, "_fds", [])):
             with suppress(OSError):
                 os.close(fd)
@@ -1042,8 +1148,10 @@ class CommandRunner:
             tempfile.TemporaryFile("w+b") as stderr_file,
         ):
             try:
+                launch_argv, launch_executable = bindings.launch_command(isolation)
                 process = subprocess.Popen(
-                    isolation.argv,
+                    launch_argv,
+                    executable=launch_executable,
                     cwd=bindings.cwd,
                     env=child_environment,
                     stdin=subprocess.DEVNULL,

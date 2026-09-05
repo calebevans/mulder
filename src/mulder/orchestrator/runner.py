@@ -1060,6 +1060,7 @@ class Orchestrator:
                 accumulated_turns += continuation.turns_used
                 phase_result.messages.extend(continuation.messages)
                 phase_result.tool_names.extend(continuation.tool_names)
+                phase_result.tool_outcomes.extend(continuation.tool_outcomes)
                 phase_result.turns_used = accumulated_turns
 
             gate = await self._validate_phase(phase, phase_result)
@@ -1297,14 +1298,24 @@ class Orchestrator:
 
         if phase.name == "autoruns_ingest":
             invoked = "parse_autoruns" in phase_result.tool_names
-            persisted = self._server.has_source_prefix("autoruns.")
-            passed = invoked and persisted
+            succeeded = ("parse_autoruns", "success") in phase_result.tool_outcomes
+            manifest = self._prepared_intake
+            expected_source = (
+                "autoruns.intake." + manifest.collection_digest.removeprefix("sha256:")
+                if manifest is not None
+                else ""
+            )
+            persisted = bool(expected_source) and self._server.has_source_name(expected_source)
+            passed = invoked and succeeded and persisted
             if passed:
                 detail = "Dedicated ingest produced a persisted Autoruns source"
                 gaps: list[str] = []
             elif not invoked:
                 detail = "Dedicated ingest tool was not invoked"
                 gaps = ["parse_autoruns was not invoked"]
+            elif not succeeded:
+                detail = "Dedicated ingest tool did not return success"
+                gaps = ["parse_autoruns did not successfully verify and ingest every input"]
             else:
                 detail = "Dedicated ingest invocation produced no persisted Autoruns source"
                 gaps = ["parse_autoruns did not persist a verified Autoruns source"]

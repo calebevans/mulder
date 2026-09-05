@@ -447,18 +447,17 @@ class ServerBridge:
             logger.warning("get_summary failed", exc_info=True)
             return None
 
-    def has_source_prefix(self, prefix: str) -> bool:
-        """Return whether the case contains a persisted source with ``prefix``."""
+    def has_source_name(self, name: str) -> bool:
+        """Return whether the case contains one exact persisted source name."""
         try:
             self.ensure_context()
             import mulder.server.app as server_app
 
             return any(
-                source.source_name.startswith(prefix)
-                for source in server_app.get_ctx().db.get_sources()
+                source.source_name == name for source in server_app.get_ctx().db.get_sources()
             )
         except Exception:
-            logger.warning("source-prefix check failed", exc_info=True)
+            logger.warning("source-name check failed", exc_info=True)
             return False
 
     def get_readiness(self) -> dict[str, Any] | None:

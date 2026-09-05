@@ -1435,39 +1435,31 @@ def parse_autoruns(
     from mulder.orchestrator.capabilities import identity_from_bound_environment
 
     bound_identity = identity_from_bound_environment()
-    if bound_identity is not None and (
-        bound_identity.role is Role.AUTORUNS_INGEST and (csv_path or not artifact_ids)
-    ):
+    dedicated_ingest = bound_identity is not None and bound_identity.role == Role.AUTORUNS_INGEST
+    if dedicated_ingest and (csv_path or not artifact_ids):
         return {
             "tool_call_id": tc_id,
             "status": "error",
             "error_message": "The ingest seat accepts committed artifact_ids only.",
         }
 
-    if not force:
-        existing = sources_already_indexed(["autoruns."])
-        if existing:
-            elapsed = (time.monotonic() - t0) * 1000
-            ctx.audit.log_tool_call(
-                tool_call_id=tc_id,
-                tool_name="parse_autoruns",
-                params=params,
-                output_hash=hash_output({"skipped": existing}),
-                duration_ms=elapsed,
-            )
-            return {
-                "tool_call_id": tc_id,
-                "status": "already_indexed",
-                "existing_sources": existing,
-                "hint": "Use force=True to re-index.",
-            }
-
     committed_inputs: list[tuple[str, str]] = []
+    committed_source_name: str | None = None
     if artifact_ids:
         manifest_path = Path(get_cfg().db_dir) / f"{ctx.case_id}.intake.json"
         try:
             manifest = load_intake_manifest_commitment(manifest_path)
             prefix = f"{manifest.collection_digest}:"
+            expected_artifact_ids = [
+                f"{manifest.collection_digest}:{index}"
+                for index, entry in enumerate(manifest.entries)
+                if "autoruns" in evidence_types(entry)
+            ]
+            if dedicated_ingest and artifact_ids != expected_artifact_ids:
+                raise IntakeError(
+                    "ingest seat must provide every committed Autoruns artifact ID "
+                    "exactly once and in manifest order"
+                )
             for artifact_id in artifact_ids:
                 if not artifact_id.startswith(prefix):
                     raise IntakeError("Autoruns artifact belongs to another collection")
@@ -1491,6 +1483,9 @@ def parse_autoruns(
                         content.decode("utf-8-sig", errors="replace"),
                     )
                 )
+            committed_source_name = "autoruns.intake." + manifest.collection_digest.removeprefix(
+                "sha256:"
+            )
         except (IntakeError, OSError) as exc:
             return {
                 "tool_call_id": tc_id,
@@ -1504,6 +1499,24 @@ def parse_autoruns(
             if csv_path and Path(csv_path).is_file()
             else _discover_autoruns_csvs(csv_path)
         )
+
+    if not force and not dedicated_ingest:
+        existing = sources_already_indexed(["autoruns."])
+        if existing:
+            elapsed = (time.monotonic() - t0) * 1000
+            ctx.audit.log_tool_call(
+                tool_call_id=tc_id,
+                tool_name="parse_autoruns",
+                params=params,
+                output_hash=hash_output({"skipped": existing}),
+                duration_ms=elapsed,
+            )
+            return {
+                "tool_call_id": tc_id,
+                "status": "already_indexed",
+                "existing_sources": existing,
+                "hint": "Use force=True to re-index.",
+            }
 
     if not csv_files and not committed_inputs:
         elapsed = (time.monotonic() - t0) * 1000
@@ -1538,6 +1551,20 @@ def parse_autoruns(
         extract_and_index(combined, source_name, source_path, "autoruns_parser")
         total_entries += len(lines)
         indexed_sources.append(source_name)
+
+    if indexed_sources and committed_source_name is not None:
+        commitment_content = json.dumps(
+            {"artifact_ids": artifact_ids},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        extract_and_index(
+            commitment_content,
+            committed_source_name,
+            str(manifest_path),
+            "autoruns_intake_commitment",
+        )
+        indexed_sources.append(committed_source_name)
 
     if not indexed_sources:
         summary: dict[str, object] = {

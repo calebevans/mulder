@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -64,18 +64,29 @@ async def test_autoruns_gate_requires_invocation_and_persisted_source() -> None:
     result = PhaseResult(
         phase_name="autoruns_ingest",
         tool_names=["parse_autoruns"],
+        tool_outcomes=[("parse_autoruns", "success")],
     )
 
-    with patch.object(orch._server, "has_source_prefix", return_value=False):
+    orch._prepared_intake = MagicMock(collection_digest="sha256:" + "a" * 64)
+
+    with patch.object(orch._server, "has_source_name", return_value=False):
         failed = await orch._validate_phase(AUTORUNS_INGEST, result)
     assert failed is not None
     assert failed.passed is False
     assert "did not persist" in failed.gaps[0]
 
-    with patch.object(orch._server, "has_source_prefix", return_value=True):
+    with patch.object(orch._server, "has_source_name", return_value=True) as persisted:
         passed = await orch._validate_phase(AUTORUNS_INGEST, result)
     assert passed is not None
     assert passed.passed is True
+    persisted.assert_called_once_with("autoruns.intake." + "a" * 64)
+
+    result.tool_outcomes = [("parse_autoruns", "error")]
+    with patch.object(orch._server, "has_source_name", return_value=True):
+        stale = await orch._validate_phase(AUTORUNS_INGEST, result)
+    assert stale is not None
+    assert stale.passed is False
+    assert "successfully verify" in stale.gaps[0]
 
 
 class TestSplitPhaseHappyPath:

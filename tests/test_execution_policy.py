@@ -249,6 +249,27 @@ def test_executable_replacement_after_authorization_executes_held_descriptor(
     assert result.stdout == b"ORIGINAL\n"
 
 
+def test_executable_in_place_rewrite_during_isolation_executes_private_snapshot(
+    tmp_path: Path,
+) -> None:
+    executable = tmp_path / "tool"
+    executable.write_text("#!/bin/sh\necho ORIGINAL\n")
+    executable.chmod(0o700)
+    policy = CommandPolicy(allowed_executables=frozenset({executable}))
+
+    def rewrite_executable() -> None:
+        executable.write_text("#!/bin/sh\necho MUTATED\n")
+        executable.chmod(0o700)
+
+    result = CommandRunner(
+        policy,
+        network_isolation=_CallbackTestIsolation(rewrite_executable),
+    ).run(CommandRequest(executable=str(executable), timeout_seconds=2))
+
+    assert result.status is ExecutionStatus.COMPLETED
+    assert result.stdout == b"ORIGINAL\n"
+
+
 @pytest.mark.parametrize("target", ["input", "output", "cwd"])
 def test_authorized_root_swap_before_launch_is_denied(tmp_path: Path, target: str) -> None:
     root = tmp_path / "authorized"

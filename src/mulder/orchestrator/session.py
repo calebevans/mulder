@@ -262,6 +262,7 @@ class SessionExecutor:
             prompt=prompt,
             system_prompt=system_prompt,
         )
+        collected_tool_outcomes: list[tuple[str, str]] = []
         options = ClaudeAgentOptions(
             system_prompt=system_prompt,
             model=model,
@@ -279,6 +280,7 @@ class SessionExecutor:
                 provider_route,
                 identity=identity,
                 delegation_secret=delegation_secret,
+                tool_outcomes=collected_tool_outcomes,
             ),
         )
 
@@ -383,6 +385,7 @@ class SessionExecutor:
             success=False,
             messages=messages,
             tool_names=collected_tool_names,
+            tool_outcomes=collected_tool_outcomes,
             turns_used=turns_used,
             session_id=session_id,
             context_exhausted=hit_context_limit,
@@ -765,6 +768,7 @@ class SessionExecutor:
         *,
         identity: AgentIdentity | None = None,
         delegation_secret: str | None = None,
+        tool_outcomes: list[tuple[str, str]] | None = None,
     ) -> dict[HookEvent, list[HookMatcher]]:
         """Authorize results and bind nested calls to the initiating identity."""
 
@@ -786,6 +790,14 @@ class SessionExecutor:
                     default=str,
                 )
             tool_name = str(post_tool_input.get("tool_name", "unknown"))
+            short_name = tool_name.removeprefix("mcp__mulder__")
+            if tool_outcomes is not None:
+                status = (
+                    str(response.get("status", "unknown"))
+                    if isinstance(response, dict)
+                    else "unknown"
+                )
+                tool_outcomes.append((short_name, status))
             self._provider_policy.authorize(
                 OutboundRequest(
                     case_id=self._case_id,

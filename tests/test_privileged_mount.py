@@ -67,7 +67,7 @@ def test_broker_uses_fixed_module_and_typed_paths(
     assert isinstance(runners[0]._network_isolation, UnshareNetworkIsolationBackend)
 
 
-def test_broker_rejects_unbound_success_and_unverified_mount(
+def test_broker_rejects_unbound_success(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     image = tmp_path / "disk.raw"
@@ -84,14 +84,33 @@ def test_broker_rejects_unbound_success_and_unverified_mount(
     )
     assert not SubprocessMountBroker().mount_read_only(image, mount_point)
 
+
+def test_broker_rolls_back_a_live_mount_when_verification_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    image = tmp_path / "disk.raw"
+    image.write_bytes(b"image")
+    mount_point = tmp_path / "mount"
+    mount_point.mkdir()
+    actions: list[str] = []
+
     def bound_response(_self: object, request: object) -> object:
         arguments = request.arguments
-        payload = mount_request_payload(
-            "mount",
-            arguments[5],
-            canonical_mount_path(mount_point, directory=True),
-            canonical_mount_path(image, directory=False),
-        )
+        action = arguments[3]
+        actions.append(action)
+        if action == "mount":
+            payload = mount_request_payload(
+                "mount",
+                arguments[5],
+                canonical_mount_path(mount_point, directory=True),
+                canonical_mount_path(image, directory=False),
+            )
+        else:
+            payload = mount_request_payload(
+                "unmount",
+                arguments[5],
+                canonical_mount_path(mount_point, directory=True),
+            )
         return SimpleNamespace(
             status=ExecutionStatus.COMPLETED,
             returncode=0,
@@ -101,9 +120,16 @@ def test_broker_rejects_unbound_success_and_unverified_mount(
             ).encode(),
         )
 
+    unmounted_states = iter((True, False, True, True))
     monkeypatch.setattr("mulder.execution.privileged.CommandRunner.run", bound_response)
     monkeypatch.setattr("mulder.execution.privileged._verified_mount_state", lambda *_: False)
+    monkeypatch.setattr(
+        "mulder.execution.privileged._verified_unmounted",
+        lambda *_: next(unmounted_states),
+    )
+
     assert not SubprocessMountBroker().mount_read_only(image, mount_point)
+    assert actions == ["mount", "unmount"]
 
 
 def test_broker_fails_closed_on_invalid_helper_output(
@@ -207,3 +233,53 @@ def test_mount_cache_uses_injected_broker(tmp_path: Path) -> None:
 
     assert len(broker.mounted) == 1
     assert len(broker.unmounted) == 1
+
+
+def test_mount_cache_preserves_directory_when_unmount_is_unverified(tmp_path: Path) -> None:
+    image = tmp_path / "disk.raw"
+    image.write_bytes(b"image")
+
+    class UnverifiableUnmountBroker:
+        mount_point: Path | None = None
+
+        def mount_read_only(self, _image_path: Path, mount_point: Path) -> bool:
+            self.mount_point = mount_point
+            return True
+
+        def unmount(self, _mount_point: Path) -> bool:
+            return False
+
+    broker = UnverifiableUnmountBroker()
+    cache = _MountCache(broker)
+    with cache.acquire(str(image)):
+        pass
+
+    assert broker.mount_point is not None
+    assert broker.mount_point.exists()
+
+
+def test_mount_cache_rolls_back_ambiguous_failed_mount(tmp_path: Path) -> None:
+    image = tmp_path / "disk.raw"
+    image.write_bytes(b"image")
+
+    class SideEffectingBroker:
+        mount_point: Path | None = None
+        unmount_calls = 0
+
+        def mount_read_only(self, _image_path: Path, mount_point: Path) -> bool:
+            self.mount_point = mount_point
+            return False
+
+        def unmount(self, _mount_point: Path) -> bool:
+            self.unmount_calls += 1
+            return False
+
+    broker = SideEffectingBroker()
+    cache = _MountCache(broker)
+
+    with pytest.raises(RuntimeError, match="Failed to mount"), cache.acquire(str(image)):
+        pytest.fail("failed mount must not be yielded")
+
+    assert broker.unmount_calls == 1
+    assert broker.mount_point is not None
+    assert broker.mount_point.exists()

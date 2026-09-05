@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections import Counter
+from collections.abc import Iterator
 from pathlib import Path, PurePosixPath
 from typing import Final
 
@@ -12,6 +14,7 @@ from mulder.patterns import DISK_IMAGE_EXTS
 
 CATALOG_PAGE_MAX_BYTES: Final[int] = 32 * 1024
 CATALOG_PAGE_MAX_ITEMS: Final[int] = 128
+_COMPACT_PATH_MAX_BYTES: Final[int] = 256
 
 _MEMORY_EXTENSIONS: Final[frozenset[str]] = frozenset(
     {".raw", ".vmem", ".mem", ".img", ".dmp", ".lime", ".001"}
@@ -99,6 +102,47 @@ def extraction_entries(manifest: IntakeManifest) -> tuple[dict[str, object], ...
     return tuple(rows)
 
 
+def _bounded_text(value: str, *, max_bytes: int) -> str:
+    """Bound a non-authorizing display string without invalid UTF-8."""
+    encoded = value.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return value
+    digest = "sha256:" + hashlib.sha256(encoded).hexdigest()
+    marker = f"…[truncated;{digest}]"
+    prefix_bytes = max(0, max_bytes - len(marker.encode("utf-8")))
+    prefix = encoded[:prefix_bytes].decode("utf-8", errors="ignore")
+    return prefix + marker
+
+
+def _compact_relative_path(relative_path: str) -> tuple[str, str]:
+    """Return a bounded display path and its independent commitment."""
+    encoded = relative_path.encode("utf-8")
+    digest = "sha256:" + hashlib.sha256(encoded).hexdigest()
+    return _bounded_text(relative_path, max_bytes=_COMPACT_PATH_MAX_BYTES), digest
+
+
+def _compact_catalog_rows(manifest: IntakeManifest, index: int) -> Iterator[dict[str, object]]:
+    """Yield increasingly small rows retaining tool-authorizing commitments."""
+    entry = manifest.entries[index]
+    relative_path, relative_path_sha256 = _compact_relative_path(entry.relative_path)
+    common: dict[str, object] = {
+        "artifact_id": f"{manifest.collection_digest}:{index}",
+        "sha256": entry.sha256,
+        "size_bytes": entry.size_bytes,
+        "storage": entry.storage,
+        "entry_truncated": True,
+    }
+    yield {
+        **common,
+        "relative_path": relative_path,
+        "relative_path_sha256": relative_path_sha256,
+        "artifact_type": _bounded_text(entry.artifact_type, max_bytes=128),
+        "evidence_types": list(evidence_types(entry)),
+    }
+    yield {**common, "relative_path_sha256": relative_path_sha256}
+    yield common
+
+
 def manifest_catalog_page(
     manifest: IntakeManifest,
     *,
@@ -140,6 +184,9 @@ def manifest_catalog_page(
         "cursor": cursor,
         "entries": [],
         "next_cursor": cursor,
+        # Reserve the maximum decimal width while fitting rows so the final
+        # page-size field cannot evict an otherwise fitting entry.
+        "page_bytes": max_bytes,
     }
     encoded_base = json.dumps(base, sort_keys=True, separators=(",", ":")).encode()
     if len(encoded_base) > max_bytes:
@@ -166,7 +213,23 @@ def manifest_catalog_page(
         candidate["next_cursor"] = index + 1
         encoded = json.dumps(candidate, sort_keys=True, separators=(",", ":")).encode()
         if len(encoded) > max_bytes:
-            break
+            if not page_entries:
+                for compact_row in _compact_catalog_rows(manifest, index):
+                    compact_candidate = dict(candidate)
+                    compact_candidate["entries"] = [compact_row]
+                    compact_encoded = json.dumps(
+                        compact_candidate, sort_keys=True, separators=(",", ":")
+                    ).encode()
+                    if len(compact_encoded) <= max_bytes:
+                        row = compact_row
+                        encoded = compact_encoded
+                        break
+            if len(encoded) > max_bytes:
+                if not page_entries:
+                    raise ValueError(
+                        "catalog page metadata leaves no room for a committed entry"
+                    )
+                break
         page_entries.append(row)
 
     next_cursor = cursor + len(page_entries)
@@ -177,18 +240,11 @@ def manifest_catalog_page(
         encoded_size = len(
             json.dumps(base, sort_keys=True, separators=(",", ":")).encode()
         )
-        if encoded_size <= max_bytes:
-            if base["page_bytes"] == encoded_size:
-                break
-            base["page_bytes"] = encoded_size
-            continue
-        if not page_entries:
-            raise ValueError("catalog metadata exceeds the bounded page size")
-        page_entries.pop()
-        next_cursor = cursor + len(page_entries)
-        base["entries"] = page_entries
-        base["next_cursor"] = next_cursor if next_cursor < manifest.file_count else None
-        base["page_bytes"] = 0
+        if encoded_size > max_bytes:
+            raise ValueError("catalog page exceeded the bounded page size")
+        if base["page_bytes"] == encoded_size:
+            break
+        base["page_bytes"] = encoded_size
     return base
 
 

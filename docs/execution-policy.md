@@ -11,8 +11,10 @@ for the executable and approved roots. The runner opens and holds descriptors
 for the executable, working directory, typed inputs, output parents, and roots;
 component walks refuse symlinks. Linux payload paths are launched through
 `/proc/self/fd` bindings, so a rename or symlink swap between policy evaluation
-and process creation cannot redirect the child. New outputs are staged under a
-held parent and committed only after a successful launch.
+and process creation cannot redirect the child. Mutable executables are copied
+to a private, unlinked snapshot before isolation preparation. New outputs are
+staged through a descriptor in their held parent and atomically committed only
+after a successful launch.
 
 Environment overrides are copied into an immutable mapping at request
 construction. The exact child environment is then snapshotted before policy
@@ -61,11 +63,13 @@ mounts would vanish at helper exit. It accepts only exact
 `/proc/self/fd/<number>` source and target references held by the unprivileged
 broker. Each request includes a
 fresh nonce and canonical request digest. The helper returns the complete
-canonical request and a bound result digest; the broker rejects truncated,
+canonical request with that exact digest; the broker rejects truncated,
 replayed, or mismatched responses. After mounting, the broker independently
 checks `/proc/self/mountinfo` for the exact target, source/loop backing, and
 `ro,nodev,nosuid,noexec` flags. Unmount success likewise requires the target
-and any E01 intermediate mount to disappear.
+and any E01 intermediate mount to disappear. A failed or ambiguous mount result
+triggers rollback; an unverified unmount preserves the mountpoint for safe
+operator recovery rather than recursively deleting it.
 
 The initial migration covers the shared `run_cli_tool` path used by strings,
 hashdeep, exiftool, ssdeep, and pasco. Legacy direct-process modules are listed
