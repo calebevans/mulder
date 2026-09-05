@@ -20,6 +20,7 @@ from collections.abc import Callable, Mapping, Sequence
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, ParamSpec
+from urllib.parse import quote
 from uuid import uuid4
 
 from mulder.server.app import get_ctx, has_ctx
@@ -31,6 +32,45 @@ TOOL_TIMEOUT: int = 600
 
 _GIB_THRESHOLD = 4
 """File size (GiB) below which no extra time is added."""
+
+
+def readonly_sqlite_uri(db_path: Path | str) -> str:
+    """Build a read-only ``file:`` URI for *db_path*, escaping URI syntax.
+
+    ``f"file:{db_path}?mode=ro"`` is not safe for a path that came out of an
+    evidence tree, because the filename is pasted into a URI without being
+    escaped. Filenames like these are ordinary, not hostile:
+
+    ``sms#2024-03-12.db``
+        ``#`` opens a URI fragment, so the path is truncated to ``sms`` and
+        ``?mode=ro`` lands inside the discarded fragment. SQLite then creates
+        and opens an empty ``sms`` **inside the evidence directory**, and the
+        caller reports that the database has no tables.
+
+    ``chat?mode=rwc.db``
+        ``?`` starts the query, so the caller's parameters are appended to the
+        attacker's and the connection is refused outright -- the database is
+        silently dropped from the analysis by the surrounding
+        ``except sqlite3.Error``.
+
+    ``report%20final.db``
+        SQLite percent-decodes the path when ``%`` is followed by two hex
+        digits, so this names a file called ``report final.db`` -- a different
+        file, and usually one that does not exist. (``100%_full.db`` is fine:
+        ``%_f`` is not a valid escape and is left alone. The bug is not "any
+        percent sign", it is a percent sign in front of two hex digits.)
+
+    Escaping the path fixes all three: the file that is opened is the file that
+    was named, it is opened read-only, and nothing is written into the evidence
+    tree.
+
+    Args:
+        db_path: Path to the SQLite database.
+
+    Returns:
+        A ``file:`` URI to pass to ``sqlite3.connect(..., uri=True)``.
+    """
+    return "file:" + quote(str(db_path)) + "?mode=ro"
 
 
 def adaptive_timeout(
