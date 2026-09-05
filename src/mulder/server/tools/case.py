@@ -563,7 +563,7 @@ def _write_materialization_receipt(
     *,
     materialized: Path,
     destination: Path,
-) -> None:
+) -> list[dict[str, object]]:
     """Commit a verified view under its final public destination identity."""
     entries = _materialization_inventory(materialized)
     payload = {
@@ -593,6 +593,7 @@ def _write_materialization_receipt(
     finally:
         with suppress(FileNotFoundError):
             os.unlink(temporary)
+    return entries
 
 
 def _verified_derived_archive(
@@ -969,7 +970,7 @@ def extract_archive(
                         intake_commitment, archive
                     ) as snapshot:
                         files = extractor(snapshot, staged)
-                _write_materialization_receipt(
+                committed_entries = _write_materialization_receipt(
                     intake_commitment,
                     archive,
                     materialized=staged,
@@ -978,6 +979,8 @@ def extract_archive(
                 if dest.exists():
                     dest.rmdir()
                 os.replace(staged, dest)
+                if _materialization_inventory(dest) != committed_entries:
+                    raise IntakeError("archive materialization changed during publication")
         else:
             if extractor is None:  # pragma: no cover - guarded above
                 raise RuntimeError("archive extractor was not selected")

@@ -233,7 +233,7 @@ def test_mount_cache_uses_injected_broker(tmp_path: Path) -> None:
 
     assert len(broker.mounted) == 1
     assert len(broker.unmounted) == 1
-    assert not broker.mounted[0][1].exists()
+    assert broker.mounted[0][1].is_dir()
 
 
 def test_mount_cache_preserves_nonempty_directory_after_verified_unmount(
@@ -337,3 +337,66 @@ def test_mount_cache_rolls_back_ambiguous_failed_mount(tmp_path: Path) -> None:
     assert broker.unmount_calls == 1
     assert broker.mount_point is not None
     assert broker.mount_point.exists()
+
+
+def test_mount_cache_rolls_back_base_exception_and_evicts_entry(tmp_path: Path) -> None:
+    image = tmp_path / "disk.raw"
+    image.write_bytes(b"image")
+
+    class InterruptingBroker:
+        mount_point: Path | None = None
+        unmount_calls = 0
+
+        def mount_read_only(self, _image_path: Path, mount_point: Path) -> bool:
+            self.mount_point = mount_point
+            raise KeyboardInterrupt
+
+        def unmount(self, _mount_point: Path) -> bool:
+            self.unmount_calls += 1
+            return True
+
+    broker = InterruptingBroker()
+    cache = _MountCache(broker)
+
+    with pytest.raises(KeyboardInterrupt), cache.acquire(str(image)):
+        pytest.fail("interrupted mount must not be yielded")
+
+    assert cache._entries == {}
+    assert broker.unmount_calls == 1
+    assert broker.mount_point is not None
+    assert broker.mount_point.is_dir()
+
+
+def test_mount_cache_interrupted_waiter_releases_its_reference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    image = tmp_path / "disk.raw"
+    image.write_bytes(b"image")
+
+    class SuccessfulBroker:
+        unmount_calls = 0
+
+        def mount_read_only(self, _image_path: Path, _mount_point: Path) -> bool:
+            return True
+
+        def unmount(self, _mount_point: Path) -> bool:
+            self.unmount_calls += 1
+            return True
+
+    broker = SuccessfulBroker()
+    cache = _MountCache(broker)
+    owner = cache.acquire(str(image))
+    owner.__enter__()
+    entry = next(iter(cache._entries.values()))
+
+    def interrupt_wait() -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(entry.ready, "wait", interrupt_wait)
+    with pytest.raises(KeyboardInterrupt), cache.acquire(str(image)):
+        pytest.fail("interrupted waiter must not be yielded")
+
+    assert entry.refcount == 1
+    owner.__exit__(None, None, None)
+    assert cache._entries == {}
+    assert broker.unmount_calls == 1

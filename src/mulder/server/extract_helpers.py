@@ -11,7 +11,6 @@ import hashlib
 import logging
 import os
 import re
-import stat
 import tempfile
 import threading
 from collections.abc import Iterator
@@ -197,7 +196,6 @@ class _MountEntry:
     """Internal bookkeeping for a single cached mount point."""
 
     mount_dir: Path
-    mount_fd: int
     refcount: int = 0
     ready: threading.Event = field(default_factory=threading.Event)
     error: BaseException | None = None
@@ -243,21 +241,7 @@ class _MountCache:
         with self._lock:
             if canonical not in self._entries:
                 mount_dir = Path(tempfile.mkdtemp(prefix="mulder_mount_"))
-                mount_flags = (
-                    os.O_RDONLY
-                    | getattr(os, "O_CLOEXEC", 0)
-                    | getattr(os, "O_DIRECTORY", 0)
-                    | getattr(os, "O_NOFOLLOW", 0)
-                )
-                try:
-                    mount_fd = os.open(mount_dir, mount_flags)
-                except OSError:
-                    mount_dir.rmdir()
-                    raise
-                self._entries[canonical] = _MountEntry(
-                    mount_dir=mount_dir,
-                    mount_fd=mount_fd,
-                )
+                self._entries[canonical] = _MountEntry(mount_dir=mount_dir)
                 is_owner = True
             entry = self._entries[canonical]
             entry.refcount += 1
@@ -271,16 +255,23 @@ class _MountCache:
                 mounted = self._broker.mount_read_only(Path(image_path), entry.mount_dir)
                 if not mounted:
                     entry.error = RuntimeError(f"Failed to mount disk image: {image_path}")
-            except Exception as exc:
+            except BaseException as exc:
                 entry.error = exc
             finally:
                 entry.ready.set()
         else:
-            entry.ready.wait()
+            try:
+                entry.ready.wait()
+            except BaseException:
+                self._release(canonical, entry)
+                raise
 
         if entry.error is not None:
+            failure = entry.error
             self._release(canonical, entry)
-            raise RuntimeError(f"Failed to mount disk image: {image_path}") from entry.error
+            if is_owner and not isinstance(failure, Exception):
+                raise failure
+            raise RuntimeError(f"Failed to mount disk image: {image_path}") from failure
 
         try:
             yield str(entry.mount_dir)
@@ -288,7 +279,7 @@ class _MountCache:
             self._release(canonical, entry)
 
     def _release(self, canonical: str, entry: _MountEntry) -> None:
-        """Decrement refcount, unmounting and cleaning up if last user.
+        """Decrement refcount and unmount when the last user releases it.
 
         Args:
             canonical: Canonical (realpath) cache key.
@@ -302,53 +293,18 @@ class _MountCache:
                 do_cleanup = True
 
         if do_cleanup:
-            try:
-                safe_to_remove = True
-                if entry.mounted:
-                    safe_to_remove = self._broker.unmount(entry.mount_dir)
-                if safe_to_remove:
-                    if not _remove_empty_original_mountpoint(entry):
-                        logger.error(
-                            "Preserving mount point because it was replaced or is not empty: %s",
-                            entry.mount_dir,
-                        )
-                else:
-                    logger.error(
-                        "Preserving mount point because unmount could not be verified: %s",
-                        entry.mount_dir,
-                    )
-            finally:
-                os.close(entry.mount_fd)
-
-
-def _remove_empty_original_mountpoint(entry: _MountEntry) -> bool:
-    """Remove only the unchanged, empty directory allocated for this mount."""
-    parent_flags = (
-        os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_DIRECTORY", 0)
-    )
-    try:
-        parent_fd = os.open(entry.mount_dir.parent, parent_flags)
-    except OSError:
-        return False
-    try:
-        original = os.fstat(entry.mount_fd)
-        observed = os.stat(
-            entry.mount_dir.name,
-            dir_fd=parent_fd,
-            follow_symlinks=False,
-        )
-        if (
-            not stat.S_ISDIR(observed.st_mode)
-            or observed.st_dev != original.st_dev
-            or observed.st_ino != original.st_ino
-        ):
-            return False
-        os.rmdir(entry.mount_dir.name, dir_fd=parent_fd)
-    except OSError:
-        return False
-    finally:
-        os.close(parent_fd)
-    return True
+            unmount_verified = not entry.mounted or self._broker.unmount(entry.mount_dir)
+            if unmount_verified:
+                logger.debug(
+                    "Preserving verified-unmounted mount point to avoid "
+                    "pathname cleanup races: %s",
+                    entry.mount_dir,
+                )
+            else:
+                logger.error(
+                    "Preserving mount point because unmount could not be verified: %s",
+                    entry.mount_dir,
+                )
 
 
 _mount_cache = _MountCache()

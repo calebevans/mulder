@@ -424,11 +424,11 @@ def test_nested_archive_is_receipted_before_publication(
         *,
         materialized: Path,
         destination: Path,
-    ) -> None:
+    ) -> list[dict[str, object]]:
         assert destination == public_destination
         (destination / "nested").mkdir(parents=True)
         (destination / "nested" / "inner.zip").write_bytes(substituted.getvalue())
-        original_write(
+        return original_write(
             commitment,
             archive,
             materialized=materialized,
@@ -451,6 +451,60 @@ def test_nested_archive_is_receipted_before_publication(
     assert second["status"] == "error"
     assert second["error_type"] == "intake_verification_failed"
     assert not (db_dir / "extracted" / "inner" / "substituted.txt").exists()
+
+
+def test_staged_archive_change_after_receipt_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    committed = io.BytesIO()
+    with zipfile.ZipFile(committed, "w") as inner:
+        inner.writestr("committed.txt", "committed")
+    substituted = io.BytesIO()
+    with zipfile.ZipFile(substituted, "w") as inner:
+        inner.writestr("substituted.txt", "substituted")
+    source = tmp_path / "evidence"
+    source.mkdir()
+    outer = source / "outer.zip"
+    with zipfile.ZipFile(outer, "w") as archive:
+        archive.writestr("nested/inner.zip", committed.getvalue())
+    db_dir = tmp_path / "cases"
+    prepare_evidence_case(source, "case-a", db_dir)
+    app.init_server(db_dir, mem_percent_limit=0, cpu_percent_limit=0)
+    app._tool_dispatch_sync["open_case"]("case-a")
+    original_write = case_tools._write_materialization_receipt
+
+    def substitute_staging_after_receipt(
+        commitment: case_tools._ArchiveCommitment,
+        archive: Path,
+        *,
+        materialized: Path,
+        destination: Path,
+    ) -> list[dict[str, object]]:
+        entries = original_write(
+            commitment,
+            archive,
+            materialized=materialized,
+            destination=destination,
+        )
+        (materialized / "nested" / "inner.zip").write_bytes(substituted.getvalue())
+        return entries
+
+    monkeypatch.setattr(
+        case_tools,
+        "_write_materialization_receipt",
+        substitute_staging_after_receipt,
+    )
+    result = app._tool_dispatch_sync["extract_archive"](str(outer))
+    monkeypatch.setattr(case_tools, "_write_materialization_receipt", original_write)
+    published_inner = db_dir / "extracted" / "outer" / "nested" / "inner.zip"
+    nested = app._tool_dispatch_sync["extract_archive"](
+        str(published_inner), str(db_dir / "extracted" / "inner")
+    )
+
+    assert result["status"] == "error"
+    assert result["error_type"] == "intake_verification_failed"
+    assert nested["status"] == "error"
+    assert nested["error_type"] == "intake_verification_failed"
 
 
 def test_dedicated_autoruns_seat_reads_only_committed_artifact_ids(
