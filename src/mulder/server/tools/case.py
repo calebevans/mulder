@@ -923,6 +923,60 @@ def extract_archive(
     ext = archive.suffix.lower()
     outer_intake = intake_commitment is not None and intake_commitment.relative is None
     extractor: Callable[[Path, Path], list[str]] | None = None
+    from mulder.extractors.classifier import (
+        ClassifiedEvidence,
+        ClassifierConfig,
+        EvidenceClassifier,
+    )
+
+    classifier = EvidenceClassifier(ClassifierConfig())
+    manifest: list[dict[str, object]] | None = None
+
+    def project_classification(
+        classified: list[ClassifiedEvidence],
+        observed_root: Path,
+        published_root: Path,
+        committed: list[dict[str, object]] | None = None,
+    ) -> list[dict[str, object]]:
+        """Project classification without reopening a committed public path."""
+        by_relative = (
+            {str(entry["relative_path"]): entry for entry in committed}
+            if committed is not None
+            else {}
+        )
+        projected: list[dict[str, object]] = []
+        for item in classified:
+            try:
+                relative = item.path.relative_to(observed_root)
+            except ValueError as exc:
+                raise IntakeError("classifier returned a path outside its staged view") from exc
+            entry: dict[str, object] = {
+                "path": str(published_root / relative),
+                "artifact_type": item.artifact_type,
+            }
+            try:
+                if item.path.is_file():
+                    if committed is None:
+                        size = item.path.stat().st_size
+                    else:
+                        committed_entry = by_relative.get(relative.as_posix())
+                        size_value = (
+                            committed_entry.get("size_bytes")
+                            if committed_entry is not None
+                            else None
+                        )
+                        if not isinstance(size_value, int):
+                            raise IntakeError(
+                                "classifier input is absent from the committed materialization"
+                            )
+                        size = size_value
+                    entry["size_bytes"] = size
+                    entry["size_human"] = _human_size(size)
+            except OSError:
+                pass
+            projected.append(entry)
+        return projected
+
     if not outer_intake:
         if ext == ".zip":
             extractor = _extract_zip
@@ -970,22 +1024,37 @@ def extract_archive(
                         intake_commitment, archive
                     ) as snapshot:
                         files = extractor(snapshot, staged)
-                committed_entries = _write_materialization_receipt(
+                committed_entries = _materialization_inventory(staged)
+                classified = classifier.classify(staged)
+                if _materialization_inventory(staged) != committed_entries:
+                    raise IntakeError("archive materialization changed during classification")
+                manifest = project_classification(
+                    classified,
+                    staged,
+                    dest,
+                    committed_entries,
+                )
+                receipt_entries = _write_materialization_receipt(
                     intake_commitment,
                     archive,
                     materialized=staged,
                     destination=dest,
                 )
+                if receipt_entries != committed_entries:
+                    raise IntakeError("archive materialization changed before receipt commit")
                 if dest.exists():
                     dest.rmdir()
                 os.replace(staged, dest)
-                if _materialization_inventory(dest) != committed_entries:
+                if _materialization_inventory(dest) != receipt_entries:
                     raise IntakeError("archive materialization changed during publication")
+                files = [str(entry["relative_path"]) for entry in committed_entries]
         else:
             if extractor is None:  # pragma: no cover - guarded above
                 raise RuntimeError("archive extractor was not selected")
             dest.mkdir(parents=True, exist_ok=True)
             files = extractor(archive, dest)
+            classified = classifier.classify(dest)
+            manifest = project_classification(classified, dest, dest)
     except IntakeError as exc:
         logger.error("Archive intake verification failed for %r: %s", archive, exc)
         return error_response(
@@ -1006,25 +1075,8 @@ def extract_archive(
             (time.monotonic() - t0) * 1000,
         )
 
-    from mulder.extractors.classifier import ClassifierConfig, EvidenceClassifier
-
-    classifier = EvidenceClassifier(ClassifierConfig())
-    classified = classifier.classify(dest)
-
-    manifest: list[dict[str, object]] = []
-    for item in classified:
-        entry: dict[str, object] = {
-            "path": str(item.path),
-            "artifact_type": item.artifact_type,
-        }
-        try:
-            if item.path.is_file():
-                size = item.path.stat().st_size
-                entry["size_bytes"] = size
-                entry["size_human"] = _human_size(size)
-        except OSError:
-            pass
-        manifest.append(entry)
+    if manifest is None:  # pragma: no cover - every successful branch assigns it
+        raise RuntimeError("archive classification was not completed")
 
     type_counts: dict[str, int] = {}
     for mi in manifest:

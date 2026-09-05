@@ -196,10 +196,16 @@ class _MountEntry:
     """Internal bookkeeping for a single cached mount point."""
 
     mount_dir: Path
-    refcount: int = 0
+    leases: set[object] = field(default_factory=set)
+    owner_lease: object | None = None
     ready: threading.Event = field(default_factory=threading.Event)
     error: BaseException | None = None
     mounted: bool = False
+
+    @property
+    def refcount(self) -> int:
+        """Return the number of live, independently releasable callers."""
+        return len(self.leases)
 
 
 class _MountCache:
@@ -224,7 +230,9 @@ class _MountCache:
         The first caller performs the actual mount; subsequent concurrent
         callers for the same canonical path block until that mount finishes,
         then receive the same mount point.  On context exit the reference
-        count is decremented, and the last caller unmounts and cleans up.
+        count is decremented, and the last caller unmounts. The empty mountpoint
+        path is intentionally retained because deleting it would introduce a
+        pathname race with a replacement or remounted tree.
 
         Args:
             image_path: Filesystem path to the disk image file.
@@ -236,49 +244,66 @@ class _MountCache:
             RuntimeError: If the underlying mount operation fails.
         """
         canonical = os.path.realpath(image_path)
+        lease = object()
+        entry: _MountEntry | None = None
         is_owner = False
-
-        with self._lock:
-            if canonical not in self._entries:
-                mount_dir = Path(tempfile.mkdtemp(prefix="mulder_mount_"))
-                self._entries[canonical] = _MountEntry(mount_dir=mount_dir)
-                is_owner = True
-            entry = self._entries[canonical]
-            entry.refcount += 1
-
-        if is_owner:
-            # Once a mount attempt begins, cleanup must conservatively prove
-            # the target unmounted.  A broker can fail after the helper has
-            # already mounted, so its False return is not absence proof.
-            entry.mounted = True
-            try:
-                mounted = self._broker.mount_read_only(Path(image_path), entry.mount_dir)
-                if not mounted:
-                    entry.error = RuntimeError(f"Failed to mount disk image: {image_path}")
-            except BaseException as exc:
-                entry.error = exc
-            finally:
-                entry.ready.set()
-        else:
-            try:
-                entry.ready.wait()
-            except BaseException:
-                self._release(canonical, entry)
-                raise
-
-        if entry.error is not None:
-            failure = entry.error
-            self._release(canonical, entry)
-            if is_owner and not isinstance(failure, Exception):
-                raise failure
-            raise RuntimeError(f"Failed to mount disk image: {image_path}") from failure
-
+        entered = False
         try:
-            yield str(entry.mount_dir)
-        finally:
-            self._release(canonical, entry)
+            with self._lock:
+                entry = self._entries.get(canonical)
+                if entry is None:
+                    mount_dir = Path(tempfile.mkdtemp(prefix="mulder_mount_"))
+                    entry = _MountEntry(
+                        mount_dir=mount_dir,
+                        leases={lease},
+                        owner_lease=lease,
+                    )
+                    is_owner = True
+                    self._entries[canonical] = entry
+                else:
+                    entry.leases.add(lease)
 
-    def _release(self, canonical: str, entry: _MountEntry) -> None:
+            if is_owner:
+                # Once a mount attempt begins, cleanup must conservatively prove
+                # the target unmounted.  A broker can fail after the helper has
+                # already mounted, so its False return is not absence proof.
+                entry.mounted = True
+                try:
+                    mounted = self._broker.mount_read_only(
+                        Path(image_path), entry.mount_dir
+                    )
+                except Exception as exc:
+                    failure = RuntimeError(f"Failed to mount disk image: {image_path}")
+                    entry.error = failure
+                    raise failure from exc
+                except BaseException as exc:
+                    entry.error = exc
+                    raise
+                if not mounted:
+                    failure = RuntimeError(f"Failed to mount disk image: {image_path}")
+                    entry.error = failure
+                    raise failure
+                entry.ready.set()
+            else:
+                entry.ready.wait()
+                if entry.error is not None:
+                    raise RuntimeError(
+                        f"Failed to mount disk image: {image_path}"
+                    ) from entry.error
+
+            entered = True
+            yield str(entry.mount_dir)
+        except BaseException as exc:
+            if entry is not None and is_owner and not entered:
+                if entry.error is None:
+                    entry.error = exc
+                entry.ready.set()
+            raise
+        finally:
+            if entry is not None:
+                self._release(canonical, entry, lease)
+
+    def _release(self, canonical: str, entry: _MountEntry, lease: object) -> None:
         """Decrement refcount and unmount when the last user releases it.
 
         Args:
@@ -287,8 +312,10 @@ class _MountCache:
         """
         do_cleanup = False
         with self._lock:
-            entry.refcount -= 1
-            if entry.refcount == 0:
+            if self._entries.get(canonical) is not entry or lease not in entry.leases:
+                return
+            entry.leases.remove(lease)
+            if not entry.leases:
                 self._entries.pop(canonical, None)
                 do_cleanup = True
 
@@ -315,8 +342,9 @@ def mount_disk_image(image_path: str) -> Iterator[str]:
     """Mount a disk image (E01 or raw) read-only and yield the mount point.
 
     Uses a thread-safe cache so that concurrent callers for the same image
-    share a single mount.  The image is unmounted and the temp directory
-    cleaned up when the last caller exits.
+    share a single mount. The image is unmounted when the last caller exits.
+    Its empty temporary mountpoint is retained for race-free operator cleanup;
+    Mulder never recursively deletes a path that may have been replaced.
 
     Raises ``RuntimeError`` if the image cannot be mounted.
     """

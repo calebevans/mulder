@@ -68,8 +68,10 @@ replayed, or mismatched responses. After mounting, the broker independently
 checks `/proc/self/mountinfo` for the exact target, source/loop backing, and
 `ro,nodev,nosuid,noexec` flags. Unmount success likewise requires the target
 and any E01 intermediate mount to disappear. A failed or ambiguous mount result
-triggers rollback; an unverified unmount preserves the mountpoint for safe
-operator recovery rather than recursively deleting it.
+triggers rollback. Mulder preserves the mountpoint after every unmount result
+for safe operator cleanup rather than racing a replacement or remounted tree
+with pathname-based deletion. Operators may remove verified-empty retained
+mountpoint directories according to their host cleanup policy.
 
 The initial migration covers the shared `run_cli_tool` path used by strings,
 hashdeep, exiftool, ssdeep, and pasco. Legacy direct-process modules are listed

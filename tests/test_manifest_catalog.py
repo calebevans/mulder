@@ -19,6 +19,7 @@ from mulder.adapters import (
 )
 from mulder.adapters.catalog import CATALOG_PAGE_MAX_BYTES, evidence_types, manifest_catalog_page
 from mulder.adapters.intake import CollectorProvenance, IntakeEntry
+from mulder.extractors.classifier import ClassifiedEvidence, EvidenceClassifier
 from mulder.orchestrator.capabilities import (
     DELEGATION_GRANT_ENV,
     DELEGATION_SECRET_ENV,
@@ -505,6 +506,58 @@ def test_staged_archive_change_after_receipt_is_rejected(
     assert result["error_type"] == "intake_verification_failed"
     assert nested["status"] == "error"
     assert nested["error_type"] == "intake_verification_failed"
+
+
+def test_committed_archive_classification_never_reopens_public_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    committed = io.BytesIO()
+    with zipfile.ZipFile(committed, "w") as inner:
+        inner.writestr("committed.txt", "committed")
+    substituted = io.BytesIO()
+    with zipfile.ZipFile(substituted, "w") as inner:
+        inner.writestr("substituted.txt", "substituted")
+    source = tmp_path / "evidence"
+    source.mkdir()
+    outer = source / "outer.zip"
+    with zipfile.ZipFile(outer, "w") as archive:
+        archive.writestr("nested/inner.zip", committed.getvalue())
+    db_dir = tmp_path / "cases"
+    prepare_evidence_case(source, "case-a", db_dir)
+    app.init_server(db_dir, mem_percent_limit=0, cpu_percent_limit=0)
+    app._tool_dispatch_sync["open_case"]("case-a")
+    public_destination = db_dir / "extracted" / "outer"
+    public_inner = public_destination / "nested" / "inner.zip"
+    original_inventory = case_tools._materialization_inventory
+    original_classify = EvidenceClassifier.classify
+    classified_roots: list[Path] = []
+
+    def replace_after_public_inventory(destination: Path) -> list[dict[str, object]]:
+        entries = original_inventory(destination)
+        if destination == public_destination:
+            public_inner.chmod(0o600)
+            public_inner.write_bytes(substituted.getvalue())
+        return entries
+
+    def record_classification(
+        self: EvidenceClassifier, evidence_root: Path
+    ) -> list[ClassifiedEvidence]:
+        classified_roots.append(evidence_root)
+        return original_classify(self, evidence_root)
+
+    monkeypatch.setattr(
+        case_tools,
+        "_materialization_inventory",
+        replace_after_public_inventory,
+    )
+    monkeypatch.setattr(EvidenceClassifier, "classify", record_classification)
+    result = app._tool_dispatch_sync["extract_archive"](str(outer))
+
+    assert result["status"] == "success"
+    assert classified_roots
+    assert public_destination not in classified_roots
+    with zipfile.ZipFile(public_inner) as archive:
+        assert archive.namelist() == ["substituted.txt"]
 
 
 def test_dedicated_autoruns_seat_reads_only_committed_artifact_ids(
