@@ -16,6 +16,7 @@ from mulder.assets.paths import asset_path, asset_search_summary
 from mulder.server.app import mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
+    classify_tool_exit,
     error_response,
     make_tool_call_id,
     require_binary,
@@ -208,6 +209,34 @@ def _parse_msodde_output(stdout: str) -> list[dict[str, object]]:
     ]
 
 
+def _olevba_failure(raw: Any) -> str:
+    """Return olevba's own error message, or ``""`` when it analysed the file.
+
+    olevba's JSON is a list of typed entries, and a run that could not read the
+    document still exits with a valid document::
+
+        {"file": "x.doc", "type": "error", "error": "PathNotFoundException",
+         "message": "Given path does not exist: 'x.doc'"}
+
+    The entry carries no ``macros`` and no ``analysis``, so a parser that only
+    looks for those sees an empty result and the document is scored ``clean``.
+    Verified against oletools 0.60.2.
+    """
+    entries: list[Any]
+    if isinstance(raw, dict):
+        entries = [raw, *raw.get("results", [])]
+    elif isinstance(raw, list):
+        entries = list(raw)
+    else:
+        return ""
+
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("type") != "error":
+            continue
+        return str(entry.get("message") or entry.get("error") or "olevba reported an error")[:500]
+    return ""
+
+
 def _analyze_macros_olevba(
     file_path: Path,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], bool]:
@@ -239,6 +268,10 @@ def _analyze_macros_olevba(
     # Module invocation always execs successfully, so a broken oletools would
     # otherwise be indistinguishable from "this document has no macros" — the
     # worst possible false negative for a potentially malicious document.
+    #
+    # The exit code alone cannot carry this decision: olevba's RETURN_WARNINGS
+    # is 1, so a non-zero status is how a *successful* analysis reports that it
+    # found something. Failures are recognised from the output instead.
     if proc.returncode != 0 and not output:
         raise OSError(
             f"olevba failed (exit {proc.returncode}): {proc.stderr.strip()[:500] or 'no output'}"
@@ -248,9 +281,13 @@ def _analyze_macros_olevba(
 
     try:
         raw: Any = json.loads(output)
-    except json.JSONDecodeError:
-        logger.warning("Failed to parse olevba JSON output for %s", file_path)
-        return [], [], False
+    except json.JSONDecodeError as exc:
+        # Unparseable output is a broken run, not a clean document.
+        raise OSError(f"olevba emitted unparseable JSON (exit {proc.returncode}): {exc}") from exc
+
+    failure = _olevba_failure(raw)
+    if failure:
+        raise OSError(f"olevba failed to analyse the document: {failure}")
 
     macros: list[dict[str, object]] = []
     indicators: list[dict[str, object]] = []
@@ -298,18 +335,27 @@ def _analyze_macros_olevba(
 def _assess_office_risk(
     macros: list[dict[str, object]],
     has_vba: bool,
+    dde_links: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """Assess risk level for an Office document.
+
+    A DDE document carries no VBA at all -- that is the point of the
+    technique -- so a verdict computed from macros alone short-circuits to
+    ``clean`` for a ``DDEAUTO c:\\windows\\system32\\cmd.exe`` maldoc, which
+    is the whole reason ``analyze_dde`` exists.
 
     Args:
         macros: Extracted macro information.
         has_vba: Whether VBA macros were detected.
+        dde_links: DDE links found by msodde, if the analysis ran.
 
     Returns:
         Dict with risk_level, auto_exec, suspicious flags, and reasons.
     """
     reasons: list[str] = []
+    links = list(dde_links or [])
     auto_exec = any(m.get("is_auto_exec") for m in macros)
+    dde_auto = any("DDEAUTO" in str(link.get("field_type", "")).upper() for link in links)
 
     has_suspicious = any(m.get("suspicious_keywords") for m in macros)
 
@@ -338,8 +384,17 @@ def _assess_office_risk(
         reasons.append("Downloads content from external sources")
     if has_obfuscation:
         reasons.append("Character obfuscation detected")
+    if links:
+        reasons.append(
+            f"{len(links)} DDE link(s) present"
+            + (" including an auto-executing one" if dde_auto else "")
+        )
 
-    if not has_vba:
+    if links:
+        # A DDE link executes a command when the document is opened (DDEAUTO)
+        # or when the user accepts one prompt. Either way this is not clean.
+        risk_level = "malicious" if dde_auto else "high"
+    elif not has_vba:
         risk_level = "clean"
     elif auto_exec and (has_execute or has_download):
         risk_level = "malicious"
@@ -359,6 +414,7 @@ def _assess_office_risk(
         "write_to_filesystem": has_execute,
         "external_connections": has_download,
         "obfuscation_detected": has_obfuscation,
+        "dde_links_present": bool(links),
         "reasons": reasons,
     }
 
@@ -395,6 +451,13 @@ def _run_pdfid(file_path: Path) -> list[dict[str, object]]:
         timeout=_PDFID_TIMEOUT,
         check=False,
     )
+
+    # A pdfid that crashed prints a traceback and no keyword lines, which is
+    # indistinguishable from a PDF with no risky keywords -- and the caller
+    # scores the second as clean.
+    verdict, message = classify_tool_exit(proc, "pdfid", produced_output=bool(proc.stdout.strip()))
+    if verdict == "failed":
+        raise OSError(message)
 
     indicators: list[dict[str, object]] = []
     for line in proc.stdout.splitlines():
@@ -675,10 +738,10 @@ def analyze_office_document(
             (time.monotonic() - t0) * 1000,
         )
 
-    risk = _assess_office_risk(macros, has_vba)
-
-    # DDE analysis via msodde if requested and available
+    # DDE analysis via msodde if requested and available. It runs before the
+    # risk assessment because its result is an input to that assessment.
     dde_links: list[dict[str, object]] = []
+    dde_warning = ""
     if analyze_dde:
         try:
             proc = subprocess.run(
@@ -692,16 +755,17 @@ def analyze_office_document(
             # silently as "no DDE links found". msodde always prints its banner
             # to stdout, so a stdout-emptiness test here would never fire.
             if proc.returncode != 0:
-                logger.warning(
-                    "msodde failed for %s (exit %s): %s",
-                    file_path,
-                    proc.returncode,
-                    proc.stderr.strip()[:500] or proc.stdout.strip()[:500] or "no output",
+                dde_warning = f"msodde exited {proc.returncode}; DDE analysis did not run: " + (
+                    proc.stderr.strip()[:500] or proc.stdout.strip()[:500] or "no output"
                 )
+                logger.warning("msodde failed for %s: %s", file_path, dde_warning)
             else:
                 dde_links = _parse_msodde_output(proc.stdout)
-        except (subprocess.TimeoutExpired, OSError):
-            logger.debug("msodde analysis failed for %s", file_path)
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            dde_warning = f"DDE analysis did not run: {type(exc).__name__}"
+            logger.debug("msodde analysis failed for %s: %s", file_path, exc)
+
+    risk = _assess_office_risk(macros, has_vba, dde_links)
 
     index_parts: list[str] = [
         f"File: {file_path}",
@@ -712,6 +776,11 @@ def analyze_office_document(
         index_parts.append(f"Module: {m.get('module_name', 'unknown')}")
         if extract_macros:
             index_parts.append(str(m.get("source_code", "")))
+    # The DDE command is the payload of a DDE maldoc. Leaving it out of the
+    # indexed text means no case-wide search for cmd.exe or powershell can
+    # ever reach it.
+    for link in dde_links:
+        index_parts.append(f"DDE {link.get('field_type', 'DDE')}: {link.get('command', '')}")
     index_text = "\n".join(index_parts)
 
     summary = extract_and_index(index_text, "office.analysis", file_path, "oletools")
@@ -724,6 +793,12 @@ def analyze_office_document(
     summary["macros"] = macros
     summary["indicators"] = indicators
     summary["dde_links"] = dde_links
+    # Without this an agent cannot tell "no DDE links in this document" from
+    # "DDE analysis did not run", which is the false negative the code above
+    # already says must not happen.
+    summary["dde_analyzed"] = analyze_dde and not dde_warning
+    if dde_warning:
+        summary["warning"] = dde_warning
     summary["risk_assessment"] = risk
     summary["macro_count"] = len(macros)
     summary["has_vba"] = has_vba
