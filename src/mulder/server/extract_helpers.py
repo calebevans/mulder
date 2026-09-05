@@ -197,10 +197,13 @@ class _MountEntry:
 
     mount_dir: Path
     leases: set[object] = field(default_factory=set)
-    owner_lease: object | None = None
     ready: threading.Event = field(default_factory=threading.Event)
+    closed: threading.Event = field(default_factory=threading.Event)
     error: BaseException | None = None
-    mounted: bool = False
+    mount_attempted: bool = False
+    closing: bool = False
+    cleanup_lease: object | None = None
+    cleanup_verified: bool | None = None
 
     @property
     def refcount(self) -> int:
@@ -249,25 +252,32 @@ class _MountCache:
         is_owner = False
         entered = False
         try:
-            with self._lock:
-                entry = self._entries.get(canonical)
-                if entry is None:
-                    mount_dir = Path(tempfile.mkdtemp(prefix="mulder_mount_"))
-                    entry = _MountEntry(
-                        mount_dir=mount_dir,
-                        leases={lease},
-                        owner_lease=lease,
-                    )
-                    is_owner = True
-                    self._entries[canonical] = entry
-                else:
-                    entry.leases.add(lease)
+            while True:
+                wait_for_close: threading.Event | None = None
+                with self._lock:
+                    entry = self._entries.get(canonical)
+                    if entry is None:
+                        mount_dir = Path(tempfile.mkdtemp(prefix="mulder_mount_"))
+                        entry = _MountEntry(
+                            mount_dir=mount_dir,
+                            leases={lease},
+                        )
+                        is_owner = True
+                        self._entries[canonical] = entry
+                    elif entry.closing:
+                        wait_for_close = entry.closed
+                    else:
+                        entry.leases.add(lease)
+                if wait_for_close is None:
+                    break
+                entry = None
+                wait_for_close.wait()
 
             if is_owner:
                 # Once a mount attempt begins, cleanup must conservatively prove
                 # the target unmounted.  A broker can fail after the helper has
                 # already mounted, so its False return is not absence proof.
-                entry.mounted = True
+                entry.mount_attempted = True
                 try:
                     mounted = self._broker.mount_read_only(
                         Path(image_path), entry.mount_dir
@@ -304,34 +314,69 @@ class _MountCache:
                 self._release(canonical, entry, lease)
 
     def _release(self, canonical: str, entry: _MountEntry, lease: object) -> None:
-        """Decrement refcount and unmount when the last user releases it.
+        """Release one lease and finish last-user cleanup before cancellation.
 
         Args:
             canonical: Canonical (realpath) cache key.
             entry: The mount entry being released.
         """
-        do_cleanup = False
-        with self._lock:
-            if self._entries.get(canonical) is not entry or lease not in entry.leases:
-                return
-            entry.leases.remove(lease)
-            if not entry.leases:
-                self._entries.pop(canonical, None)
-                do_cleanup = True
+        pending_cancellation: BaseException | None = None
+        while True:
+            try:
+                if self._mark_lease_released(canonical, entry, lease):
+                    self._finish_cleanup(canonical, entry)
+                break
+            except BaseException as exc:
+                if isinstance(exc, Exception):
+                    raise
+                if pending_cancellation is None:
+                    pending_cancellation = exc
+        if pending_cancellation is not None:
+            raise pending_cancellation
 
-        if do_cleanup:
-            unmount_verified = not entry.mounted or self._broker.unmount(entry.mount_dir)
-            if unmount_verified:
-                logger.debug(
-                    "Preserving verified-unmounted mount point to avoid "
-                    "pathname cleanup races: %s",
-                    entry.mount_dir,
+    def _mark_lease_released(
+        self,
+        canonical: str,
+        entry: _MountEntry,
+        lease: object,
+    ) -> bool:
+        """Idempotently detach a lease and identify the last-user transition."""
+        with self._lock:
+            current = self._entries.get(canonical)
+            if current is not entry:
+                return entry.cleanup_lease is lease and not entry.closed.is_set()
+            if lease in entry.leases:
+                if len(entry.leases) == 1:
+                    entry.closing = True
+                    entry.cleanup_lease = lease
+                entry.leases.remove(lease)
+            return entry.cleanup_lease is lease and not entry.closed.is_set()
+
+    def _finish_cleanup(self, canonical: str, entry: _MountEntry) -> None:
+        """Idempotently unmount, preserve the path, and publish cache closure."""
+        if entry.cleanup_verified is None:
+            try:
+                entry.cleanup_verified = (
+                    not entry.mount_attempted or self._broker.unmount(entry.mount_dir)
                 )
-            else:
-                logger.error(
-                    "Preserving mount point because unmount could not be verified: %s",
-                    entry.mount_dir,
-                )
+            except Exception:
+                logger.exception("Mount broker raised during cleanup: %s", entry.mount_dir)
+                entry.cleanup_verified = False
+        if entry.cleanup_verified:
+            logger.debug(
+                "Preserving verified-unmounted mount point to avoid "
+                "pathname cleanup races: %s",
+                entry.mount_dir,
+            )
+        else:
+            logger.error(
+                "Preserving mount point because unmount could not be verified: %s",
+                entry.mount_dir,
+            )
+        with self._lock:
+            if self._entries.get(canonical) is entry:
+                self._entries.pop(canonical)
+        entry.closed.set()
 
 
 _mount_cache = _MountCache()
