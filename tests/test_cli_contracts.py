@@ -16,6 +16,7 @@ Every assertion below was checked against the pinned release of the tool
 
 from __future__ import annotations
 
+import argparse
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -46,17 +47,104 @@ class TestZircoliteArgv:
         assert "--outfile" in argv
 
 
-class TestCapaFlossArgv:
-    def test_capa_uses_json_not_format_json(self) -> None:
-        source = Path("src/mulder/server/tools/binary.py").read_text()
-        assert '[capa_bin, "--json", "--quiet"]' in source
-        assert '"--format",\n        "json"' not in source
+def _floss_parser() -> argparse.ArgumentParser:
+    """floss 3.1.0's parser, for the options mulder passes.
 
-    def test_floss_excludes_static_with_no_static(self) -> None:
-        source = Path("src/mulder/server/tools/binary.py").read_text()
-        # A bare `--only` is nargs="+" and swallowed the sample path.
-        assert 'cmd.extend(["--no", "static"])' in source
-        assert 'cmd.append("--only")' not in source
+    Mirrors floss/main.py v3.1.0: `-n/--minimum-length`, a positional
+    `sample`, `--no`/`--only` as ``action="extend", nargs="+"`` over
+    ``{static,stack,tight,decoded}``, `-f/--format` over
+    ``{auto,pe,sc32,sc64}`` and `-j/--json`. Parsing mulder's argv with it
+    is what catches a flag rename that argparse would still reject.
+    """
+
+    class _Extend(argparse.Action):
+        def __call__(  # type: ignore[override]
+            self,
+            parser: argparse.ArgumentParser,
+            namespace: argparse.Namespace,
+            values: Any,
+            option_string: str | None = None,
+        ) -> None:
+            items = list(getattr(namespace, self.dest, None) or [])
+            items.extend(values)
+            setattr(namespace, self.dest, items)
+
+    types = ["static", "stack", "tight", "decoded"]
+    parser = argparse.ArgumentParser(prog="floss", add_help=False)
+    parser.register("action", "extend", _Extend)
+    parser.add_argument("-n", "--minimum-length", dest="min_length", type=int, default=4)
+    parser.add_argument("sample")
+    parser.add_argument(
+        "--no", action="extend", dest="disabled_types", nargs="+", choices=types, default=[]
+    )
+    parser.add_argument(
+        "--only", action="extend", dest="enabled_types", nargs="+", choices=types, default=[]
+    )
+    parser.add_argument("-f", "--format", choices=["auto", "pe", "sc32", "sc64"], default="auto")
+    parser.add_argument("-j", "--json", action="store_true")
+    return parser
+
+
+def _capa_parser() -> argparse.ArgumentParser:
+    """capa 9.4.0's parser, for the options mulder passes."""
+    parser = argparse.ArgumentParser(prog="capa", add_help=False)
+    parser.add_argument("-q", "--quiet", action="store_true")
+    parser.add_argument("-j", "--json", action="store_true")
+    parser.add_argument(
+        "-f",
+        "--format",
+        choices=["auto", "pe", "dotnet", "elf", "sc32", "sc64", "cape", "freeze"],
+        default="auto",
+    )
+    parser.add_argument("-r", "--rules", action="append", default=[])
+    parser.add_argument("sample")
+    return parser
+
+
+class TestCapaFlossArgv:
+    """Parse mulder's argv with each tool's own parser, not with a substring."""
+
+    @staticmethod
+    def _argv(tool: str, tmp_path: Path, **kwargs: Any) -> list[str]:
+        from mulder.server.tools import binary as b
+
+        sample = tmp_path / "sample.bin"
+        sample.write_bytes(b"MZ\x90\x00")
+        fake = tmp_path / tool
+        fake.write_text("#!/bin/sh\n")
+        fake.chmod(0o755)
+
+        with (
+            patch.object(b, "require_binary", return_value=str(fake)),
+            patch.object(b, "extract_and_index", return_value={}),
+            patch.object(b.subprocess, "run", return_value=_completed(stdout="{}")) as run,
+        ):
+            fn = b.run_capa if tool == "capa" else b.run_floss
+            fn.__wrapped__("case", str(sample), **kwargs)  # type: ignore[attr-defined]
+        return list(run.call_args[0][0])
+
+    def test_capa_argv_parses(self, tmp_path: Path) -> None:
+        argv = self._argv("capa", tmp_path)
+        # capa's --format takes a *sample* format; "--format json" exits 2.
+        assert "--format" not in argv
+        _capa_parser().parse_args(argv[1:])
+
+    def test_floss_argv_parses_with_static_strings(self, tmp_path: Path) -> None:
+        argv = self._argv("floss", tmp_path, include_static=True)
+        ns = _floss_parser().parse_args(argv[1:])
+        assert ns.json is True
+        assert ns.disabled_types == []
+
+    def test_floss_argv_parses_without_static_strings(self, tmp_path: Path) -> None:
+        argv = self._argv("floss", tmp_path, include_static=False)
+        ns = _floss_parser().parse_args(argv[1:])
+        assert ns.disabled_types == ["static"]
+        assert ns.sample.endswith("sample.bin")
+
+    def test_floss_sample_precedes_the_type_flags(self, tmp_path: Path) -> None:
+        """`--no static <sample>` still exits 2: nargs="+" eats the path."""
+        argv = self._argv("floss", tmp_path, include_static=False)
+        assert argv.index("--no") > argv.index(next(a for a in argv if a.endswith("sample.bin")))
 
 
 class TestChainsawArgv:

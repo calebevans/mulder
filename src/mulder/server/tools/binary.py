@@ -1021,10 +1021,13 @@ def run_floss(
         "--json",
         "--minimum-length",
         str(minimum_length),
+        # The sample must precede --no/--only: both are nargs="+" with
+        # `choices`, so argparse consumes the following path as a string
+        # type and exits 2.
+        str(target),
     ]
     if not include_static:
         cmd.extend(["--no", "static"])
-    cmd.append(str(target))
 
     floss_timeout = adaptive_timeout(file_path, base=_FLOSS_TIMEOUT)
     try:
