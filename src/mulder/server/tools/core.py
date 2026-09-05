@@ -27,12 +27,12 @@ from mulder.server.helpers import (
     _PREVIEW_CHAR_LIMIT,
     audited_tool,
     extract_module_names,
-    extract_pid,
     extract_pids_from_windows,
     hash_output,
     make_tool_call_id,
     serialize_windows,
     truncate_raw_text,
+    window_has_pid,
     windowed_response,
 )
 from mulder.server.tool_access import PLANNERS, Role, tool_access
@@ -692,7 +692,7 @@ def get_process_environment(pid: int) -> dict[str, object]:
 
     pid_str = str(pid)
     search_results = ctx.db.search_windows(pid_str, source_name=_SRC_ENVARS)
-    matching = [row[0] for row in search_results if extract_pid(row[0].raw_text) == pid]
+    matching = [row[0] for row in search_results if window_has_pid(row[0].raw_text, pid)]
     elapsed = (time.monotonic() - t0) * 1000
     return windowed_response(
         tc_id, matching, _SRC_ENVARS, "get_process_environment", {"pid": pid}, elapsed
@@ -714,7 +714,7 @@ def get_process_privileges(pid: int) -> dict[str, object]:
 
     pid_str = str(pid)
     search_results = ctx.db.search_windows(pid_str, source_name=_SRC_PRIVS)
-    matching = [row[0] for row in search_results if extract_pid(row[0].raw_text) == pid]
+    matching = [row[0] for row in search_results if window_has_pid(row[0].raw_text, pid)]
     elapsed = (time.monotonic() - t0) * 1000
     return windowed_response(
         tc_id, matching, _SRC_PRIVS, "get_process_privileges", {"pid": pid}, elapsed

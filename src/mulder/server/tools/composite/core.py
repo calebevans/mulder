@@ -95,7 +95,7 @@ _EXE_CMD = "cmd.exe"
 
 _PORT_RE = re.compile(r":(\d{1,5})(?:\s|$)")
 _PROC_NAME_RE = re.compile(r"^([^\t]+\.exe)", re.MULTILINE | re.IGNORECASE)
-_PPID_RE = re.compile(r"(?:^|\t)(\d{1,6})\t(\d{1,6})(?:\t|$)", re.MULTILINE)
+_PPID_RE = re.compile(r"(?:^|\t)(\d{1,6})\t(\d{1,6})(?:\t|$)")
 
 # ---------------------------------------------------------------------------
 # Caching
@@ -295,16 +295,18 @@ def _build_pid_metadata(
     parent_map: dict[int, int] = {}
     pid_names: dict[int, str] = {}
     for w in pstree_wins:
-        m = _PPID_RE.search(w.raw_text)
-        if m:
-            parent_map[int(m.group(1))] = int(m.group(2))
-        pid = extract_pid(w.raw_text)
-        if pid is not None:
-            pid_names[pid] = _extract_process_name(w.raw_text)
+        for line in w.raw_text.splitlines():
+            m = _PPID_RE.search(line)
+            if m:
+                parent_map[int(m.group(1))] = int(m.group(2))
+            pid = extract_pid(line)
+            if pid is not None:
+                pid_names[pid] = _extract_process_name(line)
     for w in cmdline_wins:
-        pid = extract_pid(w.raw_text)
-        if pid is not None and pid not in pid_names:
-            pid_names[pid] = _extract_process_name(w.raw_text)
+        for line in w.raw_text.splitlines():
+            pid = extract_pid(line)
+            if pid is not None and pid not in pid_names:
+                pid_names[pid] = _extract_process_name(line)
     return parent_map, pid_names
 
 

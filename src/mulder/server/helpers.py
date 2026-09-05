@@ -398,38 +398,77 @@ def error_response(
     return result
 
 
-_PID_RE = re.compile(r"(?:^|\t)(\d{1,6})(?:\t|$)", re.MULTILINE)
-_MODULE_NAME_RE = re.compile(r"^([^\t]+\.sys)", re.MULTILINE | re.IGNORECASE)
+_PID_RE = re.compile(r"(?:^|\t)(\d{1,6})(?:\t|$)")
+_MODULE_NAME_RE = re.compile(r"^([^\t]+\.sys)", re.IGNORECASE)
 
 
 def extract_pid(text: str) -> int | None:
-    """Parse the first PID value from a Volatility output line."""
-    m = _PID_RE.search(text)
-    if m:
-        val = int(m.group(1))
-        if val > 0:
-            return val
+    """The first PID value in *text*.
+
+    Prefer :func:`extract_pids` when *text* is a whole window: a window holds
+    many records, and "the first one" is rarely the question being asked.
+    """
+    for line in text.splitlines():
+        m = _PID_RE.search(line)
+        if m:
+            val = int(m.group(1))
+            if val > 0:
+                return val
     return None
 
 
+def extract_pids(text: str) -> list[int]:
+    """Every PID in *text*, one per record, in order and without duplicates.
+
+    One window holds many records. Reading only the first -- which is what
+    ``re.search`` over the whole window did -- means a window of forty
+    processes contributes exactly one of them and the other thirty-nine are
+    invisible to every correlation built on top: process trees miss parents,
+    "hidden process" diffs compare two differently-sampled sets and report
+    processes that are in both, and per-PID lookups silently return nothing.
+
+    Which column holds the PID still varies by Volatility plugin
+    (``windows.pslist`` puts it first, ``windows.netscan`` eighth), so the
+    per-line match is deliberately unchanged from what it always was. Only
+    the number of lines examined changes: all of them, rather than one.
+    """
+    seen: dict[int, None] = {}
+    for line in text.splitlines():
+        m = _PID_RE.search(line)
+        if m:
+            val = int(m.group(1))
+            if val > 0:
+                seen.setdefault(val, None)
+    return list(seen)
+
+
+def window_has_pid(text: str, pid: int) -> bool:
+    """Whether *text* contains a record for *pid*."""
+    return pid in extract_pids(text)
+
+
 def extract_pids_from_windows(windows: Sequence[Any]) -> dict[int, list[Any]]:
-    """Group windows by the PID found in their text."""
+    """Map every PID in every window to the windows that mention it."""
     pid_map: dict[int, list[Any]] = defaultdict(list)
     for w in windows:
-        pid = extract_pid(w.raw_text)
-        if pid is not None:
+        for pid in extract_pids(w.raw_text):
             pid_map[pid].append(w)
     return dict(pid_map)
 
 
 def extract_module_names(windows: Sequence[Any]) -> dict[str, list[Any]]:
-    """Group windows by the kernel module name found in their text."""
+    """Map every kernel module name in every window to the windows naming it."""
     mod_map: dict[str, list[Any]] = defaultdict(list)
     for w in windows:
-        m = _MODULE_NAME_RE.search(w.raw_text)
-        if m:
+        seen: set[str] = set()
+        for line in w.raw_text.splitlines():
+            m = _MODULE_NAME_RE.match(line)
+            if not m:
+                continue
             name = m.group(1).strip().lower()
-            mod_map[name].append(w)
+            if name not in seen:
+                seen.add(name)
+                mod_map[name].append(w)
     return dict(mod_map)
 
 
