@@ -153,7 +153,28 @@ class TestFormatRecords:
 
     def test_one_huge_field_cannot_fill_a_window(self) -> None:
         line = format_records([{"a": "x" * 100_000}])[0]
-        assert len(line) < 1000
+        assert len(line) < 4096
+
+    def test_a_realistic_event_document_keeps_its_late_fields(self) -> None:
+        """Chainsaw falls back to the whole event document for `event_data`.
+
+        That is 2-4 KB of JSON, and the fields an analyst searches for are not
+        the alphabetically first ones. A tight per-field cap would keep
+        `CommandLine` (which sorts early) and silently drop the rest.
+        """
+        document = {
+            "Channel": "Microsoft-Windows-Sysmon/Operational",
+            "CommandLine": "powershell.exe -enc SQBFAFgA",
+            "Image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+            "ParentCommandLine": "C:\\Program Files\\Microsoft Office\\winword.exe /n",
+            "TargetUserName": "svc_backup",
+            "UtcTime": "2024-03-11 09:14:02.113",
+            "_padding": "y" * 800,
+        }
+        line = format_records([{"event_data": document}])[0]
+        assert "ParentCommandLine" in line
+        assert "svc_backup" in line
+        assert "winword.exe" in line
 
     def test_none_is_empty(self) -> None:
         assert format_records([{"a": None, "b": "z"}], ["a", "b"]) == ["\tz"]

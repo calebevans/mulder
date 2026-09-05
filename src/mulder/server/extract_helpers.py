@@ -28,7 +28,12 @@ logger = logging.getLogger(__name__)
 
 _WINDOW_CHAR_BUDGET = 4096
 
-_RECORD_FIELD_CHARS = 400
+# Chainsaw falls back to the whole event document for `event_data`, which is
+# 2-4 KB of JSON. 400 characters cut everything past the first few keys --
+# Image, ParentCommandLine, TargetUserName -- so the fields an analyst
+# actually searches for were truncated away. 2000 still leaves room for the
+# other nine columns inside one 4096-character window.
+_RECORD_FIELD_CHARS = 2000
 
 
 def _record_field(value: object) -> str:
