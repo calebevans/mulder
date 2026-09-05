@@ -5,14 +5,19 @@ Tier 1 tools: help the agent orient before running any extractions.
 
 from __future__ import annotations
 
+import bz2
+import gzip
 import hashlib
+import json
 import logging
+import lzma
 import os
 import shutil
 import subprocess
 import tarfile
 import time
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 from mulder.server.app import (
@@ -447,6 +452,53 @@ def _is_contained(dest: Path, member_name: str) -> bool:
     return target == resolved_dest or resolved_dest in target.parents
 
 
+_COMPLETION_MARKER = ".mulder-extraction-complete.json"
+"""Written only after an extraction finishes, and read to decide idempotency."""
+
+
+def _extraction_is_complete(dest: Path, archive: Path) -> bool:
+    """Whether *dest* holds a finished extraction of *archive*.
+
+    Args:
+        dest: The extraction directory.
+        archive: The archive it should contain.
+
+    Returns:
+        True only if a completion marker is present and names this archive at
+        its current size. A directory that merely has files in it is a
+        previous attempt that may have failed part-way.
+    """
+    marker = dest / _COMPLETION_MARKER
+    if not marker.is_file():
+        return False
+    try:
+        recorded = json.loads(marker.read_text())
+    except (OSError, json.JSONDecodeError):
+        return False
+    try:
+        size = archive.stat().st_size
+    except OSError:
+        return False
+    return bool(recorded.get("archive") == str(archive) and recorded.get("archive_size") == size)
+
+
+def _mark_extraction_complete(dest: Path, archive: Path, file_count: int) -> None:
+    """Record that *archive* was fully extracted into *dest*."""
+    try:
+        (dest / _COMPLETION_MARKER).write_text(
+            json.dumps(
+                {
+                    "archive": str(archive),
+                    "archive_size": archive.stat().st_size,
+                    "files": file_count,
+                    "completed_utc": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+        )
+    except OSError as exc:  # pragma: no cover - a full disk, already reported
+        logger.warning("Could not write extraction marker in %s: %s", dest, exc)
+
+
 def _archive_slot(archive: Path) -> str:
     """A per-archive extraction directory name that cannot collide.
 
@@ -506,8 +558,16 @@ def _extract_zip(archive: Path, dest: Path) -> tuple[list[str], list[str]]:
 
 
 def _listing(dest: Path) -> list[str]:
-    """Files under *dest*, as paths relative to it."""
-    return [str(f.relative_to(dest)) for f in dest.rglob("*") if f.is_file()]
+    """Files under *dest*, as paths relative to it.
+
+    The completion marker is mulder's own bookkeeping, not extracted evidence,
+    so it never appears in a file list handed to an analyst or an agent.
+    """
+    return [
+        str(f.relative_to(dest))
+        for f in dest.rglob("*")
+        if f.is_file() and f.name != _COMPLETION_MARKER
+    ]
 
 
 def _safe_tar_filter(member: tarfile.TarInfo, path: str) -> tarfile.TarInfo | None:
@@ -573,6 +633,48 @@ def _extract_tar(archive: Path, dest: Path) -> tuple[list[str], list[str]]:
             tf.extract(checked, dest, filter="tar")
 
     return _listing(dest), skipped
+
+
+_SINGLE_FILE_DECOMPRESSORS: dict[str, object] = {
+    ".gz": gzip.open,
+    ".bz2": bz2.open,
+    ".xz": lzma.open,
+    ".lzma": lzma.open,
+}
+"""Compressors that wrap one file rather than an archive."""
+
+
+def _extract_single_file(archive: Path, dest: Path) -> tuple[list[str], list[str]]:
+    """Decompress a plain .gz/.bz2/.xz stream into *dest*.
+
+    ``auth.log.gz`` is a gzip stream, not a tar. Handing it to
+    ``tarfile.open(..., "r:*")`` raises ``ReadError: file could not be opened
+    successfully``, so compressed single-file evidence -- which is most of the
+    Linux logs in a triage collection -- always failed to extract.
+
+    Returns:
+        (relative file paths, skipped member names -- always empty here).
+
+    Raises:
+        ArchiveLimitError: If the stream expands past the size cap.
+    """
+    opener = _SINGLE_FILE_DECOMPRESSORS[archive.suffix.lower()]
+    out_name = archive.stem or archive.name
+    out_path = dest / out_name
+
+    written = 0
+    with opener(archive, "rb") as src, out_path.open("wb") as dst:  # type: ignore[operator]
+        while chunk := src.read(1024 * 1024):
+            written += len(chunk)
+            if written > MAX_EXTRACT_BYTES:
+                dst.close()
+                out_path.unlink(missing_ok=True)
+                raise ArchiveLimitError(
+                    f"{archive.name} expands to more than {MAX_EXTRACT_BYTES // 1024**3} GiB"
+                )
+            dst.write(chunk)
+
+    return _listing(dest), []
 
 
 def _extract_7z(archive: Path, dest: Path) -> tuple[list[str], list[str]]:
@@ -654,9 +756,13 @@ def extract_archive(
         # populated directory and hands back the first host's files.
         dest = extract_root / _archive_slot(archive)
 
-    # Idempotent: if already extracted, return the existing files
-    if dest.exists() and any(dest.iterdir()):
-        existing_files = [str(f.relative_to(dest)) for f in dest.rglob("*") if f.is_file()]
+    # Idempotent, but only for an extraction that actually finished. A
+    # non-empty directory is not evidence of completion: a run that timed out
+    # after 40 of 900 files leaves one behind, and treating that as done
+    # returned those 40 with a message to proceed, losing the other 860
+    # silently. Completion is recorded explicitly instead.
+    if _extraction_is_complete(dest, archive):
+        existing_files = _listing(dest)
         result: dict[str, object] = {
             "tool_call_id": tc_id,
             "status": "already_extracted",
@@ -692,12 +798,14 @@ def extract_archive(
     try:
         if ext == ".zip":
             files, skipped = _extract_zip(archive, dest)
-        elif (
-            ext in (".tar", ".tgz")
-            or name_lower.endswith((".tar.gz", ".tar.bz2"))
-            or (ext in (".gz", ".bz2") and ".tar" not in name_lower)
+        elif ext in (".tar", ".tgz", ".tbz2", ".txz") or name_lower.endswith(
+            (".tar.gz", ".tar.bz2", ".tar.xz")
         ):
             files, skipped = _extract_tar(archive, dest)
+        elif ext in _SINGLE_FILE_DECOMPRESSORS:
+            # A plain .gz/.bz2/.xz wraps one file, not an archive; tarfile
+            # cannot read it.
+            files, skipped = _extract_single_file(archive, dest)
         elif ext in (".7z", ".rar") or ".7z." in name_lower:
             if not shutil.which("7z"):
                 return error_response(
@@ -766,6 +874,8 @@ def extract_archive(
     for mi in manifest:
         t = str(mi["artifact_type"])
         type_counts[t] = type_counts.get(t, 0) + 1
+
+    _mark_extraction_complete(dest, archive, len(files))
 
     result = {
         "tool_call_id": tc_id,
