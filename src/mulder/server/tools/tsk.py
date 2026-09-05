@@ -16,6 +16,7 @@ import threading
 import time
 
 from mulder.models import WindowRow
+from mulder.patterns import parse_mmls_rows
 from mulder.server import source_names as _sn
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
@@ -39,11 +40,6 @@ _ICAT_TIMEOUT = 30
 _ISTAT_TIMEOUT = 15
 _MAX_TEXT_BYTES = 1024 * 1024  # 1 MB cap for text file extraction
 
-# Matches mmls partition rows to extract the offset used during ingest.
-_MMLS_ROW_RE = re.compile(
-    r"^\d+:\d+\s+(\d+)\s+\d+\s+(\d+)\s+(.+)$",
-    re.MULTILINE,
-)
 _NTFS_INDICATORS = ("ntfs", "exfat", "0x07", "win95 fat", "0x0b", "0x0c")
 _LINUX_INDICATORS = ("linux", "0x83", "ext", "0x8e")
 
@@ -84,10 +80,7 @@ def _find_tsk_source_path() -> str:
 
 def _parse_offset_from_windows(mmls_text: str) -> int:
     """Parse partition offset from mmls text, preferring NTFS then Linux."""
-    rows: list[tuple[int, int, str]] = [
-        (int(m.group(1)), int(m.group(2)), m.group(3).strip().lower())
-        for m in _MMLS_ROW_RE.finditer(mmls_text)
-    ]
+    rows = parse_mmls_rows(mmls_text)
     if not rows:
         return 0
 
