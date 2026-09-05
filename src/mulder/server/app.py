@@ -267,6 +267,42 @@ def slugify(name: str) -> str:
     return slug.strip("-") or "case"
 
 
+CASE_ID_RE: re.Pattern[str] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+"""A case ID is one filesystem path segment, and nothing more.
+
+Every case ID becomes a path: ``db_dir / f"{case_id}.db"``, plus the sidecar
+files beside it. ``slugify`` guarantees that shape, but it was only applied to
+IDs mulder derived itself -- an ID supplied by an agent went to the filesystem
+verbatim.
+"""
+
+
+def validate_case_id(case_id: str) -> str:
+    """Return *case_id* if it is a safe path segment, else raise.
+
+    Args:
+        case_id: The identifier supplied by a caller.
+
+    Returns:
+        The identifier, unchanged.
+
+    Raises:
+        ValueError: If the identifier is empty, contains a path separator or a
+            parent reference, or is otherwise not a single path segment. The
+            check is a whitelist, so it also refuses NUL bytes, leading dots
+            and anything that would resolve outside the cases directory.
+    """
+    if not case_id or not CASE_ID_RE.match(case_id):
+        raise ValueError(
+            f"Invalid case_id {case_id!r}: a case ID must be 1-128 characters of "
+            "letters, digits, dot, dash or underscore, starting with a letter or "
+            "digit, and cannot contain a path separator."
+        )
+    if ".." in case_id:
+        raise ValueError(f"Invalid case_id {case_id!r}: parent references are not allowed.")
+    return case_id
+
+
 def init_server(
     db_dir: Path,
     case_id: str | None = None,
@@ -481,6 +517,8 @@ def create_case(
     ID is allowed. Attempts to create a different case are rejected
     and the enforced case is loaded instead.
     """
+    validate_case_id(case_id)
+
     enforced_id = os.environ.get("MULDER_CASE_ID", "")
     if enforced_id and case_id != enforced_id:
         logger.warning(
