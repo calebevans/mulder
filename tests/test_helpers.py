@@ -32,21 +32,19 @@ class TestHashOutput:
         expected = "blake2b:" + hashlib.blake2b(expected_json.encode(), digest_size=32).hexdigest()
         assert result == expected
 
-    def test_large_dict_summary_hash(self) -> None:
+    def test_large_dict_full_hash(self) -> None:
         data = {f"k{i}": "x" * 100 for i in range(150)}
         result = hash_output(data)
         full_json = json.dumps(data, sort_keys=True, default=str)
         full_hash = "blake2b:" + hashlib.blake2b(full_json.encode(), digest_size=32).hexdigest()
-        assert result != full_hash
-        assert result.startswith("blake2b:")
+        assert result == full_hash
 
-    def test_large_list_summary_hash(self) -> None:
+    def test_large_list_full_hash(self) -> None:
         data = ["x" * 50 for _ in range(250)]
         result = hash_output(data)
         full_json = json.dumps(data, sort_keys=True, default=str)
         full_hash = "blake2b:" + hashlib.blake2b(full_json.encode(), digest_size=32).hexdigest()
-        assert result != full_hash
-        assert result.startswith("blake2b:")
+        assert result == full_hash
 
     def test_scalar_input(self) -> None:
         result = hash_output("hello world")
@@ -123,24 +121,26 @@ class TestSlimWindow:
         assert result["event_time"] == "2025-01-01"
 
 
-class TestHashOutputHeuristic:
-    """Test the heuristic size-check that skips full JSON serialization."""
+class TestHashOutputContent:
+    """Large output hashes commit to the complete serialized content."""
 
-    def test_large_list_uses_length_hash(self) -> None:
-        """Lists with >200 items use a length summary, not full serialization."""
+    def test_large_lists_with_the_same_length_differ(self) -> None:
         data = list(range(250))
         h1 = hash_output(data)
         data_different_content = list(range(250, 500))
         h2 = hash_output(data_different_content)
-        assert h1 == h2
+        assert h1 != h2
 
-    def test_large_dict_uses_keys_hash(self) -> None:
-        """Dicts with >100 keys use a keys summary, not full serialization."""
+    def test_large_dicts_with_the_same_keys_differ(self) -> None:
         data = {f"k{i}": "value_a" for i in range(150)}
         h1 = hash_output(data)
         data_different_values = {f"k{i}": "value_b" for i in range(150)}
         h2 = hash_output(data_different_values)
-        assert h1 == h2
+        assert h1 != h2
+
+    def test_large_strings_with_the_same_length_and_prefix_differ(self) -> None:
+        prefix = "x" * 300
+        assert hash_output(prefix + "a" * 10_000) != hash_output(prefix + "b" * 10_000)
 
 
 class TestExtractPid:
