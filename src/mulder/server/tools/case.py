@@ -412,14 +412,6 @@ MAX_EXTRACT_BYTES = 20 * 1024**3
 MAX_EXTRACT_MEMBERS = 200_000
 """Cap on member count, for an archive of millions of tiny files."""
 
-MAX_COMPRESSION_RATIO = 500
-"""Cap on a single member's expansion factor.
-
-42.zip expands roughly a millionfold. Ordinary evidence -- logs, registry
-hives, memory strings -- compresses well but not like that; 500 leaves ample
-headroom while still refusing a bomb.
-"""
-
 
 class ArchiveLimitError(Exception):
     """An archive exceeded a resource limit and was not fully extracted."""
@@ -481,7 +473,7 @@ def _extract_zip(archive: Path, dest: Path) -> tuple[list[str], list[str]]:
     handle the compression method (e.g. deflate64, LZMA).
 
     Raises:
-        ArchiveLimitError: If the archive exceeds a member, size or ratio cap.
+        ArchiveLimitError: If the archive exceeds the member or size cap.
     """
     skipped: list[str] = []
     try:
@@ -505,16 +497,6 @@ def _extract_zip(archive: Path, dest: Path) -> tuple[list[str], list[str]]:
                     raise ArchiveLimitError(
                         f"{archive.name} expands to more than {MAX_EXTRACT_BYTES // 1024**3} GiB"
                     )
-                if (
-                    info.compress_size > 0
-                    and info.file_size / info.compress_size > MAX_COMPRESSION_RATIO
-                ):
-                    raise ArchiveLimitError(
-                        f"{archive.name}: member {info.filename!r} expands "
-                        f"{info.file_size // max(info.compress_size, 1)}x, over the "
-                        f"ratio limit of {MAX_COMPRESSION_RATIO}"
-                    )
-
                 zf.extract(info, dest)
     except (NotImplementedError, zipfile.BadZipFile):
         if not shutil.which("7z"):
@@ -598,7 +580,7 @@ def _extract_7z(archive: Path, dest: Path) -> tuple[list[str], list[str]]:
 
     7-Zip refuses absolute and traversing member paths itself, and the sizes
     inside the archive are not visible to us before extraction, so this path
-    is bounded by ``_EXTRACT_TIMEOUT`` rather than by the byte and ratio caps
+    is bounded by ``_EXTRACT_TIMEOUT`` rather than by the member and byte caps
     the zip and tar paths apply. Anything it wrote outside *dest* would not
     appear in the listing either way.
 

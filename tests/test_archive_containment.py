@@ -23,7 +23,7 @@ evidence -- and reports success with a file list that never contained them, so
 the caller cannot tell anything was lost.
 
 **Resource limits.** There were none: no cap on uncompressed size, member
-count or compression ratio, and no timeout at all on the Python paths. The
+count, and no timeout at all on the Python paths. The
 tool's own ``scan_evidence`` message tells the agent to extract any archive it
 finds, so a 42.zip in the evidence fills the filesystem holding the live case
 database.
@@ -38,7 +38,6 @@ from pathlib import Path
 import pytest
 
 from mulder.server.tools.case import (
-    MAX_COMPRESSION_RATIO,
     ArchiveLimitError,
     _archive_slot,
     _extract_tar,
@@ -113,18 +112,49 @@ class TestZipExtraction:
         assert skipped == []
 
     def test_a_bomb_is_refused(self, tmp_path: Path) -> None:
+        """The declared output size is what stops it, not how well it packed."""
+        from mulder.server.tools import case as case_module
+
         path = tmp_path / "bomb.zip"
         with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
             z.writestr("big", b"\0" * (50 * 1024 * 1024))
 
+        dest = tmp_path / "out"
+        dest.mkdir()
+        original = case_module.MAX_EXTRACT_BYTES
+        case_module.MAX_EXTRACT_BYTES = 1024 * 1024
+        try:
+            with pytest.raises(ArchiveLimitError, match="expands to more than"):
+                _extract_zip(path, dest)
+        finally:
+            case_module.MAX_EXTRACT_BYTES = original
+
+    def test_a_zeroed_memory_region_is_not_a_bomb(self, tmp_path: Path) -> None:
+        """Evidence full of zeroes is ordinary, and must still extract.
+
+        Unallocated regions of a ``dd`` image and a freshly booted VM's memory
+        dump are mostly zeroes, so they hit deflate's ~1032x ceiling -- the
+        same figure as a hostile archive. A per-member expansion-ratio cap
+        cannot tell the two apart, which is why this code does not have one:
+        the total-output cap already bounds the damage, and it bounds it by
+        the number that actually matters, bytes written to disk.
+        """
+        path = tmp_path / "mem.zip"
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("mem.raw", b"\0" * (64 * 1024 * 1024))
+
         info = zipfile.ZipFile(path).infolist()[0]
-        ratio = info.file_size / info.compress_size
-        assert ratio > MAX_COMPRESSION_RATIO, "the fixture must actually be a bomb"
+        assert info.file_size / info.compress_size > 1000, (
+            "the fixture must compress like a bomb for this test to mean anything"
+        )
 
         dest = tmp_path / "out"
         dest.mkdir()
-        with pytest.raises(ArchiveLimitError, match="ratio limit"):
-            _extract_zip(path, dest)
+        files, skipped = _extract_zip(path, dest)
+
+        assert files == ["mem.raw"]
+        assert skipped == []
+        assert (dest / "mem.raw").stat().st_size == 64 * 1024 * 1024
 
     def test_ordinary_compression_is_not_refused(self, tmp_path: Path) -> None:
         """Logs compress well; the limit must leave room for real evidence."""
