@@ -5,6 +5,7 @@ Tier 1 tools: help the agent orient before running any extractions.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import shutil
@@ -120,7 +121,6 @@ def _hash_and_register_evidence(manifest: list[dict[str, object]]) -> list[str]:
     Returns:
         List of file paths that failed to hash.
     """
-    import hashlib as _hashlib
 
     from mulder.server.app import get_ctx, has_ctx
 
@@ -133,7 +133,7 @@ def _hash_and_register_evidence(manifest: list[dict[str, object]]) -> list[str]:
         if not fp.is_file():
             continue
         try:
-            h = _hashlib.sha256()
+            h = hashlib.sha256()
             size = 0
             with open(fp, "rb") as f:
                 while True:
@@ -406,50 +406,208 @@ def verify_evidence_integrity() -> dict[str, object]:
     return result
 
 
-def _extract_zip(archive: Path, dest: Path) -> list[str]:
-    """Extract a zip archive to *dest* and return paths relative to *dest*.
+MAX_EXTRACT_BYTES = 20 * 1024**3
+"""Cap on total uncompressed output: 20 GiB."""
+
+MAX_EXTRACT_MEMBERS = 200_000
+"""Cap on member count, for an archive of millions of tiny files."""
+
+MAX_COMPRESSION_RATIO = 500
+"""Cap on a single member's expansion factor.
+
+42.zip expands roughly a millionfold. Ordinary evidence -- logs, registry
+hives, memory strings -- compresses well but not like that; 500 leaves ample
+headroom while still refusing a bomb.
+"""
+
+
+class ArchiveLimitError(Exception):
+    """An archive exceeded a resource limit and was not fully extracted."""
+
+
+def _is_contained(dest: Path, member_name: str) -> bool:
+    """Whether *member_name* stays inside *dest* once joined and resolved.
+
+    The previous test was ``member.startswith("/") or ".." in member``. As a
+    security control it adds nothing over CPython's own sanitisation, and as a
+    filter it is wrong in both directions: it rejects ``invoice..pdf``,
+    ``svchost..exe`` and ``Users/j..smith/NTUSER.DAT`` -- ordinary names, and
+    ordinary evidence -- while a component-wise traversal expressed some other
+    way would not be recognised. Resolving the joined path and checking
+    containment is the check that actually answers the question.
+
+    Args:
+        dest: The extraction root.
+        member_name: The archive member's name.
+
+    Returns:
+        True if extracting the member writes inside *dest*.
+    """
+    if not member_name or member_name.startswith(("/", "\\")):
+        return False
+    if "\x00" in member_name:
+        return False
+    resolved_dest = dest.resolve()
+    try:
+        target = (resolved_dest / member_name).resolve()
+    except (OSError, ValueError):
+        return False
+    return target == resolved_dest or resolved_dest in target.parents
+
+
+def _archive_slot(archive: Path) -> str:
+    """A per-archive extraction directory name that cannot collide.
+
+    ``<stem>`` alone collides whenever two hosts contribute an archive of the
+    same name, which in a triage case is the normal shape of the evidence
+    rather than an edge case. The parent path is hashed in so the name stays
+    readable and bounded.
+
+    Args:
+        archive: The resolved path of the archive.
+
+    Returns:
+        A single directory-name component.
+    """
+    digest = hashlib.sha256(str(archive.parent).encode()).hexdigest()[:12]
+    stem = slugify(archive.stem)
+    return f"{stem}-{digest}"
+
+
+def _extract_zip(archive: Path, dest: Path) -> tuple[list[str], list[str]]:
+    """Extract a zip archive to *dest*; return (relative paths, skipped members).
 
     Falls back to the ``7z`` binary when Python's zipfile module cannot
     handle the compression method (e.g. deflate64, LZMA).
+
+    Raises:
+        ArchiveLimitError: If the archive exceeds a member, size or ratio cap.
     """
+    skipped: list[str] = []
     try:
         with zipfile.ZipFile(archive, "r") as zf:
-            for member in zf.namelist():
-                if member.startswith("/") or ".." in member:
-                    logger.warning("Skipping unsafe zip entry: %r", member)
+            infos = zf.infolist()
+            if len(infos) > MAX_EXTRACT_MEMBERS:
+                raise ArchiveLimitError(
+                    f"{archive.name} declares {len(infos)} members, over the "
+                    f"limit of {MAX_EXTRACT_MEMBERS}"
+                )
+
+            total = 0
+            for info in infos:
+                if not _is_contained(dest, info.filename):
+                    skipped.append(info.filename)
+                    logger.warning("Skipping zip entry outside dest: %r", info.filename)
                     continue
-                zf.extract(member, dest)
+
+                total += info.file_size
+                if total > MAX_EXTRACT_BYTES:
+                    raise ArchiveLimitError(
+                        f"{archive.name} expands to more than {MAX_EXTRACT_BYTES // 1024**3} GiB"
+                    )
+                if (
+                    info.compress_size > 0
+                    and info.file_size / info.compress_size > MAX_COMPRESSION_RATIO
+                ):
+                    raise ArchiveLimitError(
+                        f"{archive.name}: member {info.filename!r} expands "
+                        f"{info.file_size // max(info.compress_size, 1)}x, over the "
+                        f"ratio limit of {MAX_COMPRESSION_RATIO}"
+                    )
+
+                zf.extract(info, dest)
     except (NotImplementedError, zipfile.BadZipFile):
         if not shutil.which("7z"):
             raise
         return _extract_7z(archive, dest)
+    return _listing(dest), skipped
+
+
+def _listing(dest: Path) -> list[str]:
+    """Files under *dest*, as paths relative to it."""
     return [str(f.relative_to(dest)) for f in dest.rglob("*") if f.is_file()]
 
 
 def _safe_tar_filter(member: tarfile.TarInfo, path: str) -> tarfile.TarInfo | None:
-    """Allow extraction but neutralize absolute symlinks and path traversal."""
-    if member.name.startswith("/") or ".." in member.name:
+    """Drop a tar member that would write outside *path*, else allow it.
+
+    The previous test was ``member.name.startswith("/") or ".." in member.name``.
+    As a filter that is wrong in both directions: it rejects ordinary evidence
+    names such as ``Users/j..smith/NTUSER.DAT``, and it answers a question
+    about substrings rather than about where the member actually lands.
+    Containment is now decided by resolving the joined path.
+
+    Args:
+        member: The tar member under consideration.
+        path: The extraction root.
+
+    Returns:
+        The member, possibly with an absolute link target made relative, or
+        None to skip it.
+    """
+    dest = Path(path)
+    if not _is_contained(dest, member.name):
         return None
     if member.issym() or member.islnk():
-        if ".." in member.linkname:
+        if not _is_contained(dest, member.linkname.lstrip("/")):
             return None
-        if member.linkname.startswith("/"):
-            member.linkname = member.linkname.lstrip("/")
+        member.linkname = member.linkname.lstrip("/")
     return member
 
 
-def _extract_tar(archive: Path, dest: Path) -> list[str]:
-    """Extract a tar/tar-compressed archive to *dest*; return relative file paths."""
+def _extract_tar(archive: Path, dest: Path) -> tuple[list[str], list[str]]:
+    """Extract a tar/tar-compressed archive to *dest*.
+
+    Returns:
+        (relative file paths, skipped member names).
+
+    Raises:
+        ArchiveLimitError: If the archive exceeds a member or size cap.
+    """
+    skipped: list[str] = []
+    total = 0
+    count = 0
+
     with tarfile.open(archive, "r:*") as tf:
-        tf.extractall(dest, filter=_safe_tar_filter)
-    return [str(f.relative_to(dest)) for f in dest.rglob("*") if f.is_file()]
+        for member in tf:
+            count += 1
+            if count > MAX_EXTRACT_MEMBERS:
+                raise ArchiveLimitError(
+                    f"{archive.name} holds more than {MAX_EXTRACT_MEMBERS} members"
+                )
+
+            checked = _safe_tar_filter(member, str(dest))
+            if checked is None:
+                skipped.append(member.name)
+                logger.warning("Skipping tar entry outside dest: %r", member.name)
+                continue
+
+            total += checked.size
+            if total > MAX_EXTRACT_BYTES:
+                raise ArchiveLimitError(
+                    f"{archive.name} expands to more than {MAX_EXTRACT_BYTES // 1024**3} GiB"
+                )
+
+            tf.extract(checked, dest, filter="tar")
+
+    return _listing(dest), skipped
 
 
-def _extract_7z(archive: Path, dest: Path) -> list[str]:
-    """Extract via the ``7z`` CLI to *dest*; return paths relative to *dest*."""
+def _extract_7z(archive: Path, dest: Path) -> tuple[list[str], list[str]]:
+    """Extract via the ``7z`` CLI to *dest*.
+
+    7-Zip refuses absolute and traversing member paths itself, and the sizes
+    inside the archive are not visible to us before extraction, so this path
+    is bounded by ``_EXTRACT_TIMEOUT`` rather than by the byte and ratio caps
+    the zip and tar paths apply. Anything it wrote outside *dest* would not
+    appear in the listing either way.
+
+    Returns:
+        (relative file paths, skipped member names -- always empty here).
+    """
     cmd = ["7z", "x", f"-o{dest}", "-y", str(archive)]
     subprocess.run(cmd, capture_output=True, timeout=_EXTRACT_TIMEOUT, check=True)
-    return [str(f.relative_to(dest)) for f in dest.rglob("*") if f.is_file()]
+    return _listing(dest), []
 
 
 @mcp.tool()
@@ -489,11 +647,30 @@ def extract_archive(
             error_type="file_not_found",
         )
 
+    cfg = get_cfg()
+    extract_root = (cfg.db_dir / "extracted").resolve()
+
     if extract_to:
         dest = Path(extract_to).expanduser().resolve()
+        # The docstring says output goes under the mulder cases directory.
+        # Honouring an arbitrary destination turns "extract this evidence"
+        # into "write these attacker-supplied files wherever you can reach",
+        # and the archive and the steer can both come from the evidence tree.
+        if dest != extract_root and extract_root not in dest.parents:
+            return error_response(
+                tc_id,
+                "extract_archive",
+                params,
+                f"extract_to must be inside {extract_root}; got {dest}",
+                (time.monotonic() - t0) * 1000,
+                error_type="invalid_input",
+            )
     else:
-        cfg = get_cfg()
-        dest = cfg.db_dir / "extracted" / archive.stem
+        # Keyed by the archive's location, not just its name: a case routinely
+        # holds /evidence/host1/logs.zip and /evidence/host2/logs.zip, and a
+        # bare stem gives both the same directory -- so the second call sees a
+        # populated directory and hands back the first host's files.
+        dest = extract_root / _archive_slot(archive)
 
     # Idempotent: if already extracted, return the existing files
     if dest.exists() and any(dest.iterdir()):
@@ -532,13 +709,13 @@ def extract_archive(
 
     try:
         if ext == ".zip":
-            files = _extract_zip(archive, dest)
+            files, skipped = _extract_zip(archive, dest)
         elif (
             ext in (".tar", ".tgz")
             or name_lower.endswith((".tar.gz", ".tar.bz2"))
             or (ext in (".gz", ".bz2") and ".tar" not in name_lower)
         ):
-            files = _extract_tar(archive, dest)
+            files, skipped = _extract_tar(archive, dest)
         elif ext in (".7z", ".rar") or ".7z." in name_lower:
             if not shutil.which("7z"):
                 return error_response(
@@ -549,7 +726,7 @@ def extract_archive(
                     (time.monotonic() - t0) * 1000,
                     error_type="binary_missing",
                 )
-            files = _extract_7z(archive, dest)
+            files, skipped = _extract_7z(archive, dest)
         else:
             return error_response(
                 tc_id,
@@ -559,6 +736,20 @@ def extract_archive(
                 (time.monotonic() - t0) * 1000,
                 error_type="unsupported_format",
             )
+    except ArchiveLimitError as exc:
+        # Whatever landed before the limit was hit stays on disk; saying how
+        # much is the difference between "this archive is hostile" and "the
+        # tool broke".
+        partial = _listing(dest)
+        return error_response(
+            tc_id,
+            "extract_archive",
+            params,
+            f"Refusing to extract {archive.name}: {exc}. "
+            f"{len(partial)} file(s) were written to {dest} before the limit was reached.",
+            (time.monotonic() - t0) * 1000,
+            error_type="resource_limit",
+        )
     except Exception as exc:
         logger.error("Archive extraction failed for %r: %s", archive, exc)
         return error_response(
@@ -602,10 +793,16 @@ def extract_archive(
         "total_files_extracted": len(files),
         "type_summary": type_counts,
         "total_evidence_items": len(manifest),
+        # A dropped member was previously visible only in the log, while the
+        # response still said "success" with a file list that had never
+        # contained it. An analyst cannot chase evidence they are not told is
+        # missing.
+        "skipped_members": skipped,
         "message": (
             f"Extracted {len(files)} file(s) to {dest}. "
             f"Found {len(manifest)} evidence item(s). "
-            "Use scan_evidence on the extracted directory to create a case, "
+            + (f"{len(skipped)} member(s) were skipped as unsafe to extract. " if skipped else "")
+            + "Use scan_evidence on the extracted directory to create a case, "
             "or run extraction tools directly on the evidence files."
         ),
     }
