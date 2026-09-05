@@ -256,9 +256,14 @@ def list_cases() -> dict[str, object]:
         try:
             from mulder.db import CaseDB
 
-            db = CaseDB.open(cid, cfg.db_dir)
-            meta = db.get_case_metadata()
-            count = db.get_source_count()
+            # ``with``, not a trailing close(): CaseDB.open starts a writer
+            # thread and holds an engine, and if get_case_metadata() raises --
+            # a corrupt file, a schema older than the migrations -- the close()
+            # below it never runs. Listing a directory of such cases leaked one
+            # thread per case, and list_cases is called repeatedly.
+            with CaseDB.open(cid, cfg.db_dir) as db:
+                meta = db.get_case_metadata()
+                count = db.get_source_count()
             cases.append(
                 {
                     "case_id": cid,
@@ -267,7 +272,6 @@ def list_cases() -> dict[str, object]:
                     "ingested_at": meta.ingested_at,
                 }
             )
-            db.close()
         except Exception as exc:
             logger.warning("Failed to read case '%s': %s", cid, exc)
             cases.append({"case_id": cid, "error": str(exc)})

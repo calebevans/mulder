@@ -400,11 +400,17 @@ def _try_open_existing(
     when the caller should proceed to create a fresh database (only
     possible for empty, corrupt DBs with ``replace=True``).
     """
+    # ``existing`` is handed to _build_context on the success paths, which
+    # takes ownership of it. It is only orphaned when the open succeeded and a
+    # query on it then raised, so that is the case this pre-binding covers.
+    existing = None
     try:
         existing = CaseDB.open(case_id, db_dir)
         meta = existing.get_case_metadata()
         source_count = existing.get_source_count()
     except Exception as exc:
+        if existing is not None:
+            existing.close()
         if not replace:
             logger.exception("Failed to open existing case '%s'", case_id)
             from mulder.server.helpers import error_response, make_tool_call_id
