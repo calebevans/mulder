@@ -29,12 +29,13 @@ class Role(Flag):
     NARRATIVE_EXECUTOR = auto()
     NARRATIVE_ANALYST = auto()
     REPORT = auto()
+    AUTORUNS_INGEST = auto()
 
 
 PLANNERS = Role.EXTRACT_PLANNER | Role.CROSS_PLANNER | Role.NARRATIVE_PLANNER
 EXECUTORS = Role.EXTRACT_EXECUTOR | Role.CROSS_EXECUTOR | Role.NARRATIVE_EXECUTOR
 ANALYSTS = Role.EXTRACT_ANALYST | Role.CROSS_ANALYST | Role.NARRATIVE_ANALYST
-ALL_ROLES = Role.CATALOG | PLANNERS | EXECUTORS | ANALYSTS | Role.REPORT
+ALL_ROLES = Role.CATALOG | PLANNERS | EXECUTORS | ANALYSTS | Role.REPORT | Role.AUTORUNS_INGEST
 
 _registry: dict[str, Role] = {}
 _effect_registry: dict[str, frozenset[ToolEffect]] = {}
@@ -280,9 +281,7 @@ def tool_access(
 
     def decorator(fn: F) -> F:
         built_in_effect = _EFFECT_DECLARATIONS.get(fn.__name__)
-        built_in_effects = (
-            frozenset({built_in_effect}) if built_in_effect is not None else None
-        )
+        built_in_effects = frozenset({built_in_effect}) if built_in_effect is not None else None
         registered_effects = explicit_effects or built_in_effects
         if registered_effects is None:
             raise RuntimeError(

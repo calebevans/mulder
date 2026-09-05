@@ -353,7 +353,7 @@ The case ID names the output database and all derived artifacts. Choose somethin
 
 The orchestrator runs five phases in sequence:
 
-1. **Catalog** scans the evidence directory, classifies file types, and identifies distinct systems.
+1. **Catalog** pages through the immutable intake manifest, classifies committed entries, and identifies distinct systems. If Autoruns artifacts are present, a dedicated manifest-bound ingest seat processes them before extraction.
 2. **Extraction** runs forensic tools per system (memory analysis, disk forensics, log parsing) and submits findings.
 3. **Cross-System Analysis** correlates evidence across systems and maps findings to MITRE ATT&CK techniques.
 4. **Alternative Narrative** challenges the primary hypothesis, searches for counter-evidence, and audits for completeness.

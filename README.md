@@ -27,7 +27,7 @@ The NIST Data Leakage case has a [detailed accuracy report](https://github.com/c
 
 Each investigation runs through five phases with quality gates between them. Phases 2-4 use a plan-and-execute pipeline with three specialized roles (planner, executor, analyst) that can optionally be assigned to different models for cost optimization.
 
-1. **Catalog** - scan evidence directory, classify file types, identify distinct systems
+1. **Catalog** - page through committed intake, classify artifacts, identify distinct systems
 2. **Extraction** - run applicable forensic tools per system, index results into FTS5 database
 3. **Cross-System Analysis** - correlate events across systems, map MITRE ATT&CK techniques, deduplicate findings
 4. **Alternative Narrative** - challenge the primary narrative with counter-evidence, test alternative hypotheses, audit for tool and evidence coverage gaps

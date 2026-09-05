@@ -27,11 +27,13 @@ from mulder.adapters import (
     prepare_evidence_case,
     verify_intake_source,
 )
+from mulder.adapters.catalog import evidence_types
 from mulder.orchestrator.capabilities import identity_for_phase
 from mulder.orchestrator.display import InvestigationDashboard
 from mulder.orchestrator.errors import AuthenticationError, ModelNotAvailableError
 from mulder.orchestrator.evidence import EvidenceContext, ServerBridge
 from mulder.orchestrator.gates import (
+    GateCheck,
     GateResult,
     validate_catalog,
     validate_cross_system,
@@ -43,13 +45,14 @@ from mulder.orchestrator.log_tailer import LogTailer
 from mulder.orchestrator.models import ModelConfig
 from mulder.orchestrator.phases import (
     ALTERNATIVE_NARRATIVE,
+    AUTORUNS_INGEST,
     CATALOG,
     CROSS_SYSTEM,
     EXTRACTION,
     REPORT,
     PhaseConfig,
 )
-from mulder.orchestrator.proxy import ProxyManager
+from mulder.orchestrator.proxy import ProxyManager, snapshot_proxy_config
 from mulder.orchestrator.roles import RoleRunner
 from mulder.orchestrator.session import SessionExecutor
 from mulder.orchestrator.types import (
@@ -165,9 +168,7 @@ class Orchestrator:
         if resume_run and run_id is None:
             raise RunStateError("resume_run requires an explicit run_id")
         if run_state_path is not None and (not self._case_id or run_event_path is None):
-            raise RunStateError(
-                "durable runs require both a safe case_id and run_event_path"
-            )
+            raise RunStateError("durable runs require both a safe case_id and run_event_path")
         if resume_run and run_state_path is None:
             raise RunStateError("resume_run requires run_state_path")
         if resume_after_approval and run_state_path is not None and not resume_run:
@@ -197,7 +198,15 @@ class Orchestrator:
         self._phase_counter = 0
         self._total_phases = 0
         self._case_briefing: str = ""
-        self._proxy_config = proxy_config
+        self._proxy_config: str | None = None
+        self._proxy_config_snapshot: bytes | None = None
+        if proxy_config is not None:
+            try:
+                self._proxy_config, self._proxy_config_snapshot = snapshot_proxy_config(
+                    proxy_config
+                )
+            except (OSError, ValueError) as exc:
+                raise RunStateError(f"cannot snapshot proxy configuration: {exc}") from exc
         self._proxy: ProxyManager | None = None
         self._pack_activation = pack_activation
         self._using_proxy = False
@@ -225,9 +234,7 @@ class Orchestrator:
             resolved_run_events = Path(run_event_path).expanduser().resolve(strict=False)
             expected_run_events = self._db_dir / f"{self._case_id}.audit.jsonl"
             if resolved_run_events != expected_run_events:
-                raise RunStateError(
-                    "durable checkpoints require the case's standard audit path"
-                )
+                raise RunStateError("durable checkpoints require the case's standard audit path")
             input_digest = self._resolve_run_input_digest()
             approval_required = approval_before_report or resume_after_approval
             if resume_after_approval:
@@ -320,9 +327,7 @@ class Orchestrator:
             raise RunStateError("intake manifest belongs to a different case")
         intake_source = Path(intake.source_path).expanduser().resolve(strict=False)
         if intake_source != evidence:
-            raise RunStateError(
-                "evidence path does not match the case's immutable intake source"
-            )
+            raise RunStateError("evidence path does not match the case's immutable intake source")
         return intake.collection_digest
 
     def _validate_prepared_intake(self, manifest: IntakeManifest) -> None:
@@ -353,14 +358,26 @@ class Orchestrator:
         """Return the bounded first page handed to the catalog model."""
         return self._evidence.catalog_snapshot_json()
 
+    def _autoruns_artifact_ids(self) -> list[str]:
+        """Return exact committed Autoruns inputs for the dedicated ingest seat."""
+        manifest = self._prepared_intake
+        if manifest is None:
+            return []
+        return [
+            f"{manifest.collection_digest}:{index}"
+            for index, entry in enumerate(manifest.entries)
+            if "autoruns" in evidence_types(entry)
+        ]
+
     def _run_contract_digest(self, *, approval_required: bool) -> str:
         """Bind every execution-policy input that can change phase semantics."""
         proxy: dict[str, object] | None = None
-        if self._proxy_config:
-            proxy_path = Path(self._proxy_config).expanduser().resolve(strict=False)
-            proxy = {"path": str(proxy_path), "sha256": None}
-            if proxy_path.is_file():
-                proxy["sha256"] = "sha256:" + hashlib.sha256(proxy_path.read_bytes()).hexdigest()
+        if self._proxy_config is not None:
+            assert self._proxy_config_snapshot is not None
+            proxy = {
+                "path": self._proxy_config,
+                "sha256": "sha256:" + hashlib.sha256(self._proxy_config_snapshot).hexdigest(),
+            }
         packs = (
             self._pack_activation.receipt.model_dump(mode="json")
             if self._pack_activation is not None
@@ -519,6 +536,7 @@ class Orchestrator:
                     raise RunStateError(
                         f"prepared evidence changed before provider startup: {exc}"
                     ) from exc
+            self._total_phases = 5 + pack_phase_count + (1 if self._autoruns_artifact_ids() else 0)
             self._preflight_provider_routes()
             self._start_proxy_if_needed()
             self._running = True
@@ -584,9 +602,7 @@ class Orchestrator:
                         message="Investigation run finished",
                     )
                 )
-            terminal_status: Literal[
-                "awaiting_review", "completed", "failed", "cancelled"
-            ] = (
+            terminal_status: Literal["awaiting_review", "completed", "failed", "cancelled"] = (
                 "awaiting_review"
                 if completed.review_state == "awaiting_review"
                 else "completed"
@@ -620,7 +636,7 @@ class Orchestrator:
 
         self._proxy = ProxyManager(
             models=proxy_models,
-            config_path=self._proxy_config,
+            config_snapshot=self._proxy_config_snapshot,
             process_env=self.env,
         )
         self._proxy.start()
@@ -691,12 +707,27 @@ class Orchestrator:
             logger.error("No systems identified from catalog output; cannot proceed.")
             return result
 
+        autoruns_ids = self._autoruns_artifact_ids()
+        if autoruns_ids:
+            autoruns_result = await self._run_single_phase(
+                AUTORUNS_INGEST,
+                prompt_vars={
+                    "case_id": self._case_id,
+                    "artifact_ids_json": json.dumps(autoruns_ids),
+                },
+            )
+            result.phases.append(autoruns_result)
+            self._accumulate(result, autoruns_result)
+            if not autoruns_result.success:
+                logger.error("Committed Autoruns ingestion failed; cannot proceed.")
+                return result
+
         # Phase 2: Extraction (split-mode, rolling worker pool)
         groups = EvidenceContext.group_systems(systems, catalog_data)
         pack_phase_count = (
             len(self._pack_activation.workflow_steps) if self._pack_activation else 0
         )
-        self._total_phases = 5 + pack_phase_count
+        self._total_phases = 5 + pack_phase_count + (1 if autoruns_ids else 0)
         self.dashboard.log_info(
             f"Extraction plan: {len(groups)} session(s) for {len(systems)} systems"
             f" (workers: {self._parallel_extractions})"
@@ -705,7 +736,7 @@ class Orchestrator:
         self._phase_counter += 1
         planner_model = self.model_config.resolve(EXTRACTION.name, "planner")
         self.dashboard.set_phase(
-            label=f"Phase 2: Extraction (0/{len(groups)} done, 0 active)",
+            label=f"Extraction (0/{len(groups)} done, 0 active)",
             phase_num=self._phase_counter,
             total_phases=self._total_phases,
             model=planner_model,
@@ -811,9 +842,7 @@ class Orchestrator:
         self._write_model_usage()
         return result
 
-    async def _run_approved_report(
-        self, result: InvestigationResult
-    ) -> InvestigationResult:
+    async def _run_approved_report(self, result: InvestigationResult) -> InvestigationResult:
         """Resume at report only after validating a persisted exact-state approval."""
         from mulder.review.decisions import ReviewWorkflow
 
@@ -1265,6 +1294,32 @@ class Orchestrator:
             catalog_json = extract_catalog_result(phase_result.messages)
             self._cached_catalog_data = catalog_json
             return validate_catalog(catalog_json or {})
+
+        if phase.name == "autoruns_ingest":
+            invoked = "parse_autoruns" in phase_result.tool_names
+            persisted = self._server.has_source_prefix("autoruns.")
+            passed = invoked and persisted
+            if passed:
+                detail = "Dedicated ingest produced a persisted Autoruns source"
+                gaps: list[str] = []
+            elif not invoked:
+                detail = "Dedicated ingest tool was not invoked"
+                gaps = ["parse_autoruns was not invoked"]
+            else:
+                detail = "Dedicated ingest invocation produced no persisted Autoruns source"
+                gaps = ["parse_autoruns did not persist a verified Autoruns source"]
+            return GateResult(
+                passed=passed,
+                phase_name=phase.name,
+                checks=[
+                    GateCheck(
+                        name="committed_autoruns_ingested",
+                        passed=passed,
+                        detail=detail,
+                    )
+                ],
+                gaps=gaps,
+            )
 
         if phase.name == "extraction":
             summary_result = self._server.get_summary()

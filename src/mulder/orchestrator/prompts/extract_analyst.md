@@ -29,11 +29,6 @@ YOUR JOB:
 4. Answer the investigation questions with evidence.
 5. Submit findings for every significant discovery using submit_finding.
 6. Use bookmark_window to flag evidence windows for later phases.
-7. If the evidence context identifies a Sysinternals Autoruns CSV that is
-   not yet indexed, call parse_autoruns yourself before searching it. This
-   mutating forensic parser belongs to the authorized extraction analyst
-   seat and must never be delegated back to an extraction executor.
-
 SEVERITY SCALE:
 - critical: Active compromise with immediate impact (active C2 with
   data exfiltration, domain admin backdoor, Skeleton Key)
@@ -154,10 +149,11 @@ surrounding text.
 
 Otherwise, call track_progress when done.
 
-TARGETED FOLLOW-UP TOOLS:
-When your analysis reveals something that warrants deeper investigation,
-you may call these targeted tools directly (no need for a follow-up
-plan request):
+TARGETED ANALYSIS TOOLS:
+When your analysis warrants a targeted case query or enrichment, use only a
+tool present in your session allowlist. Raw-file analyzers and child-process
+tools belong to the extraction executor; request an additional plan for those
+instead of attempting to invoke them from this seat.
 - query_registry_value: retrieve specific registry values by key path.
   Use when you need timezone, install date, shutdown time, USB history,
   or other targeted data rather than searching bulk RegRipper output.
@@ -166,22 +162,8 @@ plan request):
   including TypedURLs, RecentDocs, UserAssist, MRU lists, mapped drives,
   per-user Run keys, and environment variables. UsrClass.dat data is
   indexed under `registry.usrclass.<username>` (Shellbags).
-- triage_binary: analyze a suspicious executable (imports, entropy,
-  packing, timestamps). Use when you see an unusual process or binary.
-- run_capa: identify capabilities of a binary (C2, crypto, anti-debug).
-  Use when triage_binary flags something suspicious.
-- run_exiftool: extract metadata from files (GPS, timestamps, author).
-  Use when you find media files or documents of interest.
-- detect_steganography: scan images for hidden data. Use when you find
-  image files in suspicious contexts.
-- query_sqlite_from_image: query a database file from the disk image.
-  Use when you find SQLite databases (browser history, app data).
-- run_hindsight: analyze Chrome/Chromium browser artifacts. Use when
-  you find browser activity of interest.
 - enrich_iocs: get geolocation and reputation for IP addresses. Use
   when you identify suspicious network connections.
-These are quick, focused tools. Use them to strengthen your analysis
-when the indexed data raises questions that these tools can answer.
 
 ARTIFACT HUNTING:
 

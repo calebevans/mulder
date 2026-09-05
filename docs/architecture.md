@@ -104,7 +104,7 @@ The `CapacityLimiter` bounds concurrent tool execution to the `--workers` count 
 
 ## Orchestration Pipeline
 
-The orchestrator (`mulder investigate`) runs five core investigation phases sequentially. Most phases use a plan-and-execute pipeline (planner/executor/analyst) while catalog and report use single-agent sessions. A preflighted [domain-pack](domain-packs.md) activation may insert complete declarative hunt phases after extraction; the five core phase definitions do not change. The orchestrator uses the [Claude Agent SDK](https://platform.claude.com/docs/en/agents-and-tools/claude-code-sdk) (`claude-agent-sdk`) for managing agent sessions.
+The orchestrator (`mulder investigate`) runs five core investigation phases sequentially. Most phases use a plan-and-execute pipeline (planner/executor/analyst) while catalog and report use single-agent sessions. When the committed intake contains Autoruns CSV artifacts, a narrowly scoped ingest phase runs between catalog and extraction. A preflighted [domain-pack](domain-packs.md) activation may insert complete declarative hunt phases after extraction; the five core phase definitions do not change. The orchestrator uses the [Claude Agent SDK](https://platform.claude.com/docs/en/agents-and-tools/claude-code-sdk) (`claude-agent-sdk`) for managing agent sessions.
 
 If a `MULDER.md` file exists in the evidence directory, its contents are loaded at startup and injected as an "INVESTIGATOR BRIEFING" preamble into the planner, analyst, and report prompts across all phases. This allows investigators to provide case background, known facts, and specific questions that guide the investigation without modifying any code.
 
@@ -112,12 +112,15 @@ If a `MULDER.md` file exists in the evidence directory, its contents are loaded 
 flowchart TD
     start["mulder investigate /evidence &lt;case_id&gt;"] --> catalog
     catalog["Phase 1: Catalog\n(Planner model, single agent)"]
-    catalog --> catalogGate{"Catalog Gate\nCase created?"}
+    catalog --> catalogGate{"Catalog Gate\nCommitted catalog valid?"}
     catalogGate -->|"Pass"| identifySystems["Identify Systems\nfrom Catalog Output"]
     catalogGate -->|"Fail"| retryC["Retry (1.5x turn limit)"]
     retryC --> catalog
 
-    identifySystems --> extraction
+    identifySystems --> autoruns{"Committed Autoruns\nartifacts present?"}
+    autoruns -->|"yes"| autorunsIngest["Dedicated Autoruns ingest\n(exact artifact IDs)"]
+    autoruns -->|"no"| extraction
+    autorunsIngest --> extraction
 
     subgraph extraction [Phase 2: Extraction - per system]
         ep["Planner\n(decides tools)"]
@@ -214,7 +217,7 @@ When a gate fails, the orchestrator retries the phase with:
 
 ## Tool Access Control
 
-Tools self-declare which pipeline roles may invoke them via the `@tool_access` decorator (`src/mulder/server/tool_access.py`). At import time, `phases.py` calls `get_tools_for_role(Role.EXTRACT_EXECUTOR)` (and similar) to build allowlists dynamically, eliminating manual tool list maintenance.
+Tools self-declare candidate pipeline roles via the `@tool_access` decorator (`src/mulder/server/tool_access.py`). At import time, `phases.py` intersects those assignments with each seat's independent effect capabilities. A role-tagged forensic tool therefore never appears in a model allowlist unless that exact seat also holds `forensic-execution`.
 
 Before an SDK session starts, `orchestrator.capabilities` independently binds
 that allowlist to a stable agent identity and a set of effect capabilities
@@ -244,8 +247,12 @@ content-addressed manifest, idempotently opens or creates the case, and
 registers original evidence hashes. Generic evidence is recorded as `generic`,
 never mislabeled as KAPE or Velociraptor. Changed content or a different source
 root fails closed. The live source is reverified immediately before provider or
-proxy startup, and Catalog receives the committed snapshot through a read-only
-tool seat instead of receiving `scan_evidence` authority.
+proxy startup. Catalog receives a bounded first page plus cursor-based
+read-only pages from the committed manifest, including top-level files and
+PCAPs; it neither scans the filesystem nor receives `scan_evidence` or archive
+extraction authority. Trusted collector host provenance overrides model-supplied
+system naming. Nested archive members must be verified and materialized by the
+extraction path before use.
 
 ### The `@tool_access` Decorator
 
@@ -435,7 +442,8 @@ The dashboard has two panels:
 
 ## Evidence Classification and Extractor Framework
 
-The `EvidenceClassifier` scans evidence directories and categorizes files by type:
+The deterministic intake catalog classifies committed manifest entries by type;
+the model never discovers prepared evidence by rescanning live directories:
 
 | Evidence Type | Extensions / Indicators | Primary Tools |
 |---------------|------------------------|---------------|

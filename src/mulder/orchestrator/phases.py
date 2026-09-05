@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
+from mulder.orchestrator.capabilities import identity_for_phase, tools_for_identity
 from mulder.orchestrator.prompts import (
     CATALOG_PROMPT,
     CROSS_SYSTEM_ANALYST_PROMPT,
@@ -137,6 +138,27 @@ CATALOG: PhaseConfig = PhaseConfig(
     single_max_budget_usd=8.0,
 )
 
+AUTORUNS_INGEST: PhaseConfig = PhaseConfig(
+    name="autoruns_ingest",
+    mode="single",
+    single_role="analyst",
+    single_system_prompt=(
+        "You are a narrowly scoped deterministic evidence-ingest operator. "
+        "Open the supplied case, then call parse_autoruns exactly once with every "
+        "supplied artifact_id in one list. Never substitute a filesystem path, "
+        "omit an ID, or call any other forensic tool. Return a short JSON status."
+    ),
+    single_prompt_template=(
+        "Case ID: {case_id}\n"
+        "Call open_case(case_id='{case_id}') first.\n"
+        "Committed Autoruns artifact IDs: {artifact_ids_json}"
+    ),
+    single_allowed_tools=tools_for_identity(identity_for_phase("autoruns_ingest", "single")),
+    single_max_turns=8,
+    single_max_budget_usd=1.0,
+    max_retries=0,
+)
+
 _EXECUTOR_CASE_ID_PREFIX: str = (
     "The case_id is '{case_id}'. Call open_case(case_id='{case_id}') "
     "as your FIRST action before executing any other tools.\n\n"
@@ -166,12 +188,12 @@ EXTRACTION: PhaseConfig = PhaseConfig(
         "Call open_case(case_id='{case_id}') as your FIRST action.\n\n"
         "EVIDENCE CONTEXT:\n{evidence_context}"
     ),
-    planner_allowed_tools=get_tools_for_role(Role.EXTRACT_PLANNER),
+    planner_allowed_tools=tools_for_identity(identity_for_phase("extraction", "planner")),
     planner_max_turns=15,
     planner_max_budget_usd=2.0,
     executor_system_prompt=EXTRACT_EXECUTOR_PROMPT,
     executor_prompt_template=_EXECUTOR_CASE_ID_PREFIX + "{plan}",
-    executor_allowed_tools=get_tools_for_role(Role.EXTRACT_EXECUTOR),
+    executor_allowed_tools=tools_for_identity(identity_for_phase("extraction", "executor")),
     executor_max_turns=80,
     executor_max_budget_usd=5.0,
     analyst_system_prompt=EXTRACT_ANALYST_PROMPT,
@@ -183,7 +205,7 @@ EXTRACTION: PhaseConfig = PhaseConfig(
         "Execution results:\n{execution_results}\n\n"
         "Investigation questions:\n{investigation_questions}"
     ),
-    analyst_allowed_tools=get_tools_for_role(Role.EXTRACT_ANALYST),
+    analyst_allowed_tools=tools_for_identity(identity_for_phase("extraction", "analyst")),
     analyst_max_turns=60,
     analyst_max_budget_usd=5.0,
 )
@@ -197,12 +219,12 @@ CROSS_SYSTEM: PhaseConfig = PhaseConfig(
         "Call open_case(case_id='{case_id}') as your FIRST action.\n\n"
         "{case_briefing}Review all findings and sources. Plan cross-system correlation queries."
     ),
-    planner_allowed_tools=get_tools_for_role(Role.CROSS_PLANNER),
+    planner_allowed_tools=tools_for_identity(identity_for_phase("cross_system", "planner")),
     planner_max_turns=10,
     planner_max_budget_usd=3.0,
     executor_system_prompt=CROSS_SYSTEM_EXECUTOR_PROMPT,
     executor_prompt_template=_EXECUTOR_CASE_ID_PREFIX + "{plan}",
-    executor_allowed_tools=get_tools_for_role(Role.CROSS_EXECUTOR),
+    executor_allowed_tools=tools_for_identity(identity_for_phase("cross_system", "executor")),
     executor_max_turns=50,
     executor_max_budget_usd=7.0,
     analyst_system_prompt=CROSS_SYSTEM_ANALYST_PROMPT,
@@ -212,7 +234,7 @@ CROSS_SYSTEM: PhaseConfig = PhaseConfig(
         "Execution results:\n{execution_results}\n\n"
         "Investigation questions:\n{investigation_questions}"
     ),
-    analyst_allowed_tools=get_tools_for_role(Role.CROSS_ANALYST),
+    analyst_allowed_tools=tools_for_identity(identity_for_phase("cross_system", "analyst")),
     analyst_max_turns=50,
     analyst_max_budget_usd=7.0,
 )
@@ -226,12 +248,16 @@ ALTERNATIVE_NARRATIVE: PhaseConfig = PhaseConfig(
         "Call open_case(case_id='{case_id}') as your FIRST action.\n\n"
         "{case_briefing}Review current findings and plan counter-analysis.\n\n{consistency_report}"
     ),
-    planner_allowed_tools=get_tools_for_role(Role.NARRATIVE_PLANNER),
+    planner_allowed_tools=tools_for_identity(
+        identity_for_phase("alternative_narrative", "planner")
+    ),
     planner_max_turns=10,
     planner_max_budget_usd=3.0,
     executor_system_prompt=NARRATIVE_EXECUTOR_PROMPT,
     executor_prompt_template=_EXECUTOR_CASE_ID_PREFIX + "{plan}",
-    executor_allowed_tools=get_tools_for_role(Role.NARRATIVE_EXECUTOR),
+    executor_allowed_tools=tools_for_identity(
+        identity_for_phase("alternative_narrative", "executor")
+    ),
     executor_max_turns=35,
     executor_max_budget_usd=5.0,
     analyst_system_prompt=NARRATIVE_ANALYST_PROMPT,
@@ -241,7 +267,9 @@ ALTERNATIVE_NARRATIVE: PhaseConfig = PhaseConfig(
         "Execution results:\n{execution_results}\n\n"
         "Investigation questions:\n{investigation_questions}"
     ),
-    analyst_allowed_tools=get_tools_for_role(Role.NARRATIVE_ANALYST),
+    analyst_allowed_tools=tools_for_identity(
+        identity_for_phase("alternative_narrative", "analyst")
+    ),
     analyst_max_turns=35,
     analyst_max_budget_usd=7.0,
 )
@@ -254,7 +282,7 @@ REPORT: PhaseConfig = PhaseConfig(
     single_prompt_template=(
         "{case_briefing}Write the investigation narrative and finalize the report."
     ),
-    single_allowed_tools=get_tools_for_role(Role.REPORT),
+    single_allowed_tools=tools_for_identity(identity_for_phase("report", "single")),
     single_max_turns=25,
     single_max_budget_usd=12.0,
 )

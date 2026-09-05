@@ -22,9 +22,11 @@ from mulder.orchestrator.capabilities import (
     create_delegation_grant,
     identity_for_phase,
     identity_from_delegation_grant,
+    tools_for_identity,
 )
 from mulder.orchestrator.phases import (
     ALTERNATIVE_NARRATIVE,
+    AUTORUNS_INGEST,
     CATALOG,
     CROSS_SYSTEM,
     EXTRACTION,
@@ -53,11 +55,28 @@ def _seats(phase: PhaseConfig) -> list[tuple[str, list[str]]]:
 
 
 def test_every_declared_phase_allowlist_is_authorized() -> None:
-    for phase in (CATALOG, EXTRACTION, CROSS_SYSTEM, ALTERNATIVE_NARRATIVE, REPORT):
+    for phase in (
+        CATALOG,
+        AUTORUNS_INGEST,
+        EXTRACTION,
+        CROSS_SYSTEM,
+        ALTERNATIVE_NARRATIVE,
+        REPORT,
+    ):
         for seat, tools in _seats(phase):
             assert authorize_tool_list(identity_for_phase(phase.name, seat), tools) == sorted(
                 set(tools)
             )
+
+
+def test_phase_allowlists_exclude_role_tools_beyond_the_seat_capabilities() -> None:
+    analyst = identity_for_phase("extraction", "analyst")
+    assert "mcp__mulder__detect_steganography" not in tools_for_identity(analyst)
+    assert "mcp__mulder__detect_steganography" not in EXTRACTION.analyst_allowed_tools
+
+    cross_executor = identity_for_phase("cross_system", "executor")
+    assert "mcp__mulder__parse_plist" not in tools_for_identity(cross_executor)
+    assert "mcp__mulder__parse_plist" not in CROSS_SYSTEM.executor_allowed_tools
 
 
 def test_declared_phase_allowlists_capture_the_complete_tool_registry() -> None:
@@ -160,11 +179,16 @@ def test_multi_effect_authorization_requires_every_effect() -> None:
         identity_for_phase("alternative_narrative", "executor"),
         "correlate_across_sources",
     )
-    authorize_tool(identity_for_phase("extraction", "analyst"), "parse_autoruns")
-    authorize_tool(identity_for_phase("cross_system", "executor"), "parse_autoruns")
+    for phase, seat in (
+        ("extraction", "executor"),
+        ("extraction", "analyst"),
+        ("cross_system", "executor"),
+    ):
+        with pytest.raises(CapabilityViolation):
+            authorize_tool(identity_for_phase(phase, seat), "parse_autoruns")
 
 
-def test_catalog_and_pack_executors_gain_no_mutating_parser_authority() -> None:
+def test_catalog_and_every_pack_seat_gain_no_mutating_parser_authority() -> None:
     assert "mcp__mulder__scan_evidence" not in CATALOG.single_allowed_tools
     assert "scan_evidence" not in CATALOG.single_prompt_template
     assert "{catalog_snapshot}" in CATALOG.single_prompt_template
@@ -174,11 +198,12 @@ def test_catalog_and_pack_executors_gain_no_mutating_parser_authority() -> None:
     )
     with pytest.raises(CapabilityViolation):
         authorize_tool(identity_for_phase("extraction", "executor"), "parse_autoruns")
-    with pytest.raises(CapabilityViolation):
-        authorize_tool(identity_for_phase("pack.synthetic", "executor"), "parse_autoruns")
+    for seat in ("planner", "executor", "analyst"):
+        with pytest.raises(CapabilityViolation):
+            authorize_tool(identity_for_phase("pack.synthetic", seat), "parse_autoruns")
     assert "mcp__mulder__parse_autoruns" not in EXTRACTION.executor_allowed_tools
-    assert "mcp__mulder__parse_autoruns" in EXTRACTION.analyst_allowed_tools
-    assert "parse_autoruns" in EXTRACTION.analyst_system_prompt
+    assert "mcp__mulder__parse_autoruns" not in EXTRACTION.analyst_allowed_tools
+    assert "parse_autoruns" not in EXTRACTION.analyst_system_prompt
 
 
 def test_identity_capability_sets_are_unchanged() -> None:
@@ -193,13 +218,11 @@ def test_identity_capability_sets_are_unchanged() -> None:
         ("extraction", "analyst"): {
             Capability.CASE_READ,
             Capability.CASE_WRITE,
-            Capability.FORENSIC_EXECUTION,
         },
         ("cross_system", "planner"): {Capability.CASE_READ},
         ("cross_system", "executor"): {
             Capability.CASE_READ,
             Capability.CASE_WRITE,
-            Capability.FORENSIC_EXECUTION,
             Capability.JOB_CONTROL,
         },
         ("cross_system", "analyst"): {
@@ -225,6 +248,21 @@ def test_identity_capability_sets_are_unchanged() -> None:
     for phase_seat, capabilities in expected.items():
         assert identity_for_phase(*phase_seat).capabilities == frozenset(capabilities)
 
+    dedicated = identity_for_phase("autoruns_ingest", "single")
+    assert dedicated.role is Role.AUTORUNS_INGEST
+    assert dedicated.capabilities == frozenset(
+        {
+            Capability.CASE_READ,
+            Capability.CASE_WRITE,
+            Capability.FORENSIC_EXECUTION,
+        }
+    )
+    authorize_tool(dedicated, "parse_autoruns")
+    assert AUTORUNS_INGEST.single_allowed_tools == [
+        "mcp__mulder__open_case",
+        "mcp__mulder__parse_autoruns",
+    ]
+
 
 def test_raw_analyzers_and_persistent_reasoning_writers_have_strong_effects() -> None:
     for name in (
@@ -237,9 +275,7 @@ def test_raw_analyzers_and_persistent_reasoning_writers_have_strong_effects() ->
         "filter_timeline",
         "export_timeline_slice",
     ):
-        assert get_registered_tool_effect(name) == frozenset(
-            {ToolEffect.FORENSIC_EXECUTION}
-        )
+        assert get_registered_tool_effect(name) == frozenset({ToolEffect.FORENSIC_EXECUTION})
     for name in (
         "create_hypothesis",
         "record_hypothesis_test",

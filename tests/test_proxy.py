@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -84,6 +85,37 @@ class TestProxyManager:
         pm = ProxyManager(models=["bedrock/test"], port=8080)
         assert pm.port == 8080
         assert "8080" in pm.env_overrides["ANTHROPIC_BASE_URL"]
+
+    def test_custom_config_is_snapshotted_before_start(self, tmp_path: Path) -> None:
+        config = tmp_path / "litellm.yaml"
+        config.write_bytes(b"original: true\n")
+        pm = ProxyManager(models=["openai/test"], port=4000, config_path=str(config))
+
+        config.write_bytes(b"substituted: true\n")
+
+        with (
+            patch("shutil.which", return_value="/usr/local/bin/litellm"),
+            patch("mulder.orchestrator.proxy._wait_for_health", return_value=True),
+            patch("subprocess.Popen") as mock_popen,
+        ):
+            mock_popen.return_value = MagicMock()
+            pm.start()
+
+        launched = mock_popen.call_args.args[0]
+        launched_config = Path(launched[launched.index("--config") + 1])
+        assert launched_config != config
+        assert launched_config.read_bytes() == b"original: true\n"
+        pm.stop()
+
+    def test_custom_config_inputs_are_mutually_exclusive(self, tmp_path: Path) -> None:
+        config = tmp_path / "litellm.yaml"
+        config.write_bytes(b"model_list: []\n")
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            ProxyManager(
+                models=["openai/test"],
+                config_path=str(config),
+                config_snapshot=b"model_list: []\n",
+            )
 
     @patch("shutil.which", return_value="/usr/local/bin/litellm")
     @patch("mulder.orchestrator.proxy._wait_for_health", return_value=True)

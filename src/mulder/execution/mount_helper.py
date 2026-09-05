@@ -14,6 +14,13 @@ import shutil
 from pathlib import Path
 
 from mulder.execution import safe_subprocess as subprocess
+from mulder.execution.mount_protocol import (
+    canonical_mount_path,
+    mount_request_digest,
+    mount_request_payload,
+    mount_response_payload,
+    validate_mount_request_digest,
+)
 
 _SECTOR_SIZE = 512
 _MMLS_ROW_RE = re.compile(r"^\d+:\d+\s+(\d+)\s+\d+\s+(\d+)\s+(.+)$", re.MULTILINE)
@@ -113,34 +120,31 @@ def _mount_e01(image_path: Path, mount_point: Path) -> bool:
     return _guestmount(image_path, mount_point, 180)
 
 
-def _validated_existing_path(value: str, *, directory: bool) -> Path:
-    path = Path(value)
-    if not path.is_absolute() or path.is_symlink():
-        raise ValueError("helper paths must be absolute and may not be symlinks")
-    resolved = path.resolve(strict=True)
-    if directory and not resolved.is_dir():
-        raise ValueError("mount point must be an existing directory")
-    if not directory and not resolved.is_file():
-        raise ValueError("image must be an existing regular file")
-    return resolved
+def _operation_path(value: str, *, directory: bool) -> tuple[Path, Path]:
+    """Return canonical identity and descriptor-preserving operation paths."""
+    raw = Path(value)
+    canonical = canonical_mount_path(raw, directory=directory)
+    if str(raw).startswith("/proc/self/fd/"):
+        return canonical, raw
+    return canonical, canonical
 
 
 def perform(action: str, path: str, mount_point: str | None = None) -> bool:
     """Perform one operation from the closed mount-helper protocol."""
     if action == "mount":
-        image = _validated_existing_path(path, directory=False)
+        canonical_image, image = _operation_path(path, directory=False)
         if mount_point is None:
             raise ValueError("mount requires a mount point")
-        target = _validated_existing_path(mount_point, directory=True)
+        _canonical_target, target = _operation_path(mount_point, directory=True)
         return (
             _mount_e01(image, target)
-            if image.suffix.lower() == ".e01"
+            if canonical_image.suffix.lower() == ".e01"
             else _mount_raw(image, target)
         )
     if action == "unmount":
         if mount_point is not None:
             raise ValueError("unmount accepts one path")
-        target = _validated_existing_path(path, directory=True)
+        _canonical_target, target = _operation_path(path, directory=True)
         main_ok = _unmount_path(target)
         ewf_dir = target / "_ewf"
         if ewf_dir.exists():
@@ -154,20 +158,46 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="mulder-mount-helper")
     subparsers = parser.add_subparsers(dest="action", required=True)
     mount_parser = subparsers.add_parser("mount")
+    mount_parser.add_argument("--nonce", required=True)
+    mount_parser.add_argument("--request-digest", required=True)
     mount_parser.add_argument("image")
     mount_parser.add_argument("mount_point")
     unmount_parser = subparsers.add_parser("unmount")
+    unmount_parser.add_argument("--nonce", required=True)
+    unmount_parser.add_argument("--request-digest", required=True)
     unmount_parser.add_argument("mount_point")
     args = parser.parse_args(argv)
     try:
+        validate_mount_request_digest(args.request_digest)
         if args.action == "mount":
+            image = canonical_mount_path(
+                args.image,
+                directory=False,
+                descriptor_only=True,
+            )
+            mount_point = canonical_mount_path(
+                args.mount_point,
+                directory=True,
+                descriptor_only=True,
+            )
+            request = mount_request_payload("mount", args.nonce, mount_point, image)
+            if mount_request_digest(request) != args.request_digest:
+                raise ValueError("mount request commitment mismatch")
             ok = perform("mount", args.image, args.mount_point)
         else:
+            mount_point = canonical_mount_path(
+                args.mount_point,
+                directory=True,
+                descriptor_only=True,
+            )
+            request = mount_request_payload("unmount", args.nonce, mount_point)
+            if mount_request_digest(request) != args.request_digest:
+                raise ValueError("mount request commitment mismatch")
             ok = perform("unmount", args.mount_point)
     except (OSError, ValueError) as exc:
         print(json.dumps({"ok": False, "reason": type(exc).__name__}, sort_keys=True))
         return 2
-    print(json.dumps({"ok": ok}, sort_keys=True))
+    print(json.dumps(mount_response_payload(request, args.request_digest, ok=ok), sort_keys=True))
     return 0 if ok else 1
 
 

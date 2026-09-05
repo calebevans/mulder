@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import shutil
+import stat
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
+from os import stat_result
 from pathlib import Path
+from types import MappingProxyType
 
 from mulder.path_policy import PathPolicyError, resolve_allowed_path
 
@@ -41,7 +45,7 @@ class CommandRequest:
     executable: str
     arguments: tuple[str | PathArgument, ...] = ()
     cwd: Path | None = None
-    environment: dict[str, str] = field(default_factory=dict)
+    environment: Mapping[str, str] = field(default_factory=dict)
     timeout_seconds: float = 600.0
     max_output_bytes: int = 16 * 1024 * 1024
     max_memory_bytes: int | None = None
@@ -61,6 +65,52 @@ class CommandRequest:
             raise ValueError("max_cpu_seconds must be positive")
         if any("\x00" in arg for arg in self.arguments if isinstance(arg, str)):
             raise ValueError("command arguments may not contain NUL bytes")
+        environment = dict(self.environment)
+        if any(
+            not isinstance(name, str)
+            or not isinstance(value, str)
+            or "\x00" in name
+            or "\x00" in value
+            for name, value in environment.items()
+        ):
+            raise ValueError("environment names and values must be NUL-free strings")
+        object.__setattr__(self, "environment", MappingProxyType(environment))
+
+
+@dataclass(frozen=True)
+class PathIdentity:
+    """Stable identity captured while policy resolves a filesystem object."""
+
+    device: int
+    inode: int
+    mode: int
+    size: int
+    mtime_ns: int
+    ctime_ns: int
+
+    @classmethod
+    def from_stat(cls, value: stat_result) -> PathIdentity:
+        """Build an identity from an ``os.stat_result``-compatible object."""
+        return cls(
+            device=value.st_dev,
+            inode=value.st_ino,
+            mode=value.st_mode,
+            size=value.st_size,
+            mtime_ns=value.st_mtime_ns,
+            ctime_ns=value.st_ctime_ns,
+        )
+
+    def same_object(self, other: PathIdentity) -> bool:
+        """Return whether *other* still names the same filesystem object."""
+        return (
+            self.device == other.device
+            and self.inode == other.inode
+            and stat.S_IFMT(self.mode) == stat.S_IFMT(other.mode)
+        )
+
+    def same_metadata(self, other: PathIdentity) -> bool:
+        """Return whether identity and mutation-sensitive metadata are unchanged."""
+        return self == other
 
 
 @dataclass(frozen=True)
@@ -75,6 +125,11 @@ class PolicyDecision:
     resolved_cwd: Path | None = None
     resolved_input_paths: tuple[Path, ...] = ()
     resolved_output_paths: tuple[Path, ...] = ()
+    executable_identity: PathIdentity | None = None
+    cwd_identity: PathIdentity | None = None
+    input_identities: tuple[PathIdentity, ...] = ()
+    output_identities: tuple[PathIdentity | None, ...] = ()
+    environment_sha256: str | None = None
 
 
 _DANGEROUS_ENVIRONMENT = frozenset(
@@ -126,6 +181,51 @@ class CommandPolicy:
     max_output_bytes: int = 64 * 1024 * 1024
     max_memory_bytes: int | None = None
     max_cpu_seconds: int | None = None
+    _executable_pins: tuple[tuple[Path, PathIdentity], ...] = field(
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    _root_pins: tuple[tuple[Path, PathIdentity], ...] = field(
+        init=False,
+        repr=False,
+        compare=False,
+    )
+
+    def __post_init__(self) -> None:
+        """Pin executable and root identities when authority is constructed."""
+        executable_pins: list[tuple[Path, PathIdentity]] = []
+        for path in self.allowed_executables:
+            try:
+                resolved = path.resolve(strict=True)
+                value = resolved.stat()
+            except (OSError, RuntimeError) as exc:
+                raise ValueError(f"allowed executable is unavailable: {path}") from exc
+            if not stat.S_ISREG(value.st_mode):
+                raise ValueError(f"allowed executable is not a regular file: {path}")
+            executable_pins.append((resolved, PathIdentity.from_stat(value)))
+
+        root_pins: list[tuple[Path, PathIdentity]] = []
+        for path in self.allowed_roots:
+            try:
+                resolved = path.resolve(strict=True)
+                value = resolved.stat()
+            except (OSError, RuntimeError) as exc:
+                raise ValueError(f"allowed root is unavailable: {path}") from exc
+            root_pins.append((resolved, PathIdentity.from_stat(value)))
+
+        object.__setattr__(self, "_executable_pins", tuple(executable_pins))
+        object.__setattr__(self, "_root_pins", tuple(root_pins))
+
+    @property
+    def executable_pins(self) -> tuple[tuple[Path, PathIdentity], ...]:
+        """Return immutable executable path/identity commitments."""
+        return self._executable_pins
+
+    @property
+    def root_pins(self) -> tuple[tuple[Path, PathIdentity], ...]:
+        """Return immutable authorized-root path/identity commitments."""
+        return self._root_pins
 
     @classmethod
     def for_executable(
@@ -162,13 +262,30 @@ class CommandPolicy:
                 "executable_unresolvable",
                 "Executable could not be resolved safely",
             )
-        pinned = {path.resolve(strict=False) for path in self.allowed_executables}
+        pinned = dict(self._executable_pins)
         if resolved_executable not in pinned:
             return PolicyDecision(
                 False,
                 "executable_denied",
                 "Resolved executable is not in the policy allowlist",
                 resolved_executable=resolved_executable,
+            )
+        try:
+            executable_identity = PathIdentity.from_stat(resolved_executable.stat())
+        except OSError:
+            return PolicyDecision(
+                False,
+                "executable_unavailable",
+                "Executable changed after policy construction",
+                resolved_executable=resolved_executable,
+            )
+        if not pinned[resolved_executable].same_metadata(executable_identity):
+            return PolicyDecision(
+                False,
+                "executable_identity_changed",
+                "Executable changed after policy construction",
+                resolved_executable=resolved_executable,
+                executable_identity=executable_identity,
             )
         if request.network_class not in self.allowed_network_classes:
             return PolicyDecision(
@@ -240,9 +357,14 @@ class CommandPolicy:
                 if request.cwd is not None
                 else None
             )
+            cwd_identity = (
+                PathIdentity.from_stat(resolved_cwd.stat()) if resolved_cwd is not None else None
+            )
             resolved_arguments: list[str] = []
             resolved_inputs: list[Path] = []
             resolved_outputs: list[Path] = []
+            input_identities: list[PathIdentity] = []
+            output_identities: list[PathIdentity | None] = []
             for argument in request.arguments:
                 if isinstance(argument, str):
                     resolved_arguments.append(argument)
@@ -251,9 +373,14 @@ class CommandPolicy:
                 resolved_arguments.append(str(resolved_path))
                 if argument.access in {PathAccess.READ, PathAccess.READ_WRITE}:
                     resolved_inputs.append(resolved_path)
+                    input_identities.append(PathIdentity.from_stat(resolved_path.stat()))
                 if argument.access in {PathAccess.WRITE, PathAccess.READ_WRITE}:
                     resolved_outputs.append(resolved_path)
-        except PathPolicyError:
+                    try:
+                        output_identities.append(PathIdentity.from_stat(resolved_path.stat()))
+                    except FileNotFoundError:
+                        output_identities.append(None)
+        except (OSError, PathPolicyError):
             return PolicyDecision(
                 False,
                 "path_denied",
@@ -265,10 +392,14 @@ class CommandPolicy:
             "permitted",
             "Command satisfies the declared execution policy",
             resolved_executable=resolved_executable,
+            executable_identity=executable_identity,
             resolved_arguments=tuple(resolved_arguments),
             resolved_cwd=resolved_cwd,
             resolved_input_paths=tuple(resolved_inputs),
             resolved_output_paths=tuple(resolved_outputs),
+            cwd_identity=cwd_identity,
+            input_identities=tuple(input_identities),
+            output_identities=tuple(output_identities),
         )
 
 

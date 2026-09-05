@@ -29,6 +29,7 @@ class _ManagedProcess(Protocol):
 
     def wait(self, timeout: float | None = None) -> int: ...
 
+
 _LITELLM_PREFIXES: tuple[str, ...] = (
     "bedrock/",
     "openai/",
@@ -40,6 +41,20 @@ _LITELLM_PREFIXES: tuple[str, ...] = (
 _DEFAULT_PORT: int = 4000
 _HEALTH_CHECK_TIMEOUT: float = 30.0
 _HEALTH_CHECK_INTERVAL: float = 0.5
+_MAX_CUSTOM_CONFIG_BYTES: int = 8 * 1024 * 1024
+
+
+def snapshot_proxy_config(config_path: str) -> tuple[str, bytes]:
+    """Read and bind a custom proxy configuration before run commitment."""
+    path = Path(config_path).expanduser().resolve(strict=True)
+    if not path.is_file():
+        raise ValueError(f"proxy config is not a regular file: {path}")
+    size = path.stat().st_size
+    if size > _MAX_CUSTOM_CONFIG_BYTES:
+        raise ValueError(
+            f"proxy config exceeds {_MAX_CUSTOM_CONFIG_BYTES} byte safety limit: {path}"
+        )
+    return str(path), path.read_bytes()
 
 
 def is_proxy_model(model_id: str) -> bool:
@@ -153,6 +168,7 @@ class ProxyManager:
         models: list[str],
         port: int | None = None,
         config_path: str | None = None,
+        config_snapshot: bytes | None = None,
         process_env: Mapping[str, str] | None = None,
     ) -> None:
         """Initialize the proxy manager.
@@ -163,14 +179,23 @@ class ProxyManager:
                 value of MULDER_PROXY_PORT env var.
             config_path: Optional path to a user-provided LiteLLM config
                 YAML. When provided, the auto-generated config is skipped
-                and this file is used instead.
+                and an immutable copy is captured immediately.
+            config_snapshot: Already-captured custom configuration. This is
+                mutually exclusive with ``config_path``.
             process_env: Environment overrides for the proxy subprocess.
         """
         import os
 
         self._models = models
         self._port = port or int(os.environ.get("MULDER_PROXY_PORT", _DEFAULT_PORT))
-        self._config_path = config_path
+        if config_path is not None and config_snapshot is not None:
+            raise ValueError("config_path and config_snapshot are mutually exclusive")
+        self._config_path: str | None = None
+        self._config_snapshot: bytes | None = None
+        if config_path is not None:
+            self._config_path, self._config_snapshot = snapshot_proxy_config(config_path)
+        elif config_snapshot is not None:
+            self._config_snapshot = bytes(config_snapshot)
         self._process_env = dict(process_env or {})
         self._process: _ManagedProcess | None = None
         self._temp_config: Path | None = None
@@ -219,17 +244,23 @@ class ProxyManager:
                 "pip install 'litellm[proxy]' or rebuild the Docker image."
             )
 
-        if self._config_path:
-            config_file = self._config_path
-        else:
+        if self._config_snapshot is None:
             config = _build_proxy_config(self._models, self._port)
-            fd, tmp_path = tempfile.mkstemp(suffix=".yaml", prefix="mulder_litellm_")
-            self._temp_config = Path(tmp_path)
+            config_bytes = yaml.dump(config, default_flow_style=False).encode("utf-8")
+        else:
+            config_bytes = self._config_snapshot
+        fd, tmp_path = tempfile.mkstemp(suffix=".yaml", prefix="mulder_litellm_")
+        self._temp_config = Path(tmp_path)
+        try:
+            remaining = memoryview(config_bytes)
+            while remaining:
+                written = os.write(fd, remaining)
+                if written <= 0:
+                    raise OSError("failed to write snapshotted proxy configuration")
+                remaining = remaining[written:]
+        finally:
             os.close(fd)
-            self._temp_config.write_text(
-                yaml.dump(config, default_flow_style=False), encoding="utf-8"
-            )
-            config_file = str(self._temp_config)
+        config_file = str(self._temp_config)
 
         cmd = [
             litellm_bin,

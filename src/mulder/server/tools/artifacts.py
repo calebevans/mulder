@@ -22,6 +22,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from mulder.adapters.catalog import committed_entry_path, evidence_types
+from mulder.adapters.intake import (
+    IntakeError,
+    load_intake_manifest_commitment,
+    read_intake_member,
+)
 from mulder.execution import safe_subprocess as subprocess
 from mulder.path_policy import PathPolicyError, resolve_allowed_path
 from mulder.security.evidence_envelope import present_model_evidence
@@ -620,9 +626,7 @@ def read_evidence_file(
         max_characters=(2000 if is_binary else max(1, max_bytes)),
     )
     result = {
-        **presentation.response_fields(
-            content_key="content", metadata_key="evidence_envelope"
-        ),
+        **presentation.response_fields(content_key="content", metadata_key="evidence_envelope"),
         "file_size": file_size,
         "truncated": truncated,
         "is_binary": is_binary,
@@ -1151,10 +1155,7 @@ def _analyze_mft_windows_for_timestomping(
 
 @mcp.tool()
 @tool_access(
-    Role.EXTRACT_EXECUTOR
-    | Role.EXTRACT_ANALYST
-    | Role.CROSS_EXECUTOR
-    | Role.NARRATIVE_EXECUTOR
+    Role.EXTRACT_EXECUTOR | Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR | Role.NARRATIVE_EXECUTOR
 )
 def detect_timestomping() -> dict[str, object]:
     """Analyze MFT data for files with manipulated timestamps (timestomping).
@@ -1323,17 +1324,8 @@ def _discover_autoruns_csvs(evidence_path: str) -> list[Path]:
     return sorted(candidates)
 
 
-def _parse_autoruns_csv_content(csv_path: Path) -> tuple[list[str], str]:
-    """Parse an Autoruns CSV and return formatted lines and hostname hint.
-
-    Handles both comma-separated and tab-separated variants, and is
-    robust to missing columns. Returns (lines, hostname).
-    """
-    try:
-        raw = csv_path.read_text(encoding="utf-8-sig", errors="replace")
-    except OSError:
-        raw = csv_path.read_text(encoding="utf-8", errors="replace")
-
+def _parse_autoruns_csv_text(raw: str) -> tuple[list[str], str]:
+    """Parse decoded Autoruns CSV/TSV content into bounded index lines."""
     if not raw.strip():
         return [], ""
 
@@ -1349,9 +1341,6 @@ def _parse_autoruns_csv_content(csv_path: Path) -> tuple[list[str], str]:
     reader.fieldnames = fieldnames
 
     hostname = ""
-    if "Profile" in fieldnames:
-        pass  # extract from first row below
-
     lines: list[str] = []
     for row in reader:
         entry_location = row.get("Entry Location", "").strip()
@@ -1392,16 +1381,34 @@ def _parse_autoruns_csv_content(csv_path: Path) -> tuple[list[str], str]:
     return lines, hostname
 
 
+def _parse_autoruns_csv_content(csv_path: Path) -> tuple[list[str], str]:
+    """Parse an Autoruns CSV and return formatted lines and hostname hint.
+
+    Handles both comma-separated and tab-separated variants, and is
+    robust to missing columns. Returns (lines, hostname).
+    """
+    try:
+        raw = csv_path.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        raw = csv_path.read_text(encoding="utf-8", errors="replace")
+
+    return _parse_autoruns_csv_text(raw)
+
+
 @mcp.tool()
 @tool_access(
-    Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR,
+    Role.AUTORUNS_INGEST,
     effects=(
         ToolEffect.CASE_READ,
         ToolEffect.FORENSIC_EXECUTION,
         ToolEffect.CASE_WRITE,
     ),
 )
-def parse_autoruns(csv_path: str = "", force: bool = False) -> dict[str, object]:
+def parse_autoruns(
+    csv_path: str = "",
+    force: bool = False,
+    artifact_ids: list[str] | None = None,
+) -> dict[str, object]:
     """Parse Sysinternals Autoruns CSV output to identify persistence mechanisms.
 
     Call when autoruns CSV files are present in the evidence. Indexes all
@@ -1412,13 +1419,30 @@ def parse_autoruns(csv_path: str = "", force: bool = False) -> dict[str, object]
         csv_path: Path to the Autoruns CSV file (or auto-discover from
             evidence/extracted directories if empty).
         force: Re-run even if already indexed.
+        artifact_ids: Exact committed artifact IDs for the dedicated ingest seat.
     """
     from mulder.server.helpers import sources_already_indexed
 
     ctx = get_ctx()
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
-    params: dict[str, object] = {"csv_path": csv_path, "force": force}
+    params: dict[str, object] = {
+        "csv_path": csv_path,
+        "force": force,
+        "artifact_ids": list(artifact_ids or ()),
+    }
+
+    from mulder.orchestrator.capabilities import identity_from_bound_environment
+
+    bound_identity = identity_from_bound_environment()
+    if bound_identity is not None and (
+        bound_identity.role is Role.AUTORUNS_INGEST and (csv_path or not artifact_ids)
+    ):
+        return {
+            "tool_call_id": tc_id,
+            "status": "error",
+            "error_message": "The ingest seat accepts committed artifact_ids only.",
+        }
 
     if not force:
         existing = sources_already_indexed(["autoruns."])
@@ -1438,13 +1462,50 @@ def parse_autoruns(csv_path: str = "", force: bool = False) -> dict[str, object]
                 "hint": "Use force=True to re-index.",
             }
 
-    csv_files = (
-        [Path(csv_path)]
-        if csv_path and Path(csv_path).is_file()
-        else _discover_autoruns_csvs(csv_path)
-    )
+    committed_inputs: list[tuple[str, str]] = []
+    if artifact_ids:
+        manifest_path = Path(get_cfg().db_dir) / f"{ctx.case_id}.intake.json"
+        try:
+            manifest = load_intake_manifest_commitment(manifest_path)
+            prefix = f"{manifest.collection_digest}:"
+            for artifact_id in artifact_ids:
+                if not artifact_id.startswith(prefix):
+                    raise IntakeError("Autoruns artifact belongs to another collection")
+                index_text = artifact_id.removeprefix(prefix)
+                if not index_text.isdigit():
+                    raise IntakeError("Autoruns artifact ID is malformed")
+                index = int(index_text)
+                if index >= len(manifest.entries):
+                    raise IntakeError("Autoruns artifact ID is outside the manifest")
+                entry = manifest.entries[index]
+                if "autoruns" not in evidence_types(entry):
+                    raise IntakeError("Committed artifact is not an Autoruns CSV/TSV")
+                content = read_intake_member(
+                    manifest,
+                    entry.relative_path,
+                    max_bytes=64 * 1024 * 1024,
+                )
+                committed_inputs.append(
+                    (
+                        committed_entry_path(manifest, entry),
+                        content.decode("utf-8-sig", errors="replace"),
+                    )
+                )
+        except (IntakeError, OSError) as exc:
+            return {
+                "tool_call_id": tc_id,
+                "status": "error",
+                "error_message": f"Committed Autoruns input is unavailable: {exc}",
+            }
+        csv_files: list[Path] = []
+    else:
+        csv_files = (
+            [Path(csv_path)]
+            if csv_path and Path(csv_path).is_file()
+            else _discover_autoruns_csvs(csv_path)
+        )
 
-    if not csv_files:
+    if not csv_files and not committed_inputs:
         elapsed = (time.monotonic() - t0) * 1000
         ctx.audit.log_tool_call(
             tool_call_id=tc_id,
@@ -1465,14 +1526,16 @@ def parse_autoruns(csv_path: str = "", force: bool = False) -> dict[str, object]
     total_entries = 0
     indexed_sources: list[str] = []
 
-    for csv_file in csv_files:
-        lines, hostname = _parse_autoruns_csv_content(csv_file)
+    parsed_inputs = [
+        (str(csv_file), _parse_autoruns_csv_content(csv_file)) for csv_file in csv_files
+    ] + [(source_path, _parse_autoruns_csv_text(raw)) for source_path, raw in committed_inputs]
+    for source_path, (lines, hostname) in parsed_inputs:
         if not lines:
             continue
 
         source_name = f"autoruns.{hostname}" if hostname else "autoruns"
         combined = "\n".join(lines)
-        extract_and_index(combined, source_name, str(csv_file), "autoruns_parser")
+        extract_and_index(combined, source_name, source_path, "autoruns_parser")
         total_entries += len(lines)
         indexed_sources.append(source_name)
 
@@ -1486,7 +1549,7 @@ def parse_autoruns(csv_path: str = "", force: bool = False) -> dict[str, object]
             "status": "success",
             "sources_indexed": indexed_sources,
             "total_entries": total_entries,
-            "files_parsed": len(csv_files),
+            "files_parsed": len(parsed_inputs),
         }
 
     elapsed = (time.monotonic() - t0) * 1000

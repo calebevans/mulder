@@ -12,14 +12,18 @@ import pytest
 
 from mulder.adapters import IntakeError, IntakeManifest, prepare_evidence_case, scan_collection
 from mulder.adapters.catalog import CATALOG_PAGE_MAX_BYTES, manifest_catalog_page
+from mulder.orchestrator.capabilities import (
+    DELEGATION_GRANT_ENV,
+    DELEGATION_SECRET_ENV,
+    create_delegation_grant,
+    identity_for_phase,
+)
 from mulder.orchestrator.evidence import EvidenceContext
 from mulder.orchestrator.types import PhaseResult
 from mulder.server import app
 
 
-def _context(
-    source: Path, case_id: str, db_dir: Path
-) -> tuple[IntakeManifest, EvidenceContext]:
+def _context(source: Path, case_id: str, db_dir: Path) -> tuple[IntakeManifest, EvidenceContext]:
     manifest = prepare_evidence_case(source, case_id, db_dir)
     return manifest, EvidenceContext(str(source), manifest=manifest)
 
@@ -118,9 +122,7 @@ def test_mixed_directory_assigns_every_committed_evidence_kind_without_name_filt
     _manifest, context = _context(source, "mixed", tmp_path / "cases")
 
     decoded = json.loads(context.build_evidence_context("unrelated-model-name"))
-    types = {
-        kind for entry in decoded["entries"] for kind in entry["evidence_types"]
-    }
+    types = {kind for entry in decoded["entries"] for kind in entry["evidence_types"]}
 
     assert {"disk_image", "memory_dump", "network_capture", "autoruns", "archive"} <= types
     assert decoded["assigned_artifact_count"] == 5
@@ -253,3 +255,60 @@ def test_nested_archive_member_uses_verified_outer_materialization(tmp_path: Pat
     )
     assert rejected["status"] == "error"
     assert rejected["error_type"] == "intake_verification_failed"
+
+
+def test_dedicated_autoruns_seat_reads_only_committed_artifact_ids(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "evidence"
+    source.mkdir()
+    autoruns = source / "Autoruns.csv"
+    autoruns.write_text(
+        "Entry Location,Entry,Image Path,Profile\nHKLM\\Run,Bad,C:\\bad.exe,HOST-A\n"
+    )
+    manifest = prepare_evidence_case(source, "case-a", tmp_path / "cases")
+    app.init_server(tmp_path / "cases", mem_percent_limit=0, cpu_percent_limit=0)
+    app._tool_dispatch_sync["open_case"]("case-a")
+    secret = "dedicated-autoruns-test-secret"
+    identity = identity_for_phase("autoruns_ingest", "single")
+    monkeypatch.setenv(DELEGATION_SECRET_ENV, secret)
+    monkeypatch.setenv(DELEGATION_GRANT_ENV, create_delegation_grant(identity, secret))
+
+    result = app._tool_dispatch_sync["parse_autoruns"](
+        artifact_ids=[f"{manifest.collection_digest}:0"]
+    )
+
+    assert result["status"] == "success"
+    assert result["result_count"] == 1
+    assert result["sources"] == ["autoruns.host-a"]
+
+
+def test_dedicated_autoruns_seat_rejects_changed_or_non_autoruns_members(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "evidence"
+    source.mkdir()
+    autoruns = source / "Autoruns.csv"
+    autoruns.write_text("Entry,Image Path\nRun,C:\\good.exe\n")
+    (source / "notes.txt").write_text("not autoruns")
+    manifest = prepare_evidence_case(source, "case-a", tmp_path / "cases")
+    app.init_server(tmp_path / "cases", mem_percent_limit=0, cpu_percent_limit=0)
+    app._tool_dispatch_sync["open_case"]("case-a")
+    secret = "dedicated-autoruns-test-secret"
+    identity = identity_for_phase("autoruns_ingest", "single")
+    monkeypatch.setenv(DELEGATION_SECRET_ENV, secret)
+    monkeypatch.setenv(DELEGATION_GRANT_ENV, create_delegation_grant(identity, secret))
+    by_name = {entry.relative_path: index for index, entry in enumerate(manifest.entries)}
+
+    wrong_type = app._tool_dispatch_sync["parse_autoruns"](
+        artifact_ids=[f"{manifest.collection_digest}:{by_name['notes.txt']}"]
+    )
+    assert wrong_type["status"] == "error"
+    assert "not an Autoruns" in wrong_type["error_message"]
+
+    autoruns.write_text("Entry,Image Path\nRun,C:\\changed.exe\n")
+    changed = app._tool_dispatch_sync["parse_autoruns"](
+        artifact_ids=[f"{manifest.collection_digest}:{by_name['Autoruns.csv']}"]
+    )
+    assert changed["status"] == "error"
+    assert "changed" in changed["error_message"]

@@ -18,7 +18,9 @@ from mulder.execution import (
     ExecutionStatus,
     NetworkClass,
     NetworkIsolationPlan,
+    PathAccess,
     PathArgument,
+    UnshareNetworkIsolationBackend,
     safe_subprocess,
 )
 from mulder.server import helpers
@@ -35,7 +37,9 @@ def _python_policy(**kwargs: object) -> CommandPolicy:
 
 
 class _VerifiedTestIsolation:
-    def prepare(self, argv: tuple[str, ...]) -> NetworkIsolationPlan:
+    def prepare(
+        self, argv: tuple[str, ...], _descriptor_bindings: object = ()
+    ) -> NetworkIsolationPlan:
         return NetworkIsolationPlan(
             enforced=True,
             backend="test-netns",
@@ -50,13 +54,32 @@ class _VerifiedTestIsolation:
 
 
 class _UnavailableTestIsolation:
-    def prepare(self, argv: tuple[str, ...]) -> NetworkIsolationPlan:
+    def prepare(
+        self, argv: tuple[str, ...], _descriptor_bindings: object = ()
+    ) -> NetworkIsolationPlan:
         return NetworkIsolationPlan(
             enforced=False,
             backend="unavailable-test-backend",
             argv=argv,
             reason_code="network_isolation_unavailable",
             message="test backend unavailable",
+        )
+
+
+class _CallbackTestIsolation:
+    def __init__(self, callback: object) -> None:
+        self._callback = callback
+
+    def prepare(
+        self, argv: tuple[str, ...], _descriptor_bindings: object = ()
+    ) -> NetworkIsolationPlan:
+        self._callback()  # type: ignore[operator]
+        return NetworkIsolationPlan(
+            enforced=True,
+            backend="callback-test-netns",
+            argv=argv,
+            reason_code="network_isolation_enforced",
+            message="deterministic callback isolation",
         )
 
 
@@ -193,15 +216,138 @@ def test_authorized_path_argument_is_replaced_with_resolved_path(tmp_path: Path)
             executable=sys.executable,
             arguments=(
                 "-c",
-                "import sys; print(sys.argv[1])",
+                "from pathlib import Path; import sys; print(Path(sys.argv[1]).read_text())",
                 PathArgument(root / "." / "artifact.txt"),
             ),
             timeout_seconds=2,
         )
     )
     assert result.status is ExecutionStatus.COMPLETED
-    assert result.stdout.decode().strip() == str(artifact.resolve())
+    assert result.stdout == b"evidence\n"
     assert result.decision.resolved_input_paths == (artifact.resolve(),)
+
+
+def test_executable_replacement_after_authorization_executes_held_descriptor(
+    tmp_path: Path,
+) -> None:
+    executable = tmp_path / "tool"
+    executable.write_text("#!/bin/sh\necho ORIGINAL\n")
+    executable.chmod(0o700)
+    policy = CommandPolicy(allowed_executables=frozenset({executable}))
+
+    def replace_executable() -> None:
+        executable.rename(tmp_path / "authorized-tool")
+        executable.write_text("#!/bin/sh\necho SWAPPED\n")
+        executable.chmod(0o700)
+
+    result = CommandRunner(
+        policy,
+        network_isolation=_CallbackTestIsolation(replace_executable),
+    ).run(CommandRequest(executable=str(executable), timeout_seconds=2))
+
+    assert result.status is ExecutionStatus.COMPLETED
+    assert result.stdout == b"ORIGINAL\n"
+
+
+@pytest.mark.parametrize("target", ["input", "output", "cwd"])
+def test_authorized_root_swap_before_launch_is_denied(tmp_path: Path, target: str) -> None:
+    root = tmp_path / "authorized"
+    root.mkdir()
+    original = root / "input.txt"
+    original.write_text("ORIGINAL")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "input.txt").write_text("SWAPPED")
+    output = root / "output.txt"
+    policy = _python_policy(allowed_roots=(root,))
+
+    def swap_root() -> None:
+        root.rename(tmp_path / "held-root")
+        root.symlink_to(outside, target_is_directory=True)
+
+    if target == "input":
+        arguments = (
+            "-c",
+            "from pathlib import Path; import sys; print(Path(sys.argv[1]).read_text())",
+            PathArgument(original),
+        )
+        cwd = None
+    elif target == "output":
+        arguments = (
+            "-c",
+            "from pathlib import Path; import sys; Path(sys.argv[1]).write_text('ESCAPED')",
+            PathArgument(output, PathAccess.WRITE),
+        )
+        cwd = None
+    else:
+        arguments = ("-c", "import os; print(os.getcwd())")
+        cwd = root
+
+    result = CommandRunner(
+        policy,
+        network_isolation=_CallbackTestIsolation(swap_root),
+    ).run(
+        CommandRequest(
+            executable=sys.executable,
+            arguments=arguments,
+            cwd=cwd,
+            timeout_seconds=2,
+        )
+    )
+
+    assert result.status is ExecutionStatus.DENIED
+    assert result.decision.reason_code == "network_isolation_invalid"
+    assert not (outside / "output.txt").exists()
+
+
+def test_new_output_is_staged_and_committed_through_held_parent(tmp_path: Path) -> None:
+    output = tmp_path / "result.txt"
+    result = _runner(_python_policy(allowed_roots=(tmp_path,))).run(
+        CommandRequest(
+            executable=sys.executable,
+            arguments=(
+                "-c",
+                "from pathlib import Path; import sys; Path(sys.argv[1]).write_text('SAFE')",
+                PathArgument(output, PathAccess.WRITE),
+            ),
+            timeout_seconds=2,
+        )
+    )
+
+    assert result.status is ExecutionStatus.COMPLETED
+    assert output.read_text() == "SAFE"
+
+
+def test_request_environment_is_frozen_snapshotted_and_receipted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_environment = {"PATH": "/authorized/bin"}
+    request = CommandRequest(
+        executable=sys.executable,
+        arguments=("-c", "import os; print(os.environ['PATH'])"),
+        environment=original_environment,
+        timeout_seconds=2,
+    )
+    original_environment["PATH"] = "/mutated-before-run"
+    with pytest.raises(TypeError):
+        request.environment["PATH"] = "/mutated-request"  # type: ignore[index]
+
+    events: list[ExecutionAuditEvent] = []
+
+    def mutate_ambient_environment() -> None:
+        monkeypatch.setenv("PATH", str(tmp_path / "injected-bin"))
+
+    policy = _python_policy(allowed_environment_overrides=frozenset({"PATH"}))
+    result = CommandRunner(
+        policy,
+        audit_sink=events.append,
+        network_isolation=_CallbackTestIsolation(mutate_ambient_environment),
+    ).run(request)
+
+    assert result.status is ExecutionStatus.COMPLETED
+    assert result.stdout == b"/authorized/bin\n"
+    assert result.decision.environment_sha256 is not None
+    assert events[0].environment_sha256 == result.decision.environment_sha256
 
 
 def test_network_capability_is_fail_closed() -> None:
@@ -279,6 +425,16 @@ def test_none_network_fails_closed_and_receipts_backend_denial(tmp_path: Path) -
     assert result.network_backend == "unavailable-test-backend"
     assert events[0].network_enforcement == "network_isolation_unavailable"
     assert events[0].policy_decision == "deny"
+
+
+def test_unshare_backend_preserves_mount_namespace_and_descriptor_argv() -> None:
+    argv = ("/proc/self/fd/10", "-m", "helper", "/proc/self/fd/11")
+    wrapped = UnshareNetworkIsolationBackend._wrapped_argv(
+        "/usr/bin/unshare",
+        argv,
+    )
+
+    assert wrapped == ("/usr/bin/unshare", "--net", "--", *argv)
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="bubblewrap is Linux-only")
@@ -361,16 +517,25 @@ def test_compatibility_runner_binds_declared_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(helpers, "has_ctx", lambda: False)
+    monkeypatch.setattr(
+        "mulder.execution.runner._DEFAULT_NETWORK_ISOLATION_BACKEND",
+        _VerifiedTestIsolation(),
+    )
     artifact = tmp_path / "artifact.txt"
     artifact.write_text("evidence")
     result = helpers.run_subprocess(
-        [sys.executable, "-c", "import sys; print(sys.argv[1])", str(artifact)],
+        [
+            sys.executable,
+            "-c",
+            "from pathlib import Path; import sys; print(Path(sys.argv[1]).read_text())",
+            str(artifact),
+        ],
         timeout=2,
         input_paths=(artifact,),
         allowed_roots=(tmp_path,),
     )
     assert not isinstance(result, str)
-    assert result.stdout.strip() == str(artifact.resolve())
+    assert result.stdout.strip() == "evidence"
 
 
 def test_compatibility_runner_rejects_unbound_declared_path(tmp_path: Path) -> None:

@@ -101,9 +101,10 @@ class EvidenceContext:
         for artifact in artifacts[:128]:
             candidate = dict(payload)
             candidate["entries"] = [*assigned, artifact]
-            if len(
-                json.dumps(candidate, sort_keys=True, separators=(",", ":")).encode()
-            ) > 32 * 1024:
+            if (
+                len(json.dumps(candidate, sort_keys=True, separators=(",", ":")).encode())
+                > 32 * 1024
+            ):
                 break
             assigned.append(artifact)
         next_cursor = len(assigned)
@@ -130,11 +131,7 @@ class EvidenceContext:
         """
         if self._manifest is not None:
             briefing_entry = next(
-                (
-                    entry
-                    for entry in self._manifest.entries
-                    if entry.relative_path == "MULDER.md"
-                ),
+                (entry for entry in self._manifest.entries if entry.relative_path == "MULDER.md"),
                 None,
             )
             if briefing_entry is None:
@@ -295,9 +292,7 @@ class EvidenceContext:
             # Assigning all exact entries to each reported system is conservative:
             # it may duplicate work but cannot silently omit mixed evidence.
             artifacts = extraction_entries(self._manifest)
-            self._system_artifacts = {
-                system.casefold(): artifacts for system in systems
-            }
+            self._system_artifacts = {system.casefold(): artifacts for system in systems}
             type_names: set[str] = set()
             for artifact in artifacts:
                 artifact_types = artifact.get("evidence_types")
@@ -451,6 +446,20 @@ class ServerBridge:
         except Exception:
             logger.warning("get_summary failed", exc_info=True)
             return None
+
+    def has_source_prefix(self, prefix: str) -> bool:
+        """Return whether the case contains a persisted source with ``prefix``."""
+        try:
+            self.ensure_context()
+            import mulder.server.app as server_app
+
+            return any(
+                source.source_name.startswith(prefix)
+                for source in server_app.get_ctx().db.get_sources()
+            )
+        except Exception:
+            logger.warning("source-prefix check failed", exc_info=True)
+            return False
 
     def get_readiness(self) -> dict[str, Any] | None:
         """Retrieve finalize readiness via direct DB read.

@@ -16,6 +16,7 @@ from mulder.orchestrator.gates import (
     validate_narrative,
 )
 from mulder.orchestrator.models import ModelConfig
+from mulder.orchestrator.phases import AUTORUNS_INGEST
 from mulder.orchestrator.runner import Orchestrator
 from mulder.orchestrator.types import PhaseResult
 
@@ -44,6 +45,37 @@ class TestOrchestratorInit:
         assert orch.model_config.planner == "custom-planner"
         assert orch.model_config.executor == "custom-exec"
         assert orch.model_config.analyst == "custom-analyst"
+
+    def test_proxy_config_snapshot_binds_run_contract(self, tmp_path: Path) -> None:
+        config = tmp_path / "litellm.yaml"
+        config.write_bytes(b"original: true\n")
+        orch = _make_orchestrator(proxy_config=str(config))
+        committed = orch._run_contract_digest(approval_required=False)
+
+        config.write_bytes(b"substituted: true\n")
+
+        assert orch._run_contract_digest(approval_required=False) == committed
+        assert orch._proxy_config_snapshot == b"original: true\n"
+
+
+@pytest.mark.asyncio()
+async def test_autoruns_gate_requires_invocation_and_persisted_source() -> None:
+    orch = _make_orchestrator()
+    result = PhaseResult(
+        phase_name="autoruns_ingest",
+        tool_names=["parse_autoruns"],
+    )
+
+    with patch.object(orch._server, "has_source_prefix", return_value=False):
+        failed = await orch._validate_phase(AUTORUNS_INGEST, result)
+    assert failed is not None
+    assert failed.passed is False
+    assert "did not persist" in failed.gaps[0]
+
+    with patch.object(orch._server, "has_source_prefix", return_value=True):
+        passed = await orch._validate_phase(AUTORUNS_INGEST, result)
+    assert passed is not None
+    assert passed.passed is True
 
 
 class TestSplitPhaseHappyPath:

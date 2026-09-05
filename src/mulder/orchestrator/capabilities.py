@@ -21,6 +21,7 @@ from mulder.server.tool_access import (
     get_registered_tool_effect,
     get_registered_tool_effect_set,
     get_registered_tool_roles,
+    get_tools_for_role,
 )
 
 
@@ -105,6 +106,21 @@ def authorize_tool_list(identity: AgentIdentity, requested: list[str]) -> list[s
     return sorted(authorized)
 
 
+def tools_for_identity(identity: AgentIdentity) -> list[str]:
+    """Return the role's tools whose complete effects fit this identity.
+
+    A decorator role can be shared by seats with different authority.  Phase
+    construction must therefore intersect role membership with the independent
+    capability grant instead of handing the model every role-tagged tool and
+    relying on a later rejection.
+    """
+    return sorted(
+        tool_name
+        for tool_name in get_tools_for_role(identity.role)
+        if tool_capabilities(tool_name) <= identity.capabilities
+    )
+
+
 def create_delegation_grant(identity: AgentIdentity, secret: str) -> str:
     """Sign one session-scoped identity for server-side nested dispatch."""
     if not secret:
@@ -186,19 +202,13 @@ IDENTITIES: dict[tuple[str, str], AgentIdentity] = {
         _READ | {Capability.FORENSIC_EXECUTION, Capability.JOB_CONTROL},
     ),
     ("extraction", "analyst"): AgentIdentity(
-        "extraction-analyst",
-        Role.EXTRACT_ANALYST,
-        _READ_MUTATE | {Capability.FORENSIC_EXECUTION},
+        "extraction-analyst", Role.EXTRACT_ANALYST, _READ_MUTATE
     ),
     ("cross_system", "planner"): AgentIdentity("cross-planner", Role.CROSS_PLANNER, _READ),
     ("cross_system", "executor"): AgentIdentity(
-        "cross-executor",
-        Role.CROSS_EXECUTOR,
-        _READ_MUTATE | {Capability.FORENSIC_EXECUTION, Capability.JOB_CONTROL},
+        "cross-executor", Role.CROSS_EXECUTOR, _READ_MUTATE | {Capability.JOB_CONTROL}
     ),
-    ("cross_system", "analyst"): AgentIdentity(
-        "cross-analyst", Role.CROSS_ANALYST, _READ_MUTATE
-    ),
+    ("cross_system", "analyst"): AgentIdentity("cross-analyst", Role.CROSS_ANALYST, _READ_MUTATE),
     ("alternative_narrative", "planner"): AgentIdentity(
         "narrative-planner", Role.NARRATIVE_PLANNER, _READ
     ),
@@ -212,6 +222,11 @@ IDENTITIES: dict[tuple[str, str], AgentIdentity] = {
     ),
     ("report", "single"): AgentIdentity(
         "report", Role.REPORT, _READ | {Capability.CASE_WRITE, Capability.PUBLICATION}
+    ),
+    ("autoruns_ingest", "single"): AgentIdentity(
+        "autoruns-ingest",
+        Role.AUTORUNS_INGEST,
+        _READ_MUTATE | {Capability.FORENSIC_EXECUTION},
     ),
 }
 

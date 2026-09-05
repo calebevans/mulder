@@ -52,7 +52,7 @@ Project terminology and definitions for contributors and users of Mulder.
 
 | Term | Definition |
 |------|-----------|
-| Catalog Phase | Phase 1 (single-mode). Scans the evidence directory, creates the case database, identifies systems and evidence types, and outputs structured JSON listing all discovered systems. Validated by the catalog gate which checks for `case_id`, `evidence_root`, and a non-empty `systems` array. |
+| Catalog Phase | Phase 1 (single-mode). Reads bounded pages from the CLI-prepared immutable intake catalog, identifies systems and evidence types, and outputs structured JSON. It cannot scan the live filesystem, create the case, mutate evidence state, or extract archives. |
 | Extraction Phase | Phase 2 (split-mode). Runs per-system with a rolling worker pool. The planner selects extraction tools, the executor runs them (with background batching), and the analyst reviews indexed evidence to submit findings. The gate requires at least one source to be indexed. |
 | Cross-System Phase | Phase 3 (split-mode). Correlates evidence across all systems using composite tools and timeline analysis. The gate requires at least one finding with a MITRE ATT&CK technique mapping. |
 | Alternative Narrative Phase | Phase 4 (split-mode). Challenges initial findings by seeking counter-evidence, deduplicates findings, runs audit tools, and ensures the investigation is ready for report generation. The gate checks finalize readiness. |

@@ -6,11 +6,20 @@ environment, network, time, memory, CPU, and output capabilities. Shell command
 strings are not part of the interface.
 
 `CommandPolicy` resolves the executable and requires an exact match with a
-pinned path. It also resolves every declared working, input, and output path
-through the shared component-aware path policy. Environment overrides are
-allowlisted; loader and runtime injection variables are always rejected and
-removed from inherited child environments. Network use is denied unless its
-class is explicitly allowed. Decisions use stable reason codes.
+pinned path. It records device, inode, mode, size, mtime, and ctime identities
+for the executable and approved roots. The runner opens and holds descriptors
+for the executable, working directory, typed inputs, output parents, and roots;
+component walks refuse symlinks. Linux payload paths are launched through
+`/proc/self/fd` bindings, so a rename or symlink swap between policy evaluation
+and process creation cannot redirect the child. New outputs are staged under a
+held parent and committed only after a successful launch.
+
+Environment overrides are copied into an immutable mapping at request
+construction. The exact child environment is then snapshotted before policy
+evaluation, stripped of loader/runtime injection variables, and committed by
+SHA-256 in both the policy decision and execution receipt. Network use is
+denied unless its class is explicitly allowed. Decisions use stable reason
+codes.
 
 The runner uses the paths returned by the decision, starts a separate process
 group, enforces timeout and combined-output caps, applies requested POSIX CPU
@@ -39,9 +48,24 @@ Native Linux installations that run forensic commands therefore require the
 `bubblewrap` package and a host configuration that permits unprivileged
 bubblewrap namespaces. The project container installs it. macOS and Windows
 remain fail-closed until an equally verifiable backend is provided. This
-backend deliberately preserves the existing filesystem view; it asserts only
-network isolation, while path allowlists and OS file permissions remain the
-filesystem controls.
+backend creates read-only/read-write bind mounts from the held descriptors to
+private `/run/mulder-bound/*` paths in the child namespace. Filesystem
+authorization therefore follows the object approved by policy, not a later
+lookup of the caller's original path.
+
+## Privileged mount protocol
+
+The privileged helper is launched through an attested `unshare --net` backend,
+which isolates networking without creating a private mount namespace whose
+mounts would vanish at helper exit. It accepts only exact
+`/proc/self/fd/<number>` source and target references held by the unprivileged
+broker. Each request includes a
+fresh nonce and canonical request digest. The helper returns the complete
+canonical request and a bound result digest; the broker rejects truncated,
+replayed, or mismatched responses. After mounting, the broker independently
+checks `/proc/self/mountinfo` for the exact target, source/loop backing, and
+`ro,nodev,nosuid,noexec` flags. Unmount success likewise requires the target
+and any E01 intermediate mount to disappear.
 
 The initial migration covers the shared `run_cli_tool` path used by strings,
 hashdeep, exiftool, ssdeep, and pasco. Legacy direct-process modules are listed

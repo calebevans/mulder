@@ -2,7 +2,7 @@
 
 Every tool is exposed as `mcp__mulder__{name}`. All tools return a dict containing at minimum `tool_call_id` and `status`. Extraction tools additionally return `source_name`, `windows_indexed`, and `line_count`. Write tools (those with a `source_name`) return only metadata plus a 500-character content preview; full output is accessible via `search()` or `get_raw_output()`.
 
-**Role Key:** `CATALOG` `EXTRACT_PLANNER` `EXTRACT_EXECUTOR` `EXTRACT_ANALYST` `CROSS_PLANNER` `CROSS_EXECUTOR` `CROSS_ANALYST` `NARRATIVE_PLANNER` `NARRATIVE_EXECUTOR` `NARRATIVE_ANALYST` `REPORT`
+**Role Key:** `CATALOG` `AUTORUNS_INGEST` `EXTRACT_PLANNER` `EXTRACT_EXECUTOR` `EXTRACT_ANALYST` `CROSS_PLANNER` `CROSS_EXECUTOR` `CROSS_ANALYST` `NARRATIVE_PLANNER` `NARRATIVE_EXECUTOR` `NARRATIVE_ANALYST` `REPORT`. These are decorator assignments; each live phase allowlist is further intersected with the seat's effect capabilities.
 
 ---
 
@@ -58,7 +58,7 @@ Extract a compressed evidence archive to make its contents accessible.
 
 **Returns:** `extracted_to`, `total_files_extracted`, `type_summary`, `total_evidence_items`
 
-**Roles:** `CATALOG` `EXTRACT_EXECUTOR`
+**Roles:** `EXTRACT_EXECUTOR`
 
 ### collect_linux_live_state_bundle
 
@@ -1639,7 +1639,7 @@ Query the Plaso timeline with time range and optional filters.
 
 **Returns:** `source_name` (plaso.filtered), `result_count`, `windows_indexed`
 
-**Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR` `CROSS_ANALYST`
+**Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR`
 
 ### export_timeline_slice
 
@@ -1665,7 +1665,7 @@ Extract browser history from Chrome, Firefox, and Safari databases in a disk ima
 
 **Returns:** `source` (browser.history), `result_count`
 
-**Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR` `CROSS_ANALYST`
+**Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR`
 
 ### parse_plist
 
@@ -1677,9 +1677,9 @@ Extract and parse macOS plist files from a disk image.
 
 **Returns:** `source` (plist.parsed), `result_count`
 
-**Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR`
+**Roles:** `EXTRACT_EXECUTOR` `EXTRACT_ANALYST` `CROSS_EXECUTOR`
 
-**Effects:** `case-read` + `forensic-execution` + `case-mutation`
+**Effects:** `forensic-execution`. In the built-in pipeline this is exposed only to a seat holding that capability.
 
 ### query_sqlite_from_image
 
@@ -1735,16 +1735,19 @@ Extract hidden data from a steganographic JPEG image.
 
 ### parse_autoruns
 
-Parse Sysinternals Autoruns CSV output to identify persistence mechanisms. Indexes all autostart entries (services, registry, scheduled tasks, drivers) for searching.
+Parse Sysinternals Autoruns CSV output to identify persistence mechanisms. During `mulder investigate`, a dedicated non-pack ingest seat must supply exact IDs from the authenticated intake manifest; the standalone administrative form may still use a path. Successful calls index all autostart entries for searching.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| csv_path | str | no | Path to the Autoruns CSV file (auto-discovers from evidence if empty) |
+| csv_path | str \| None | no | Standalone administrative path; forbidden to the bound ingest seat |
 | force | bool | no | Re-run even if already indexed (default False) |
+| artifact_ids | list[str] \| None | no | Required for the bound ingest seat; exact `<collection_digest>:<entry_index>` commitments |
 
 **Returns:** `sources` (autoruns.\*), `result_count`, `files_parsed`
 
-**Roles:** `EXTRACT_EXECUTOR` `EXTRACT_ANALYST` `CROSS_EXECUTOR`
+**Roles:** `AUTORUNS_INGEST`
+
+**Effects:** `case-read` + `forensic-execution` + `case-mutation`
 
 ---
 

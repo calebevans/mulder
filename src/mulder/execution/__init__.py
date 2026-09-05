@@ -22,6 +22,7 @@ from mulder.execution.runner import (
     ExecutionStatus,
     NetworkIsolationBackend,
     NetworkIsolationPlan,
+    UnshareNetworkIsolationBackend,
 )
 
 __all__ = [
@@ -35,6 +36,7 @@ __all__ = [
     "NetworkClass",
     "NetworkIsolationBackend",
     "NetworkIsolationPlan",
+    "UnshareNetworkIsolationBackend",
     "PathAccess",
     "PathArgument",
     "PolicyDecision",
