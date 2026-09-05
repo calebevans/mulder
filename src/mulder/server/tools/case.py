@@ -22,6 +22,7 @@ from mulder.server.app import (
     load_case,
     mcp,
     slugify,
+    validate_case_id,
 )
 from mulder.server.helpers import error_response, hash_output, make_tool_call_id
 from mulder.server.tool_access import ALL_ROLES, Role, tool_access
@@ -87,6 +88,20 @@ def scan_evidence(
         case_id = enforced_id
     elif case_id is None:
         case_id = slugify(ev_path.name)
+
+    # slugify guarantees a safe path segment, but only for IDs mulder derives.
+    # One supplied by an agent has to be checked before it becomes a path.
+    try:
+        validate_case_id(case_id)
+    except ValueError as exc:
+        return error_response(
+            tc_id,
+            "scan_evidence",
+            params,
+            str(exc),
+            (time.monotonic() - t0) * 1000,
+            error_type="invalid_input",
+        )
 
     try:
         result = _scan_evidence_inner(ev_path, case_id, replace)
@@ -310,6 +325,32 @@ def open_case(case_id: str) -> dict[str, object]:
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
     params: dict[str, object] = {"case_id": case_id}
+
+    try:
+        validate_case_id(case_id)
+    except ValueError as exc:
+        return error_response(
+            tc_id,
+            "open_case",
+            params,
+            str(exc),
+            (time.monotonic() - t0) * 1000,
+            error_type="invalid_input",
+        )
+
+    # scan_evidence and create_case both honour MULDER_CASE_ID; open_case did
+    # not, so an agent pinned to one case could attach to another and every
+    # later finding, note and export would be written there instead.
+    enforced_id = os.environ.get("MULDER_CASE_ID", "")
+    if enforced_id and case_id != enforced_id:
+        return error_response(
+            tc_id,
+            "open_case",
+            params,
+            f"MULDER_CASE_ID enforces case '{enforced_id}'; refusing to open '{case_id}'.",
+            (time.monotonic() - t0) * 1000,
+            error_type="forbidden",
+        )
 
     cfg = get_cfg()
     db_path = cfg.db_dir / f"{case_id}.db"
