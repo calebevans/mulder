@@ -34,6 +34,14 @@ def _completed(**kwargs: Any) -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
 
+def _fake_mapping(root: Path) -> Path:
+    """chainsaw hunt refuses to start without --mapping; give it a real file."""
+    mapping = root / "chainsaw_mappings" / "sigma-event-logs-all.yml"
+    mapping.parent.mkdir(parents=True, exist_ok=True)
+    mapping.write_text("")
+    return mapping
+
+
 class TestChainsaw:
     def test_execs_the_binary_the_gate_found(self, tmp_path: Path) -> None:
         from mulder.server.tools.chainsaw import run_chainsaw
@@ -41,10 +49,15 @@ class TestChainsaw:
         chainsaw = _fake_binary(tmp_path, "chainsaw")
         evidence = tmp_path / "evtx"
         evidence.mkdir()
+        mapping = _fake_mapping(tmp_path)
 
         with (
             patch("mulder.server.tools.chainsaw.sources_already_indexed", return_value=[]),
             patch("mulder.server.helpers.shutil.which", return_value=str(chainsaw)),
+            patch(
+                "mulder.server.tools.chainsaw._default_chainsaw_mapping",
+                return_value=mapping,
+            ),
             patch("mulder.server.tools.chainsaw.extract_and_index", return_value={}),
             patch(
                 "mulder.server.tools.chainsaw.subprocess.run", return_value=_completed()
@@ -76,10 +89,15 @@ class TestChainsaw:
         binary = installed / "chainsaw"
         binary.write_text("#!/bin/sh\n")
         binary.chmod(0o755)
+        mapping = _fake_mapping(asset_root)
 
         with (
             patch("mulder.server.tools.chainsaw.sources_already_indexed", return_value=[]),
             patch("mulder.server.helpers.shutil.which", return_value=None),
+            patch(
+                "mulder.server.tools.chainsaw._default_chainsaw_mapping",
+                return_value=mapping,
+            ),
             patch("mulder.server.tools.chainsaw.extract_and_index", return_value={}),
             patch(
                 "mulder.server.tools.chainsaw.subprocess.run", return_value=_completed()
@@ -104,6 +122,9 @@ class TestChainsaw:
         chainsaw.mkdir()
         (chainsaw / "chainsaw").write_text("")
         (chainsaw / "chainsaw").chmod(0o755)
+        mappings = chainsaw / "mappings"
+        mappings.mkdir()
+        (mappings / "sigma-event-logs-all.yml").write_text("")
 
         with (
             patch("mulder.server.tools.chainsaw.sources_already_indexed", return_value=[]),
@@ -115,7 +136,11 @@ class TestChainsaw:
         ):
             run_chainsaw.__wrapped__(str(asset_root))  # type: ignore[attr-defined]
 
-        assert str(rules) in mock_run.call_args[0][0]
+        argv = mock_run.call_args[0][0]
+        assert str(rules) in argv
+        # chainsaw treats --mapping as required whenever Sigma rules are given.
+        assert "--mapping" in argv
+        assert str(mappings / "sigma-event-logs-all.yml") in argv
 
 
 def _eve_stub() -> dict[str, Any]:

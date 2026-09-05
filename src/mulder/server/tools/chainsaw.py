@@ -57,6 +57,16 @@ def _default_sigma_rules() -> Path:
     return asset_display_path("sigma-rules", "rules", "windows")
 
 
+def _default_chainsaw_mapping() -> Path:
+    """The Sigma-to-EVTX field mapping chainsaw requires for ``hunt -s``.
+
+    ``chainsaw hunt`` treats ``--mapping`` as *required* whenever Sigma rules
+    are supplied; the file ships in chainsaw's own ``mappings/`` directory,
+    which ``mulder setup`` fetches alongside the binary.
+    """
+    return asset_display_path("chainsaw", "mappings", "sigma-event-logs-all.yml")
+
+
 def _resolve_evtx_evidence(evidence_path: str) -> str:
     """Resolve a disk image path to its EVTX extraction directory.
 
@@ -108,6 +118,7 @@ def _run_chainsaw_hunt(
     binary: str,
     evidence_path: Path,
     sigma_rules_path: Path,
+    mapping_path: Path,
     output_dir: Path,
     time_start: str | None = None,
     time_end: str | None = None,
@@ -119,6 +130,7 @@ def _run_chainsaw_hunt(
         binary: Resolved Chainsaw executable.
         evidence_path: Directory containing .evtx files.
         sigma_rules_path: Path to Sigma rules directory.
+        mapping_path: Path to the chainsaw Sigma field-mapping file.
         output_dir: Output directory for results.
         time_start: Optional time range start (ISO 8601).
         time_end: Optional time range end (ISO 8601).
@@ -137,6 +149,8 @@ def _run_chainsaw_hunt(
         str(evidence_path),
         "-s",
         str(sigma_rules_path),
+        "--mapping",
+        str(mapping_path),
         "--json",
         "--output",
         str(output_file),
@@ -208,13 +222,18 @@ def _run_chainsaw_search(
 
 
 def _run_chainsaw_srum(
-    binary: str, srum_path: Path, output_dir: Path, timeout: int = _CHAINSAW_TIMEOUT
+    binary: str,
+    srum_path: Path,
+    software_hive: Path,
+    output_dir: Path,
+    timeout: int = _CHAINSAW_TIMEOUT,
 ) -> Path:
     """Execute Chainsaw SRUM parsing mode.
 
     Args:
         binary: Resolved Chainsaw executable.
         srum_path: Path to the SRUDB.dat file.
+        software_hive: Path to the SOFTWARE registry hive (required by chainsaw).
         output_dir: Output directory for results.
         timeout: Subprocess timeout in seconds.
 
@@ -230,7 +249,8 @@ def _run_chainsaw_srum(
         "analyse",
         "srum",
         str(srum_path),
-        "--json",
+        "--software",
+        str(software_hive),
         "--output",
         str(output_file),
     ]
@@ -248,8 +268,6 @@ def _run_chainsaw_timeline(
     binary: str,
     evidence_path: Path,
     output_dir: Path,
-    time_start: str | None = None,
-    time_end: str | None = None,
     timeout: int = _CHAINSAW_TIMEOUT,
 ) -> Path:
     """Execute Chainsaw in dump/timeline mode against EVTX files.
@@ -258,8 +276,6 @@ def _run_chainsaw_timeline(
         binary: Resolved Chainsaw executable.
         evidence_path: Directory containing .evtx files.
         output_dir: Output directory for results.
-        time_start: Optional time range start.
-        time_end: Optional time range end.
         timeout: Subprocess timeout in seconds.
 
     Returns:
@@ -277,10 +293,6 @@ def _run_chainsaw_timeline(
         "--output",
         str(output_file),
     ]
-    if time_start:
-        cmd.extend(["--from", time_start])
-    if time_end:
-        cmd.extend(["--to", time_end])
 
     subprocess.run(
         cmd,
@@ -420,6 +432,7 @@ def run_chainsaw(
     mode: Literal["hunt", "search", "srum", "timeline"] = "hunt",
     sigma_rules_path: str = "",
     search_term: str | None = None,
+    software_hive: str = "",
     time_range_start: str | None = None,
     time_range_end: str | None = None,
     force: bool = False,
@@ -442,10 +455,13 @@ def run_chainsaw(
             resolves to the rules installed by 'mulder setup'.
         search_term: Required when mode="search". The keyword or
             regex pattern to search for in EVTX records.
+        software_hive: Required when mode="srum". Path to the SOFTWARE
+            registry hive extracted from the same host as the SRUM
+            database; chainsaw needs it to resolve application IDs.
         time_range_start: Optional ISO 8601 timestamp to filter results
-            (inclusive start).
+            (inclusive start). Not supported in "timeline" mode.
         time_range_end: Optional ISO 8601 timestamp to filter results
-            (inclusive end).
+            (inclusive end). Not supported in "timeline" mode.
         force: Re-run extraction even if sources already exist.
     """
     tc_id = make_tool_call_id()
@@ -455,6 +471,7 @@ def run_chainsaw(
         "mode": mode,
         "sigma_rules_path": sigma_rules_path,
         "search_term": search_term,
+        "software_hive": software_hive,
         "time_range_start": time_range_start,
         "time_range_end": time_range_end,
         "force": force,
@@ -511,7 +528,37 @@ def run_chainsaw(
             error_type="invalid_argument",
         )
 
+    if mode == "srum" and not software_hive:
+        return error_response(
+            tc_id,
+            "run_chainsaw",
+            params,
+            "software_hive is required when mode='srum': chainsaw needs the "
+            "SOFTWARE registry hive to resolve SRUM application IDs",
+            error_type="invalid_argument",
+        )
+
+    if mode == "timeline" and (time_range_start or time_range_end):
+        return error_response(
+            tc_id,
+            "run_chainsaw",
+            params,
+            "chainsaw dump has no time-range filter; use mode='search' or "
+            "filter the returned timeline instead",
+            error_type="invalid_argument",
+        )
+
     rules = Path(sigma_rules_path) if sigma_rules_path else _default_sigma_rules()
+    mapping = _default_chainsaw_mapping()
+    if mode == "hunt" and not mapping.exists():
+        return error_response(
+            tc_id,
+            "run_chainsaw",
+            params,
+            f"chainsaw Sigma mapping not found at {mapping}. Run 'mulder setup' "
+            "to provision chainsaw's mappings/ directory.",
+            error_type="asset_missing",
+        )
 
     timeout = adaptive_timeout(evidence_path, base=_CHAINSAW_TIMEOUT)
     with tempfile.TemporaryDirectory(prefix="mulder_chainsaw_") as tmpdir:
@@ -522,6 +569,7 @@ def run_chainsaw(
                     binary,
                     Path(evidence_path),
                     rules,
+                    mapping,
                     output_dir,
                     time_range_start,
                     time_range_end,
@@ -544,7 +592,11 @@ def run_chainsaw(
                 source_name = "chainsaw.search"
             elif mode == "srum":
                 results_path = _run_chainsaw_srum(
-                    binary, Path(evidence_path), output_dir, timeout=timeout
+                    binary,
+                    Path(evidence_path),
+                    Path(software_hive),
+                    output_dir,
+                    timeout=timeout,
                 )
                 result = _parse_chainsaw_srum_results(results_path)
                 source_name = "chainsaw.srum"
@@ -553,8 +605,6 @@ def run_chainsaw(
                     binary,
                     Path(evidence_path),
                     output_dir,
-                    time_range_start,
-                    time_range_end,
                     timeout=timeout,
                 )
                 result = _parse_chainsaw_timeline_results(results_path)

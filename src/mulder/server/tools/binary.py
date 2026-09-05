@@ -877,7 +877,7 @@ def run_capa(
             error_type="file_not_found",
         )
 
-    cmd = [capa_bin, "--format", "json", "--quiet"]
+    cmd = [capa_bin, "--json", "--quiet"]
     if rules_path:
         if not Path(rules_path).exists():
             return error_response(
@@ -1018,13 +1018,12 @@ def run_floss(
 
     cmd = [
         floss_bin,
-        "--format",
-        "json",
+        "--json",
         "--minimum-length",
         str(minimum_length),
     ]
     if not include_static:
-        cmd.append("--only")
+        cmd.extend(["--no", "static"])
     cmd.append(str(target))
 
     floss_timeout = adaptive_timeout(file_path, base=_FLOSS_TIMEOUT)

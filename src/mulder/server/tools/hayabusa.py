@@ -257,8 +257,8 @@ def run_hayabusa(
     if severity not in _VALID_SEVERITIES:
         severity = "medium"
 
-    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
-        out_path = tmp.name
+    tmp_dir = tempfile.mkdtemp(prefix="mulder_hayabusa_")
+    out_path = str(Path(tmp_dir) / "timeline.csv")
 
     cmd = [
         hayabusa_bin,
@@ -267,6 +267,7 @@ def run_hayabusa(
         resolved_dir,
         "-o",
         out_path,
+        "--clobber",
         "-p",
         "super-verbose",
         "--no-wizard",
@@ -293,7 +294,7 @@ def run_hayabusa(
                 elapsed_ms=(time.monotonic() - t0) * 1000,
             )
 
-        if proc.returncode != 0 and not Path(out_path).exists():
+        if proc.returncode != 0:
             stderr_preview = (proc.stderr or "")[:_PREVIEW_CHAR_LIMIT]
             return error_response(
                 tc_id,
@@ -303,12 +304,24 @@ def run_hayabusa(
                 elapsed_ms=(time.monotonic() - t0) * 1000,
             )
 
+        if not Path(out_path).exists():
+            # Hayabusa reports several fatal conditions on stdout and still
+            # exits 0; a missing output file is the only reliable signal.
+            preview = ((proc.stderr or "") + (proc.stdout or ""))[-_PREVIEW_CHAR_LIMIT:]
+            return error_response(
+                tc_id,
+                tool_name,
+                params,
+                f"Hayabusa produced no output file: {preview}",
+                elapsed_ms=(time.monotonic() - t0) * 1000,
+            )
+
         try:
             csv_text = Path(out_path).read_text(errors="replace")
         except OSError:
             csv_text = ""
     finally:
-        Path(out_path).unlink(missing_ok=True)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
     if not csv_text.strip():
         elapsed = (time.monotonic() - t0) * 1000
