@@ -197,8 +197,7 @@ class _MountEntry:
     """Internal bookkeeping for a single cached mount point."""
 
     mount_dir: Path
-    mount_device: int
-    mount_inode: int
+    mount_fd: int
     refcount: int = 0
     ready: threading.Event = field(default_factory=threading.Event)
     error: BaseException | None = None
@@ -244,11 +243,20 @@ class _MountCache:
         with self._lock:
             if canonical not in self._entries:
                 mount_dir = Path(tempfile.mkdtemp(prefix="mulder_mount_"))
-                mount_stat = mount_dir.stat(follow_symlinks=False)
+                mount_flags = (
+                    os.O_RDONLY
+                    | getattr(os, "O_CLOEXEC", 0)
+                    | getattr(os, "O_DIRECTORY", 0)
+                    | getattr(os, "O_NOFOLLOW", 0)
+                )
+                try:
+                    mount_fd = os.open(mount_dir, mount_flags)
+                except OSError:
+                    mount_dir.rmdir()
+                    raise
                 self._entries[canonical] = _MountEntry(
                     mount_dir=mount_dir,
-                    mount_device=mount_stat.st_dev,
-                    mount_inode=mount_stat.st_ino,
+                    mount_fd=mount_fd,
                 )
                 is_owner = True
             entry = self._entries[canonical]
@@ -294,20 +302,23 @@ class _MountCache:
                 do_cleanup = True
 
         if do_cleanup:
-            safe_to_remove = True
-            if entry.mounted:
-                safe_to_remove = self._broker.unmount(entry.mount_dir)
-            if safe_to_remove:
-                if not _remove_empty_original_mountpoint(entry):
+            try:
+                safe_to_remove = True
+                if entry.mounted:
+                    safe_to_remove = self._broker.unmount(entry.mount_dir)
+                if safe_to_remove:
+                    if not _remove_empty_original_mountpoint(entry):
+                        logger.error(
+                            "Preserving mount point because it was replaced or is not empty: %s",
+                            entry.mount_dir,
+                        )
+                else:
                     logger.error(
-                        "Preserving mount point because it was replaced or is not empty: %s",
+                        "Preserving mount point because unmount could not be verified: %s",
                         entry.mount_dir,
                     )
-            else:
-                logger.error(
-                    "Preserving mount point because unmount could not be verified: %s",
-                    entry.mount_dir,
-                )
+            finally:
+                os.close(entry.mount_fd)
 
 
 def _remove_empty_original_mountpoint(entry: _MountEntry) -> bool:
@@ -320,6 +331,7 @@ def _remove_empty_original_mountpoint(entry: _MountEntry) -> bool:
     except OSError:
         return False
     try:
+        original = os.fstat(entry.mount_fd)
         observed = os.stat(
             entry.mount_dir.name,
             dir_fd=parent_fd,
@@ -327,8 +339,8 @@ def _remove_empty_original_mountpoint(entry: _MountEntry) -> bool:
         )
         if (
             not stat.S_ISDIR(observed.st_mode)
-            or observed.st_dev != entry.mount_device
-            or observed.st_ino != entry.mount_inode
+            or observed.st_dev != original.st_dev
+            or observed.st_ino != original.st_ino
         ):
             return False
         os.rmdir(entry.mount_dir.name, dir_fd=parent_fd)

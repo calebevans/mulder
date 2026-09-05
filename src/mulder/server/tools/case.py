@@ -15,7 +15,7 @@ import tarfile
 import tempfile
 import time
 import zipfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -560,15 +560,17 @@ def _materialization_receipt_path(dest: Path) -> Path:
 def _write_materialization_receipt(
     commitment: _ArchiveCommitment,
     archive: Path,
-    dest: Path,
+    *,
+    materialized: Path,
+    destination: Path,
 ) -> None:
-    """Atomically commit extracted bytes for later nested-archive use."""
-    entries = _materialization_inventory(dest)
+    """Commit a verified view under its final public destination identity."""
+    entries = _materialization_inventory(materialized)
     payload = {
         "schema": _ARCHIVE_MATERIALIZATION_SCHEMA,
         "collection_digest": commitment.manifest.collection_digest,
         "archive_path": str(archive),
-        "destination": str(dest),
+        "destination": str(destination),
         "entries": entries,
     }
     encoded = json.dumps(
@@ -580,7 +582,7 @@ def _write_materialization_receipt(
     ).encode("utf-8")
     if len(encoded) > _MAX_MATERIALIZATION_RECEIPT_BYTES:
         raise IntakeError("archive materialization receipt exceeds its size limit")
-    receipt = _materialization_receipt_path(dest)
+    receipt = _materialization_receipt_path(destination)
     fd, temporary = tempfile.mkstemp(prefix=f".{receipt.name}.", dir=receipt.parent)
     try:
         with os.fdopen(fd, "wb") as handle:
@@ -775,21 +777,15 @@ def _verify_intake_materialization(manifest: IntakeManifest, dest: Path) -> list
 
 
 def _extract_intake_zip(manifest: IntakeManifest, dest: Path) -> list[str]:
-    """Materialize a bounded verified ZIP intake without a fallback extractor."""
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=f".{dest.name}.", dir=dest.parent) as temporary:
-        staged = Path(temporary) / "content"
-        staged.mkdir()
-        files = materialize_intake(
+    """Materialize a bounded verified ZIP intake into an empty staging view."""
+    return list(
+        materialize_intake(
             manifest,
-            staged,
+            dest,
             max_file_bytes=_INTAKE_EXTRACT_MAX_FILE_BYTES,
             max_total_bytes=_INTAKE_EXTRACT_MAX_TOTAL_BYTES,
         )
-        if dest.exists():
-            dest.rmdir()
-        os.replace(staged, dest)
-    return list(files)
+    )
 
 
 def _safe_tar_filter(member: tarfile.TarInfo, path: str) -> tarfile.TarInfo | None:
@@ -922,53 +918,71 @@ def extract_archive(
             )
         return result
 
-    dest.mkdir(parents=True, exist_ok=True)
-
     name_lower = archive.name.lower()
     ext = archive.suffix.lower()
+    outer_intake = intake_commitment is not None and intake_commitment.relative is None
+    extractor: Callable[[Path, Path], list[str]] | None = None
+    if not outer_intake:
+        if ext == ".zip":
+            extractor = _extract_zip
+        elif (
+            ext in (".tar", ".tgz")
+            or name_lower.endswith((".tar.gz", ".tar.bz2"))
+            or (ext in (".gz", ".bz2") and ".tar" not in name_lower)
+        ):
+            extractor = _extract_tar
+        elif ext in (".7z", ".rar") or ".7z." in name_lower:
+            if not shutil.which("7z"):
+                return error_response(
+                    tc_id,
+                    "extract_archive",
+                    params,
+                    "7z not found on PATH. Install p7zip-full.",
+                    (time.monotonic() - t0) * 1000,
+                    error_type="binary_missing",
+                )
+            extractor = _extract_7z
+        else:
+            return error_response(
+                tc_id,
+                "extract_archive",
+                params,
+                f"Unsupported archive format: {ext}",
+                (time.monotonic() - t0) * 1000,
+                error_type="unsupported_format",
+            )
 
     try:
-        if intake_commitment is not None and intake_commitment.relative is None:
-            files = _extract_intake_zip(intake_commitment.manifest, dest)
+        if intake_commitment is not None:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(
+                prefix=f".{dest.name}.", dir=dest.parent
+            ) as temporary:
+                staged = Path(temporary) / "content"
+                staged.mkdir()
+                if intake_commitment.relative is None:
+                    files = _extract_intake_zip(intake_commitment.manifest, staged)
+                else:
+                    if extractor is None:  # pragma: no cover - guarded above
+                        raise RuntimeError("archive extractor was not selected")
+                    with _committed_archive_snapshot(
+                        intake_commitment, archive
+                    ) as snapshot:
+                        files = extractor(snapshot, staged)
+                _write_materialization_receipt(
+                    intake_commitment,
+                    archive,
+                    materialized=staged,
+                    destination=dest,
+                )
+                if dest.exists():
+                    dest.rmdir()
+                os.replace(staged, dest)
         else:
-
-            @contextmanager
-            def selected_archive() -> Iterator[Path]:
-                if intake_commitment is None:
-                    yield archive
-                else:
-                    with _committed_archive_snapshot(intake_commitment, archive) as snapshot:
-                        yield snapshot
-
-            with selected_archive() as extraction_archive:
-                if ext == ".zip":
-                    files = _extract_zip(extraction_archive, dest)
-                elif (
-                    ext in (".tar", ".tgz")
-                    or name_lower.endswith((".tar.gz", ".tar.bz2"))
-                    or (ext in (".gz", ".bz2") and ".tar" not in name_lower)
-                ):
-                    files = _extract_tar(extraction_archive, dest)
-                elif ext in (".7z", ".rar") or ".7z." in name_lower:
-                    if not shutil.which("7z"):
-                        return error_response(
-                            tc_id,
-                            "extract_archive",
-                            params,
-                            "7z not found on PATH. Install p7zip-full.",
-                            (time.monotonic() - t0) * 1000,
-                            error_type="binary_missing",
-                        )
-                    files = _extract_7z(extraction_archive, dest)
-                else:
-                    return error_response(
-                        tc_id,
-                        "extract_archive",
-                        params,
-                        f"Unsupported archive format: {ext}",
-                        (time.monotonic() - t0) * 1000,
-                        error_type="unsupported_format",
-                    )
+            if extractor is None:  # pragma: no cover - guarded above
+                raise RuntimeError("archive extractor was not selected")
+            dest.mkdir(parents=True, exist_ok=True)
+            files = extractor(archive, dest)
     except IntakeError as exc:
         logger.error("Archive intake verification failed for %r: %s", archive, exc)
         return error_response(
@@ -988,20 +1002,6 @@ def extract_archive(
             f"Extraction failed: {exc}",
             (time.monotonic() - t0) * 1000,
         )
-
-    if intake_commitment is not None:
-        try:
-            _write_materialization_receipt(intake_commitment, archive, dest)
-        except (IntakeError, OSError) as exc:
-            logger.error("Archive materialization commitment failed for %r: %s", archive, exc)
-            return error_response(
-                tc_id,
-                "extract_archive",
-                params,
-                f"Extraction output verification failed: {exc}",
-                (time.monotonic() - t0) * 1000,
-                error_type="intake_verification_failed",
-            )
 
     from mulder.extractors.classifier import ClassifierConfig, EvidenceClassifier
 
