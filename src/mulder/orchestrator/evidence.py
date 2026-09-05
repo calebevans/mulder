@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from mulder.orchestrator.types import PhaseResult, extract_catalog_result
-from mulder.patterns import DEFAULT_DB_DIR, DISK_IMAGE_EXTS, extract_iocs_from_text
+from mulder.patterns import DISK_IMAGE_EXTS, extract_iocs_from_text, resolve_db_dir
 
 logger = logging.getLogger(__name__)
 
@@ -264,13 +264,16 @@ class ServerBridge:
     checks, and consistency analysis without spending LLM tokens.
     """
 
-    def __init__(self, case_id: str) -> None:
+    def __init__(self, case_id: str, db_dir: str | Path | None = None) -> None:
         """Initialize the server bridge.
 
         Args:
             case_id: Case identifier for loading the correct database.
+            db_dir: Directory holding the case database. Falls back to
+                ``$MULDER_DB_DIR`` and then the default when not given.
         """
         self._case_id = case_id
+        self._db_dir = db_dir
 
     def ensure_context(self) -> None:
         """Initialize a fresh server context for direct tool invocations.
@@ -283,8 +286,7 @@ class ServerBridge:
         if server_app._cfg is None:
             from mulder.server.app import ServerConfig
 
-            db_dir = Path(DEFAULT_DB_DIR).expanduser()
-            server_app._cfg = ServerConfig(db_dir=db_dir)
+            server_app._cfg = ServerConfig(db_dir=resolve_db_dir(self._db_dir))
 
         if self._case_id:
             server_app.load_case(self._case_id)
