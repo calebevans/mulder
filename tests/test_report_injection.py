@@ -105,11 +105,8 @@ class TestAutoescapeSelection:
 
     def test_a_value_reaching_the_html_template_is_escaped(self) -> None:
         env = ReportRenderer()._env
-        tpl = env.from_string("<p>{{ v }}</p>")
-        # from_string has no name, so assert the environment's policy directly
-        # on a named template instead.
-        assert isinstance(tpl.render(v="<b>x</b>"), str)
-
+        # from_string has no name, so assert the environment's policy on a
+        # named template instead.
         loaded = jinja2.Environment(
             loader=jinja2.DictLoader({"x.html.j2": "<p>{{ v }}</p>"}),
             autoescape=env.autoescape,
@@ -117,3 +114,42 @@ class TestAutoescapeSelection:
         rendered = loaded.get_template("x.html.j2").render(v="<script>alert(1)</script>")
         assert "<script>" not in rendered
         assert "&lt;script&gt;" in rendered
+
+
+class TestScriptBlockInterpolation:
+    """Autoescaping is an HTML-context escape, not a JavaScript one.
+
+    Inside ``<script>`` the browser does not decode entities, so a value
+    interpolated raw there is both broken (``&amp;`` arrives literally) and
+    unsafe (a source filename containing ``</script>`` closes the block).
+    Every string reaching a script block must go through ``| tojson``, which
+    emits a correctly quoted JS literal.
+    """
+
+    # Expressions that are integers by construction and so cannot carry markup.
+    NUMERIC = {
+        "s.line_count",
+        "t.finding_count",
+        "entry.input + entry.output",
+    }
+
+    def test_every_script_interpolation_is_json_encoded(self) -> None:
+        import re
+        from pathlib import Path
+
+        import mulder
+
+        tpl = Path(mulder.__file__).parent / "report" / "templates" / "report.html.j2"
+        offenders = []
+        inside = False
+        for lineno, line in enumerate(tpl.read_text().splitlines(), start=1):
+            if "<script" in line:
+                inside = True
+            if inside:
+                for m in re.finditer(r"\{\{(.+?)\}\}", line):
+                    expr = m.group(1).strip()
+                    if "tojson" not in expr and expr not in self.NUMERIC:
+                        offenders.append(f"{tpl.name}:{lineno} {m.group(0)}")
+            if "</script>" in line:
+                inside = False
+        assert offenders == []

@@ -1330,14 +1330,14 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
 /* ========== DATA ========== */
 var AUDIT_DATA = {{ audit_entries | tojson }};
 var TOOL_COUNTS = {{ tool_call_counts | tojson }};
-var FINDINGS_TITLES = { {% for f in findings %}"{{ f.finding_id }}": {{ f.title | tojson }}{% if not loop.last %},{% endif %}{% endfor %} };
+var FINDINGS_TITLES = { {% for f in findings %}{{ f.finding_id | tojson }}: {{ f.title | tojson }}{% if not loop.last %},{% endif %}{% endfor %} };
 var SOURCE_WINDOWS = {{ source_windows | tojson }};
-var SOURCES_META = { {% for s in sources_list %}"{{ s.source_name }}": {"extractor":"{{ s.extractor }}","line_count":{{ s.line_count }},"hash":"{{ s.source_hash[:16] }}"}{% if not loop.last %},{% endif %}{% endfor %} };
+var SOURCES_META = { {% for s in sources_list %}{{ s.source_name | tojson }}: {"extractor":{{ s.extractor | tojson }},"line_count":{{ s.line_count }},"hash":{{ s.source_hash[:16] | tojson }}}{% if not loop.last %},{% endif %}{% endfor %} };
 
 var AUDIT_INDEX = {};
 AUDIT_DATA.forEach(function(e) { AUDIT_INDEX[e.tool_call_id] = e; });
 var FINDING_REFS = {};
-{% for f in findings %}FINDING_REFS["{{ f.finding_id }}"] = {{ f.evidence_refs | tojson }};
+{% for f in findings %}FINDING_REFS[{{ f.finding_id | tojson }}] = {{ f.evidence_refs | tojson }};
 {% endfor %}
 var TC_TO_FINDINGS = {};
 Object.keys(FINDING_REFS).forEach(function(fid) {
@@ -1738,7 +1738,7 @@ function renderThroughputChart() {
   /* Per-model token data */
   var models=[
     {% for entry in model_token_breakdown %}
-    {name:'{{ entry.model }}',total:{{ entry.input + entry.output }}},
+    {name:{{ entry.model | tojson }},total:{{ entry.input + entry.output }}},
     {% endfor %}
   ];
   var totalTok=0;
