@@ -456,18 +456,20 @@ def _correlate_with_netscan(
     ip_re = IP_RE
 
     for w in netscan_wins:
-        netscan_ips = {m.group() for m in ip_re.finditer(w.raw_text)}
-        overlap = netscan_ips & pcap_ips
-        if overlap:
-            pid = extract_pid(w.raw_text)
-            proc_name = _extract_process_name(w.raw_text)
+        for line in w.raw_text.splitlines():
+            netscan_ips = {m.group() for m in ip_re.finditer(line)}
+            overlap = netscan_ips & pcap_ips
+            if not overlap:
+                continue
+            pid = extract_pid(line)
+            proc_name = _extract_process_name(line)
             correlations.append(
                 {
                     "type": "pcap_netscan_ip_match",
                     "matched_ips": sorted(overlap),
                     "pid": pid,
                     "process": proc_name,
-                    "netscan_text": w.raw_text.strip()[:300],
+                    "netscan_text": line.strip()[:300],
                 }
             )
 
