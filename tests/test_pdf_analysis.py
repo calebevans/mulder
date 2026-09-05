@@ -364,6 +364,25 @@ class TestJavaScriptExtraction:
         with patch.object(doc, "_run_pdf_parser", return_value=names_tree):
             assert doc._extract_pdf_javascript(tmp_path / "x.pdf") == []
 
+    def test_a_hex_obfuscated_action_is_still_found(self, tmp_path: Path) -> None:
+        """`/J#61vaScript` must not defeat the extractor as it defeated the count.
+
+        pdf-parser canonicalizes hex-escaped names before printing, so the dump
+        for an obfuscated action is byte-identical to the dump for a plain one
+        and `--search javascript` matches both. Verified against the real tool
+        on a PDF whose *only* JavaScript action is written `/S /J#61vaScript`:
+        the raw file contains no literal `/JavaScript` at all, and pdf-parser
+        still prints `/S /JavaScript`, which is the fixture below.
+
+        This is asserted rather than assumed because the PR's other half exists
+        precisely because that evasion defeated the keyword count.
+        """
+        with patch.object(doc, "_run_pdf_parser", return_value=LITERAL_JS_OBJECT):
+            scripts = doc._extract_pdf_javascript(tmp_path / "obfuscated.pdf")
+
+        assert len(scripts) == 1
+        assert scripts[0]["code"] == "app.alert(1)"
+
     def test_the_extracted_script_is_analysed(self, tmp_path: Path) -> None:
         """Extraction must feed the obfuscation and suspicious-function checks."""
         with patch.object(doc, "_run_pdf_parser", return_value=LITERAL_JS_OBJECT):
