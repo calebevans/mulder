@@ -12,7 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, TypedDict, TypeVar, cast
+from typing import Any, Literal, TypedDict, TypeVar, cast
 
 from sqlalchemy import (
     Column,
@@ -26,6 +26,7 @@ from sqlalchemy import (
     event,
     func,
     insert,
+    literal_column,
     or_,
     select,
     text,
@@ -175,6 +176,31 @@ def _sanitize_fts5_query(query: str) -> str:
         else:
             tokens.append(token)
     return " ".join(tokens)
+
+
+def _fts5_any_query(query: str) -> str:
+    """Turn a bag of keywords into an FTS5 OR expression.
+
+    FTS5's implicit operator is AND, so ``"failed logon event 4625
+    authentication failure brute force"`` requires all seven terms inside one
+    4096-character window and matches nothing. Callers that pass a keyword bag
+    mean "any of these, best first".
+
+    Operators, parenthesis and already-quoted phrases the sanitizer produced
+    are preserved; only adjacent operands get an ``OR`` between them.
+    """
+    # Re-tokenize with the same regex the sanitizer used: ``str.split()``
+    # would cut a quoted phrase in half and produce ``"brute OR force"``.
+    tokens = _FTS5_TOKEN_RE.findall(_sanitize_fts5_query(query))
+    parts: list[str] = []
+    for token in tokens:
+        if parts and token not in _FTS5_OPERATORS and parts[-1] not in _FTS5_OPERATORS:
+            parts.append("OR")
+        parts.append(token)
+    # A trailing operator would be a syntax error.
+    while parts and parts[-1] in _FTS5_OPERATORS:
+        parts.pop()
+    return " ".join(parts)
 
 
 def _make_engine(db_path: Path) -> Engine:
@@ -555,6 +581,7 @@ class CaseDB:
         time_start: str | None = None,
         time_end: str | None = None,
         exclude_source_names: list[str] | None = None,
+        match: Literal["all", "any"] = "all",
     ) -> list[tuple[WindowRow, str]]:
         """Full-text keyword search over raw_text using FTS5.
 
@@ -568,19 +595,27 @@ class CaseDB:
             time_start: Optional ISO 8601 lower bound for event_time.
             time_end: Optional ISO 8601 upper bound for event_time.
             exclude_source_names: Optional source name prefixes to exclude.
+            match: ``"all"`` keeps FTS5's implicit AND and orders by
+                ``event_time``, which is what an explicit query wants.
+                ``"any"`` ORs the terms together and orders by FTS5's bm25
+                ``rank`` instead -- for a bag of keywords, relevance is the
+                only sane order. Taking the *first 20 by time* out of every
+                window containing the word "event" is a different wrong
+                answer, not a fix.
         """
-        j = windows_t.join(sources_t, windows_t.c.source_id == sources_t.c.source_id)
-        stmt = (
-            select(windows_t, sources_t.c.source_name)
-            .select_from(j)
-            .where(
-                windows_t.c.window_id.in_(
-                    select(text("rowid"))
-                    .select_from(text("windows_fts"))
-                    .where(text("windows_fts MATCH :q"))
-                )
+        fts = (
+            select(
+                literal_column("rowid").label("rid"),
+                literal_column("rank").label("rank"),
             )
+            .select_from(text("windows_fts"))
+            .where(text("windows_fts MATCH :q"))
+            .subquery("fts")
         )
+        j = windows_t.join(sources_t, windows_t.c.source_id == sources_t.c.source_id).join(
+            fts, windows_t.c.window_id == fts.c.rid
+        )
+        stmt = select(windows_t, sources_t.c.source_name).select_from(j)
 
         if source_name is not None:
             stmt = stmt.where(
@@ -604,11 +639,19 @@ class CaseDB:
                     )
                 )
 
-        stmt = stmt.order_by(
-            windows_t.c.event_time.asc().nullslast(),
-        ).limit(max_results)
+        if match == "any":
+            # Rank lives on the FTS table, so it has to be joined rather than
+            # filtered through `window_id IN (SELECT rowid ...)`.
+            stmt = stmt.order_by(text("fts.rank")).limit(max_results)
+            safe_query = _fts5_any_query(query)
+        else:
+            stmt = stmt.order_by(
+                windows_t.c.event_time.asc().nullslast(),
+            ).limit(max_results)
+            safe_query = _sanitize_fts5_query(query)
 
-        safe_query = _sanitize_fts5_query(query)
+        if not safe_query:
+            return []
 
         with self._engine.connect() as conn:
             try:
