@@ -1,0 +1,255 @@
+"""The PDF analyser was defeated by the evasion it exists to detect.
+
+``pdfid`` reports hex-obfuscated keyword occurrences as ``total(obfuscated)``::
+
+     /JS                    2(1)
+     /JavaScript            2(1)
+
+``int("2(1)")`` raises, and the count parser turned that into ``0``. A PDF
+that writes ``/J#61vaScript`` instead of ``/JavaScript`` -- which is the
+entire point of the technique -- was therefore reported as containing **no**
+JavaScript at all, and the obfuscation itself, a strong signal on its own,
+was never surfaced.
+
+Separately, ``analyze_pdf`` accepted ``extract_urls`` and ``extract_embedded``,
+echoed both into the audited parameters and documented them, then returned
+hardcoded empty lists.
+
+The pdfid fixtures below are verbatim output from pdfid 0.2.10.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+from mulder.server.tools.documents import (
+    _extract_pdf_embedded_files,
+    _extract_pdf_urls,
+    _extract_pdfid_count,
+    _parse_pdfid_obfuscated_count,
+    _run_pdfid,
+)
+
+# Verbatim `pdfid.py evil.pdf` output, where evil.pdf carries one plain and
+# one hex-obfuscated JavaScript action.
+PDFID_OBFUSCATED = """PDFiD 0.2.10 evil.pdf
+ PDF Header: %PDF-1.4
+ obj                    5
+ endobj                 5
+ stream                 0
+ endstream              0
+ xref                   0
+ trailer                1
+ startxref              1
+ /Page                  1
+ /Encrypt               0
+ /ObjStm                0
+ /JS                    2(1)
+ /JavaScript            2(1)
+ /AA                    0
+ /OpenAction            1
+ /AcroForm              0
+ /JBIG2Decode           0
+ /RichMedia             0
+ /Launch                0
+ /EmbeddedFile          0
+ /XFA                   0
+ /Colors > 2^24         0
+"""
+
+
+class TestPdfidCountParsing:
+    @pytest.mark.parametrize(
+        ("line", "expected"),
+        [
+            (" /JS                    2(1)", 2),
+            (" /JavaScript            2(1)", 2),
+            (" /OpenAction            1", 1),
+            (" /Launch                0", 0),
+            (" /EmbeddedFile          17(17)", 17),
+            (" /AA                    0(0)", 0),
+        ],
+    )
+    def test_counts(self, line: str, expected: int) -> None:
+        assert _extract_pdfid_count(line) == expected
+
+    def test_the_old_parser_returned_zero_for_the_obfuscated_form(self) -> None:
+        """Pins the premise: this is what int() did with '2(1)'."""
+        with pytest.raises(ValueError):
+            int("2(1)")
+
+    @pytest.mark.parametrize(
+        ("line", "expected"),
+        [
+            (" /JS                    2(1)", 1),
+            (" /JavaScript            5(3)", 3),
+            (" /OpenAction            1", 0),
+            (" /Launch                0", 0),
+        ],
+    )
+    def test_obfuscated_counts(self, line: str, expected: int) -> None:
+        assert _parse_pdfid_obfuscated_count(line) == expected
+
+    def test_a_malformed_line_is_zero(self) -> None:
+        assert _extract_pdfid_count("garbage") == 0
+        assert _parse_pdfid_obfuscated_count("garbage") == 0
+
+
+class TestObfuscatedJavaScriptIsReported:
+    @staticmethod
+    def _indicators(output: str) -> list[dict[str, object]]:
+        import subprocess
+
+        from mulder.server.tools import documents as doc
+
+        proc = subprocess.CompletedProcess(args=[], returncode=0, stdout=output, stderr="")
+        with (
+            patch.object(doc, "_pdfid_script", return_value=Path("/fake/pdfid.py")),
+            patch.object(doc.subprocess, "run", return_value=proc),
+        ):
+            return _run_pdfid(Path("/evidence/evil.pdf"))
+
+    def test_the_javascript_is_no_longer_invisible(self) -> None:
+        """On main this keyword produced no indicator at all."""
+        found = {i["keyword"]: i for i in self._indicators(PDFID_OBFUSCATED)}
+        assert "/JavaScript" in found
+        assert found["/JavaScript"]["count"] == 2
+
+    def test_the_obfuscation_is_reported_as_its_own_signal(self) -> None:
+        found = {i["keyword"]: i for i in self._indicators(PDFID_OBFUSCATED)}
+        assert found["/JS"]["obfuscated_count"] == 1
+        assert found["/JS"]["risk_level"] == "high"
+        assert "evasion" in str(found["/JS"]["description"])
+
+    def test_an_unobfuscated_keyword_carries_no_such_flag(self) -> None:
+        found = {i["keyword"]: i for i in self._indicators(PDFID_OBFUSCATED)}
+        assert "obfuscated_count" not in found["/OpenAction"]
+
+    def test_zero_counts_produce_no_indicator(self) -> None:
+        found = {i["keyword"] for i in self._indicators(PDFID_OBFUSCATED)}
+        assert "/Launch" not in found
+        assert "/JBIG2Decode" not in found
+
+
+# pdf-parser object dumps, in the shape pdf-parser.py --raw emits.
+URI_DUMP = """obj 5 0
+ Type: /Action
+ Referencing:
+
+  << /Type /Action /S /URI /URI (http://evil.example/payload) >>
+
+"""
+
+FILESPEC_DUMP = """obj 8 0
+ Type: /Filespec
+ Referencing: 9 0 R
+
+  << /Type /Filespec /F (dropper.exe) /UF (dropper.exe) /EF << /F 9 0 R >> >>
+
+"""
+
+
+class TestUrlExtraction:
+    @staticmethod
+    def _urls(dump: str) -> list[dict[str, object]]:
+        from mulder.server.tools import documents as doc
+
+        with patch.object(doc, "_run_pdf_parser", return_value=dump):
+            return _extract_pdf_urls(Path("/evidence/x.pdf"))
+
+    def test_a_uri_action_is_found(self) -> None:
+        """The way a PDF reaches a phishing page with no JavaScript at all."""
+        urls = {u["url"] for u in self._urls(URI_DUMP)}
+        assert "http://evil.example/payload" in urls
+
+    def test_a_url_is_reported_once(self) -> None:
+        assert len(self._urls(URI_DUMP)) == 1
+
+    def test_no_urls_in_a_clean_dump(self) -> None:
+        assert self._urls("obj 1 0\n << /Type /Catalog >>\n") == []
+
+
+class TestEmbeddedFileExtraction:
+    @staticmethod
+    def _files(dump: str) -> list[dict[str, object]]:
+        from mulder.server.tools import documents as doc
+
+        with patch.object(doc, "_run_pdf_parser", return_value=dump):
+            return _extract_pdf_embedded_files(Path("/evidence/x.pdf"))
+
+    def test_an_embedded_executable_is_listed(self) -> None:
+        files = self._files(FILESPEC_DUMP)
+        assert [f["filename"] for f in files] == ["dropper.exe"]
+
+    def test_an_embedded_executable_is_flagged(self) -> None:
+        assert self._files(FILESPEC_DUMP)[0]["suspicious"] is True
+
+    def test_a_benign_attachment_is_not_flagged(self) -> None:
+        dump = FILESPEC_DUMP.replace("dropper.exe", "report.pdf")
+        assert "suspicious" not in self._files(dump)[0]
+
+    def test_nothing_embedded(self) -> None:
+        assert self._files("obj 1 0\n << /Type /Catalog >>\n") == []
+
+
+class TestAnalyzePdfHonoursTheFlags:
+    """Both parameters were accepted, documented, and then ignored.
+
+    ``summary["urls"]`` and ``summary["embedded_files"]`` were assigned a
+    literal ``[]`` regardless of what the caller asked for or what the file
+    contained.
+    """
+
+    @staticmethod
+    def _analyze(tmp_path: Path, **kwargs: object) -> dict[str, object]:
+        from mulder.server.tools import documents as doc
+
+        pdf = tmp_path / "sample.pdf"
+        pdf.write_bytes(b"%PDF-1.4\n%%EOF\n")
+
+        def fake_parser(_path: Path, *args: str) -> str:
+            if "/URI" in args or "/Annot" in args:
+                return URI_DUMP
+            if "/Filespec" in args or "/EmbeddedFile" in args:
+                return FILESPEC_DUMP
+            return ""
+
+        captured: dict[str, object] = {}
+
+        def capture_response(
+            tc_id: str, tool_name: str, params: object, results: object, *a: object
+        ) -> dict[str, object]:
+            if isinstance(results, dict):
+                captured.update(results)
+            return {"status": "success"}
+
+        with (
+            patch.object(doc, "_pdfid_script", return_value=Path("/fake/pdfid.py")),
+            patch.object(doc, "_run_pdfid", return_value=[]),
+            patch.object(doc, "_extract_pdf_javascript", return_value=[]),
+            patch.object(doc, "_run_pdf_parser", side_effect=fake_parser),
+            patch.object(doc, "extract_and_index", return_value={}),
+            patch.object(doc, "tool_response", capture_response),
+        ):
+            doc.analyze_pdf.__wrapped__(  # type: ignore[attr-defined]
+                "case-1", str(pdf), **kwargs
+            )
+        return captured
+
+    def test_urls_are_returned_when_asked_for(self, tmp_path: Path) -> None:
+        result = self._analyze(tmp_path, extract_urls=True, extract_embedded=False)
+        urls = [u["url"] for u in result["urls"]]  # type: ignore[index,union-attr]
+        assert "http://evil.example/payload" in urls
+
+    def test_embedded_files_are_returned_when_asked_for(self, tmp_path: Path) -> None:
+        result = self._analyze(tmp_path, extract_urls=False, extract_embedded=True)
+        names = [f["filename"] for f in result["embedded_files"]]  # type: ignore[index,union-attr]
+        assert names == ["dropper.exe"]
+
+    def test_the_flags_still_switch_the_work_off(self, tmp_path: Path) -> None:
+        result = self._analyze(tmp_path, extract_urls=False, extract_embedded=False)
+        assert result["urls"] == []
+        assert result["embedded_files"] == []

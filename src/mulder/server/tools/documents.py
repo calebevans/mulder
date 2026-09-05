@@ -403,15 +403,24 @@ def _run_pdfid(file_path: Path) -> list[dict[str, object]]:
             clean_keyword = keyword.lstrip("/")
             if clean_keyword in stripped:
                 count = _extract_pdfid_count(stripped)
+                obfuscated = _parse_pdfid_obfuscated_count(stripped)
                 if count > 0:
-                    indicators.append(
-                        {
-                            "keyword": keyword,
-                            "count": count,
-                            "risk_level": risk,
-                            "description": description,
-                        }
-                    )
+                    entry: dict[str, object] = {
+                        "keyword": keyword,
+                        "count": count,
+                        "risk_level": risk,
+                        "description": description,
+                    }
+                    if obfuscated > 0:
+                        # Nothing writes `/J#61vaScript` by accident.
+                        entry["obfuscated_count"] = obfuscated
+                        entry["risk_level"] = "high"
+                        entry["description"] = (
+                            f"{description} "
+                            f"({obfuscated} of {count} written with hex-escaped "
+                            f"names, a deliberate evasion)"
+                        )
+                    indicators.append(entry)
     return indicators
 
 
@@ -425,12 +434,39 @@ def _extract_pdfid_count(line: str) -> int:
         Integer count value, or 0 if not parseable.
     """
     parts = line.rsplit(None, 1)
-    if len(parts) == 2:
-        try:
-            return int(parts[1])
-        except ValueError:
-            return 0
-    return 0
+    if len(parts) != 2:
+        return 0
+    count = parts[1]
+    # pdfid reports hex-obfuscated occurrences as `total(obfuscated)`:
+    #
+    #      /JS                    2(1)
+    #      /JavaScript            2(1)
+    #
+    # `int("2(1)")` raises, and the old code turned that into 0 -- so a PDF
+    # that hides its JavaScript behind `/J#61vaScript`, which is the whole
+    # point of the technique, was reported as containing none. Verified
+    # against pdfid 0.2.10.
+    total, _, _obfuscated = count.partition("(")
+    try:
+        return int(total)
+    except ValueError:
+        return 0
+
+
+def _parse_pdfid_obfuscated_count(line: str) -> int:
+    """How many occurrences of this keyword were hex-obfuscated.
+
+    Non-zero is a deliberate evasion signal in its own right: nothing
+    obfuscates ``/JavaScript`` by accident.
+    """
+    parts = line.rsplit(None, 1)
+    if len(parts) != 2:
+        return 0
+    _total, _, rest = parts[1].partition("(")
+    try:
+        return int(rest.rstrip(")"))
+    except ValueError:
+        return 0
 
 
 def _extract_pdf_javascript(file_path: Path) -> list[dict[str, object]]:
@@ -491,6 +527,133 @@ def _extract_pdf_javascript(file_path: Path) -> list[dict[str, object]]:
         scripts.append(_make_js_entry(current_obj_id, code))
 
     return scripts
+
+
+_PDF_URI_RE = re.compile(r"/URI\s*\(([^)]{1,2048})\)")
+"""A ``/URI (...)`` action value in a pdf-parser object dump."""
+
+_PDF_URL_RE = re.compile(r"https?://[^\s()<>\"\']{3,2048}")
+"""A bare URL anywhere in the object dump."""
+
+_PDF_FILENAME_RE = re.compile(r"/(?:UF|F)\s*\(([^)]{1,512})\)")
+"""The filename of an embedded file, from its /Filespec."""
+
+_SUSPICIOUS_EMBEDDED_SUFFIXES: frozenset[str] = frozenset(
+    {
+        ".exe",
+        ".dll",
+        ".scr",
+        ".bat",
+        ".cmd",
+        ".ps1",
+        ".vbs",
+        ".js",
+        ".jar",
+        ".hta",
+        ".lnk",
+        ".wsf",
+        ".msi",
+        ".com",
+        ".pif",
+    }
+)
+"""Extensions that make an embedded file worth flagging on sight."""
+
+
+def _run_pdf_parser(file_path: Path, *args: str) -> str:
+    """Run the vendored pdf-parser with *args*, returning stdout."""
+    script = _pdf_parser_script()
+    if script is not None:
+        cmd = [sys.executable, str(script), *args, str(file_path)]
+    else:
+        parser_bin = require_binary("pdf-parser") or "pdf-parser"
+        cmd = [parser_bin, *args, str(file_path)]
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=_PDF_PARSER_TIMEOUT,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return ""
+    return proc.stdout
+
+
+def _extract_pdf_urls(file_path: Path) -> list[dict[str, object]]:
+    """Extract URLs reachable from the PDF.
+
+    ``analyze_pdf`` accepted ``extract_urls``, echoed it into the audited
+    parameters and documented it -- and then returned a hardcoded empty
+    list. A URI action is how a PDF sends a reader to a phishing page
+    without carrying any JavaScript at all.
+    """
+    urls: dict[str, dict[str, object]] = {}
+    for obj_type, label in (("/URI", "uri_action"), ("/Annot", "annotation")):
+        output = _run_pdf_parser(file_path, "--type", obj_type, "--raw")
+        for match in _PDF_URI_RE.finditer(output):
+            value = match.group(1).strip()
+            if value and value not in urls:
+                urls[value] = {"url": value, "source": label}
+    # Also pick up anything the raw object dump reveals.
+    for match in _PDF_URL_RE.finditer(_run_pdf_parser(file_path, "--raw")):
+        value = match.group(0).rstrip(")>,.;")
+        urls.setdefault(value, {"url": value, "source": "object"})
+    return list(urls.values())
+
+
+def _extract_pdf_embedded_files(file_path: Path) -> list[dict[str, object]]:
+    """List files embedded in the PDF.
+
+    Like ``extract_urls``, ``extract_embedded`` was accepted and then
+    ignored, so a PDF carrying a dropped executable reported none.
+    """
+    files: list[dict[str, object]] = []
+    seen: set[str] = set()
+    # /Filespec first: it is the object that carries the filename. A bare
+    # /EmbeddedFile stream is only reported when nothing named it, so a
+    # single embedded file does not appear twice.
+    named_ids: set[int] = set()
+    for obj_type in ("/Filespec", "/EmbeddedFile"):
+        output = _run_pdf_parser(file_path, "--type", obj_type, "--raw")
+        for obj_id, body in _iter_pdf_objects(output):
+            name_match = _PDF_FILENAME_RE.search(body)
+            if name_match:
+                name = name_match.group(1).strip()
+                named_ids.add(obj_id)
+            elif obj_type == "/EmbeddedFile" and not named_ids and "/EmbeddedFile" in body:
+                name = f"object_{obj_id}"
+            else:
+                continue
+            if name in seen:
+                continue
+            seen.add(name)
+            entry: dict[str, object] = {"object_id": obj_id, "filename": name}
+            suffix = Path(name).suffix.lower()
+            if suffix in _SUSPICIOUS_EMBEDDED_SUFFIXES:
+                entry["suspicious"] = True
+            files.append(entry)
+    return files
+
+
+def _iter_pdf_objects(output: str) -> list[tuple[int, str]]:
+    """Split pdf-parser output into ``(object_id, body)`` pairs."""
+    objects: list[tuple[int, str]] = []
+    current_id: int | None = None
+    body: list[str] = []
+    for line in output.splitlines():
+        m = re.match(r"obj (\d+)", line)
+        if m:
+            if current_id is not None:
+                objects.append((current_id, "\n".join(body)))
+            current_id = int(m.group(1))
+            body = []
+        else:
+            body.append(line)
+    if current_id is not None:
+        objects.append((current_id, "\n".join(body)))
+    return objects
 
 
 def _make_js_entry(object_id: int, code: str) -> dict[str, object]:
@@ -848,8 +1011,8 @@ def analyze_pdf(
     summary["indicators"] = indicators
     summary["risk_assessment"] = risk
     summary["javascript"] = javascript if extract_javascript else []
-    summary["urls"] = []
-    summary["embedded_files"] = []
+    summary["urls"] = _extract_pdf_urls(target) if extract_urls else []
+    summary["embedded_files"] = _extract_pdf_embedded_files(target) if extract_embedded else []
 
     elapsed = (time.monotonic() - t0) * 1000
     return tool_response(tc_id, "analyze_pdf", params, summary, "pdf.analysis", elapsed)
