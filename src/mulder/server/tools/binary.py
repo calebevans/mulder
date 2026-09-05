@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from mulder.patterns import IP_RE, UNIX_PATH_RE, WIN_PATH_RE
 from mulder.server.app import mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
@@ -97,10 +98,13 @@ SUSPICIOUS_API_CATEGORIES: dict[str, list[str]] = {
     ],
 }
 
+# _URL_RE and _REGISTRY_RE have no counterpart in mulder.patterns and no other
+# caller, so they stay local. IP and filesystem paths do have one, and the
+# copies here had drifted: the local Unix pattern knew only /usr, /etc, /tmp
+# and /var, so strings like /root/.bash_history and /home/victim/.ssh/id_rsa
+# were classified as "not a path" and dropped from the categorised output.
 _URL_RE = re.compile(r"https?://[^\s\"']+")
-_IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _REGISTRY_RE = re.compile(r"HKLM\\|HKCU\\|HKCR\\|SOFTWARE\\", re.IGNORECASE)
-_FILEPATH_RE = re.compile(r"[A-Z]:\\[^\s\"]+|/(?:usr|etc|tmp|var)/[^\s\"]+")
 _BASE64_RE = re.compile(r"^[A-Za-z0-9+/]{20,}={0,2}$")
 _HEX_KEY_RE = re.compile(r"^[0-9a-fA-F]{16,}$")
 _RAHASH_RE = re.compile(r"(\w+):\s+([0-9a-fA-F]+)")
@@ -254,11 +258,11 @@ def _categorize_string(value: str) -> str | None:
     """
     if _URL_RE.search(value):
         return "url"
-    if _IPV4_RE.search(value):
+    if IP_RE.search(value):
         return "ip"
     if _REGISTRY_RE.search(value):
         return "registry"
-    if _FILEPATH_RE.search(value):
+    if WIN_PATH_RE.search(value) or UNIX_PATH_RE.search(value):
         return "filepath"
     return None
 
