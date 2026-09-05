@@ -18,6 +18,7 @@ from mulder.server.helpers import (
     _FILE_LIST_CAP,
     _PREVIEW_CHAR_LIMIT,
     adaptive_timeout,
+    classify_tool_exit,
     error_response,
     make_tool_call_id,
     require_binary,
@@ -639,7 +640,7 @@ def run_photorec(image_path: str) -> dict[str, object]:
             f"search,{tmpdir}/",
         ]
         try:
-            subprocess.run(
+            proc = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
@@ -656,6 +657,20 @@ def run_photorec(image_path: str) -> dict[str, object]:
             )
 
         report_path = Path(tmpdir) / "report.xml"
+        recovered_anything = report_path.exists() or any(
+            f.is_file() for f in Path(tmpdir).rglob("*")
+        )
+        verdict, message = classify_tool_exit(proc, "photorec", produced_output=recovered_anything)
+        if verdict == "failed":
+            return error_response(
+                tc_id,
+                "run_photorec",
+                params,
+                message,
+                elapsed_ms=(time.monotonic() - t0) * 1000,
+                error_type="tool_failed",
+            )
+
         report_text = ""
         if report_path.exists():
             report_text = report_path.read_text(errors="replace")

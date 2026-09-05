@@ -107,6 +107,50 @@ def run_subprocess(
         return f"Failed to run {cmd[0]}: {exc}"
 
 
+_EXIT_PREVIEW_CHARS = 500
+
+
+def classify_tool_exit(
+    proc: subprocess.CompletedProcess[str],
+    binary: str,
+    *,
+    produced_output: bool,
+) -> tuple[str, str]:
+    """Decide what a finished CLI tool's exit status means for the caller.
+
+    Returns ``(verdict, message)`` where *verdict* is one of:
+
+    ``"ok"``
+        The tool exited 0. Nothing to report.
+    ``"partial"``
+        The tool exited non-zero but still produced output. Several of the
+        wrapped tools exit non-zero on a single unreadable input file while
+        having processed every other one (chainsaw does this without
+        ``--skip-errors``), so the results are kept and the message is
+        surfaced as a warning.
+    ``"failed"``
+        The tool exited non-zero and produced nothing. Reporting this as a
+        successful scan with zero findings is the single worst thing a DFIR
+        tool can do, so callers must turn it into an error.
+
+    A tool that exits 0 without producing output is *not* classified here:
+    "no output" is a legitimate clean result for most of these tools, and
+    the ones where it is not (hayabusa refuses to overwrite and still exits
+    0) check for their own output file explicitly.
+    """
+    if proc.returncode == 0:
+        return "ok", ""
+
+    detail = ((proc.stderr or "").strip() or (proc.stdout or "").strip())[:_EXIT_PREVIEW_CHARS]
+    if produced_output:
+        return (
+            "partial",
+            f"{binary} exited {proc.returncode} but produced output; "
+            f"results may be incomplete: {detail}",
+        )
+    return "failed", f"{binary} exited {proc.returncode} and produced no output: {detail}"
+
+
 def make_tool_call_id() -> str:
     """Generate a short unique identifier for a tool invocation."""
     return f"tc_{uuid4().hex[:8]}"
@@ -585,6 +629,21 @@ def run_cli_tool(
         return error_response(tc_id, tool_name, params, result, error_type="timeout")
     proc = result
 
-    summary = extract_and_index(proc.stdout.strip(), source_name, source_path, extractor_label)
+    stdout = proc.stdout.strip()
+    verdict, message = classify_tool_exit(proc, binary, produced_output=bool(stdout))
+    if verdict == "failed":
+        return error_response(
+            tc_id,
+            tool_name,
+            params,
+            message,
+            elapsed_ms=(time.monotonic() - t0) * 1000,
+            error_type="tool_failed",
+        )
+
+    summary = extract_and_index(stdout, source_name, source_path, extractor_label)
     elapsed = (time.monotonic() - t0) * 1000
-    return tool_response(tc_id, tool_name, params, summary, source_name, elapsed)
+    response = tool_response(tc_id, tool_name, params, summary, source_name, elapsed)
+    if verdict == "partial":
+        response["warning"] = message
+    return response

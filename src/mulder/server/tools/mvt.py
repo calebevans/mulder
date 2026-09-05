@@ -19,7 +19,12 @@ from pathlib import Path
 
 from mulder.server.app import mcp
 from mulder.server.extract_helpers import extract_and_index
-from mulder.server.helpers import error_response, make_tool_call_id, tool_response
+from mulder.server.helpers import (
+    classify_tool_exit,
+    error_response,
+    make_tool_call_id,
+    tool_response,
+)
 from mulder.server.tool_access import Role, tool_access
 
 logger = logging.getLogger(__name__)
@@ -123,6 +128,19 @@ def run_mvt_android(
 
         raw_output, module_counts = _collect_mvt_results(tmpdir)
 
+        verdict, message = classify_tool_exit(
+            proc, cmd[0], produced_output=bool(raw_output.strip())
+        )
+        if verdict == "failed":
+            return error_response(
+                tc_id,
+                tool_name,
+                params,
+                message,
+                elapsed_ms=(time.monotonic() - t0) * 1000,
+                error_type="tool_failed",
+            )
+
         if not raw_output.strip():
             raw_output = proc.stdout.strip() or proc.stderr.strip()
 
@@ -222,6 +240,19 @@ def run_mvt_ios(
             )
 
         raw_output, module_counts = _collect_mvt_results(tmpdir)
+
+        verdict, message = classify_tool_exit(
+            proc, cmd[0], produced_output=bool(raw_output.strip())
+        )
+        if verdict == "failed":
+            return error_response(
+                tc_id,
+                tool_name,
+                params,
+                message,
+                elapsed_ms=(time.monotonic() - t0) * 1000,
+                error_type="tool_failed",
+            )
 
         if not raw_output.strip():
             raw_output = proc.stdout.strip() or proc.stderr.strip()

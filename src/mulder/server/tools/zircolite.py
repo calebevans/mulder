@@ -16,6 +16,7 @@ from mulder.assets.paths import asset_display_path, asset_path, asset_search_sum
 from mulder.server.app import mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
+    classify_tool_exit,
     error_response,
     make_tool_call_id,
     sources_already_indexed,
@@ -74,7 +75,7 @@ def _run_zircolite_process(
     log_format: str,
     ruleset_path: Path,
     output_dir: Path,
-) -> Path:
+) -> tuple[Path, subprocess.CompletedProcess[str]]:
     """Execute Zircolite against event logs.
 
     Args:
@@ -85,7 +86,10 @@ def _run_zircolite_process(
         output_dir: Output directory for results.
 
     Returns:
-        Path to the JSON results file.
+        ``(results_path, completed_process)``. The caller must inspect the
+        process: Zircolite exits non-zero on a bad argument or ruleset and
+        writes no output file, which the parser would otherwise report as
+        zero detections.
 
     Raises:
         subprocess.TimeoutExpired: If Zircolite exceeds the timeout.
@@ -105,14 +109,14 @@ def _run_zircolite_process(
         *format_flags,
     ]
 
-    subprocess.run(
+    proc = subprocess.run(
         cmd,
         capture_output=True,
         text=True,
         timeout=_ZIRCOLITE_TIMEOUT,
         check=False,
     )
-    return output_file
+    return output_file, proc
 
 
 def _build_detection_timeline(
@@ -360,7 +364,7 @@ def run_zircolite(
     with tempfile.TemporaryDirectory(prefix="mulder_zircolite_") as tmpdir:
         output_dir = Path(tmpdir)
         try:
-            results_path = _run_zircolite_process(
+            results_path, proc = _run_zircolite_process(
                 str(script),
                 Path(events_path),
                 log_format,
@@ -384,6 +388,19 @@ def run_zircolite(
                 f"Failed to execute Zircolite: {exc}",
                 (time.monotonic() - t0) * 1000,
                 error_type="os_error",
+            )
+
+        verdict, message = classify_tool_exit(
+            proc, "zircolite", produced_output=results_path.exists()
+        )
+        if verdict == "failed":
+            return error_response(
+                tc_id,
+                "run_zircolite",
+                params,
+                message,
+                (time.monotonic() - t0) * 1000,
+                error_type="tool_failed",
             )
 
         result = _parse_zircolite_output(results_path, events_path, log_format, sigma_level_filter)
