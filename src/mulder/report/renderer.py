@@ -15,6 +15,8 @@ from typing import Any
 
 import jinja2
 import markdown
+from jinja2.exceptions import SecurityError
+from jinja2.sandbox import SandboxedEnvironment
 
 from mulder.models import AuditSummary, CaseMetadataRow, Finding, SourceRow
 from mulder.patterns import (
@@ -937,17 +939,46 @@ def _clean_finding_description(text: str) -> str:
     return cleaned
 
 
+_MD_EXTENSIONS = ["fenced_code", "tables", "nl2br"]
+
+
+def _markdown_to_safe_html(text: str) -> str:
+    """Convert *text* to HTML without letting it inject markup.
+
+    Python-Markdown passes raw HTML straight through -- it has had no safe
+    mode since 3.0 -- and both the finding descriptions and the case
+    narrative are built from evidence content: filenames, command lines,
+    registry values, strings carved out of a disk image. Escaping the three
+    markup characters first keeps every markdown construct working (they use
+    ``*``, ``_``, backticks and brackets) while making ``<script>`` inert.
+    """
+    if not text:
+        return ""
+    escaped = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    html: str = markdown.markdown(escaped, extensions=_MD_EXTENSIONS)
+    return html
+
+
 class ReportRenderer:
     """Renders validated findings into markdown and HTML investigation reports."""
 
     def __init__(self) -> None:
         """Configure Jinja to load package templates.
 
-        ``autoescape=False`` preserves markdown until HTML conversion.
+        Autoescaping is on for ``.html.j2`` and off for ``.md.j2``. A single
+        ``autoescape=False`` environment served both, so every value that
+        reaches the HTML report -- filenames, command lines, registry values,
+        all of it read straight off the evidence -- was interpolated as raw
+        markup. Anything already converted to HTML on purpose is marked
+        ``| safe`` in the template.
         """
         self._env = jinja2.Environment(
             loader=jinja2.PackageLoader("mulder", "report/templates"),
-            autoescape=False,
+            autoescape=jinja2.select_autoescape(
+                enabled_extensions=("html", "html.j2"),
+                default_for_string=False,
+                default=False,
+            ),
             keep_trailing_newline=True,
         )
         self._env.filters["attack_url"] = _attack_id_to_url
@@ -975,10 +1006,15 @@ class ReportRenderer:
         if not narrative:
             return narrative
         try:
-            env = jinja2.Environment(undefined=jinja2.Undefined)
+            # SandboxedEnvironment, not Environment: the narrative is
+            # model-authored prose summarising attacker-controlled evidence,
+            # and a plain environment would execute
+            # ``{{ cycler.__init__.__globals__ }}`` and everything reachable
+            # from it as the user running the server.
+            env = SandboxedEnvironment(undefined=jinja2.Undefined)
             template = env.from_string(narrative)
             return template.render(**ctx)
-        except Exception:
+        except (jinja2.TemplateError, SecurityError, TypeError, ValueError):
             return narrative
 
     def build_context(
@@ -1154,14 +1190,7 @@ class ReportRenderer:
 
         rendered_narrative = self._render_narrative_template(case_metadata.narrative or "", ctx)
         ctx["narrative"] = rendered_narrative
-        ctx["narrative_html"] = (
-            markdown.markdown(
-                rendered_narrative,
-                extensions=["fenced_code", "tables", "nl2br"],
-            )
-            if rendered_narrative
-            else ""
-        )
+        ctx["narrative_html"] = _markdown_to_safe_html(rendered_narrative)
 
         return ctx
 
@@ -1309,12 +1338,11 @@ class ReportRenderer:
         Returns:
             Rendered HTML report string.
         """
-        md_extensions = ["fenced_code", "tables", "nl2br"]
         html_findings = []
         for f in ctx["findings"]:
             fd = f.model_dump()
             cleaned_desc = _clean_finding_description(fd.get("description", ""))
-            fd["description_html"] = markdown.markdown(cleaned_desc, extensions=md_extensions)
+            fd["description_html"] = _markdown_to_safe_html(cleaned_desc)
             html_findings.append(SimpleNamespace(**fd))
         ctx["findings"] = html_findings
 

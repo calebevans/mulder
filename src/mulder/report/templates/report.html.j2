@@ -770,7 +770,7 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
     <div class="subtitle">Case <span class="mono">{{ case_id }}</span></div>
   </div>
   <div class="report-narrative">
-    {{ narrative_html }}
+    {{ narrative_html | safe }}
   </div>
 </div>
 {% endif %}
@@ -808,7 +808,7 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
         <div class="tl-sources">{{ f.sources | join(', ') }}</div>
       </div>
       <div class="tl-detail-panel" id="tld_{{ f.finding_id }}">
-        {{ f.description_html }}
+        {{ f.description_html | safe }}
         <div style="margin-top:0.75rem;">
           <a style="color:var(--accent);cursor:pointer;font-size:0.8rem;" onclick="event.stopPropagation();navigateToFinding('{{ f.finding_id }}')">View full finding &rarr;</a>
         </div>
@@ -855,7 +855,7 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
       <span class="finding-name">{{ f.title }}</span>
     </div>
     <div class="finding-body">
-      <div class="finding-desc">{{ f.description_html }}</div>
+      <div class="finding-desc">{{ f.description_html | safe }}</div>
       <div class="evidence-strength">
         <span>Evidence strength:</span>
         <div class="evidence-strength-bar"><div class="evidence-strength-fill" style="width:{{ [f.evidence_refs | length * 20, 100] | min }}%"></div></div>
