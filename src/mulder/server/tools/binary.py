@@ -502,14 +502,20 @@ def _parse_capa_output(raw: dict[str, Any], file_path: str) -> dict[str, object]
                     "tactic": tactic,
                     "technique_id": technique_id,
                     "technique_name": technique_name,
-                    "subtechnique_id": ref.get("subtechnique_id"),
+                    # capa's AttackSpec field is `subtechnique` and holds a
+                    # name, not an id; `id` already carries the full
+                    # "T1055.012". `subtechnique_id` was always None.
+                    "subtechnique": str(ref.get("subtechnique", "")),
                 }
             )
 
             if tactic:
                 if tactic not in mitre_summary:
                     mitre_summary[tactic] = []
-                desc = f"{technique_id}: {technique_name}"
+                subtechnique = str(ref.get("subtechnique", ""))
+                desc = f"{technique_id}: {technique_name}" + (
+                    f"::{subtechnique}" if subtechnique else ""
+                )
                 if desc not in mitre_summary[tactic]:
                     mitre_summary[tactic].append(desc)
 
@@ -559,13 +565,30 @@ def _extract_floss_strings(
         results.append(
             {
                 "value": value,
-                "encoding": encoding,
+                "encoding": str(entry.get("encoding", encoding)),
+                "string_type": encoding,
+                # A decoded or stack string never existed in the file, so it
+                # has no offset; it has an address in memory instead.
                 "offset": entry.get("offset"),
+                "address": entry.get("address"),
                 "decoding_routine_address": entry.get("decoding_routine"),
                 "category": _categorize_decoded_string(value),
             }
         )
     return results
+
+
+def _floss_runtime_seconds(raw: dict[str, Any]) -> float:
+    """FLOSS records its runtime under ``metadata.runtime``, not ``elapsed_time``."""
+    metadata = raw.get("metadata", {})
+    if not isinstance(metadata, dict):
+        return 0.0
+    runtime = metadata.get("runtime", {})
+    if isinstance(runtime, dict):
+        total = runtime.get("total")
+        if isinstance(total, int | float):
+            return float(total)
+    return 0.0
 
 
 def _parse_floss_output(raw: dict[str, Any], file_path: str) -> dict[str, object]:
@@ -580,10 +603,18 @@ def _parse_floss_output(raw: dict[str, Any], file_path: str) -> dict[str, object
     Returns:
         Dict with categorized decoded strings and stats.
     """
-    decoded = _extract_floss_strings(raw.get("decoded", []), "xor")
-    stack = _extract_floss_strings(raw.get("stack_strings", []), "stack")
-    tight = _extract_floss_strings(raw.get("tight_strings", []), "tight")
-    static = _extract_floss_strings(raw.get("static_strings", []), "static")
+    # FLOSS's ResultDocument is {metadata, analysis, strings}; all four string
+    # lists live under `strings`, and the decoded one is `decoded_strings`.
+    # Reading them from the top level returned four empty lists for every
+    # sample, which the tool reported as "no obfuscated strings recovered".
+    strings: dict[str, Any] = raw.get("strings", {})
+    if not isinstance(strings, dict):
+        strings = {}
+
+    decoded = _extract_floss_strings(strings.get("decoded_strings", []), "xor")
+    stack = _extract_floss_strings(strings.get("stack_strings", []), "stack")
+    tight = _extract_floss_strings(strings.get("tight_strings", []), "tight")
+    static = _extract_floss_strings(strings.get("static_strings", []), "static")
 
     return {
         "file_path": file_path,
@@ -592,13 +623,41 @@ def _parse_floss_output(raw: dict[str, Any], file_path: str) -> dict[str, object
         "tight_strings": tight,
         "static_strings": static,
         "total_decoded": len(decoded) + len(stack) + len(tight),
-        "analysis_time_seconds": raw.get("metadata", {}).get("elapsed_time", 0.0),
+        "analysis_time_seconds": _floss_runtime_seconds(raw),
     }
 
 
 # ---------------------------------------------------------------------------
 # Detect-It-Easy helpers
 # ---------------------------------------------------------------------------
+
+
+def _die_records(raw: dict[str, Any]) -> list[tuple[dict[str, Any], str]]:
+    """Yield ``(record, filetype)`` for every DIE detection.
+
+    Detect It Easy nests the real detection records one level down::
+
+        {"detects": [{"filetype": "ELF64", "parentfilepart": "Header",
+                      "values": [{"type": "Compiler", "name": "GCC", ...}]}]}
+
+    The ``detects[]`` entry itself carries no ``type`` or ``name``, so reading
+    those from it produced ``{"type": "unknown", "name": ""}`` for every
+    detection -- packers included. The flat shape is still accepted, so an
+    older diec (or ``--json`` from a different build) keeps working.
+
+    Verified against Detect It Easy 3.09.
+    """
+    records: list[tuple[dict[str, Any], str]] = []
+    for entry in raw.get("detects", []):
+        if not isinstance(entry, dict):
+            continue
+        filetype = str(entry.get("filetype", ""))
+        values = entry.get("values")
+        if isinstance(values, list):
+            records.extend((value, filetype) for value in values if isinstance(value, dict))
+        else:
+            records.append((entry, filetype or str(raw.get("filetype", ""))))
+    return records
 
 
 def _parse_die_output(raw: dict[str, Any], file_path: str) -> dict[str, object]:
@@ -619,16 +678,23 @@ def _parse_die_output(raw: dict[str, Any], file_path: str) -> dict[str, object]:
     protectors: list[dict[str, object]] = []
     linkers: list[dict[str, object]] = []
 
-    for entry in raw.get("detects", []):
+    file_type = "unknown"
+    for entry in _die_records(raw):
+        record, parent_filetype = entry
+        if file_type == "unknown" and parent_filetype:
+            file_type = parent_filetype
+
         detection: dict[str, object] = {
-            "type": entry.get("type", "unknown"),
-            "name": entry.get("name", ""),
-            "version": entry.get("version"),
-            "options": entry.get("options"),
+            "type": record.get("type", "unknown"),
+            "name": record.get("name", ""),
+            "version": record.get("version"),
+            "options": record.get("options", record.get("info")),
         }
         detections.append(detection)
 
-        det_type = str(entry.get("type", ""))
+        # DIE capitalises the type on output: a rule declaring
+        # init("packer", "UPX") is emitted as "type": "Packer".
+        det_type = str(record.get("type", "")).lower()
         if det_type == "compiler":
             compilers.append(detection)
         elif det_type == "packer":
@@ -647,7 +713,7 @@ def _parse_die_output(raw: dict[str, Any], file_path: str) -> dict[str, object]:
 
     return {
         "file_path": file_path,
-        "file_type": raw.get("filetype", "unknown"),
+        "file_type": file_type,
         "detections": detections,
         "compilers": compilers,
         "packers": packers,
