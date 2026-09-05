@@ -25,6 +25,7 @@ from unittest.mock import patch
 
 import pytest
 
+import mulder.server.tools.documents as doc
 from mulder.server.tools.documents import (
     _extract_pdf_embedded_files,
     _extract_pdf_urls,
@@ -253,3 +254,120 @@ class TestAnalyzePdfHonoursTheFlags:
         result = self._analyze(tmp_path, extract_urls=False, extract_embedded=False)
         assert result["urls"] == []
         assert result["embedded_files"] == []
+
+
+# --- JavaScript extraction ------------------------------------------------
+#
+# `pdf-parser --type` selects on an indirect object's /Type entry. A PDF's
+# JavaScript lives in an action dictionary -- /Type /Action, /S /JavaScript --
+# so `--type /JS` matches no object in any PDF and the extractor always
+# returned nothing. Verified against DidierStevensSuite pdf-parser: on a PDF
+# containing `app.alert(1)`, `--type /JS --filter` prints zero bytes while
+# `--search javascript` prints the action.
+
+LITERAL_JS_OBJECT = """obj 4 0
+ Type: /Action
+ Referencing:
+
+  <<
+    /Type /Action
+    /S /JavaScript
+    /JS '(app.alert\\(1\\))'
+  >>
+
+"""
+"""Verbatim `pdf-parser --search javascript --filter` output for an inline script."""
+
+INDIRECT_JS_OBJECT = """obj 4 0
+ Type: /Action
+ Referencing: 5 0 R
+
+  <<
+    /Type /Action
+    /S /JavaScript
+    /JS 5 0 R
+  >>
+
+"""
+"""Verbatim output for the shape a real maldoc uses: a compressed JS stream."""
+
+INDIRECT_JS_STREAM = """obj 5 0
+ Type:
+ Referencing:
+ Contains stream
+
+  <<
+    /Length 38
+    /Filter /FlateDecode
+  >>
+
+ b"app.alert('indirect-js-here');"
+"""
+"""Verbatim `--object 5 --filter --raw` output: the decoded stream payload."""
+
+
+class TestJavaScriptExtraction:
+    def test_the_search_is_not_a_type_selector(self, tmp_path: Path) -> None:
+        """The invocation itself is the bug; pin what is actually run."""
+        calls: list[tuple[str, ...]] = []
+
+        def fake_parser(_path: Path, *args: str) -> str:
+            calls.append(args)
+            return ""
+
+        with patch.object(doc, "_run_pdf_parser", side_effect=fake_parser):
+            doc._extract_pdf_javascript(tmp_path / "x.pdf")
+
+        assert calls, "the parser was never invoked"
+        assert all("--type" not in a for a in calls)
+        assert ("--search", "javascript", "--filter") in calls
+
+    def test_an_inline_script_is_extracted(self, tmp_path: Path) -> None:
+        with patch.object(doc, "_run_pdf_parser", return_value=LITERAL_JS_OBJECT):
+            scripts = doc._extract_pdf_javascript(tmp_path / "x.pdf")
+
+        assert len(scripts) == 1
+        assert scripts[0]["object_id"] == 4
+        assert scripts[0]["code"] == "app.alert(1)"
+
+    def test_an_escaped_parenthesis_does_not_truncate_the_script(self, tmp_path: Path) -> None:
+        """`app.alert(1)` is the common case, and a PDF writes `(` as `\\(`.
+
+        Stopping at the first `)` would yield `app.alert(1` and lose whatever
+        followed -- including the part an analyst is reading the script for.
+        """
+        with patch.object(doc, "_run_pdf_parser", return_value=LITERAL_JS_OBJECT):
+            scripts = doc._extract_pdf_javascript(tmp_path / "x.pdf")
+
+        assert scripts[0]["code"].endswith(")")
+
+    def test_an_indirect_stream_reference_is_followed(self, tmp_path: Path) -> None:
+        """`/JS 5 0 R` -- the code is in another object, usually compressed."""
+        seen: list[tuple[str, ...]] = []
+
+        def fake_parser(_path: Path, *args: str) -> str:
+            seen.append(args)
+            if "--object" in args:
+                return INDIRECT_JS_STREAM
+            return INDIRECT_JS_OBJECT
+
+        with patch.object(doc, "_run_pdf_parser", side_effect=fake_parser):
+            scripts = doc._extract_pdf_javascript(tmp_path / "x.pdf")
+
+        assert ("--object", "5", "--filter", "--raw") in seen
+        assert len(scripts) == 1
+        assert scripts[0]["code"] == "app.alert('indirect-js-here');"
+
+    def test_an_object_carrying_no_script_is_not_reported(self, tmp_path: Path) -> None:
+        """`--search javascript` also matches a /Names /JavaScript tree."""
+        names_tree = "obj 9 0\n  <<\n    /Names [(n) 4 0 R]\n  >>\n"
+        with patch.object(doc, "_run_pdf_parser", return_value=names_tree):
+            assert doc._extract_pdf_javascript(tmp_path / "x.pdf") == []
+
+    def test_the_extracted_script_is_analysed(self, tmp_path: Path) -> None:
+        """Extraction must feed the obfuscation and suspicious-function checks."""
+        with patch.object(doc, "_run_pdf_parser", return_value=LITERAL_JS_OBJECT):
+            scripts = doc._extract_pdf_javascript(tmp_path / "x.pdf")
+
+        assert "is_obfuscated" in scripts[0]
+        assert "suspicious_functions" in scripts[0]

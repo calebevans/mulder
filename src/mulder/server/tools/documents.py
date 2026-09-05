@@ -472,8 +472,16 @@ def _parse_pdfid_obfuscated_count(line: str) -> int:
 def _extract_pdf_javascript(file_path: Path) -> list[dict[str, object]]:
     """Extract JavaScript code from PDF objects.
 
-    Uses pdf-parser to identify and extract JavaScript streams
-    from the PDF document structure.
+    ``pdf-parser --type`` selects on an indirect object's ``/Type`` entry.
+    PDF JavaScript lives in an action dictionary -- ``/Type /Action``,
+    ``/S /JavaScript`` -- so ``--type /JS`` matched no object in any PDF and
+    this function always returned an empty list. Verified against
+    DidierStevensSuite pdf-parser on a PDF containing an ``app.alert`` action:
+    ``--type /JS`` prints nothing, ``--search javascript`` prints the object.
+
+    The code itself may be a literal string in the action (``/JS (...)``) or an
+    indirect reference to a stream (``/JS 5 0 R``), which is what a real maldoc
+    uses because the stream can be compressed. Both are handled.
 
     Args:
         file_path: Path to the PDF file.
@@ -481,52 +489,69 @@ def _extract_pdf_javascript(file_path: Path) -> list[dict[str, object]]:
     Returns:
         List of JavaScript extractions with analysis.
     """
-    script = _pdf_parser_script()
-    if script is not None:
-        cmd = [
-            sys.executable,
-            str(script),
-            "--type",
-            "/JS",
-            "--filter",
-            str(file_path),
-        ]
-    else:
-        parser_bin = require_binary("pdf-parser") or "pdf-parser"
-        cmd = [parser_bin, "--type", "/JS", "--filter", str(file_path)]
-
-    try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=_PDF_PARSER_TIMEOUT,
-            check=False,
-        )
-    except (subprocess.TimeoutExpired, OSError):
-        return []
+    output = _run_pdf_parser(file_path, "--search", "javascript", "--filter")
 
     scripts: list[dict[str, object]] = []
-    obj_re = re.compile(r"obj (\d+)")
-    current_obj_id: int | None = None
-    current_code: list[str] = []
-
-    for line in proc.stdout.splitlines():
-        obj_match = obj_re.match(line)
-        if obj_match:
-            if current_obj_id is not None and current_code:
-                code = "\n".join(current_code)
-                scripts.append(_make_js_entry(current_obj_id, code))
-            current_obj_id = int(obj_match.group(1))
-            current_code = []
-        else:
-            current_code.append(line)
-
-    if current_obj_id is not None and current_code:
-        code = "\n".join(current_code)
-        scripts.append(_make_js_entry(current_obj_id, code))
-
+    for object_id, body in _iter_pdf_objects(output):
+        code = _pdf_javascript_code(file_path, body)
+        if code:
+            scripts.append(_make_js_entry(object_id, code))
     return scripts
+
+
+_PDF_JS_LITERAL_RE = re.compile(r"/JS\s*'?\(((?:\\{1,2}.|[^)]){0,65536}?)\)", re.DOTALL)
+"""``/JS (code)`` -- the script written inline in the action dictionary.
+
+A PDF string escapes a literal parenthesis as ``\\(``, and the script almost
+always contains one (``app.alert(1)``), so the pattern must skip escaped
+characters rather than stop at the first ``)``.
+"""
+
+_PDF_STRING_ESCAPE_RE = re.compile(r"\\{1,2}([()\\])")
+"""A escaped ``(``, ``)`` or ``\\`` in a PDF literal string as pdf-parser prints it."""
+
+_PDF_JS_REF_RE = re.compile(r"/JS\s+(\d+)\s+\d+\s+R")
+"""``/JS 5 0 R`` -- the script held in a separate, usually compressed, stream."""
+
+
+def _pdf_javascript_code(file_path: Path, body: str) -> str:
+    """Return the JavaScript carried by one pdf-parser object dump.
+
+    Args:
+        file_path: The PDF, needed to resolve an indirect stream reference.
+        body: The object dump emitted by ``pdf-parser``.
+
+    Returns:
+        The script source, or ``""`` when the object carries none.
+    """
+    literal = _PDF_JS_LITERAL_RE.search(body)
+    if literal:
+        return _PDF_STRING_ESCAPE_RE.sub(r"\1", literal.group(1)).strip()
+
+    ref = _PDF_JS_REF_RE.search(body)
+    if ref:
+        dump = _run_pdf_parser(file_path, "--object", ref.group(1), "--filter", "--raw")
+        return _pdf_stream_payload(dump)
+
+    return ""
+
+
+def _pdf_stream_payload(dump: str) -> str:
+    """Return the decoded stream content from a ``--object --filter`` dump.
+
+    pdf-parser prints the object header, the dictionary, then the decoded
+    stream. Everything up to and including the dictionary's closing ``>>`` is
+    metadata; what follows is the payload.
+    """
+    _, sep, tail = dump.rpartition(">>")
+    text = tail if sep else dump
+    text = text.strip()
+    # A binary payload is printed as a Python bytes repr.
+    if (text.startswith("b'") and text.endswith("'")) or (
+        text.startswith('b"') and text.endswith('"')
+    ):
+        text = text[2:-1]
+    return text.strip()
 
 
 _PDF_URI_RE = re.compile(r"/URI\s*\(([^)]{1,2048})\)")
