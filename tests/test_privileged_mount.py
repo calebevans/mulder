@@ -233,6 +233,60 @@ def test_mount_cache_uses_injected_broker(tmp_path: Path) -> None:
 
     assert len(broker.mounted) == 1
     assert len(broker.unmounted) == 1
+    assert not broker.mounted[0][1].exists()
+
+
+def test_mount_cache_preserves_nonempty_directory_after_verified_unmount(
+    tmp_path: Path,
+) -> None:
+    image = tmp_path / "disk.raw"
+    image.write_bytes(b"image")
+
+    class InsertionBroker:
+        mount_point: Path | None = None
+
+        def mount_read_only(self, _image_path: Path, mount_point: Path) -> bool:
+            self.mount_point = mount_point
+            return True
+
+        def unmount(self, mount_point: Path) -> bool:
+            (mount_point / "late.txt").write_text("preserve")
+            return True
+
+    broker = InsertionBroker()
+    cache = _MountCache(broker)
+    with cache.acquire(str(image)):
+        pass
+
+    assert broker.mount_point is not None
+    assert (broker.mount_point / "late.txt").read_text() == "preserve"
+
+
+def test_mount_cache_preserves_replaced_directory_after_verified_unmount(
+    tmp_path: Path,
+) -> None:
+    image = tmp_path / "disk.raw"
+    image.write_bytes(b"image")
+
+    class ReplacementBroker:
+        mount_point: Path | None = None
+
+        def mount_read_only(self, _image_path: Path, mount_point: Path) -> bool:
+            self.mount_point = mount_point
+            return True
+
+        def unmount(self, mount_point: Path) -> bool:
+            mount_point.rmdir()
+            mount_point.mkdir()
+            return True
+
+    broker = ReplacementBroker()
+    cache = _MountCache(broker)
+    with cache.acquire(str(image)):
+        pass
+
+    assert broker.mount_point is not None
+    assert broker.mount_point.is_dir()
 
 
 def test_mount_cache_preserves_directory_when_unmount_is_unverified(tmp_path: Path) -> None:

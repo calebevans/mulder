@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import shutil
+import stat
 import tarfile
 import tempfile
 import time
@@ -627,11 +628,49 @@ def _verified_derived_archive(
     observed_entries = _materialization_inventory(destination)
     if observed_entries != expected_entries:
         raise IntakeError("archive materialization changed after extraction")
+    relative = archive.relative_to(destination).as_posix()
+    expected_entry = next(
+        (
+            entry
+            for entry in expected_entries
+            if isinstance(entry, dict) and entry.get("relative_path") == relative
+        ),
+        None,
+    )
+    if expected_entry is None:
+        raise IntakeError("derived archive is absent from its materialization receipt")
+    expected_size = expected_entry.get("size_bytes")
+    expected_digest = expected_entry.get("sha256")
+    if (
+        not isinstance(expected_size, int)
+        or isinstance(expected_size, bool)
+        or expected_size < 0
+        or expected_size > _INTAKE_EXTRACT_MAX_FILE_BYTES
+        or not isinstance(expected_digest, str)
+    ):
+        raise IntakeError("derived archive has an invalid materialization receipt")
     verify_intake_source(manifest)
-    size = archive.stat().st_size
-    if size > _INTAKE_EXTRACT_MAX_FILE_BYTES:
-        raise IntakeError("derived archive exceeds extraction limit")
-    return archive.read_bytes()
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(archive, flags)
+    except OSError as exc:
+        raise IntakeError("derived archive could not be opened safely") from exc
+    try:
+        file_stat = os.fstat(fd)
+        if not stat.S_ISREG(file_stat.st_mode):
+            raise IntakeError("derived archive is not a regular file")
+        if file_stat.st_size != expected_size:
+            raise IntakeError("derived archive size changed after verification")
+        with os.fdopen(fd, "rb", closefd=False) as handle:
+            content = handle.read(_INTAKE_EXTRACT_MAX_FILE_BYTES + 1)
+    finally:
+        os.close(fd)
+    if len(content) != expected_size:
+        raise IntakeError("derived archive size changed while being captured")
+    digest = "sha256:" + hashlib.sha256(content).hexdigest()
+    if digest != expected_digest:
+        raise IntakeError("derived archive content changed after verification")
+    return content
 
 
 def _intake_for_archive(archive: Path) -> _ArchiveCommitment | None:

@@ -351,7 +351,8 @@ boundaries, cancellation semantics, archive limits, and quick-mode scope.
 
 The case ID names the output database and all derived artifacts. Choose something descriptive (e.g. the incident ticket number or a short codename).
 
-The orchestrator runs five phases in sequence:
+The orchestrator runs five primary phases in sequence, plus a conditional
+Autoruns ingest phase when the committed intake contains Autoruns artifacts:
 
 1. **Catalog** pages through the immutable intake manifest, classifies committed entries, and identifies distinct systems. If Autoruns artifacts are present, a dedicated manifest-bound ingest seat processes them before extraction.
 2. **Extraction** runs forensic tools per system (memory analysis, disk forensics, log parsing) and submits findings.

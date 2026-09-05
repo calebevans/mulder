@@ -15,6 +15,7 @@ from mulder.patterns import DISK_IMAGE_EXTS
 CATALOG_PAGE_MAX_BYTES: Final[int] = 32 * 1024
 CATALOG_PAGE_MAX_ITEMS: Final[int] = 128
 _COMPACT_PATH_MAX_BYTES: Final[int] = 256
+_COMPACT_METADATA_TEXT_MAX_BYTES: Final[int] = 512
 
 _MEMORY_EXTENSIONS: Final[frozenset[str]] = frozenset(
     {".raw", ".vmem", ".mem", ".img", ".dmp", ".lime", ".001"}
@@ -165,15 +166,29 @@ def manifest_catalog_page(
     counts: Counter[str] = Counter()
     for entry in manifest.entries:
         counts.update(evidence_types(entry))
-    provenance = manifest.provenance.model_dump(
+    raw_provenance = manifest.provenance.model_dump(
         mode="json",
         exclude={"examiner_assertions"},
     )
+    provenance = {
+        key: (
+            _bounded_text(value, max_bytes=_COMPACT_METADATA_TEXT_MAX_BYTES)
+            if isinstance(value, str)
+            else value
+        )
+        for key, value in raw_provenance.items()
+    }
     base: dict[str, object] = {
         "schema": "mulder.evidence-catalog-page",
         "version": 1,
-        "case_id": manifest.case_id,
-        "evidence_root": manifest.source_path,
+        "case_id": _bounded_text(
+            manifest.case_id,
+            max_bytes=_COMPACT_METADATA_TEXT_MAX_BYTES,
+        ),
+        "evidence_root": _bounded_text(
+            manifest.source_path,
+            max_bytes=_COMPACT_METADATA_TEXT_MAX_BYTES * 2,
+        ),
         "source_kind": manifest.source_kind,
         "collection_format": manifest.collection_format,
         "collection_digest": manifest.collection_digest,

@@ -28,6 +28,7 @@ from mulder.orchestrator.capabilities import (
 from mulder.orchestrator.evidence import EvidenceContext
 from mulder.orchestrator.types import PhaseResult
 from mulder.server import app
+from mulder.server.tools import case as case_tools
 
 
 def _context(source: Path, case_id: str, db_dir: Path) -> tuple[IntakeManifest, EvidenceContext]:
@@ -224,6 +225,30 @@ def test_catalog_page_advances_for_a_valid_oversized_manifest_row(tmp_path: Path
     )
 
 
+def test_catalog_page_compacts_oversized_prepared_collector_metadata(
+    tmp_path: Path,
+) -> None:
+    host = "host-" + ("x" * 50_000)
+    source = tmp_path / "collection.zip"
+    with zipfile.ZipFile(source, "w") as archive:
+        archive.writestr("collection_context.json", json.dumps({"Hostname": host}))
+        archive.writestr("uploads/events.json", "{}")
+    manifest = prepare_evidence_case(source, "case-a", tmp_path / "cases")
+
+    page = manifest_catalog_page(manifest)
+    encoded = json.dumps(page, sort_keys=True, separators=(",", ":")).encode()
+
+    assert len(encoded) <= CATALOG_PAGE_MAX_BYTES
+    assert page["page_bytes"] == len(encoded)
+    assert len(page["entries"]) == manifest.file_count
+    provenance = page["provenance"]
+    assert isinstance(provenance, dict)
+    projected_host = provenance["host"]
+    assert isinstance(projected_host, str)
+    assert "…[truncated;sha256:" in projected_host
+    assert projected_host.endswith(hashlib.sha256(host.encode()).hexdigest() + "]")
+
+
 def test_catalog_page_tool_reads_only_authenticated_manifest_after_live_mutation(
     tmp_path: Path,
 ) -> None:
@@ -332,6 +357,44 @@ def test_directory_intake_nested_archive_uses_committed_materialization(
 
     assert second["status"] == "success"
     assert (db_dir / "extracted" / "inner" / "payload.txt").read_text() == "committed"
+
+
+def test_derived_archive_swap_during_verification_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    committed = io.BytesIO()
+    with zipfile.ZipFile(committed, "w") as inner:
+        inner.writestr("committed.txt", "committed")
+    substituted = io.BytesIO()
+    with zipfile.ZipFile(substituted, "w") as inner:
+        inner.writestr("substituted.txt", "substituted")
+    source = tmp_path / "evidence"
+    source.mkdir()
+    outer = source / "outer.zip"
+    with zipfile.ZipFile(outer, "w") as archive:
+        archive.writestr("nested/inner.zip", committed.getvalue())
+    db_dir = tmp_path / "cases"
+    prepare_evidence_case(source, "case-a", db_dir)
+    app.init_server(db_dir, mem_percent_limit=0, cpu_percent_limit=0)
+    app._tool_dispatch_sync["open_case"]("case-a")
+
+    first = app._tool_dispatch_sync["extract_archive"](str(outer))
+    assert first["status"] == "success"
+    materialized_inner = db_dir / "extracted" / "outer" / "nested" / "inner.zip"
+    original_verify = case_tools.verify_intake_source
+
+    def swap_after_source_verification(manifest: IntakeManifest) -> None:
+        original_verify(manifest)
+        materialized_inner.write_bytes(substituted.getvalue())
+
+    monkeypatch.setattr(case_tools, "verify_intake_source", swap_after_source_verification)
+    result = app._tool_dispatch_sync["extract_archive"](
+        str(materialized_inner), str(db_dir / "extracted" / "inner")
+    )
+
+    assert result["status"] == "error"
+    assert result["error_type"] == "intake_verification_failed"
+    assert not (db_dir / "extracted" / "inner" / "substituted.txt").exists()
 
 
 def test_dedicated_autoruns_seat_reads_only_committed_artifact_ids(
