@@ -343,7 +343,52 @@ def _detect_packing(
     return indicators
 
 
-def _assess_timestamp(raw_ts: str | None) -> dict[str, object]:
+_RABIN2_CTIME_FORMAT = "%a %b %d %H:%M:%S %Y"
+"""How rabin2 renders a PE TimeDateStamp: ``Wed Mar 12 09:41:03 2025``."""
+
+_TIMESTAMP_BEARING_FORMATS: frozenset[str] = frozenset({"pe", "coff", "te"})
+"""Formats whose header carries a compilation timestamp.
+
+ELF and Mach-O do not have one. rabin2 reports ``compiled: ""`` for them, and
+treating that absence as an anomaly scored every Linux and macOS binary as
+suspicious for a field the format never had.
+"""
+
+
+def _parse_rabin2_timestamp(raw_ts: str) -> datetime | None:
+    """Parse the compilation timestamp as rabin2 actually emits it.
+
+    rabin2 formats the PE TimeDateStamp with ctime before putting it in JSON::
+
+        "compiled": "Wed Mar 12 09:41:03 2025"
+
+    ``int()`` on that raises, which the caller used to report as an impossible
+    timestamp. A bare epoch integer is still accepted, since that is what a
+    caller passing the raw header field would supply.
+
+    Args:
+        raw_ts: The ``compiled`` value from ``rabin2 -Ij``.
+
+    Returns:
+        The parsed UTC datetime, or None if the value is in neither form.
+    """
+    text = raw_ts.strip()
+    if not text:
+        return None
+
+    if text.lstrip("-").isdigit():
+        try:
+            return datetime.fromtimestamp(int(text), tz=timezone.utc)
+        except (ValueError, OSError, OverflowError):
+            return None
+
+    try:
+        return datetime.strptime(text, _RABIN2_CTIME_FORMAT).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _assess_timestamp(raw_ts: str | None, bintype: str = "") -> dict[str, object]:
     """Validate a PE compilation timestamp.
 
     Checks whether the timestamp falls within a plausible range.
@@ -352,11 +397,21 @@ def _assess_timestamp(raw_ts: str | None) -> dict[str, object]:
 
     Args:
         raw_ts: Raw timestamp string from rabin2 output.
+        bintype: rabin2's ``bintype`` for the file (``pe``, ``elf``, ...).
+            Formats that carry no compilation timestamp are not penalised for
+            not having one.
 
     Returns:
         Dict with raw_timestamp, parsed_utc, validity, and reason.
     """
     if not raw_ts:
+        if bintype and bintype.lower() not in _TIMESTAMP_BEARING_FORMATS:
+            return {
+                "raw_timestamp": None,
+                "parsed_utc": None,
+                "validity": "not_applicable",
+                "reason": f"{bintype} binaries carry no compilation timestamp",
+            }
         return {
             "raw_timestamp": None,
             "parsed_utc": None,
@@ -364,9 +419,8 @@ def _assess_timestamp(raw_ts: str | None) -> dict[str, object]:
             "reason": "No compilation timestamp present",
         }
 
-    try:
-        parsed = datetime.fromtimestamp(int(raw_ts), tz=timezone.utc)
-    except (ValueError, OSError, OverflowError):
+    parsed = _parse_rabin2_timestamp(raw_ts)
+    if parsed is None:
         return {
             "raw_timestamp": raw_ts,
             "parsed_utc": None,
@@ -795,9 +849,9 @@ def triage_binary(
     info_dict: dict[str, Any] = info_raw.get("info", info_raw.get("bin", {}))
     raw_ts_val = info_dict.get("compiled")
     raw_ts = str(raw_ts_val) if raw_ts_val is not None else None
-    if raw_ts in ("None", "0", ""):
+    if raw_ts is not None and raw_ts.strip() in ("None", ""):
         raw_ts = None
-    timestamp = _assess_timestamp(raw_ts)
+    timestamp = _assess_timestamp(raw_ts, str(info_dict.get("bintype", "")))
 
     verdict = _compute_verdict(packing_indicators, suspicious_imports, timestamp, sections)
 
