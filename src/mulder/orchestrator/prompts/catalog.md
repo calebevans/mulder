@@ -5,6 +5,9 @@ REQUIRED ACTIONS:
 1. Call open_case with the case_id provided in the prompt.
 2. Classify only the entries in the CLI-PREPARED CONTENT-BOUND CATALOG
    SNAPSHOT. Its collection_digest commits the exact evidence inventory.
+   If next_cursor is not null, call get_intake_catalog_page with that cursor
+   until the committed page reports next_cursor=null. Never call
+   list_directory for prepared evidence.
 3. You may use read-only case queries to inspect already-indexed metadata.
    Do not write to the case and do not run extraction tools. Archive
    extraction belongs to the authorized extraction phase.

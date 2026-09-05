@@ -1063,8 +1063,8 @@ def _atomic_create(path: Path, content: bytes) -> None:
         raise
 
 
-def load_intake_manifest(path: Path) -> IntakeManifest:
-    """Load and verify an intake manifest without touching its evidence."""
+def load_intake_manifest_commitment(path: Path) -> IntakeManifest:
+    """Load and authenticate an intake manifest without reading live evidence."""
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -1076,6 +1076,12 @@ def load_intake_manifest(path: Path) -> IntakeManifest:
     except ValueError as exc:
         raise IntakeError(f"existing intake manifest is invalid: {exc}") from exc
     _verify_manifest_commitments(manifest)
+    return manifest
+
+
+def load_intake_manifest(path: Path) -> IntakeManifest:
+    """Load a manifest and verify its complete live evidence source."""
+    manifest = load_intake_manifest_commitment(path)
     verify_intake_source(manifest)
     return manifest
 
@@ -1245,6 +1251,7 @@ __all__ = [
     "IntakeResult",
     "ingest_collection",
     "load_intake_manifest",
+    "load_intake_manifest_commitment",
     "prepare_evidence_case",
     "read_intake_member",
     "scan_collection",

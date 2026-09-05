@@ -289,7 +289,10 @@ class Orchestrator:
             budget_multiplier=profile_spec.budget_multiplier,
             scope_instruction=self._run_scope_instruction,
         )
-        self._evidence = EvidenceContext(evidence_path=evidence_path)
+        self._evidence = EvidenceContext(
+            evidence_path=evidence_path,
+            manifest=self._prepared_intake,
+        )
         self._server = ServerBridge(case_id=self._case_id)
         self._log_tailer = LogTailer(
             dashboard=self.dashboard,
@@ -347,24 +350,8 @@ class Orchestrator:
         return manifest
 
     def _catalog_snapshot_json(self) -> str:
-        """Return the exact content commitment handed to the catalog model."""
-        manifest = self._prepared_intake
-        if manifest is None:
-            return json.dumps({"status": "not-prepared"}, sort_keys=True)
-        return json.dumps(
-            {
-                "schema": manifest.intake_schema,
-                "case_id": manifest.case_id,
-                "evidence_root": manifest.source_path,
-                "collection_format": manifest.collection_format,
-                "collection_digest": manifest.collection_digest,
-                "file_count": manifest.file_count,
-                "total_bytes": manifest.total_bytes,
-                "entries": [entry.model_dump(mode="json") for entry in manifest.entries],
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        )
+        """Return the bounded first page handed to the catalog model."""
+        return self._evidence.catalog_snapshot_json()
 
     def _run_contract_digest(self, *, approval_required: bool) -> str:
         """Bind every execution-policy input that can change phase semantics."""
@@ -525,6 +512,7 @@ class Orchestrator:
             if self._case_id and self._prepared_intake is None:
                 self._prepared_intake = self._prepare_input()
             if self._prepared_intake is not None:
+                self._evidence.bind_manifest(self._prepared_intake)
                 try:
                     verify_intake_source(self._prepared_intake)
                 except IntakeError as exc:

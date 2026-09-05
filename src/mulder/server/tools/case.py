@@ -13,15 +13,19 @@ import tarfile
 import tempfile
 import time
 import zipfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from mulder.adapters import (
     IntakeError,
     IntakeManifest,
-    load_intake_manifest,
+    load_intake_manifest_commitment,
     materialize_intake,
+    read_intake_member,
     verify_intake_source,
 )
+from mulder.adapters.catalog import manifest_catalog_page
 from mulder.execution import safe_subprocess as subprocess
 from mulder.server.app import (
     create_case,
@@ -370,6 +374,62 @@ def _human_size(nbytes: int) -> str:
 
 
 @mcp.tool()
+@tool_access(
+    Role.CATALOG | Role.EXTRACT_PLANNER,
+    effects=(ToolEffect.CASE_READ,),
+)
+def get_intake_catalog_page(
+    cursor: int = 0,
+    max_items: int = 128,
+) -> dict[str, object]:
+    """Read one bounded page from the active case's committed intake index.
+
+    This reads and authenticates only the immutable sidecar manifest.  It does
+    not enumerate the live evidence source or any extracted output directory.
+
+    Args:
+        cursor: Zero-based cursor returned by the previous page.
+        max_items: Maximum entries to return, capped at 128.
+    """
+    tc_id = make_tool_call_id()
+    t0 = time.monotonic()
+    ctx = get_ctx()
+    params: dict[str, object] = {"cursor": cursor, "max_items": max_items}
+    manifest_path = Path(ctx.db.db_path).parent / f"{ctx.case_id}.intake.json"
+    try:
+        manifest = load_intake_manifest_commitment(manifest_path)
+        page = manifest_catalog_page(
+            manifest,
+            cursor=cursor,
+            max_items=max_items,
+            max_bytes=30 * 1024,
+        )
+    except (IntakeError, ValueError) as exc:
+        return error_response(
+            tc_id,
+            "get_intake_catalog_page",
+            params,
+            f"Committed intake catalog is unavailable: {exc}",
+            (time.monotonic() - t0) * 1000,
+            error_type="intake_catalog_error",
+        )
+    result: dict[str, object] = {
+        "tool_call_id": tc_id,
+        "status": "success",
+        "catalog": page,
+    }
+    elapsed = (time.monotonic() - t0) * 1000
+    ctx.audit.log_tool_call(
+        tool_call_id=tc_id,
+        tool_name="get_intake_catalog_page",
+        params=params,
+        output_hash=hash_output(result),
+        duration_ms=elapsed,
+    )
+    return result
+
+
+@mcp.tool()
 @tool_access(Role.CATALOG)
 def verify_evidence_integrity() -> dict[str, object]:
     """Verify the integrity of all indexed source data.
@@ -439,20 +499,73 @@ def _extract_zip(archive: Path, dest: Path) -> list[str]:
     return [str(f.relative_to(dest)) for f in dest.rglob("*") if f.is_file()]
 
 
-def _intake_for_archive(archive: Path) -> IntakeManifest | None:
-    """Return the active case intake when ``archive`` is its committed ZIP."""
+def _intake_for_archive(archive: Path) -> tuple[IntakeManifest, str | None] | None:
+    """Resolve ``archive`` to the active manifest or reject it as uncommitted.
+
+    The returned member name is ``None`` only for the committed outer ZIP
+    container.  Directory and ordinary-file archives return their exact intake
+    entry name so extraction can operate on a verified snapshot.
+    """
     if not has_ctx():
         return None
     ctx = get_ctx()
     manifest_path = Path(ctx.db.db_path).parent / f"{ctx.case_id}.intake.json"
     if not manifest_path.is_file():
         return None
-    manifest = load_intake_manifest(manifest_path)
-    if Path(manifest.source_path).resolve(strict=False) != archive:
-        return None
-    if manifest.source_kind != "zip":
-        raise IntakeError("intake source is not a ZIP archive")
-    return manifest
+    manifest = load_intake_manifest_commitment(manifest_path)
+    source = Path(manifest.source_path).resolve(strict=False)
+    if archive == source:
+        if manifest.source_kind == "zip":
+            return manifest, None
+        if manifest.source_kind == "file" and len(manifest.entries) == 1:
+            return manifest, manifest.entries[0].relative_path
+        raise IntakeError("selected archive is not a committed file intake")
+    if manifest.source_kind == "zip":
+        materialized_root = Path(ctx.db.db_path).parent / "extracted" / source.stem
+        try:
+            relative = archive.relative_to(materialized_root.resolve(strict=False)).as_posix()
+        except ValueError as exc:
+            raise IntakeError("archive is outside the active case intake") from exc
+        if not any(
+            entry.relative_path == relative and entry.storage == "zip_member"
+            for entry in manifest.entries
+        ):
+            raise IntakeError("archive is not committed by the active case intake")
+        _verify_intake_materialization(manifest, materialized_root)
+        return manifest, relative
+    if manifest.source_kind != "directory":
+        raise IntakeError("archive is not committed by the active case intake")
+    try:
+        relative = archive.relative_to(source).as_posix()
+    except ValueError as exc:
+        raise IntakeError("archive is outside the active case intake") from exc
+    if not any(
+        entry.relative_path == relative and entry.storage == "file"
+        for entry in manifest.entries
+    ):
+        raise IntakeError("archive is not committed by the active case intake")
+    return manifest, relative
+
+
+@contextmanager
+def _committed_archive_snapshot(
+    commitment: tuple[IntakeManifest, str | None],
+    archive: Path,
+) -> Iterator[Path]:
+    """Yield an unchanged bounded copy of one committed non-container archive."""
+    manifest, relative = commitment
+    if relative is None:
+        raise IntakeError("outer ZIP containers use verified intake materialization")
+    content = read_intake_member(
+        manifest,
+        relative,
+        max_bytes=_INTAKE_EXTRACT_MAX_FILE_BYTES,
+    )
+    with tempfile.TemporaryDirectory(prefix=".mulder-archive-") as temporary:
+        snapshot = Path(temporary) / archive.name
+        snapshot.write_bytes(content)
+        snapshot.chmod(0o400)
+        yield snapshot
 
 
 def _verify_intake_materialization(manifest: IntakeManifest, dest: Path) -> list[str]:
@@ -570,7 +683,7 @@ def extract_archive(
         dest = cfg.db_dir / "extracted" / archive.stem
 
     try:
-        intake_manifest = _intake_for_archive(archive)
+        intake_commitment = _intake_for_archive(archive)
     except IntakeError as exc:
         return error_response(
             tc_id,
@@ -584,9 +697,14 @@ def extract_archive(
     # Idempotent: if already extracted, return the existing files
     if dest.exists() and any(dest.iterdir()):
         try:
+            if intake_commitment is not None and intake_commitment[1] is not None:
+                raise IntakeError(
+                    "existing nested-archive output has no immutable member manifest; "
+                    "use a new empty extraction destination"
+                )
             existing_files = (
-                _verify_intake_materialization(intake_manifest, dest)
-                if intake_manifest is not None
+                _verify_intake_materialization(intake_commitment[0], dest)
+                if intake_commitment is not None and intake_commitment[1] is None
                 else [str(f.relative_to(dest)) for f in dest.rglob("*") if f.is_file()]
             )
         except IntakeError as exc:
@@ -631,38 +749,56 @@ def extract_archive(
     ext = archive.suffix.lower()
 
     try:
-        if ext == ".zip":
-            files = (
-                _extract_intake_zip(intake_manifest, dest)
-                if intake_manifest is not None
-                else _extract_zip(archive, dest)
-            )
-        elif (
-            ext in (".tar", ".tgz")
-            or name_lower.endswith((".tar.gz", ".tar.bz2"))
-            or (ext in (".gz", ".bz2") and ".tar" not in name_lower)
-        ):
-            files = _extract_tar(archive, dest)
-        elif ext in (".7z", ".rar") or ".7z." in name_lower:
-            if not shutil.which("7z"):
-                return error_response(
-                    tc_id,
-                    "extract_archive",
-                    params,
-                    "7z not found on PATH. Install p7zip-full.",
-                    (time.monotonic() - t0) * 1000,
-                    error_type="binary_missing",
-                )
-            files = _extract_7z(archive, dest)
+        if intake_commitment is not None and intake_commitment[1] is None:
+            files = _extract_intake_zip(intake_commitment[0], dest)
         else:
-            return error_response(
-                tc_id,
-                "extract_archive",
-                params,
-                f"Unsupported archive format: {ext}",
-                (time.monotonic() - t0) * 1000,
-                error_type="unsupported_format",
-            )
+            @contextmanager
+            def selected_archive() -> Iterator[Path]:
+                if intake_commitment is None:
+                    yield archive
+                else:
+                    with _committed_archive_snapshot(intake_commitment, archive) as snapshot:
+                        yield snapshot
+
+            with selected_archive() as extraction_archive:
+                if ext == ".zip":
+                    files = _extract_zip(extraction_archive, dest)
+                elif (
+                    ext in (".tar", ".tgz")
+                    or name_lower.endswith((".tar.gz", ".tar.bz2"))
+                    or (ext in (".gz", ".bz2") and ".tar" not in name_lower)
+                ):
+                    files = _extract_tar(extraction_archive, dest)
+                elif ext in (".7z", ".rar") or ".7z." in name_lower:
+                    if not shutil.which("7z"):
+                        return error_response(
+                            tc_id,
+                            "extract_archive",
+                            params,
+                            "7z not found on PATH. Install p7zip-full.",
+                            (time.monotonic() - t0) * 1000,
+                            error_type="binary_missing",
+                        )
+                    files = _extract_7z(extraction_archive, dest)
+                else:
+                    return error_response(
+                        tc_id,
+                        "extract_archive",
+                        params,
+                        f"Unsupported archive format: {ext}",
+                        (time.monotonic() - t0) * 1000,
+                        error_type="unsupported_format",
+                    )
+    except IntakeError as exc:
+        logger.error("Archive intake verification failed for %r: %s", archive, exc)
+        return error_response(
+            tc_id,
+            "extract_archive",
+            params,
+            f"Intake verification failed: {exc}",
+            (time.monotonic() - t0) * 1000,
+            error_type="intake_verification_failed",
+        )
     except Exception as exc:
         logger.error("Archive extraction failed for %r: %s", archive, exc)
         return error_response(

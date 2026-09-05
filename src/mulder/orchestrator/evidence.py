@@ -11,10 +11,13 @@ Contains two collaborators extracted from the Orchestrator:
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Any
 
+from mulder.adapters import IntakeError, IntakeManifest, read_intake_member
+from mulder.adapters.catalog import extraction_entries, manifest_catalog_page
 from mulder.orchestrator.types import PhaseResult, extract_catalog_result
 from mulder.patterns import DEFAULT_DB_DIR, DISK_IMAGE_EXTS, extract_iocs_from_text
 
@@ -39,13 +42,80 @@ class EvidenceContext:
     groups them into extraction sessions based on evidence complexity.
     """
 
-    def __init__(self, evidence_path: str) -> None:
+    def __init__(
+        self,
+        evidence_path: str,
+        manifest: IntakeManifest | None = None,
+    ) -> None:
         """Initialize the evidence context.
 
         Args:
             evidence_path: Filesystem path to the evidence directory.
         """
         self.evidence_path = evidence_path
+        self._manifest = manifest
+        self._system_artifacts: dict[str, tuple[dict[str, object], ...]] = {}
+
+    def bind_manifest(self, manifest: IntakeManifest) -> None:
+        """Bind discovery to one immutable intake commitment."""
+        if Path(manifest.source_path).resolve(strict=False) != Path(
+            self.evidence_path
+        ).expanduser().resolve(strict=False):
+            raise ValueError("intake manifest belongs to a different evidence path")
+        if (
+            self._manifest is not None
+            and self._manifest.collection_digest != manifest.collection_digest
+        ):
+            raise ValueError("evidence context is already bound to another collection")
+        self._manifest = manifest
+
+    def catalog_snapshot_json(self) -> str:
+        """Return the bounded first page of the committed catalog index."""
+        if self._manifest is None:
+            return json.dumps({"status": "not-prepared"}, sort_keys=True)
+        return json.dumps(
+            manifest_catalog_page(self._manifest),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    def _build_manifest_context(self, system_name: str) -> str:
+        """Render only exact artifact assignments derived from the manifest."""
+        assert self._manifest is not None
+        artifacts = self._system_artifacts.get(system_name.casefold())
+        if artifacts is None:
+            # Until a catalog result names systems, the conservative policy is
+            # that every committed artifact may belong to the requested system.
+            artifacts = extraction_entries(self._manifest)
+        payload: dict[str, object] = {
+            "schema": "mulder.system-evidence-assignment",
+            "version": 1,
+            "system_name": system_name,
+            "collection_digest": self._manifest.collection_digest,
+            "assignment_policy": "conservative_all_committed_artifacts",
+            "assigned_artifact_count": len(artifacts),
+            "entries": [],
+            "next_cursor": 0,
+        }
+        assigned: list[dict[str, object]] = []
+        for artifact in artifacts[:128]:
+            candidate = dict(payload)
+            candidate["entries"] = [*assigned, artifact]
+            if len(
+                json.dumps(candidate, sort_keys=True, separators=(",", ":")).encode()
+            ) > 32 * 1024:
+                break
+            assigned.append(artifact)
+        next_cursor = len(assigned)
+        payload["entries"] = assigned
+        payload["next_cursor"] = next_cursor if next_cursor < len(artifacts) else None
+        payload["pagination_instruction"] = (
+            "Call get_intake_catalog_page with next_cursor to continue the exact "
+            "committed inventory; every returned entry is assigned to this system."
+            if next_cursor < len(artifacts)
+            else None
+        )
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
     def load_case_briefing(self) -> str:
         """Load optional MULDER.md case briefing from the evidence directory.
@@ -58,6 +128,29 @@ class EvidenceContext:
         Returns:
             Formatted briefing string, or empty string if no file exists.
         """
+        if self._manifest is not None:
+            briefing_entry = next(
+                (
+                    entry
+                    for entry in self._manifest.entries
+                    if entry.relative_path == "MULDER.md"
+                ),
+                None,
+            )
+            if briefing_entry is None:
+                return ""
+            try:
+                raw = read_intake_member(
+                    self._manifest,
+                    briefing_entry.relative_path,
+                    max_bytes=1 << 20,
+                )
+            except IntakeError:
+                logger.error("Committed MULDER.md failed intake verification")
+                raise
+            content = raw.decode("utf-8", errors="replace").strip()
+            return f"INVESTIGATOR BRIEFING:\n{content}\n" if content else ""
+
         briefing_path = Path(self.evidence_path) / "MULDER.md"
         if briefing_path.is_file():
             content = briefing_path.read_text(encoding="utf-8", errors="replace").strip()
@@ -84,6 +177,9 @@ class EvidenceContext:
             Multi-line context string listing discovered file paths, or a
             fallback instruction when no files are found.
         """
+        if self._manifest is not None:
+            return self._build_manifest_context(system_name)
+
         evidence_path = Path(self.evidence_path)
         extracted_dir = Path.home() / ".mulder" / "cases" / "extracted"
 
@@ -191,6 +287,43 @@ class EvidenceContext:
             return [], {}
 
         systems = [str(s["name"]) for s in catalog_data["systems"]]
+        if self._manifest is not None:
+            trusted_host = self._manifest.provenance.host
+            if trusted_host:
+                systems = [trusted_host]
+            # There is no authenticated per-host mapping in a generic manifest.
+            # Assigning all exact entries to each reported system is conservative:
+            # it may duplicate work but cannot silently omit mixed evidence.
+            artifacts = extraction_entries(self._manifest)
+            self._system_artifacts = {
+                system.casefold(): artifacts for system in systems
+            }
+            type_names: set[str] = set()
+            for artifact in artifacts:
+                artifact_types = artifact.get("evidence_types")
+                if isinstance(artifact_types, list):
+                    type_names.update(str(kind) for kind in artifact_types)
+            all_types = sorted(type_names)
+            original_systems = {
+                str(item.get("name", "")).casefold(): item
+                for item in catalog_data.get("systems", [])
+                if isinstance(item, dict)
+            }
+            catalog_data = dict(catalog_data)
+            catalog_data["systems"] = [
+                {
+                    **(
+                        original_systems.get(system.casefold(), {})
+                        if isinstance(original_systems.get(system.casefold(), {}), dict)
+                        else {}
+                    ),
+                    "name": system,
+                    "evidence": all_types,
+                    "artifact_count": len(artifacts),
+                    "assignment_policy": "conservative_all_committed_artifacts",
+                }
+                for system in systems
+            ]
         logger.info(
             "Identified %d system(s) from catalog JSON: %s",
             len(systems),
