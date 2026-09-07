@@ -293,20 +293,29 @@ def run_hayabusa(
                 elapsed_ms=(time.monotonic() - t0) * 1000,
             )
 
-        if proc.returncode != 0 and not Path(out_path).exists():
-            stderr_preview = (proc.stderr or "")[:_PREVIEW_CHAR_LIMIT]
-            return error_response(
-                tc_id,
-                tool_name,
-                params,
-                f"Hayabusa exited {proc.returncode}: {stderr_preview}",
-                elapsed_ms=(time.monotonic() - t0) * 1000,
-            )
-
         try:
             csv_text = Path(out_path).read_text(errors="replace")
         except OSError:
             csv_text = ""
+
+        # The output path is pre-created above, so "the file exists" says
+        # nothing about whether Hayabusa ran. Gate on content instead: a
+        # non-zero exit that wrote no timeline produced no evidence, and
+        # must not be reported as a scan that found nothing. Conjunctive on
+        # purpose -- Hayabusa exits non-zero on an unreadable EVTX after
+        # having already written detections for the rest, and those are kept.
+        if proc.returncode != 0 and not csv_text.strip():
+            detail = ((proc.stderr or "").strip() or (proc.stdout or "").strip())[
+                :_PREVIEW_CHAR_LIMIT
+            ]
+            return error_response(
+                tc_id,
+                tool_name,
+                params,
+                f"Hayabusa exited {proc.returncode} and wrote no timeline: {detail}",
+                elapsed_ms=(time.monotonic() - t0) * 1000,
+                error_type="tool_failed",
+            )
     finally:
         Path(out_path).unlink(missing_ok=True)
 
