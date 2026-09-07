@@ -32,6 +32,7 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 _CHAINSAW_TIMEOUT = 600
+_STDERR_PREVIEW_CHARS = 500
 
 
 def _chainsaw_binary() -> str | None:
@@ -112,7 +113,7 @@ def _run_chainsaw_hunt(
     time_start: str | None = None,
     time_end: str | None = None,
     timeout: int = _CHAINSAW_TIMEOUT,
-) -> Path:
+) -> tuple[Path, subprocess.CompletedProcess[str]]:
     """Execute Chainsaw in hunt mode against EVTX files.
 
     Args:
@@ -125,7 +126,9 @@ def _run_chainsaw_hunt(
         timeout: Subprocess timeout in seconds.
 
     Returns:
-        Path to the JSON results file.
+        Tuple of (path to the JSON results file, the completed
+        process). The caller needs the process to tell an empty result set
+        from a Chainsaw run that never produced one.
 
     Raises:
         subprocess.TimeoutExpired: If Chainsaw exceeds the timeout.
@@ -146,14 +149,14 @@ def _run_chainsaw_hunt(
     if time_end:
         cmd.extend(["--to", time_end])
 
-    subprocess.run(
+    proc = subprocess.run(
         cmd,
         capture_output=True,
         text=True,
         timeout=timeout,
         check=False,
     )
-    return output_file
+    return output_file, proc
 
 
 def _run_chainsaw_search(
@@ -164,7 +167,7 @@ def _run_chainsaw_search(
     time_start: str | None = None,
     time_end: str | None = None,
     timeout: int = _CHAINSAW_TIMEOUT,
-) -> Path:
+) -> tuple[Path, subprocess.CompletedProcess[str]]:
     """Execute Chainsaw in search mode against EVTX files.
 
     Args:
@@ -177,7 +180,9 @@ def _run_chainsaw_search(
         timeout: Subprocess timeout in seconds.
 
     Returns:
-        Path to the JSON results file.
+        Tuple of (path to the JSON results file, the completed
+        process). The caller needs the process to tell an empty result set
+        from a Chainsaw run that never produced one.
 
     Raises:
         subprocess.TimeoutExpired: If Chainsaw exceeds the timeout.
@@ -197,19 +202,19 @@ def _run_chainsaw_search(
     if time_end:
         cmd.extend(["--to", time_end])
 
-    subprocess.run(
+    proc = subprocess.run(
         cmd,
         capture_output=True,
         text=True,
         timeout=timeout,
         check=False,
     )
-    return output_file
+    return output_file, proc
 
 
 def _run_chainsaw_srum(
     binary: str, srum_path: Path, output_dir: Path, timeout: int = _CHAINSAW_TIMEOUT
-) -> Path:
+) -> tuple[Path, subprocess.CompletedProcess[str]]:
     """Execute Chainsaw SRUM parsing mode.
 
     Args:
@@ -219,7 +224,9 @@ def _run_chainsaw_srum(
         timeout: Subprocess timeout in seconds.
 
     Returns:
-        Path to the JSON results file.
+        Tuple of (path to the JSON results file, the completed
+        process). The caller needs the process to tell an empty result set
+        from a Chainsaw run that never produced one.
 
     Raises:
         subprocess.TimeoutExpired: If Chainsaw exceeds the timeout.
@@ -234,14 +241,14 @@ def _run_chainsaw_srum(
         "--output",
         str(output_file),
     ]
-    subprocess.run(
+    proc = subprocess.run(
         cmd,
         capture_output=True,
         text=True,
         timeout=timeout,
         check=False,
     )
-    return output_file
+    return output_file, proc
 
 
 def _run_chainsaw_timeline(
@@ -251,7 +258,7 @@ def _run_chainsaw_timeline(
     time_start: str | None = None,
     time_end: str | None = None,
     timeout: int = _CHAINSAW_TIMEOUT,
-) -> Path:
+) -> tuple[Path, subprocess.CompletedProcess[str]]:
     """Execute Chainsaw in dump/timeline mode against EVTX files.
 
     Args:
@@ -263,7 +270,9 @@ def _run_chainsaw_timeline(
         timeout: Subprocess timeout in seconds.
 
     Returns:
-        Path to the JSON results file.
+        Tuple of (path to the JSON results file, the completed
+        process). The caller needs the process to tell an empty result set
+        from a Chainsaw run that never produced one.
 
     Raises:
         subprocess.TimeoutExpired: If Chainsaw exceeds the timeout.
@@ -282,14 +291,14 @@ def _run_chainsaw_timeline(
     if time_end:
         cmd.extend(["--to", time_end])
 
-    subprocess.run(
+    proc = subprocess.run(
         cmd,
         capture_output=True,
         text=True,
         timeout=timeout,
         check=False,
     )
-    return output_file
+    return output_file, proc
 
 
 def _parse_chainsaw_hunt_results(results_path: Path) -> dict[str, Any]:
@@ -518,7 +527,7 @@ def run_chainsaw(
         output_dir = Path(tmpdir)
         try:
             if mode == "hunt":
-                results_path = _run_chainsaw_hunt(
+                results_path, proc = _run_chainsaw_hunt(
                     binary,
                     Path(evidence_path),
                     rules,
@@ -531,7 +540,7 @@ def run_chainsaw(
                 source_name = "chainsaw.hunt"
             elif mode == "search":
                 assert search_term is not None
-                results_path = _run_chainsaw_search(
+                results_path, proc = _run_chainsaw_search(
                     binary,
                     Path(evidence_path),
                     search_term,
@@ -543,13 +552,13 @@ def run_chainsaw(
                 result = _parse_chainsaw_hunt_results(results_path)
                 source_name = "chainsaw.search"
             elif mode == "srum":
-                results_path = _run_chainsaw_srum(
+                results_path, proc = _run_chainsaw_srum(
                     binary, Path(evidence_path), output_dir, timeout=timeout
                 )
                 result = _parse_chainsaw_srum_results(results_path)
                 source_name = "chainsaw.srum"
             else:
-                results_path = _run_chainsaw_timeline(
+                results_path, proc = _run_chainsaw_timeline(
                     binary,
                     Path(evidence_path),
                     output_dir,
@@ -577,6 +586,19 @@ def run_chainsaw(
                 f"Failed to execute Chainsaw: {exc}",
                 (time.monotonic() - t0) * 1000,
                 error_type="os_error",
+            )
+
+        if proc.returncode != 0 and not results_path.exists():
+            detail = ((proc.stderr or "").strip() or (proc.stdout or "").strip())[
+                :_STDERR_PREVIEW_CHARS
+            ]
+            return error_response(
+                tc_id,
+                "run_chainsaw",
+                params,
+                f"Chainsaw {mode} exited {proc.returncode} and wrote no results file: {detail}",
+                (time.monotonic() - t0) * 1000,
+                error_type="tool_failed",
             )
 
         text_parts = [f"Chainsaw {mode} analysis of {evidence_path}"]
