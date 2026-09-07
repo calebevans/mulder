@@ -180,3 +180,29 @@ def extract_iocs_from_text(text: str) -> IOCSet:
         processes=PROCESS_RE.findall(text),
         emails=EMAIL_RE.findall(text),
     )
+
+
+MMLS_ROW_RE: re.Pattern[str] = re.compile(
+    r"^\s*\d+:\s*\S+\s+(\d+)\s+\d+\s+(\d+)\s+(.+)$",
+    re.MULTILINE,
+)
+"""Matches an ``mmls`` partition row across TSK output variations.
+
+``mmls`` prints the slot column as ``000:000`` for DOS partition tables and
+as a bare ``000`` for GPT, and indents every row by a few spaces.  A pattern
+anchored on ``^\\d+:\\d+`` therefore matches nothing at all on real output.
+
+Captures ``(start_sector, length_sectors, description)``.
+"""
+
+
+def parse_mmls_rows(mmls_text: str) -> list[tuple[int, int, str]]:
+    """Parse ``mmls`` output into ``(start_sector, length_sectors, description)``.
+
+    The description is stripped and lower-cased so callers can match it
+    against the filesystem indicator tuples directly.
+    """
+    return [
+        (int(m.group(1)), int(m.group(2)), m.group(3).strip().lower())
+        for m in MMLS_ROW_RE.finditer(mmls_text)
+    ]

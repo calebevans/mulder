@@ -12,6 +12,7 @@ import threading
 import time
 from pathlib import Path
 
+from mulder.patterns import parse_mmls_rows
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
@@ -44,17 +45,6 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-
-_MMLS_ROW_RE = re.compile(
-    r"^\s*\d+:\s*\S+\s+(\d+)\s+\d+\s+(\d+)\s+(.+)$",
-    re.MULTILINE,
-)
-"""Regex matching mmls partition rows across TSK output variations.
-
-Handles formats with or without leading whitespace, with or without
-spaces in the slot field (e.g. ``002:000`` vs ``002:  000:000``).
-Captures: (start_sector, length, description).
-"""
 
 _NTFS_INDICATORS = ("ntfs", "0x07", "win95 fat", "0x0b", "0x0c", "basic data")
 _LINUX_INDICATORS = ("linux", "0x83", "ext", "0x8e")
@@ -89,10 +79,7 @@ def _parse_partition_offset(mmls_text: str) -> int:
     Searches for NTFS/Windows partitions first, then Linux, then falls
     back to the largest partition by sector count.
     """
-    rows: list[tuple[int, int, str]] = [
-        (int(m.group(1)), int(m.group(2)), m.group(3).strip().lower())
-        for m in _MMLS_ROW_RE.finditer(mmls_text)
-    ]
+    rows = parse_mmls_rows(mmls_text)
     if not rows:
         return 0
 
@@ -132,10 +119,7 @@ def _parse_all_partitions(mmls_text: str) -> list[tuple[int, int, str]]:
     Returns:
         List of ``(start_sector, length, description)`` tuples.
     """
-    rows: list[tuple[int, int, str]] = [
-        (int(m.group(1)), int(m.group(2)), m.group(3).strip().lower())
-        for m in _MMLS_ROW_RE.finditer(mmls_text)
-    ]
+    rows = parse_mmls_rows(mmls_text)
     if not rows:
         return []
 
