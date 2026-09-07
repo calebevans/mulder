@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _OLEVBA_TIMEOUT = 120
+_STDERR_PREVIEW_CHARS = 500
 _PDFID_TIMEOUT = 60
 _PDF_PARSER_TIMEOUT = 120
 
@@ -688,20 +689,45 @@ def analyze_office_document(
                 timeout=_OLEVBA_TIMEOUT,
                 check=False,
             )
-            # DDE analysis is best-effort, but a broken msodde must not pass
-            # silently as "no DDE links found". msodde always prints its banner
-            # to stdout, so a stdout-emptiness test here would never fire.
-            if proc.returncode != 0:
-                logger.warning(
-                    "msodde failed for %s (exit %s): %s",
-                    file_path,
-                    proc.returncode,
-                    proc.stderr.strip()[:500] or proc.stdout.strip()[:500] or "no output",
-                )
-            else:
-                dde_links = _parse_msodde_output(proc.stdout)
-        except (subprocess.TimeoutExpired, OSError):
-            logger.debug("msodde analysis failed for %s", file_path)
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            return error_response(
+                tc_id,
+                "analyze_office_document",
+                params,
+                f"msodde could not be run for {file_path}: {exc}",
+                (time.monotonic() - t0) * 1000,
+                error_type="tool_failed",
+                suggestion=(
+                    "Re-run with analyze_dde=False to get the macro analysis "
+                    "without the DDE check."
+                ),
+            )
+
+        # A broken msodde must not pass silently as "no DDE links found":
+        # DDEAUTO is a live code-execution vector, and an empty dde_links list
+        # is read as an authoritative all-clear. msodde always prints its
+        # banner to stdout, so a stdout-emptiness test here would never fire --
+        # the exit code is the only signal there is.
+        if proc.returncode != 0:
+            detail = (
+                proc.stderr.strip()[:_STDERR_PREVIEW_CHARS]
+                or proc.stdout.strip()[:_STDERR_PREVIEW_CHARS]
+                or "no output"
+            )
+            return error_response(
+                tc_id,
+                "analyze_office_document",
+                params,
+                f"msodde exited {proc.returncode}, so the DDE check did not run: {detail}",
+                (time.monotonic() - t0) * 1000,
+                error_type="tool_failed",
+                suggestion=(
+                    "Re-run with analyze_dde=False to get the macro analysis "
+                    "without the DDE check."
+                ),
+            )
+
+        dde_links = _parse_msodde_output(proc.stdout)
 
     index_parts: list[str] = [
         f"File: {file_path}",
