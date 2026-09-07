@@ -36,6 +36,7 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
+_STDERR_PREVIEW_CHARS = 500
 _BULK_TIMEOUT = 1800
 _SCALPEL_TIMEOUT = 1800
 _PHOTOREC_TIMEOUT = 3600
@@ -639,7 +640,7 @@ def run_photorec(image_path: str) -> dict[str, object]:
             f"search,{tmpdir}/",
         ]
         try:
-            subprocess.run(
+            proc = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
@@ -656,6 +657,20 @@ def run_photorec(image_path: str) -> dict[str, object]:
             )
 
         report_path = Path(tmpdir) / "report.xml"
+        recovered_anything = report_path.exists() or any(
+            f.is_file() for f in Path(tmpdir).rglob("*")
+        )
+        if proc.returncode != 0 and not recovered_anything:
+            detail = (proc.stderr.strip() or proc.stdout.strip())[:_STDERR_PREVIEW_CHARS]
+            return error_response(
+                tc_id,
+                "run_photorec",
+                params,
+                f"photorec exited {proc.returncode} and carved nothing: {detail}",
+                (time.monotonic() - t0) * 1000,
+                error_type="tool_failed",
+            )
+
         report_text = ""
         if report_path.exists():
             report_text = report_path.read_text(errors="replace")
