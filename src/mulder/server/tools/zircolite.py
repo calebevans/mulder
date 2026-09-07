@@ -30,6 +30,7 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 _ZIRCOLITE_TIMEOUT = 600
+_STDERR_PREVIEW_CHARS = 500
 _ZIRCOLITE_DIRNAME = "zircolite"
 
 
@@ -74,7 +75,7 @@ def _run_zircolite_process(
     log_format: str,
     ruleset_path: Path,
     output_dir: Path,
-) -> Path:
+) -> tuple[Path, subprocess.CompletedProcess[str]]:
     """Execute Zircolite against event logs.
 
     Args:
@@ -85,7 +86,9 @@ def _run_zircolite_process(
         output_dir: Output directory for results.
 
     Returns:
-        Path to the JSON results file.
+        Tuple of (path to the JSON results file, the completed process). The
+        caller needs the process to tell a genuinely empty ruleset match from a
+        Zircolite run that never produced results.
 
     Raises:
         subprocess.TimeoutExpired: If Zircolite exceeds the timeout.
@@ -106,14 +109,14 @@ def _run_zircolite_process(
         *format_flags,
     ]
 
-    subprocess.run(
+    proc = subprocess.run(
         cmd,
         capture_output=True,
         text=True,
         timeout=_ZIRCOLITE_TIMEOUT,
         check=False,
     )
-    return output_file
+    return output_file, proc
 
 
 def _build_detection_timeline(
@@ -361,7 +364,7 @@ def run_zircolite(
     with tempfile.TemporaryDirectory(prefix="mulder_zircolite_") as tmpdir:
         output_dir = Path(tmpdir)
         try:
-            results_path = _run_zircolite_process(
+            results_path, proc = _run_zircolite_process(
                 str(script),
                 Path(events_path),
                 log_format,
@@ -385,6 +388,19 @@ def run_zircolite(
                 f"Failed to execute Zircolite: {exc}",
                 (time.monotonic() - t0) * 1000,
                 error_type="os_error",
+            )
+
+        if proc.returncode != 0 and not results_path.exists():
+            detail = ((proc.stderr or "").strip() or (proc.stdout or "").strip())[
+                :_STDERR_PREVIEW_CHARS
+            ]
+            return error_response(
+                tc_id,
+                "run_zircolite",
+                params,
+                f"Zircolite exited {proc.returncode} and wrote no results file: {detail}",
+                (time.monotonic() - t0) * 1000,
+                error_type="tool_failed",
             )
 
         result = _parse_zircolite_output(results_path, events_path, log_format, sigma_level_filter)
