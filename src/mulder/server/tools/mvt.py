@@ -39,9 +39,11 @@ def _collect_mvt_results(output_dir: str) -> tuple[str, dict[str, int]]:
             data = json.loads(result_file.read_text(encoding="utf-8", errors="replace"))
             if isinstance(data, list):
                 module_counts[result_file.stem] = len(data)
-                for item in data[:100]:
-                    if isinstance(item, dict):
-                        parts.append(json.dumps(item, default=str))
+                # Every counted record must reach the index: module_counts is
+                # reported to the analyst as the number of findings, so any
+                # record dropped here becomes a detection that is claimed but
+                # cannot be found by search().
+                parts.extend(json.dumps(item, default=str) for item in data)
             elif isinstance(data, dict):
                 module_counts[result_file.stem] = 1
                 parts.append(json.dumps(data, default=str))
