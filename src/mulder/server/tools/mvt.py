@@ -25,6 +25,7 @@ from mulder.server.tool_access import Role, tool_access
 logger = logging.getLogger(__name__)
 
 _MVT_TIMEOUT = 600
+_STDERR_PREVIEW_CHARS = 500
 
 
 def _collect_mvt_results(output_dir: str) -> tuple[str, dict[str, int]]:
@@ -122,6 +123,17 @@ def run_mvt_android(
             )
 
         raw_output, module_counts = _collect_mvt_results(tmpdir)
+
+        if proc.returncode != 0 and not raw_output.strip():
+            detail = (proc.stderr.strip() or proc.stdout.strip())[:_STDERR_PREVIEW_CHARS]
+            return error_response(
+                tc_id,
+                tool_name,
+                params,
+                f"mvt-android exited {proc.returncode} and produced no results: {detail}",
+                elapsed_ms=(time.monotonic() - t0) * 1000,
+                error_type="tool_failed",
+            )
 
         if not raw_output.strip():
             raw_output = proc.stdout.strip() or proc.stderr.strip()
@@ -222,6 +234,17 @@ def run_mvt_ios(
             )
 
         raw_output, module_counts = _collect_mvt_results(tmpdir)
+
+        if proc.returncode != 0 and not raw_output.strip():
+            detail = (proc.stderr.strip() or proc.stdout.strip())[:_STDERR_PREVIEW_CHARS]
+            return error_response(
+                tc_id,
+                tool_name,
+                params,
+                f"mvt-ios exited {proc.returncode} and produced no results: {detail}",
+                elapsed_ms=(time.monotonic() - t0) * 1000,
+                error_type="tool_failed",
+            )
 
         if not raw_output.strip():
             raw_output = proc.stdout.strip() or proc.stderr.strip()
