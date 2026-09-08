@@ -103,6 +103,56 @@ def _parse_timestamp(text: str, reference_year: int | None = None) -> str | None
 _INSERT_BATCH_SIZE = 5000
 
 
+def _line_aligned_windows(raw_output: str) -> Iterator[tuple[str, int, int]]:
+    """Yield ``(text, first_line, last_line)`` windows that never split a line.
+
+    Windows used to be cut at absolute character offsets
+    (``raw_output[offset : offset + 4096]``), which severs whichever record
+    straddles the boundary.  Around twenty callers then read *one* record out
+    of each window -- a PID, a module name, a command line -- so a severed row
+    does not merely lose data, it yields a **wrong** value: a truncated PID
+    that still parses as an integer, or a process name from one row paired
+    with the PID from another.  Two windows sampled from the same output can
+    then be diffed against each other and produce fabricated "hidden process"
+    or "hidden module" findings.
+
+    Line numbers are 1-based and inclusive -- which is what the ``line_start``
+    and ``line_end`` columns have always claimed to hold, and did not.
+
+    A single line longer than the window budget is still split, because it has
+    to be; that is pathological input (a whole file on one line) rather than
+    the routine case.
+    """
+    budget = _WINDOW_CHAR_BUDGET
+    current: list[str] = []
+    current_len = 0
+    first_line = 1
+    last_line = 1
+
+    for line_no, line in enumerate(raw_output.splitlines(keepends=True), start=1):
+        pieces = (
+            [line[i : i + budget] for i in range(0, len(line), budget)]
+            if len(line) > budget
+            else [line]
+        )
+        for piece in pieces:
+            if current and current_len + len(piece) > budget:
+                text = "".join(current)
+                if text.strip():
+                    yield text, first_line, last_line
+                current = []
+                current_len = 0
+                first_line = line_no
+            current.append(piece)
+            current_len += len(piece)
+            last_line = line_no
+
+    if current:
+        text = "".join(current)
+        if text.strip():
+            yield text, first_line, last_line
+
+
 def extract_and_index(
     raw_output: str,
     source_name: str,
@@ -156,20 +206,16 @@ def extract_and_index(
 
     total_indexed = 0
     batch: list[WindowRow] = []
-    budget = _WINDOW_CHAR_BUDGET
 
-    for offset in range(0, len(raw_output), budget):
-        chunk = raw_output[offset : offset + budget]
-        if not chunk.strip():
-            continue
-        event_time = _parse_timestamp(chunk)
+    for window_text, first_line, last_line in _line_aligned_windows(raw_output):
+        event_time = _parse_timestamp(window_text)
         batch.append(
             WindowRow(
                 source_id=source_id,
-                line_start=offset,
-                line_end=offset + len(chunk),
+                line_start=first_line,
+                line_end=last_line,
                 event_time=event_time,
-                raw_text=chunk,
+                raw_text=window_text,
             )
         )
         if len(batch) >= _INSERT_BATCH_SIZE:
