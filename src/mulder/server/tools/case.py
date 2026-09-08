@@ -5,6 +5,8 @@ Tier 1 tools: help the agent orient before running any extractions.
 
 from __future__ import annotations
 
+import bz2
+import gzip
 import logging
 import os
 import shutil
@@ -445,6 +447,34 @@ def _extract_tar(archive: Path, dest: Path) -> list[str]:
     return [str(f.relative_to(dest)) for f in dest.rglob("*") if f.is_file()]
 
 
+def _extract_single_stream(archive: Path, dest: Path) -> list[str]:
+    """Decompress a single-member gzip/bzip2 stream into *dest*.
+
+    ``evidence.dd.gz`` is one compressed file, not an archive of files.  The
+    output keeps the name with the compression suffix removed, so
+    ``evidence.dd.gz`` becomes ``evidence.dd``.
+    """
+    opener = gzip.open if archive.suffix.lower() == ".gz" else bz2.open
+    out = dest / archive.stem
+    with opener(archive, "rb") as src, open(out, "wb") as dst:
+        shutil.copyfileobj(src, dst)
+    return [str(out.relative_to(dest))]
+
+
+def _tar_member_count(archive: Path) -> int:
+    """Return how many members *archive* yields when read as a tar, else 0.
+
+    ``tarfile.is_tarfile`` cannot answer this for a compressed file: it sees
+    the gzip wrapper and returns True for a plain ``.dd.gz`` as readily as for
+    a real ``.tar.gz``.  Counting members is the only honest test.
+    """
+    try:
+        with tarfile.open(archive, "r:*") as tf:
+            return sum(1 for _ in tf)
+    except (tarfile.TarError, OSError, EOFError):
+        return 0
+
+
 def _extract_7z(archive: Path, dest: Path) -> list[str]:
     """Extract via the ``7z`` CLI to *dest*; return paths relative to *dest*."""
     cmd = ["7z", "x", f"-o{dest}", "-y", str(archive)]
@@ -533,12 +563,16 @@ def extract_archive(
     try:
         if ext == ".zip":
             files = _extract_zip(archive, dest)
-        elif (
-            ext in (".tar", ".tgz")
-            or name_lower.endswith((".tar.gz", ".tar.bz2"))
-            or (ext in (".gz", ".bz2") and ".tar" not in name_lower)
-        ):
+        elif ext in (".tar", ".tgz") or name_lower.endswith((".tar.gz", ".tar.bz2")):
             files = _extract_tar(archive, dest)
+        elif ext in (".gz", ".bz2"):
+            # A bare .gz/.bz2 is usually one compressed file (evidence.dd.gz),
+            # but it may also be a tar that was not named .tar.gz.  Ask the
+            # archive which it is instead of guessing from the name.
+            if _tar_member_count(archive):
+                files = _extract_tar(archive, dest)
+            else:
+                files = _extract_single_stream(archive, dest)
         elif ext in (".7z", ".rar") or ".7z." in name_lower:
             if not shutil.which("7z"):
                 return error_response(
