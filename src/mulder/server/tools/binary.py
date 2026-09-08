@@ -556,14 +556,21 @@ def _parse_capa_output(raw: dict[str, Any], file_path: str) -> dict[str, object]
                     "tactic": tactic,
                     "technique_id": technique_id,
                     "technique_name": technique_name,
-                    "subtechnique_id": ref.get("subtechnique_id"),
+                    # capa's AttackSpec is (parts, tactic, technique,
+                    # subtechnique, id). There is no "subtechnique_id" field,
+                    # so this was always None; the sub-technique is a *name*,
+                    # and "id" already carries the full "T1059.006".
+                    "subtechnique": str(ref.get("subtechnique", "")),
                 }
             )
 
             if tactic:
                 if tactic not in mitre_summary:
                     mitre_summary[tactic] = []
-                desc = f"{technique_id}: {technique_name}"
+                subtechnique = str(ref.get("subtechnique", ""))
+                desc = f"{technique_id}: {technique_name}" + (
+                    f"::{subtechnique}" if subtechnique else ""
+                )
                 if desc not in mitre_summary[tactic]:
                     mitre_summary[tactic].append(desc)
 
@@ -622,6 +629,30 @@ def _extract_floss_strings(
     return results
 
 
+def _floss_runtime_seconds(raw: dict[str, Any]) -> float:
+    """Read FLOSS's own runtime, which it records as ``metadata.runtime.total``.
+
+    There is no ``elapsed_time`` anywhere in the document, so the previous
+    lookup reported 0.0 for every analysis.
+
+    Args:
+        raw: Parsed FLOSS ResultDocument.
+
+    Returns:
+        Total analysis seconds, or 0.0 if the field is absent or malformed.
+    """
+    metadata = raw.get("metadata", {})
+    if not isinstance(metadata, dict):
+        return 0.0
+    runtime = metadata.get("runtime", {})
+    if not isinstance(runtime, dict):
+        return 0.0
+    total = runtime.get("total")
+    if isinstance(total, bool) or not isinstance(total, int | float):
+        return 0.0
+    return float(total)
+
+
 def _parse_floss_output(raw: dict[str, Any], file_path: str) -> dict[str, object]:
     """Parse FLOSS JSON output into structured result.
 
@@ -634,10 +665,18 @@ def _parse_floss_output(raw: dict[str, Any], file_path: str) -> dict[str, object
     Returns:
         Dict with categorized decoded strings and stats.
     """
-    decoded = _extract_floss_strings(raw.get("decoded", []), "xor")
-    stack = _extract_floss_strings(raw.get("stack_strings", []), "stack")
-    tight = _extract_floss_strings(raw.get("tight_strings", []), "tight")
-    static = _extract_floss_strings(raw.get("static_strings", []), "static")
+    # FLOSS's ResultDocument is {metadata, analysis, strings}: all four string
+    # lists live under "strings", and the decoded one is "decoded_strings".
+    # Reading them from the top level found nothing for every sample, which the
+    # tool then reported as "no obfuscated strings recovered".
+    strings = raw.get("strings", {})
+    if not isinstance(strings, dict):
+        strings = {}
+
+    decoded = _extract_floss_strings(strings.get("decoded_strings", []), "xor")
+    stack = _extract_floss_strings(strings.get("stack_strings", []), "stack")
+    tight = _extract_floss_strings(strings.get("tight_strings", []), "tight")
+    static = _extract_floss_strings(strings.get("static_strings", []), "static")
 
     return {
         "file_path": file_path,
@@ -646,7 +685,7 @@ def _parse_floss_output(raw: dict[str, Any], file_path: str) -> dict[str, object
         "tight_strings": tight,
         "static_strings": static,
         "total_decoded": len(decoded) + len(stack) + len(tight),
-        "analysis_time_seconds": raw.get("metadata", {}).get("elapsed_time", 0.0),
+        "analysis_time_seconds": _floss_runtime_seconds(raw),
     }
 
 
