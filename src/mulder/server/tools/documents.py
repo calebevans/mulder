@@ -148,6 +148,35 @@ _SUSPICIOUS_JS_FUNCTIONS: list[str] = [
 #: Everything above it is banner/log noise.
 _MSODDE_LINK_MARKER = "DDE Links:"
 
+# pdf-parser prints one "obj <id> <generation>" header per object.
+_PDF_OBJ_HEADER_RE = re.compile(r"^obj (\d+) \d+\s*$")
+# /URI (http://...) -- the value a link annotation actually navigates to.
+_PDF_URI_RE = re.compile(r"/URI\s*\(([^)]{1,2048})\)")
+_PDF_URL_RE = re.compile(r"https?://[^\s()<>\"']{3,2048}")
+# /F and /UF carry the filename on a /Filespec entry.
+_PDF_FILESPEC_NAME_RE = re.compile(r"/(?:UF|F)\s*\(([^)]{1,512})\)")
+_SUSPICIOUS_EMBEDDED_SUFFIXES: frozenset[str] = frozenset(
+    {
+        ".bat",
+        ".chm",
+        ".cmd",
+        ".com",
+        ".dll",
+        ".exe",
+        ".hta",
+        ".jar",
+        ".js",
+        ".jse",
+        ".lnk",
+        ".msi",
+        ".ps1",
+        ".scr",
+        ".vbe",
+        ".vbs",
+        ".wsf",
+    }
+)
+
 
 def _parse_msodde_output(stdout: str) -> list[dict[str, object]]:
     """Extract DDE links from msodde's output.
@@ -433,6 +462,140 @@ def _extract_pdfid_count(line: str) -> int:
     return 0
 
 
+def _pdf_parser_cmd(file_path: Path, *args: str) -> list[str]:
+    """Build a pdf-parser invocation, preferring the bundled script.
+
+    Args:
+        file_path: Path to the PDF file.
+        args: Extra pdf-parser arguments, placed before the file path.
+
+    Returns:
+        Command list for subprocess.
+    """
+    script = _pdf_parser_script()
+    if script is not None:
+        return [sys.executable, str(script), *args, str(file_path)]
+    parser_bin = require_binary("pdf-parser") or "pdf-parser"
+    return [parser_bin, *args, str(file_path)]
+
+
+def _run_pdf_parser(file_path: Path, *args: str) -> str:
+    """Run pdf-parser and return its stdout, or "" if it could not run.
+
+    Args:
+        file_path: Path to the PDF file.
+        args: Extra pdf-parser arguments.
+
+    Returns:
+        stdout text, empty when pdf-parser is missing or times out.
+    """
+    try:
+        proc = subprocess.run(
+            _pdf_parser_cmd(file_path, *args),
+            capture_output=True,
+            text=True,
+            timeout=_PDF_PARSER_TIMEOUT,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return ""
+    return proc.stdout
+
+
+def _iter_pdf_objects(output: str) -> list[tuple[int, str]]:
+    """Split a pdf-parser dump into (object id, body) pairs.
+
+    Args:
+        output: Raw pdf-parser stdout.
+
+    Returns:
+        List of (object_id, body) tuples in document order.
+    """
+    objects: list[tuple[int, str]] = []
+    current_id: int | None = None
+    current: list[str] = []
+    for line in output.splitlines():
+        match = _PDF_OBJ_HEADER_RE.match(line)
+        if match:
+            if current_id is not None:
+                objects.append((current_id, "\n".join(current)))
+            current_id = int(match.group(1))
+            current = []
+        elif current_id is not None:
+            current.append(line)
+    if current_id is not None:
+        objects.append((current_id, "\n".join(current)))
+    return objects
+
+
+def _extract_pdf_urls(file_path: Path) -> list[dict[str, object]]:
+    """Extract URLs reachable from the PDF's actions and object bodies.
+
+    ``/URI`` action values are reported as ``uri_action`` -- those are the
+    links a reader will actually follow. Any other http(s) URL found in an
+    object body is reported as ``object_body``, which catches URLs hidden in
+    places a link annotation would not cover.
+
+    Args:
+        file_path: Path to the PDF file.
+
+    Returns:
+        List of dicts with url, source and object_id, de-duplicated by URL.
+    """
+    output = _run_pdf_parser(file_path)
+    if not output:
+        return []
+
+    urls: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for object_id, body in _iter_pdf_objects(output):
+        for match in _PDF_URI_RE.finditer(body):
+            url = match.group(1).strip()
+            if url and url not in seen:
+                seen.add(url)
+                urls.append({"url": url, "source": "uri_action", "object_id": object_id})
+        for match in _PDF_URL_RE.finditer(body):
+            url = match.group(0).rstrip(").,;")
+            if url and url not in seen:
+                seen.add(url)
+                urls.append({"url": url, "source": "object_body", "object_id": object_id})
+    return urls
+
+
+def _extract_pdf_embedded_files(file_path: Path) -> list[dict[str, object]]:
+    """List files carried inside the PDF via /Filespec entries.
+
+    Args:
+        file_path: Path to the PDF file.
+
+    Returns:
+        List of dicts with filename, object_id and a suspicious flag.
+    """
+    output = _run_pdf_parser(file_path)
+    if not output:
+        return []
+
+    embedded: list[dict[str, object]] = []
+    seen: set[tuple[int, str]] = set()
+    for object_id, body in _iter_pdf_objects(output):
+        if "/Filespec" not in body and "/EmbeddedFile" not in body:
+            continue
+        for match in _PDF_FILESPEC_NAME_RE.finditer(body):
+            filename = match.group(1).strip()
+            if not filename or (object_id, filename) in seen:
+                continue
+            seen.add((object_id, filename))
+            suffix = Path(filename).suffix.lower()
+            embedded.append(
+                {
+                    "filename": filename,
+                    "object_id": object_id,
+                    "suspicious": suffix in _SUSPICIOUS_EMBEDDED_SUFFIXES,
+                }
+            )
+    return embedded
+
+
 def _extract_pdf_javascript(file_path: Path) -> list[dict[str, object]]:
     """Extract JavaScript code from PDF objects.
 
@@ -445,23 +608,9 @@ def _extract_pdf_javascript(file_path: Path) -> list[dict[str, object]]:
     Returns:
         List of JavaScript extractions with analysis.
     """
-    script = _pdf_parser_script()
-    if script is not None:
-        cmd = [
-            sys.executable,
-            str(script),
-            "--type",
-            "/JS",
-            "--filter",
-            str(file_path),
-        ]
-    else:
-        parser_bin = require_binary("pdf-parser") or "pdf-parser"
-        cmd = [parser_bin, "--type", "/JS", "--filter", str(file_path)]
-
     try:
         proc = subprocess.run(
-            cmd,
+            _pdf_parser_cmd(file_path, "--type", "/JS", "--filter"),
             capture_output=True,
             text=True,
             timeout=_PDF_PARSER_TIMEOUT,
@@ -830,6 +979,14 @@ def analyze_pdf(
         if has_js_indicator:
             javascript = _extract_pdf_javascript(target)
 
+    urls: list[dict[str, object]] = []
+    if extract_urls:
+        urls = _extract_pdf_urls(target)
+
+    embedded_files: list[dict[str, object]] = []
+    if extract_embedded:
+        embedded_files = _extract_pdf_embedded_files(target)
+
     risk = _compute_pdf_risk(indicators, javascript)
 
     index_parts: list[str] = [f"PDF Analysis: {file_path}"]
@@ -841,6 +998,13 @@ def analyze_pdf(
         index_parts.append(f"JavaScript in object {js.get('object_id', '?')}")
         code_preview = str(js.get("code", ""))[:2000]
         index_parts.append(code_preview)
+    for url in urls:
+        index_parts.append(f"URL in object {url.get('object_id', '?')}: {url.get('url', '')}")
+    for embedded in embedded_files:
+        index_parts.append(
+            f"Embedded file in object {embedded.get('object_id', '?')}: "
+            f"{embedded.get('filename', '')}"
+        )
     index_text = "\n".join(index_parts)
 
     summary = extract_and_index(index_text, "pdf.analysis", file_path, "pdftools")
@@ -848,8 +1012,8 @@ def analyze_pdf(
     summary["indicators"] = indicators
     summary["risk_assessment"] = risk
     summary["javascript"] = javascript if extract_javascript else []
-    summary["urls"] = []
-    summary["embedded_files"] = []
+    summary["urls"] = urls
+    summary["embedded_files"] = embedded_files
 
     elapsed = (time.monotonic() - t0) * 1000
     return tool_response(tc_id, "analyze_pdf", params, summary, "pdf.analysis", elapsed)
