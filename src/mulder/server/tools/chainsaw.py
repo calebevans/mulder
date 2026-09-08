@@ -57,6 +57,17 @@ def _default_sigma_rules() -> Path:
     return asset_display_path("sigma-rules", "rules", "windows")
 
 
+def _default_chainsaw_mapping() -> Path:
+    """The Sigma-to-EVTX mapping Chainsaw requires alongside ``--sigma``.
+
+    Chainsaw cannot apply third-party Sigma rules without a mapping that tells
+    it which event fields those rules refer to, so ``--sigma`` *requires*
+    ``--mapping``.  The mapping ships in the Chainsaw release tarball and is
+    also pulled by the asset supplement, so ``mulder setup`` always provides it.
+    """
+    return asset_display_path("chainsaw", "mappings", "sigma-event-logs-all.yml")
+
+
 def _resolve_evtx_evidence(evidence_path: str) -> str:
     """Resolve a disk image path to its EVTX extraction directory.
 
@@ -108,6 +119,7 @@ def _run_chainsaw_hunt(
     binary: str,
     evidence_path: Path,
     sigma_rules_path: Path,
+    mapping_path: Path,
     output_dir: Path,
     time_start: str | None = None,
     time_end: str | None = None,
@@ -119,6 +131,7 @@ def _run_chainsaw_hunt(
         binary: Resolved Chainsaw executable.
         evidence_path: Directory containing .evtx files.
         sigma_rules_path: Path to Sigma rules directory.
+        mapping_path: Chainsaw mapping file; required alongside --sigma.
         output_dir: Output directory for results.
         time_start: Optional time range start (ISO 8601).
         time_end: Optional time range end (ISO 8601).
@@ -137,6 +150,8 @@ def _run_chainsaw_hunt(
         str(evidence_path),
         "-s",
         str(sigma_rules_path),
+        "--mapping",
+        str(mapping_path),
         "--json",
         "--output",
         str(output_file),
@@ -419,6 +434,7 @@ def run_chainsaw(
     evidence_path: str,
     mode: Literal["hunt", "search", "srum", "timeline"] = "hunt",
     sigma_rules_path: str = "",
+    mapping_path: str = "",
     search_term: str | None = None,
     time_range_start: str | None = None,
     time_range_end: str | None = None,
@@ -440,6 +456,10 @@ def run_chainsaw(
             "timeline" dumps all events chronologically.
         sigma_rules_path: Path to the Sigma rules directory. Empty
             resolves to the rules installed by 'mulder setup'.
+        mapping_path: Path to the Chainsaw mapping file that tells it how
+            to read third-party Sigma rules. Chainsaw requires this
+            whenever Sigma rules are supplied. Empty resolves to the
+            mapping installed by 'mulder setup'.
         search_term: Required when mode="search". The keyword or
             regex pattern to search for in EVTX records.
         time_range_start: Optional ISO 8601 timestamp to filter results
@@ -454,6 +474,7 @@ def run_chainsaw(
         "evidence_path": evidence_path,
         "mode": mode,
         "sigma_rules_path": sigma_rules_path,
+        "mapping_path": mapping_path,
         "search_term": search_term,
         "time_range_start": time_range_start,
         "time_range_end": time_range_end,
@@ -513,6 +534,21 @@ def run_chainsaw(
 
     rules = Path(sigma_rules_path) if sigma_rules_path else _default_sigma_rules()
 
+    mapping = Path(mapping_path) if mapping_path else _default_chainsaw_mapping()
+
+    if mode == "hunt" and not mapping.exists():
+        return error_response(
+            tc_id,
+            "run_chainsaw",
+            params,
+            f"Chainsaw Sigma mapping not found: {mapping}",
+            error_type="file_not_found",
+            suggestion=(
+                "Run 'mulder setup' (provisions Chainsaw 2.16.0 and its "
+                "mappings/ directory), or pass mapping_path explicitly."
+            ),
+        )
+
     timeout = adaptive_timeout(evidence_path, base=_CHAINSAW_TIMEOUT)
     with tempfile.TemporaryDirectory(prefix="mulder_chainsaw_") as tmpdir:
         output_dir = Path(tmpdir)
@@ -522,6 +558,7 @@ def run_chainsaw(
                     binary,
                     Path(evidence_path),
                     rules,
+                    mapping,
                     output_dir,
                     time_range_start,
                     time_range_end,
