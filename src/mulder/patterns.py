@@ -7,6 +7,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import NamedTuple
 
 IP_RE: re.Pattern[str] = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 
@@ -231,3 +232,80 @@ def parse_mmls_rows(mmls_text: str) -> list[tuple[int, int, str]]:
         (int(m.group(1)), int(m.group(2)), m.group(3).strip().lower())
         for m in MMLS_ROW_RE.finditer(mmls_text)
     ]
+
+
+FLS_ROW_RE: re.Pattern[str] = re.compile(
+    r"^(?P<name_type>[A-Za-z\-])/(?P<meta_type>[A-Za-z\-])\s+"
+    r"(?P<deleted>\*\s+)?"
+    r"(?P<inode>\d+(?:-\d+-\d+)?):\t"
+    r"(?P<path>.+?)\s*$",
+    re.MULTILINE,
+)
+"""One row of ``fls -r -p`` output.
+
+Verified against The Sleuth Kit 4.12.1 on a real image::
+
+    r/r 15:\tUsers/alice/NTUSER.DAT
+    r/r * 16:\tUsers/alice/capture.pcap
+    l/l 17:\tUsers/alice/link_to_passwd
+    r/r * 22:\tWindows/System32/winevt/Logs/Deleted.evtx
+    V/V 1025:\t$OrphanFiles
+
+Two things the previous ``[rd]/[rd*]`` spelling got wrong:
+
+* the deleted marker is a **separate ``*`` token after the type pair**, not a
+  character inside it, so every deleted entry failed to match;
+* the type characters are not limited to ``r`` and ``d``. TSK also emits
+  ``l`` (symlink), ``v``/``V`` (virtual, e.g. ``$OrphanFiles``), ``s``, ``c``,
+  ``b``, ``p``, ``h``, ``w`` and ``-`` (unknown); ``-/r`` in particular is
+  what an unallocated or orphaned file looks like.
+
+The separator between the inode and the path is a literal tab, which is what
+makes it safe for a path to contain spaces.
+"""
+
+
+class FlsEntry(NamedTuple):
+    """One parsed row of ``fls`` output."""
+
+    inode: str
+    path: str
+    deleted: bool
+    name_type: str
+    meta_type: str
+
+    @property
+    def base_inode(self) -> str:
+        """The inode without NTFS attribute qualifiers, as ``icat`` wants it."""
+        return self.inode.split("-")[0]
+
+
+def parse_fls_rows(fls_text: str) -> list[FlsEntry]:
+    """Parse ``fls -r -p`` output into structured entries.
+
+    Args:
+        fls_text: Raw ``fls`` output, one entry per line.
+
+    Returns:
+        Every entry in the listing, directories included, in file order.
+    """
+    return [
+        FlsEntry(
+            inode=m.group("inode"),
+            path=m.group("path").strip(),
+            deleted=m.group("deleted") is not None,
+            name_type=m.group("name_type"),
+            meta_type=m.group("meta_type"),
+        )
+        for m in FLS_ROW_RE.finditer(fls_text)
+    ]
+
+
+def fls_file_entries(fls_text: str) -> list[FlsEntry]:
+    """Parse ``fls`` output and keep only entries that can hold file content.
+
+    Directories are dropped; everything else -- including entries whose type
+    is unknown (``-``), which is how deleted and orphaned files present -- is
+    kept, because ``icat`` can still read them.
+    """
+    return [e for e in parse_fls_rows(fls_text) if e.meta_type.lower() != "d"]

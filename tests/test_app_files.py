@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 from mulder.server.tools.extract.app_files import (
     _DEFAULT_EXTENSIONS,
     _derive_source_name,
+    _extract_and_read_file,
     _find_matching_files,
     _is_binary_content,
 )
@@ -47,7 +48,6 @@ class TestFindMatchingFiles:
             [_SAMPLE_FLS],
             "Program Files/mIRC",
             frozenset({".ini"}),
-            max_file_size_kb=512,
             offset=0,
         )
         paths = [m[1] for m in matches]
@@ -63,7 +63,6 @@ class TestFindMatchingFiles:
             [_SAMPLE_FLS],
             "Program Files/mIRC",
             _DEFAULT_EXTENSIONS,
-            max_file_size_kb=512,
             offset=0,
         )
         paths = [m[1] for m in matches]
@@ -80,7 +79,6 @@ class TestFindMatchingFiles:
             [_MULTI_USER_FLS],
             "Documents and Settings/*/Application Data/Thunderbird",
             frozenset({".ini", ".cfg", ".txt"}),
-            max_file_size_kb=512,
             offset=0,
         )
         paths = [m[1] for m in matches]
@@ -101,7 +99,6 @@ class TestFindMatchingFiles:
             [fls],
             "AppDir",
             frozenset({".sqlite", ".db"}),
-            max_file_size_kb=512,
             offset=0,
         )
         paths = [m[1] for m in matches]
@@ -110,8 +107,14 @@ class TestFindMatchingFiles:
         assert "AppDir/cache.db" in paths
         assert "AppDir/config.ini" not in paths
 
-    def test_size_limit_with_tab_delimited_sizes(self) -> None:
-        """Files with tab-delimited sizes above threshold are excluded."""
+    def test_listing_alone_cannot_apply_a_size_limit(self) -> None:
+        """``fls -r -p`` prints no size column, so discovery cannot filter.
+
+        This test previously claimed sizes "above threshold are excluded"
+        while asserting all three files matched -- because the size check
+        read a ``\\t(\\d+)\\t`` field that this output never contains. The
+        threshold is now applied to the bytes ``icat`` actually returns.
+        """
         fls = (
             "r/r 4001:\tSmallDir/small.txt\n"
             "r/r 4002:\tSmallDir/medium.txt\n"
@@ -121,7 +124,6 @@ class TestFindMatchingFiles:
             [fls],
             "SmallDir",
             frozenset({".txt"}),
-            max_file_size_kb=512,
             offset=0,
         )
         assert len(matches) == 3
@@ -134,7 +136,6 @@ class TestFindMatchingFiles:
             [_SAMPLE_FLS],
             "NonExistent/Directory",
             _DEFAULT_EXTENSIONS,
-            max_file_size_kb=512,
             offset=0,
         )
         assert matches == []
@@ -146,7 +147,6 @@ class TestFindMatchingFiles:
             [duplicate_fls],
             "AppDir",
             frozenset({".ini"}),
-            max_file_size_kb=512,
             offset=0,
         )
         assert len(matches) == 1
@@ -158,7 +158,6 @@ class TestFindMatchingFiles:
             [fls],
             "program files/myapp",
             frozenset({".ini"}),
-            max_file_size_kb=512,
             offset=0,
         )
         assert len(matches) == 1
@@ -396,3 +395,73 @@ class TestIndexAppFilesTool:
         assert result["status"] == "success"
         assert result["results"]["files_discovered"] == 2
         assert ".ini" not in str(result["results"]["sample_files"])
+
+
+class TestDeletedFilesAreDiscovered:
+    """Deleted files are what an examiner is looking for.
+
+    The previous ``[rd]/[rd*]`` row regex expected a digit where ``fls``
+    prints the ``*`` deleted marker, so every deleted entry was skipped
+    silently -- undeleted siblings in the same directory still matched.
+    """
+
+    #: Genuine ``fls -r -p`` output (TSK 4.12.1); inode 16 is deleted.
+    REAL_FLS = (
+        "r/r 15:\tUsers/alice/notes.txt\n"
+        "r/r * 16:\tUsers/alice/deleted_notes.txt\n"
+        "l/l 17:\tUsers/alice/link.txt\n"
+    )
+
+    def test_a_deleted_file_is_returned(self) -> None:
+        matches = _find_matching_files(
+            [self.REAL_FLS], "Users/alice", frozenset({".txt"}), offset=0
+        )
+        paths = [m[1] for m in matches]
+
+        assert "Users/alice/deleted_notes.txt" in paths
+        assert "Users/alice/notes.txt" in paths
+
+    def test_the_deleted_files_inode_is_usable_by_icat(self) -> None:
+        """A path is no use without the inode ``icat`` needs to read it."""
+        matches = _find_matching_files(
+            [self.REAL_FLS], "Users/alice", frozenset({".txt"}), offset=0
+        )
+        inodes = {path: inode for inode, path, _ in matches}
+
+        assert inodes["Users/alice/deleted_notes.txt"] == "16"
+
+
+class TestSizeLimitAppliesToExtractedBytes:
+    """The threshold now runs where the size is actually known."""
+
+    def _icat_returning(self, payload: bytes) -> Any:
+        proc = MagicMock()
+        proc.returncode = 0
+        proc.stdout = payload
+        return proc
+
+    def test_a_file_over_the_limit_is_skipped(self) -> None:
+        big = b"A" * 4096
+        with (
+            patch("mulder.server.tools.extract.app_files.shutil.which", return_value="/bin/icat"),
+            patch(
+                "mulder.server.tools.extract.app_files.subprocess.run",
+                return_value=self._icat_returning(big),
+            ),
+        ):
+            content = _extract_and_read_file("/img.dd", "16", 0, max_size_bytes=1024)
+
+        assert content is None
+
+    def test_a_file_under_the_limit_is_read(self) -> None:
+        small = b"hello evidence"
+        with (
+            patch("mulder.server.tools.extract.app_files.shutil.which", return_value="/bin/icat"),
+            patch(
+                "mulder.server.tools.extract.app_files.subprocess.run",
+                return_value=self._icat_returning(small),
+            ),
+        ):
+            content = _extract_and_read_file("/img.dd", "16", 0, max_size_bytes=1024)
+
+        assert content == "hello evidence"
