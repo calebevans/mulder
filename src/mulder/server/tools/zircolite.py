@@ -103,7 +103,6 @@ def _run_zircolite_process(
         str(events_path),
         "--ruleset",
         str(ruleset_path),
-        "--json",
         "--outfile",
         str(output_file),
         *format_flags,
