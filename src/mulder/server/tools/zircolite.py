@@ -100,9 +100,11 @@ def _run_zircolite_process(
         str(events_path),
         "--ruleset",
         str(ruleset_path),
-        "--json",
         "--outfile",
         str(output_file),
+        # The input format is declared by format_flags alone. Zircolite has no
+        # --json option: seven of its options start with that prefix, so
+        # argparse rejects it as ambiguous before reading a single event.
         *format_flags,
     ]
 
