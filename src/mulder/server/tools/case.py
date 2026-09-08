@@ -30,6 +30,22 @@ logger = logging.getLogger(__name__)
 
 _EXTRACT_TIMEOUT = 600
 
+MAX_EXTRACT_MEMBERS = 200_000
+"""Cap on the number of members extracted from one archive."""
+
+MAX_EXTRACT_BYTES = 20 * 1024**3
+"""Cap on total uncompressed output: 20 GiB.
+
+Deliberately a total, not a per-member compression ratio.  Ratio caps cannot
+distinguish an attack from ordinary evidence -- a zeroed 64 MiB region of a
+disk image compresses about 1029x, and so does a freshly allocated VM memory
+dump.  Only the absolute size of what lands on disk is meaningful.
+"""
+
+
+class ArchiveLimitError(Exception):
+    """An archive exceeded a resource limit and was not fully extracted."""
+
 
 @mcp.tool()
 @tool_access(Role.CATALOG)
@@ -414,11 +430,31 @@ def _extract_zip(archive: Path, dest: Path) -> list[str]:
     """
     try:
         with zipfile.ZipFile(archive, "r") as zf:
-            for member in zf.namelist():
+            infos = zf.infolist()
+            if len(infos) > MAX_EXTRACT_MEMBERS:
+                raise ArchiveLimitError(
+                    f"{archive.name} declares {len(infos)} members, over the "
+                    f"limit of {MAX_EXTRACT_MEMBERS}"
+                )
+            declared = sum(i.file_size for i in infos)
+            if declared > MAX_EXTRACT_BYTES:
+                raise ArchiveLimitError(
+                    f"{archive.name} declares {declared} bytes uncompressed, over the "
+                    f"limit of {MAX_EXTRACT_BYTES // 1024**3} GiB"
+                )
+            written = 0
+            for info in infos:
+                member = info.filename
                 if member.startswith("/") or ".." in member:
                     logger.warning("Skipping unsafe zip entry: %r", member)
                     continue
                 zf.extract(member, dest)
+                written += info.file_size
+                if written > MAX_EXTRACT_BYTES:
+                    raise ArchiveLimitError(
+                        f"{archive.name} expands past the limit of "
+                        f"{MAX_EXTRACT_BYTES // 1024**3} GiB"
+                    )
     except (NotImplementedError, zipfile.BadZipFile):
         if not shutil.which("7z"):
             raise
@@ -441,6 +477,17 @@ def _safe_tar_filter(member: tarfile.TarInfo, path: str) -> tarfile.TarInfo | No
 def _extract_tar(archive: Path, dest: Path) -> list[str]:
     """Extract a tar/tar-compressed archive to *dest*; return relative file paths."""
     with tarfile.open(archive, "r:*") as tf:
+        total = 0
+        for count, member in enumerate(tf, start=1):
+            if count > MAX_EXTRACT_MEMBERS:
+                raise ArchiveLimitError(
+                    f"{archive.name} holds more than {MAX_EXTRACT_MEMBERS} members"
+                )
+            total += member.size
+            if total > MAX_EXTRACT_BYTES:
+                raise ArchiveLimitError(
+                    f"{archive.name} expands to more than {MAX_EXTRACT_BYTES // 1024**3} GiB"
+                )
         tf.extractall(dest, filter=_safe_tar_filter)
     return [str(f.relative_to(dest)) for f in dest.rglob("*") if f.is_file()]
 
@@ -559,6 +606,18 @@ def extract_archive(
                 (time.monotonic() - t0) * 1000,
                 error_type="unsupported_format",
             )
+    except ArchiveLimitError as exc:
+        # Whatever landed before the limit was hit stays on disk; say so rather
+        # than implying the destination is empty.
+        partial = [str(f.relative_to(dest)) for f in dest.rglob("*") if f.is_file()]
+        return error_response(
+            tc_id,
+            "extract_archive",
+            params,
+            f"{exc}. {len(partial)} file(s) were written to {dest} before the limit was reached.",
+            (time.monotonic() - t0) * 1000,
+            error_type="resource_limit",
+        )
     except Exception as exc:
         logger.error("Archive extraction failed for %r: %s", archive, exc)
         return error_response(
