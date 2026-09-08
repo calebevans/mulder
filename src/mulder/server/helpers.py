@@ -574,7 +574,9 @@ def run_cli_tool(
         check_exists: Optional file path to verify exists before running.
 
     Returns:
-        Standardized tool response dict (success or error).
+        Standardized tool response dict (success or error). A tool that exits
+        non-zero without writing anything to stdout is reported as an error
+        rather than indexed as an empty result.
     """
     import time
 
@@ -605,6 +607,17 @@ def run_cli_tool(
     if isinstance(result, str):
         return error_response(tc_id, tool_name, params, result, error_type="timeout")
     proc = result
+
+    if proc.returncode != 0 and not proc.stdout.strip():
+        detail = ((proc.stderr or "").strip() or (proc.stdout or "").strip())[:_PREVIEW_CHAR_LIMIT]
+        return error_response(
+            tc_id,
+            tool_name,
+            params,
+            f"{binary} exited {proc.returncode} and produced no output: {detail}",
+            (time.monotonic() - t0) * 1000,
+            error_type="tool_failed",
+        )
 
     summary = extract_and_index(proc.stdout.strip(), source_name, source_path, extractor_label)
     elapsed = (time.monotonic() - t0) * 1000
