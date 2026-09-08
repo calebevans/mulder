@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 _READPST_TIMEOUT = 600
 _READPST_BINARY = "/usr/bin/readpst"
+_STDERR_PREVIEW_CHARS = 500
 
 _SUSPICIOUS_EXTENSIONS: set[str] = {
     ".exe",
@@ -345,7 +346,7 @@ def parse_pst(
 
         pst_timeout = adaptive_timeout(file_path, base=_READPST_TIMEOUT)
         try:
-            subprocess.run(
+            proc = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
@@ -368,6 +369,17 @@ def parse_pst(
                 params,
                 f"Failed to execute readpst: {exc}",
                 (time.monotonic() - t0) * 1000,
+            )
+
+        if proc.returncode != 0 and not any(output_dir.rglob("*.eml")):
+            detail = (proc.stderr.strip() or proc.stdout.strip())[:_STDERR_PREVIEW_CHARS]
+            return error_response(
+                tc_id,
+                "parse_pst",
+                params,
+                f"readpst exited {proc.returncode} and extracted no messages: {detail}",
+                (time.monotonic() - t0) * 1000,
+                error_type="tool_failed",
             )
 
         result = _parse_extracted_emails(
