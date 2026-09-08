@@ -5,6 +5,7 @@ Tier 1 tools: help the agent orient before running any extractions.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import shutil
@@ -14,6 +15,7 @@ import time
 import zipfile
 from pathlib import Path
 
+from mulder.path_policy import PathPolicyError, resolve_allowed_path
 from mulder.server.app import (
     create_case,
     get_cfg,
@@ -452,6 +454,19 @@ def _extract_7z(archive: Path, dest: Path) -> list[str]:
     return [str(f.relative_to(dest)) for f in dest.rglob("*") if f.is_file()]
 
 
+def _archive_slot(archive: Path) -> str:
+    """Return a per-archive directory name that cannot collide.
+
+    ``archive.stem`` alone is ambiguous: two unrelated archives called
+    ``evidence.zip`` collect in the same slot, and the second call then takes
+    the "already extracted" path and reports the *first* archive's files as
+    its own.  Appending a digest of the resolved source path keeps the name
+    readable while making it unique to one archive on disk.
+    """
+    digest = hashlib.blake2b(str(archive).encode(), digest_size=6).hexdigest()
+    return f"{archive.stem}-{digest}"
+
+
 @mcp.tool()
 @tool_access(Role.CATALOG | Role.EXTRACT_EXECUTOR)
 def extract_archive(
@@ -489,11 +504,23 @@ def extract_archive(
             error_type="file_not_found",
         )
 
+    cfg = get_cfg()
+    extract_root = Path(cfg.db_dir) / "extracted"
+
     if extract_to:
-        dest = Path(extract_to).expanduser().resolve()
+        try:
+            dest = resolve_allowed_path(Path(extract_to).expanduser(), [extract_root])
+        except PathPolicyError as exc:
+            return error_response(
+                tc_id,
+                "extract_archive",
+                params,
+                f"{exc}: extract_to must stay under {extract_root}",
+                (time.monotonic() - t0) * 1000,
+                error_type="invalid_input",
+            )
     else:
-        cfg = get_cfg()
-        dest = cfg.db_dir / "extracted" / archive.stem
+        dest = extract_root / _archive_slot(archive)
 
     # Idempotent: if already extracted, return the existing files
     if dest.exists() and any(dest.iterdir()):
