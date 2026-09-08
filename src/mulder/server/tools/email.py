@@ -5,6 +5,7 @@ from __future__ import annotations
 import email as email_lib
 import email.parser
 import logging
+import re
 import subprocess
 import tempfile
 import time
@@ -54,6 +55,10 @@ _SUSPICIOUS_EXTENSIONS: set[str] = {
 
 _VALID_PST_SUFFIXES: set[str] = {".pst", ".ost"}
 
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_HTML_WS_RE = re.compile(r"[ \t]*\n[ \t]*")
+_SCRIPT_STYLE_RE = re.compile(r"(?is)<(script|style).*?</\1>")
+
 
 # ---------------------------------------------------------------------------
 # Parsing helpers
@@ -87,20 +92,56 @@ def _get_body(
     Returns:
         Body text or None if no matching part found.
     """
-    if msg.is_multipart():
-        for part in msg.walk():
-            if part.get_content_type() == content_type:
-                payload = part.get_payload(decode=True)
-                if isinstance(payload, bytes):
-                    charset = part.get_content_charset() or "utf-8"
-                    return payload.decode(charset, errors="replace")
-    else:
-        if msg.get_content_type() == content_type:
-            payload = msg.get_payload(decode=True)
-            if isinstance(payload, bytes):
-                charset = msg.get_content_charset() or "utf-8"
+    for part in msg.walk():
+        if part.is_multipart():
+            continue
+        # A text/plain *attachment* is evidence, but it is not the body.
+        if part.get_content_disposition() == "attachment":
+            continue
+        if part.get_content_type() != content_type:
+            continue
+        payload = part.get_payload(decode=True)
+        if isinstance(payload, bytes):
+            charset = part.get_content_charset() or "utf-8"
+            try:
                 return payload.decode(charset, errors="replace")
+            except LookupError:
+                # A charset the platform does not know must not lose the body.
+                return payload.decode("utf-8", errors="replace")
     return None
+
+
+def _html_to_text(html: str) -> str:
+    """Strip markup from an HTML body so its words are searchable."""
+    text = _SCRIPT_STYLE_RE.sub(" ", html)
+    text = _HTML_TAG_RE.sub(" ", text)
+    for entity, char in (
+        ("&nbsp;", " "),
+        ("&amp;", "&"),
+        ("&lt;", "<"),
+        ("&gt;", ">"),
+        ("&quot;", '"'),
+        ("&#39;", "'"),
+    ):
+        text = text.replace(entity, char)
+    return _HTML_WS_RE.sub("\n", text).strip()
+
+
+def _get_searchable_body(msg: email_lib.message.Message) -> str | None:
+    """The message body as text, whatever it was sent as.
+
+    ``text/plain`` when present, otherwise ``text/html`` with the markup
+    stripped. An HTML-only message -- which is most phishing -- previously
+    had no body at all, so no keyword could match it and nothing of its
+    content reached the case.
+    """
+    plain = _get_body(msg, "text/plain")
+    if plain and plain.strip():
+        return plain
+    html = _get_body(msg, "text/html")
+    if html and html.strip():
+        return _html_to_text(html)
+    return plain or html
 
 
 def _matches_search(
@@ -163,7 +204,7 @@ def _parse_email_message(
         "recipients_to": _parse_recipients(msg.get("To", "")),
         "recipients_cc": _parse_recipients(msg.get("Cc", "")),
         "date": msg.get("Date"),
-        "body_text": _get_body(msg, "text/plain"),
+        "body_text": _get_searchable_body(msg),
         "attachments": attachments,
         "folder": folder,
         "importance": msg.get("Importance", "normal"),
