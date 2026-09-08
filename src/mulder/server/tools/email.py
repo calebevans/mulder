@@ -8,6 +8,8 @@ import logging
 import subprocess
 import tempfile
 import time
+from email.errors import HeaderParseError
+from email.header import decode_header, make_header
 from pathlib import Path
 
 from mulder.server.app import mcp
@@ -58,6 +60,25 @@ _VALID_PST_SUFFIXES: set[str] = {".pst", ".ost"}
 # ---------------------------------------------------------------------------
 # Parsing helpers
 # ---------------------------------------------------------------------------
+
+
+def _decode_header_value(raw: str | None) -> str:
+    """Decode an RFC 2047 encoded header into text.
+
+    Subjects and display names arrive as ``=?utf-8?B?...?=`` whenever they
+    are not pure ASCII -- and any sender may choose the encoding even for
+    ASCII. Reading the header raw means the report shows base64 and a
+    keyword search for the words it contains cannot match.
+
+    Falls back to the raw value when the encoded word is malformed, so a
+    broken header loses nothing.
+    """
+    if not raw:
+        return ""
+    try:
+        return str(make_header(decode_header(raw)))
+    except (HeaderParseError, UnicodeDecodeError, LookupError, ValueError):
+        return raw
 
 
 def _parse_recipients(raw: str) -> list[str]:
@@ -158,8 +179,8 @@ def _parse_email_message(
 
     return {
         "message_id": msg.get("Message-ID"),
-        "subject": msg.get("Subject", "(no subject)"),
-        "sender": msg.get("From", ""),
+        "subject": _decode_header_value(msg.get("Subject")) or "(no subject)",
+        "sender": _decode_header_value(msg.get("From")),
         "recipients_to": _parse_recipients(msg.get("To", "")),
         "recipients_cc": _parse_recipients(msg.get("Cc", "")),
         "date": msg.get("Date"),
