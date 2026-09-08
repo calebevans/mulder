@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import html
 import json
 import logging
 import re
@@ -454,7 +455,7 @@ def _build_executive_summary(
     if tl:
         earliest, latest = _timeline_date_range(tl)
         if earliest and latest:
-            first_event = tl[0].title
+            first_event = html.escape(tl[0].title)
             first_ts = tl[0].event_time_start
             narrative = f"The attack timeline spans <strong>{earliest}</strong>"
             if earliest != latest:
@@ -466,14 +467,14 @@ def _build_executive_summary(
 
             crit_tl = [f for f in tl if f.severity == "critical"]
             if len(crit_tl) > 1:
-                mid_titles = [f.title for f in crit_tl[1:4]]
+                mid_titles = [html.escape(f.title) for f in crit_tl[1:4]]
                 narrative += (
                     " The investigation subsequently uncovered "
                     + "; ".join(f"<em>{t}</em>" for t in mid_titles)
                     + "."
                 )
 
-            last_event = tl[-1].title
+            last_event = html.escape(tl[-1].title)
             if len(tl) > 1 and last_event != first_event:
                 last_ts = tl[-1].event_time_start
                 narrative += f" The most recent activity was <em>{last_event}</em>"
@@ -483,7 +484,7 @@ def _build_executive_summary(
             sections.append(f"<p>{narrative}</p>")
 
     if critical_findings:
-        items = "".join(f"<li>{f.title}</li>" for f in critical_findings[:5])
+        items = "".join(f"<li>{html.escape(f.title)}</li>" for f in critical_findings[:5])
         sections.append(
             f'<div class="exec-threats"><strong>Key Threats</strong><ul>{items}</ul></div>'
         )

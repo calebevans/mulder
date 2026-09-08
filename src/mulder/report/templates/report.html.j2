@@ -618,7 +618,7 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
 
   <div class="exec-summary">
     <div class="exec-summary-label">Executive Summary</div>
-    <p>{{ executive_summary }}</p>
+    <p>{{ executive_summary | safe }}</p>
   </div>
 
   <div class="stats-grid stagger-in">
