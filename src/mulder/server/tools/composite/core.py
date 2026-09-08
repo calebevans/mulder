@@ -246,7 +246,19 @@ def _keyword_sub_query(
 ) -> tuple[list[WindowRow], str]:
     """Run a keyword search as a logged sub-call, return (windows, tool_call_id).
 
-    Searches raw_text for *query* as a case-insensitive substring.
+    *query* is a bag of keywords, not a phrase and not a substring: every one
+    of this function's callers passes something like ``"failed logon event
+    4625 authentication failure brute force"``, meaning "windows about any of
+    this, most relevant first". It is therefore run with ``match="any"``,
+    which ORs the terms and orders by FTS5's bm25 rank.
+
+    Under FTS5's implicit AND all seven of those terms had to appear in one
+    4096-character window, so these searches returned nothing at all. Plain
+    OR would not have been enough either: ordered by ``event_time`` and cut
+    at *k*, the caller would get an arbitrary sample of every window
+    containing the word "event", and the callers' own filters (``"4625" in
+    raw_text``) would discard nearly all of it.
+
     Falls back to searching all sources when the requested source doesn't
     exist in the case database.
     """
@@ -255,7 +267,9 @@ def _keyword_sub_query(
     t0 = time.monotonic()
 
     effective_source = source_name if source_name and _source_exists(source_name) else None
-    results = ctx.db.search_windows(query, source_name=effective_source, max_results=k)
+    results = ctx.db.search_windows(
+        query, source_name=effective_source, max_results=k, match="any"
+    )
     windows = [w for w, _sname in results]
 
     actual_label = effective_source or "all"
@@ -263,7 +277,12 @@ def _keyword_sub_query(
     ctx.audit.log_tool_call(
         tool_call_id=tc_id,
         tool_name=f"{tool_name}._search({actual_label})",
-        params={"query": query, "source": effective_source, "max_results": k},
+        params={
+            "query": query,
+            "source": effective_source,
+            "max_results": k,
+            "match": "any",
+        },
         output_hash=hash_output({"count": len(windows)}),
         duration_ms=elapsed,
     )
