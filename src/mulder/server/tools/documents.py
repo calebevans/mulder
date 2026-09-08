@@ -148,6 +148,11 @@ _SUSPICIOUS_JS_FUNCTIONS: list[str] = [
 #: Everything above it is banner/log noise.
 _MSODDE_LINK_MARKER = "DDE Links:"
 
+# pdfid keyword rows end in the total count, optionally followed by the
+# hex-obfuscated tally in parentheses: "1", or "1(1)" when the name was
+# written as e.g. /J#61vaScript.
+_PDFID_COUNT_RE = re.compile(r"^(?P<total>\d+)(?:\((?P<hexcode>\d+)\))?$")
+
 
 def _parse_msodde_output(stdout: str) -> list[dict[str, object]]:
     """Extract DDE links from msodde's output.
@@ -418,6 +423,12 @@ def _run_pdfid(file_path: Path) -> list[dict[str, object]]:
 def _extract_pdfid_count(line: str) -> int:
     """Extract the numeric count from a pdfid output line.
 
+    pdfid formats a keyword row as ``' %-16s %7d'`` and, when any occurrence
+    of the name was written with a hex-escaped character, appends the
+    hex-encoded tally as ``'(%d)'`` with no separating space -- so a name that
+    an attacker obfuscated arrives as ``/JavaScript            1(1)``. The
+    total count is the part before that suffix; it must not be discarded.
+
     Args:
         line: A single line from pdfid output.
 
@@ -425,12 +436,12 @@ def _extract_pdfid_count(line: str) -> int:
         Integer count value, or 0 if not parseable.
     """
     parts = line.rsplit(None, 1)
-    if len(parts) == 2:
-        try:
-            return int(parts[1])
-        except ValueError:
-            return 0
-    return 0
+    if len(parts) != 2:
+        return 0
+    match = _PDFID_COUNT_RE.match(parts[1])
+    if match is None:
+        return 0
+    return int(match.group("total"))
 
 
 def _extract_pdf_javascript(file_path: Path) -> list[dict[str, object]]:
