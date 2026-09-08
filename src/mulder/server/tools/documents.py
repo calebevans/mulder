@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _OLEVBA_TIMEOUT = 120
+_STDERR_PREVIEW_CHARS = 500
 _PDFID_TIMEOUT = 60
 _PDF_PARSER_TIMEOUT = 120
 
@@ -221,7 +222,9 @@ def _analyze_macros_olevba(
 
     Raises:
         subprocess.TimeoutExpired: If olevba exceeds the timeout.
-        OSError: If olevba cannot be executed or exits non-zero with no output.
+        OSError: If olevba cannot be executed, or exits non-zero without
+            producing a usable result -- no output at all, output that is not
+            JSON, or JSON whose only content is olevba's own error records.
     """
     # oletools is a mulder dependency, so its console scripts live in mulder's
     # own venv bin/ — which pipx does not link onto PATH.  Invoke the module.
@@ -249,6 +252,11 @@ def _analyze_macros_olevba(
     try:
         raw: Any = json.loads(output)
     except json.JSONDecodeError:
+        if proc.returncode != 0:
+            raise OSError(
+                f"olevba failed (exit {proc.returncode}) and its output was not JSON: "
+                f"{output[:_STDERR_PREVIEW_CHARS]}"
+            ) from None
         logger.warning("Failed to parse olevba JSON output for %s", file_path)
         return [], [], False
 
@@ -291,6 +299,17 @@ def _analyze_macros_olevba(
             )
             if indicator.get("type") in ("VBA", "AutoExec", "Suspicious"):
                 has_vba = True
+
+    # olevba reports its own failures as JSON records on stdout and still exits
+    # non-zero (5 for an unreadable file, 3 for a missing one), so the
+    # stdout-emptiness test above cannot catch them.  Without this, a document
+    # olevba could not open is returned as a clean, macro-free document.
+    errors = [r for r in results if r.get("type") == "error"]
+    if proc.returncode != 0 and errors and not macros and not indicators:
+        detail = "; ".join(
+            f"{e.get('error', 'error')}: {e.get('message', '')}".strip() for e in errors
+        )
+        raise OSError(f"olevba failed (exit {proc.returncode}): {detail[:_STDERR_PREVIEW_CHARS]}")
 
     return macros, indicators, has_vba
 
@@ -673,6 +692,7 @@ def analyze_office_document(
             params,
             f"Failed to execute olevba: {exc}",
             (time.monotonic() - t0) * 1000,
+            error_type="tool_failed",
         )
 
     risk = _assess_office_risk(macros, has_vba)
