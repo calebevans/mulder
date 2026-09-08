@@ -342,7 +342,7 @@ def _parse_chainsaw_hunt_results(results_path: Path) -> dict[str, Any]:
         )
 
     return {
-        "detections": detections[:500],
+        "detections": detections,
         "total_findings": len(detections),
         "severity_counts": severity_counts,
         "mitre_techniques": sorted(mitre_techniques),
@@ -382,7 +382,7 @@ def _parse_chainsaw_srum_results(results_path: Path) -> dict[str, Any]:
         )
 
     return {
-        "srum_entries": entries[:500],
+        "srum_entries": entries,
         "total_entries": len(entries),
     }
 
@@ -408,9 +408,63 @@ def _parse_chainsaw_timeline_results(results_path: Path) -> dict[str, Any]:
         raw = [raw] if raw else []
 
     return {
-        "timeline_entries": raw[:1000],
+        "timeline_entries": raw,
         "total_entries": len(raw),
     }
+
+
+_RESPONSE_RECORD_CAP = 500
+
+
+def _detection_lines(result: dict[str, Any], mode: str) -> list[str]:
+    """One searchable line per record, for the case DB.
+
+    Only counts used to be indexed, so the detections themselves -- rule names,
+    computers, event IDs, SRUM process names -- were never searchable.  This is
+    deliberately a module-local helper rather than a shared formatter: the
+    fields worth indexing differ per tool.
+    """
+    lines: list[str] = []
+    if mode in ("hunt", "search"):
+        for d in result.get("detections", []):
+            lines.append(
+                " | ".join(
+                    str(part)
+                    for part in (
+                        d.get("timestamp", ""),
+                        d.get("rule_level", ""),
+                        d.get("rule_name", ""),
+                        d.get("computer", ""),
+                        d.get("channel", ""),
+                        f"EventID={d.get('event_id', '')}",
+                        d.get("sigma_id", ""),
+                        " ".join(d.get("mitre_attack", []) or []),
+                    )
+                    if str(part)
+                )
+            )
+    elif mode == "srum":
+        for e in result.get("srum_entries", []):
+            lines.append(
+                " | ".join(str(v) for v in e.values() if str(v)) if isinstance(e, dict) else str(e)
+            )
+    else:
+        for e in result.get("timeline_entries", []):
+            lines.append(
+                " | ".join(str(v) for v in e.values() if str(v)) if isinstance(e, dict) else str(e)
+            )
+    return [line for line in lines if line.strip()]
+
+
+def _cap_records(result: dict[str, Any]) -> dict[str, Any]:
+    """Trim the record lists in the *response* only, never before indexing."""
+    capped = dict(result)
+    for key in ("detections", "srum_entries", "timeline_entries"):
+        records = capped.get(key)
+        if isinstance(records, list) and len(records) > _RESPONSE_RECORD_CAP:
+            capped[key] = records[:_RESPONSE_RECORD_CAP]
+            capped[f"{key}_truncated"] = True
+    return capped
 
 
 @mcp.tool()
@@ -589,8 +643,10 @@ def run_chainsaw(
         else:
             text_parts.append(f"Timeline entries: {result.get('total_entries', 0)}")
 
+        text_parts.extend(_detection_lines(result, mode))
+
         summary = extract_and_index("\n".join(text_parts), source_name, evidence_path, "chainsaw")
-        summary.update(result)
+        summary.update(_cap_records(result))
 
     elapsed = (time.monotonic() - t0) * 1000
     return tool_response(tc_id, "run_chainsaw", params, summary, source_name, elapsed)
