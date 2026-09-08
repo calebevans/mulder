@@ -62,6 +62,57 @@ _FORMAT_FLAGS: dict[str, list[str]] = {
 
 _LEVEL_ORDER = ["informational", "low", "medium", "high", "critical"]
 
+# How many detections the tool response carries back. The index is not bounded
+# by this: every detection is indexed, and the list is truncated only for the
+# response, which tool_response reduces to a preview anyway.
+_MAX_RESPONSE_DETECTIONS = 500
+
+# Field order for the indexed lines. Timestamp first, so the per-window
+# timestamp extraction in extract_and_index picks up the detection's own time
+# rather than the first timestamp that happens to appear in the window.
+_DETECTION_FIELDS = (
+    "timestamp",
+    "rule_level",
+    "rule_title",
+    "rule_id",
+    "count",
+    "mitre_attack",
+    "rule_description",
+    "matched_fields",
+)
+
+# matched_fields carries the whole matched event. Long enough to keep the
+# fields an analyst searches for (process image, command line, user), short
+# enough that one detection cannot fill a 4096-character index window.
+_FIELD_CHARS = 2000
+
+
+def _detection_field(value: object) -> str:
+    """Render one detection field as a single-line, bounded string."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        text = value
+    elif isinstance(value, bool | int | float):
+        text = str(value)
+    else:
+        text = json.dumps(value, default=str, separators=(",", ":"), sort_keys=True)
+    return text.replace("\t", " ").replace("\r", " ").replace("\n", " ")[:_FIELD_CHARS]
+
+
+def _detection_lines(detections: list[dict[str, Any]]) -> list[str]:
+    """Render detections as one tab-separated line each, for indexing.
+
+    ``extract_and_index`` stores exactly the text it is handed, so handing it a
+    count stored a count. One line per detection matters twice over: the window
+    builder splits on line boundaries, so no detection is cut in half, and
+    timestamp extraction runs per window rather than finding a single timestamp
+    for a whole summary.
+    """
+    return [
+        "\t".join(_detection_field(d.get(name)) for name in _DETECTION_FIELDS) for d in detections
+    ]
+
 
 def _missing_zircolite_modules() -> list[str]:
     """Return Zircolite dependencies not importable from mulder's interpreter."""
@@ -238,7 +289,9 @@ def _parse_zircolite_output(
     return {
         "events_path": events_path,
         "log_format": log_format,
-        "detections": detections[:500],
+        # Not truncated here: run_zircolite indexes every detection before
+        # bounding the list for the response.
+        "detections": detections,
         "total_detections": len(detections),
         "total_events_processed": sum(level_counts.values()),
         "level_counts": level_counts,
@@ -401,9 +454,19 @@ def run_zircolite(
             for tactic, techniques in result["mitre_coverage"].items():
                 text_parts.append(f"  {tactic}: {', '.join(techniques[:5])}")
 
+        # Index the detections themselves, not just how many there were: the
+        # source is called "zircolite.detections", so a search over the case
+        # must be able to find a rule title, a MITRE technique or a matched
+        # field, none of which the header lines above contain.
+        detections: list[dict[str, Any]] = result["detections"]
+        text_parts.extend(_detection_lines(detections))
+
         summary = extract_and_index(
             "\n".join(text_parts), "zircolite.detections", events_path, "zircolite"
         )
+
+        # The index holds every detection; the response stays bounded.
+        result["detections"] = detections[:_MAX_RESPONSE_DETECTIONS]
         summary.update(result)
 
     elapsed = (time.monotonic() - t0) * 1000
