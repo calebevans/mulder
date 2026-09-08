@@ -8,6 +8,7 @@ import logging
 import subprocess
 import tempfile
 import time
+from email.utils import getaddresses
 from pathlib import Path
 
 from mulder.server.app import mcp
@@ -61,17 +62,34 @@ _VALID_PST_SUFFIXES: set[str] = {".pst", ".ost"}
 
 
 def _parse_recipients(raw: str) -> list[str]:
-    """Parse a comma-separated recipient string into individual addresses.
+    """Parse a To/Cc header into individual addresses.
+
+    Splitting on "," is wrong, because a display name may legitimately
+    contain one. ``"Doe, John" <john@example.com>, jane@example.com`` split
+    that way yields ``'"Doe'``, ``'John" <john@example.com>'`` and
+    ``'jane@example.com'`` -- the first is not an address at all and the
+    second is mangled, so recipient search and address extraction both miss
+    them. RFC 5322 quoting is what ``email.utils.getaddresses`` exists for.
 
     Args:
-        raw: Raw To/CC header value.
+        raw: Raw To/Cc header value.
 
     Returns:
-        List of individual email addresses or display names.
+        One entry per recipient: ``Display Name <addr>`` when a name is
+        present, the bare address otherwise.
     """
     if not raw:
         return []
-    return [r.strip() for r in raw.split(",") if r.strip()]
+    out: list[str] = []
+    for name, addr in getaddresses([raw]):
+        display = name.strip()
+        if addr and display:
+            out.append(f"{display} <{addr}>")
+        elif addr:
+            out.append(addr)
+        elif display:
+            out.append(display)
+    return out
 
 
 def _get_body(
