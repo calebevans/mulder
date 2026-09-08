@@ -931,7 +931,10 @@ def run_capa(
             error_type="file_not_found",
         )
 
-    cmd = [capa_bin, "--format", "json", "--quiet"]
+    # -f/--format selects capa's *input* format (auto/pe/elf/sc32/...); JSON
+    # output is -j/--json. Passing "json" to --format is an invalid choice and
+    # capa exits 2 from argparse before it opens the sample.
+    cmd = [capa_bin, "--json", "--quiet"]
     if rules_path:
         if not Path(rules_path).exists():
             return error_response(
@@ -1070,16 +1073,22 @@ def run_floss(
             error_type="file_not_found",
         )
 
+    # As with capa, -f/--format is FLOSS's *input* format (auto/pe/sc32/sc64)
+    # and JSON output is -j/--json.
     cmd = [
         floss_bin,
-        "--format",
-        "json",
+        "--json",
         "--minimum-length",
         str(minimum_length),
+        # The sample must precede --no/--only: both are nargs="+" with
+        # `choices`, so argparse otherwise consumes the sample path as one of
+        # their values and exits 2 on an invalid choice.
+        str(target),
     ]
     if not include_static:
-        cmd.append("--only")
-    cmd.append(str(target))
+        # Skipping static extraction is "--no static"; a bare "--only" is not
+        # a valid invocation, since --only requires at least one analysis type.
+        cmd.extend(["--no", "static"])
 
     floss_timeout = adaptive_timeout(file_path, base=_FLOSS_TIMEOUT)
     try:
