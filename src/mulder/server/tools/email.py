@@ -149,11 +149,19 @@ def _parse_email_message(
     has_suspicious = False
 
     for part in msg.walk():
-        if part.get_content_disposition() == "attachment":
-            filename = part.get_filename() or "unnamed"
-            attachments.append(filename)
-            ext = Path(filename).suffix.lower()
-            if ext in _SUSPICIOUS_EXTENSIONS:
+        if part.is_multipart():
+            continue
+        filename = part.get_filename()
+        disposition = part.get_content_disposition()
+        # An attachment is anything carrying a filename, not only what
+        # declares `Content-Disposition: attachment`. Malicious payloads
+        # arrive as `inline`, or with no disposition header at all, and both
+        # were previously invisible -- including to the suspicious-extension
+        # check, which is the point of this function.
+        if disposition == "attachment" or filename:
+            name = filename or "unnamed"
+            attachments.append(name)
+            if Path(name).suffix.lower() in _SUSPICIOUS_EXTENSIONS:
                 has_suspicious = True
 
     return {
