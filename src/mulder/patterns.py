@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import ipaddress
+import os
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 IP_RE: re.Pattern[str] = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 
@@ -44,6 +46,29 @@ DISK_IMAGE_EXTS: frozenset[str] = frozenset(
 )
 
 DEFAULT_DB_DIR: str = "~/.mulder/cases"
+
+#: Environment variable carrying the case-database directory to subprocesses.
+#: ``mulder investigate`` spawns agent sessions which spawn their own
+#: ``mulder serve``; without this the child server falls back to the default
+#: directory and writes the case somewhere ``mulder report --db-dir`` will
+#: never look. Mirrors the existing ``MULDER_CWD`` convention.
+DB_DIR_ENV_VAR: str = "MULDER_DB_DIR"
+
+
+def resolve_db_dir(db_dir: str | Path | None = None) -> Path:
+    """Resolve the case-database directory.
+
+    Args:
+        db_dir: An explicit directory. When *None* or empty, falls back to
+            ``$MULDER_DB_DIR`` and then to :data:`DEFAULT_DB_DIR`.
+
+    Returns:
+        The expanded directory. Never ``~``-relative, so callers can compare
+        and join paths without expanding again.
+    """
+    chosen = str(db_dir) if db_dir else (os.environ.get(DB_DIR_ENV_VAR) or DEFAULT_DB_DIR)
+    return Path(chosen).expanduser()
+
 
 DEFAULT_WORKSPACE_DIR: str = "~/.mulder/workspace"
 """Default working directory for agent sessions on a native install.

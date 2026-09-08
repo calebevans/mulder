@@ -46,7 +46,11 @@ from mulder.orchestrator.types import (
     PhaseResult,
     extract_catalog_result,
 )
-from mulder.patterns import DEFAULT_DB_DIR, DEFAULT_WORKSPACE_DIR
+from mulder.patterns import (
+    DB_DIR_ENV_VAR,
+    DEFAULT_WORKSPACE_DIR,
+    resolve_db_dir,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +78,7 @@ class Orchestrator:
         parallel_extractions: int = 3,
         proxy_config: str | None = None,
         case_id: str = "",
+        db_dir: str | Path = "",
     ) -> None:
         """Initialize the orchestrator.
 
@@ -90,6 +95,10 @@ class Orchestrator:
                 custom model routing.
             case_id: Case identifier used for the database filename and
                 referenced by all phases.
+            db_dir: Directory holding the case database, its audit log and
+                the run's sidecar files. Exported to agent sessions so the
+                MCP servers they spawn write to the same place. Falls back to
+                ``$MULDER_DB_DIR`` and then the default when not given.
         """
         self.evidence_path = evidence_path
         self.cwd = str(cwd)
@@ -97,6 +106,10 @@ class Orchestrator:
         self.effort = effort
         self.env = env or {}
         self._case_id: str = case_id
+        self._db_dir = resolve_db_dir(db_dir)
+        # Agent sessions spawn their own `mulder serve`; without this the
+        # child server writes the case to the default directory instead.
+        self.env[DB_DIR_ENV_VAR] = str(self._db_dir)
         if self._case_id:
             self.env["MULDER_CASE_ID"] = self._case_id
         self._last_session_id: str = ""
@@ -128,10 +141,10 @@ class Orchestrator:
             cwd=self.cwd,
         )
         self._evidence = EvidenceContext(evidence_path=evidence_path)
-        self._server = ServerBridge(case_id=self._case_id)
+        self._server = ServerBridge(case_id=self._case_id, db_dir=self._db_dir)
         self._log_tailer = LogTailer(
             dashboard=self.dashboard,
-            log_path=Path(DEFAULT_DB_DIR).expanduser() / "mulder.log",
+            log_path=self._db_dir / "mulder.log",
         )
 
     async def run(self) -> InvestigationResult:
@@ -816,8 +829,7 @@ class Orchestrator:
         if not model_data or not self._case_id:
             return
 
-        db_dir = Path("~/.mulder/cases").expanduser()
-        usage_path = db_dir / f"{self._case_id}.model_usage.json"
+        usage_path = self._db_dir / f"{self._case_id}.model_usage.json"
         try:
             entries = []
             for model_name, counts in sorted(model_data.items()):
