@@ -267,6 +267,11 @@ def run_hayabusa(
         resolved_dir,
         "-o",
         out_path,
+        # out_path is pre-created above by NamedTemporaryFile, and Hayabusa
+        # refuses to write over an existing file unless --clobber is given:
+        # it prints "The file ... already exists" to stderr, writes nothing,
+        # and still exits 0. Without this flag no scan ever runs.
+        "--clobber",
         "-p",
         "super-verbose",
         "--no-wizard",
