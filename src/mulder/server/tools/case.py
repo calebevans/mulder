@@ -5,6 +5,7 @@ Tier 1 tools: help the agent orient before running any extractions.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -12,6 +13,7 @@ import subprocess
 import tarfile
 import time
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 from mulder.server.app import (
@@ -29,6 +31,14 @@ from mulder.server.tool_access import ALL_ROLES, Role, tool_access
 logger = logging.getLogger(__name__)
 
 _EXTRACT_TIMEOUT = 600
+
+_COMPLETION_MARKER = ".mulder-extraction-complete.json"
+"""Written only after an extraction runs to completion.
+
+The presence of *files* in a destination proves only that an extraction
+started.  A run killed by a timeout, a full disk or a crash leaves a partial
+tree behind that is indistinguishable from a finished one by that test.
+"""
 
 
 @mcp.tool()
@@ -452,6 +462,44 @@ def _extract_7z(archive: Path, dest: Path) -> list[str]:
     return [str(f.relative_to(dest)) for f in dest.rglob("*") if f.is_file()]
 
 
+def _extraction_is_complete(dest: Path, archive: Path) -> bool:
+    """Return True only if *dest* holds a finished extraction of *archive*."""
+    marker = dest / _COMPLETION_MARKER
+    if not marker.is_file():
+        return False
+    try:
+        recorded = json.loads(marker.read_text())
+    except (OSError, json.JSONDecodeError):
+        return False
+    return bool(recorded.get("archive") == str(archive))
+
+
+def _mark_extraction_complete(dest: Path, archive: Path, file_count: int) -> None:
+    """Record that *archive* was fully extracted into *dest*."""
+    try:
+        (dest / _COMPLETION_MARKER).write_text(
+            json.dumps(
+                {
+                    "archive": str(archive),
+                    "file_count": file_count,
+                    "completed_utc": datetime.now(timezone.utc).isoformat(),
+                },
+                indent=2,
+            )
+        )
+    except OSError as exc:
+        logger.warning("Could not write extraction marker in %s: %s", dest, exc)
+
+
+def _extracted_files(dest: Path) -> list[str]:
+    """List extracted files, excluding mulder's own completion marker."""
+    return [
+        str(f.relative_to(dest))
+        for f in dest.rglob("*")
+        if f.is_file() and f.name != _COMPLETION_MARKER
+    ]
+
+
 @mcp.tool()
 @tool_access(Role.CATALOG | Role.EXTRACT_EXECUTOR)
 def extract_archive(
@@ -495,9 +543,10 @@ def extract_archive(
         cfg = get_cfg()
         dest = cfg.db_dir / "extracted" / archive.stem
 
-    # Idempotent: if already extracted, return the existing files
-    if dest.exists() and any(dest.iterdir()):
-        existing_files = [str(f.relative_to(dest)) for f in dest.rglob("*") if f.is_file()]
+    # Idempotent, but only for an extraction that actually finished.  A
+    # non-empty directory may be the debris of a run that died partway.
+    if _extraction_is_complete(dest, archive):
+        existing_files = _extracted_files(dest)
         result: dict[str, object] = {
             "tool_call_id": tc_id,
             "status": "already_extracted",
@@ -593,6 +642,10 @@ def extract_archive(
     for mi in manifest:
         t = str(mi["artifact_type"])
         type_counts[t] = type_counts.get(t, 0) + 1
+
+    # Written last: the marker is mulder's own bookkeeping, so it must not be
+    # on disk while the classifier is walking the tree for evidence.
+    _mark_extraction_complete(dest, archive, len(files))
 
     result = {
         "tool_call_id": tc_id,
