@@ -8,6 +8,8 @@ import logging
 import subprocess
 import tempfile
 import time
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 from mulder.server.app import mcp
@@ -132,6 +134,58 @@ def _matches_search(
     return any(term in r.lower() for r in recipients)
 
 
+def _message_date(raw: str | None) -> datetime | None:
+    """Parse an RFC 5322 ``Date`` header into an aware datetime.
+
+    Returns None when the header is absent or malformed, which the caller
+    treats as "cannot be excluded" rather than "excluded".
+    """
+    if not raw:
+        return None
+    try:
+        parsed = parsedate_to_datetime(raw)
+    except (TypeError, ValueError):
+        return None
+    if parsed is None:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _in_date_range(raw: str | None, start: str | None, end: str | None) -> bool:
+    """Whether a message's ``Date`` falls in an inclusive YYYY-MM-DD range.
+
+    The ``Date`` header is RFC 5322 -- ``Mon, 11 Mar 2024 09:14:02 +0100`` --
+    and was previously compared against the bounds as a plain string.
+    ``"Mon, ..." > "2024-12-31"`` is true for every message ever sent,
+    because ``M`` (77) sorts above every digit (48-57), so ``date_end``
+    discarded the whole mailbox while ``date_start`` discarded nothing.
+
+    A message whose date is missing or unparseable is kept: a malformed
+    header must not silently hide evidence.
+    """
+    if not start and not end:
+        return True
+    when = _message_date(raw)
+    if when is None:
+        return True
+    day = when.date()
+    if start:
+        try:
+            if day < datetime.strptime(start, "%Y-%m-%d").date():
+                return False
+        except ValueError:
+            pass
+    if end:
+        try:
+            if day > datetime.strptime(end, "%Y-%m-%d").date():
+                return False
+        except ValueError:
+            pass
+    return True
+
+
 def _parse_email_message(
     msg: email_lib.message.Message,
     folder: str,
@@ -214,10 +268,7 @@ def _parse_extracted_emails(
 
         parsed = _parse_email_message(msg, folder)
 
-        date_val = str(parsed.get("date") or "")
-        if date_start and date_val and date_val < date_start:
-            continue
-        if date_end and date_val and date_val > date_end:
+        if not _in_date_range(str(parsed.get("date") or ""), date_start, date_end):
             continue
 
         if search_term:
