@@ -452,6 +452,60 @@ def _assess_timestamp(raw_ts: str | None, bintype: str = "") -> dict[str, object
     }
 
 
+def _triage_findings_text(
+    file_info: dict[str, object],
+    timestamp: dict[str, object],
+    packing_indicators: list[str],
+    suspicious_imports: dict[str, list[str]],
+    verdict: dict[str, object],
+) -> str:
+    """Render the derived triage analysis as searchable text.
+
+    Everything here is computed from the raw rabin2 output and was then
+    discarded: only the raw JSON was indexed, so an analyst searching the case
+    for ``UPX`` or ``VirtualAllocEx`` could not find the tool's own conclusion
+    about the binary.
+
+    Args:
+        file_info: Parsed ``rabin2 -I`` metadata.
+        timestamp: The compilation-timestamp assessment.
+        packing_indicators: Packing signals detected.
+        suspicious_imports: Suspicious APIs grouped by category.
+        verdict: The computed classification.
+
+    Returns:
+        A text block, one finding per line.
+    """
+    lines = [
+        "Triage verdict: "
+        f"{verdict.get('classification', 'unknown')} "
+        f"(confidence {verdict.get('confidence', 'unknown')})"
+    ]
+    reasons = verdict.get("reasons")
+    if isinstance(reasons, list):
+        lines.extend(f"Reason: {reason}" for reason in reasons)
+
+    lines.append(
+        f"Format: {file_info.get('arch', '?')} {file_info.get('bits', '?')}-bit "
+        f"{file_info.get('os', '?')}"
+    )
+    compiler = file_info.get("compiler")
+    if compiler:
+        lines.append(f"Compiler: {compiler}")
+
+    lines.append(
+        f"Compilation timestamp: {timestamp.get('parsed_utc') or 'none'} "
+        f"[{timestamp.get('validity', 'unknown')}]"
+    )
+
+    lines.extend(f"Packing indicator: {indicator}" for indicator in packing_indicators)
+
+    for category, apis in suspicious_imports.items():
+        lines.append(f"Suspicious imports ({category}): {', '.join(str(a) for a in apis)}")
+
+    return "\n".join(lines)
+
+
 def _compute_verdict(
     packing_indicators: list[str],
     suspicious_imports: dict[str, list[str]],
@@ -855,7 +909,22 @@ def triage_binary(
 
     verdict = _compute_verdict(packing_indicators, suspicious_imports, timestamp, sections)
 
-    combined_output = "\n\n".join(raw_parts)
+    # The derived analysis has to be indexed too, not only the raw rabin2 JSON.
+    # Once a source is given, tool_response replaces the results dict with a
+    # short preview, so the verdict, the packing indicators and the suspicious
+    # imports do not reach the caller in the response; if they are not in the
+    # indexed text either, search(source="binary.triage") cannot recover them
+    # and the analysis exists only inside this function. It goes first so that
+    # the conclusion, rather than the head of a JSON dump, is what a preview
+    # and a keyword search both land on.
+    combined_output = "\n\n".join(
+        [
+            _triage_findings_text(
+                file_info, timestamp, packing_indicators, suspicious_imports, verdict
+            ),
+            *raw_parts,
+        ]
+    )
     summary = extract_and_index(combined_output, "binary.triage", file_path, "rabin2")
 
     summary["file_info"] = file_info
