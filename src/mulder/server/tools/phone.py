@@ -1005,6 +1005,48 @@ def _parse_tsv_file(tsv_path: Path) -> list[dict[str, str]]:
     return records
 
 
+_LEAPP_TSV_DIRNAME = "_TSV Exports"
+
+
+def _find_leapp_tsv_dir(output_dir: Path) -> Path | None:
+    """Locate the directory ALEAPP/iLEAPP wrote their TSV exports into.
+
+    Both tools create a timestamped report folder under the ``-o`` path and
+    write every TSV into a ``_TSV Exports`` directory inside it, so the layout
+    is ``<output_dir>/<TOOL>_Output_<timestamp>/_TSV Exports/*.tsv``. Looking
+    directly under *output_dir* finds nothing at all.
+
+    Args:
+        output_dir: The directory passed to the tool as ``-o``.
+
+    Returns:
+        The directory holding the ``.tsv`` files, or None if there is none.
+    """
+    nested = sorted(
+        (d for d in output_dir.glob(f"*/{_LEAPP_TSV_DIRNAME}") if d.is_dir()),
+        key=lambda d: d.parent.name,
+    )
+    if nested:
+        # A fresh temporary directory holds one run, but sort by the report
+        # folder's timestamped name so the newest wins if a caller reuses one.
+        return nested[-1]
+
+    direct = output_dir / _LEAPP_TSV_DIRNAME
+    if direct.is_dir():
+        return direct
+
+    # Older layouts, and anything that drops the files straight in.
+    legacy = output_dir / "tsv"
+    if legacy.is_dir():
+        return legacy
+    for candidate in sorted(output_dir.iterdir()) if output_dir.is_dir() else []:
+        if candidate.is_dir() and (candidate / "tsv").is_dir():
+            return candidate / "tsv"
+    if output_dir.is_dir() and any(output_dir.glob("*.tsv")):
+        return output_dir
+    return None
+
+
 def _parse_leapp_output(
     output_dir: Path,
     platform: str,
@@ -1030,16 +1072,8 @@ def _parse_leapp_output(
     categories: dict[str, int] = {}
     total_records = 0
 
-    tsv_dir = output_dir / "tsv"
-    if not tsv_dir.exists():
-        for candidate in output_dir.iterdir():
-            if candidate.is_dir() and (candidate / "tsv").exists():
-                tsv_dir = candidate / "tsv"
-                break
-        else:
-            tsv_dir = output_dir
-
-    tsv_files = sorted(tsv_dir.glob("*.tsv")) if tsv_dir.exists() else []
+    tsv_dir = _find_leapp_tsv_dir(output_dir)
+    tsv_files = sorted(tsv_dir.glob("*.tsv")) if tsv_dir is not None else []
 
     for tsv_file in tsv_files:
         artifact_type = tsv_file.stem
