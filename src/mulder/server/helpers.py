@@ -60,9 +60,17 @@ def readonly_sqlite_uri(db_path: Path | str) -> str:
         ``%_f`` is not a valid escape and is left alone. The bug is not "any
         percent sign", it is a percent sign in front of two hex digits.)
 
-    Escaping the path fixes all three: the file that is opened is the file that
-    was named, it is opened read-only, and nothing is written into the evidence
-    tree.
+    ``//tmp/case/sms.db``
+        A path may legally begin with exactly two slashes, and ``file://`` is
+        the start of a URI authority. SQLite reads ``tmp`` as a hostname and
+        refuses the connection with ``invalid uri authority: tmp``. This is
+        why the separators have to be escaped as well -- ``quote`` leaves
+        ``/`` alone by default, which fixes the filename but not the path.
+
+    Escaping the whole path fixes all four: the file that is opened is the
+    file that was named, it is opened read-only, and nothing is written into
+    the evidence tree. SQLite percent-decodes the path before using it, so
+    ``file:%2Ftmp%2Fcase%2Fsms.db`` names ``/tmp/case/sms.db`` exactly.
 
     Args:
         db_path: Path to the SQLite database.
@@ -70,7 +78,7 @@ def readonly_sqlite_uri(db_path: Path | str) -> str:
     Returns:
         A ``file:`` URI to pass to ``sqlite3.connect(..., uri=True)``.
     """
-    return "file:" + quote(str(db_path)) + "?mode=ro"
+    return "file:" + quote(str(db_path), safe="") + "?mode=ro"
 
 
 def adaptive_timeout(

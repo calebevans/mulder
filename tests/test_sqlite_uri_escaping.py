@@ -28,6 +28,15 @@ different and silent way:
     left alone. The bug is a percent sign in front of two hex digits, not any
     percent sign, and the tests below pin both directions.
 
+The directory is as much a part of the URI as the filename:
+
+``//tmp/case/sms.db``
+    POSIX allows a path to begin with exactly two slashes, and ``file://``
+    begins a URI authority. SQLite reads the first component as a hostname and
+    refuses the connection -- ``invalid uri authority: tmp``. Escaping only the
+    unsafe *filename* characters is not enough, because ``quote`` leaves ``/``
+    alone by default; the separators have to be escaped too.
+
 These are not adversarial names. ``#`` and ``%`` appear in exported chat
 databases, dated backups and app cache filenames as a matter of course. A name
 chosen deliberately does more than confuse the path, though -- see
@@ -38,10 +47,25 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 
 from mulder.server.helpers import readonly_sqlite_uri
+
+
+def _double_slash_db(tmp_path: Path) -> Path:
+    """An evidence database whose path begins with exactly two slashes.
+
+    ``tmp_path`` is absolute, so prefixing one more slash gives a path with a
+    leading ``//``. POSIX leaves such a path implementation-defined but every
+    platform mulder runs on resolves it to the same file as a single slash;
+    pathlib preserves exactly two, and collapses three or more.
+    """
+    evidence = Path("/" + str(tmp_path)) / "sms.db"
+    assert str(evidence).startswith("//") and not str(evidence).startswith("///")
+    _make_db(evidence)
+    return evidence
 
 
 def _make_db(path: Path) -> None:
@@ -130,6 +154,22 @@ class TestThePremise:
         with pytest.raises(sqlite3.Error):
             sqlite3.connect(f"file:{evidence}?mode=ro", uri=True)
 
+    def test_a_double_slash_path_is_read_as_a_uri_authority(self, tmp_path: Path) -> None:
+        """Escaping the filename alone leaves this one, so pin it separately.
+
+        ``quote()`` keeps ``/`` unescaped by default, so a path beginning with
+        exactly two slashes still produces ``file://host/...`` and SQLite takes
+        the first component for a hostname.
+        """
+        evidence = _double_slash_db(tmp_path)
+
+        for uri in (
+            f"file:{evidence}?mode=ro",
+            "file:" + quote(str(evidence)) + "?mode=ro",
+        ):
+            with pytest.raises(sqlite3.OperationalError, match="invalid uri authority"):
+                sqlite3.connect(uri, uri=True)
+
 
 class TestReadonlySqliteUri:
     @pytest.mark.parametrize("name", HOSTILE_NAMES)
@@ -166,6 +206,18 @@ class TestReadonlySqliteUri:
         conn = sqlite3.connect(readonly_sqlite_uri(str(evidence)), uri=True)
         assert [r[0] for r in conn.execute("SELECT body FROM message")] == ["the evidence"]
         conn.close()
+
+    def test_a_double_slash_path_opens_against_real_sqlite(self, tmp_path: Path) -> None:
+        """The regression for the URI-authority case, against real SQLite."""
+        evidence = _double_slash_db(tmp_path)
+
+        conn = sqlite3.connect(readonly_sqlite_uri(evidence), uri=True)
+        rows = [r[0] for r in conn.execute("SELECT body FROM message")]
+        with pytest.raises(sqlite3.OperationalError):
+            conn.execute("DELETE FROM message")
+        conn.close()
+
+        assert rows == ["the evidence"]
 
     def test_a_percent_escape_is_not_decoded(self, tmp_path: Path) -> None:
         """The file named report%20final.db, not the file named 'report final.db'."""
