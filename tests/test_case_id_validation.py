@@ -21,10 +21,17 @@ note and export would be written to CASE-B.
 The evidence tree is attacker-influenced -- ``scan_evidence`` renders file and
 directory names back into the agent's context -- so "an agent would not do
 that" is not a control.
+
+The check is containment only. A case ID that contains no path separator is
+exactly one component once a suffix is appended, and one component cannot be
+``.`` or ``..``, so it cannot leave ``db_dir``. IDs that mulder accepted before
+and that do not escape -- spaces, accents, leading dashes, embedded ``..`` --
+still work, and the tests below pin that as hard as they pin the traversal.
 """
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -35,7 +42,25 @@ from mulder.server.app import slugify, validate_case_id
 class TestWhatAValidIdLooksLike:
     @pytest.mark.parametrize(
         "case_id",
-        ["CASE-2024-007", "case1", "a", "host_1.image", "0", "A" * 128],
+        [
+            "CASE-2024-007",
+            "case1",
+            "a",
+            "host_1.image",
+            "0",
+            # Accepted by mulder's CLI today, and none of them escape db_dir.
+            "Incident 2026",
+            "café",
+            "-case",
+            "case..2026",
+            ".hidden",
+            "中文",
+            # A suffix is always appended, so even these stay one component:
+            # db_dir / "..db", db_dir / "...db".
+            ".",
+            "..",
+            "A" * 200,
+        ],
     )
     def test_accepted(self, case_id: str) -> None:
         assert validate_case_id(case_id) == case_id
@@ -45,19 +70,28 @@ class TestWhatAValidIdLooksLike:
         [
             "../../../../home/analyst/cases/CASE-2024-007",
             "../shared/cases/CASE-B",
-            "..",
             "a/b",
-            "a\\b",
             "/etc/passwd",
-            ".hidden",
-            "-leading-dash",
+            "CASE-2024-007/",
             "",
-            "a" * 129,
-            "case\x00id",
-            "case id",
         ],
     )
-    def test_rejected(self, case_id: str) -> None:
+    def test_a_separator_is_rejected(self, case_id: str) -> None:
+        with pytest.raises(ValueError, match="case_id"):
+            validate_case_id(case_id)
+
+    def test_the_platform_separator_is_rejected(self) -> None:
+        """On Windows a backslash separates; on POSIX it is an ordinary character."""
+        with pytest.raises(ValueError, match="case_id"):
+            validate_case_id(f"a{os.sep}b")
+
+    @pytest.mark.parametrize("case_id", ["case\x00id", "case\n", "\ncase", "case\x7f", "a\tb"])
+    def test_a_control_character_is_rejected(self, case_id: str) -> None:
+        """A NUL truncates the name under open(); the rest corrupt the audit log.
+
+        A trailing newline is the one that a `$`-anchored regex would have let
+        through, so it is pinned explicitly rather than left to the class.
+        """
         with pytest.raises(ValueError, match="case_id"):
             validate_case_id(case_id)
 
@@ -68,17 +102,40 @@ class TestWhatAValidIdLooksLike:
 
 
 class TestTheTraversalItWasBlocking:
-    def test_the_path_really_did_escape(self) -> None:
-        """Pin the premise rather than describing it."""
-        db_dir = Path("/home/analyst/.mulder/cases")
-        target = (db_dir / "../../../../home/analyst/cases/CASE-2024-007.db").resolve()
-        assert target == Path("/home/analyst/cases/CASE-2024-007.db")
-        assert db_dir.resolve() not in target.parents
+    """The security boundary, asserted without assuming a filesystem layout."""
 
-    def test_a_valid_id_stays_inside(self) -> None:
-        db_dir = Path("/home/analyst/.mulder/cases")
-        target = (db_dir / f"{validate_case_id('CASE-2024-007')}.db").resolve()
-        assert target.parent == db_dir.resolve()
+    def test_the_path_really_did_escape(self, tmp_path: Path) -> None:
+        """Pin the premise rather than describing it."""
+        db_dir = (tmp_path / "cases").resolve()
+        db_dir.mkdir()
+        escaping = "../../../../analyst/cases/CASE-2024-007"
+
+        target = (db_dir / f"{escaping}.db").resolve()
+
+        assert db_dir not in target.parents, "the premise: this ID left db_dir"
+        with pytest.raises(ValueError, match="case_id"):
+            validate_case_id(escaping)
+
+    @pytest.mark.parametrize(
+        "case_id", ["CASE-2024-007", "Incident 2026", "café", "-case", "case..2026", ".", ".."]
+    )
+    def test_an_accepted_id_stays_inside(self, tmp_path: Path, case_id: str) -> None:
+        """Every ID the validator accepts must land directly in db_dir."""
+        db_dir = (tmp_path / "cases").resolve()
+        db_dir.mkdir()
+
+        target = (db_dir / f"{validate_case_id(case_id)}.db").resolve()
+
+        assert target.parent == db_dir
+
+    def test_every_sidecar_suffix_stays_inside_too(self, tmp_path: Path) -> None:
+        """The .db path is not the only one an ID is interpolated into."""
+        db_dir = (tmp_path / "cases").resolve()
+        db_dir.mkdir()
+        case_id = validate_case_id("case..2026")
+
+        for suffix in (".db", ".audit.jsonl", ".report.md", ".plaso", ".iocs.stix.json"):
+            assert (db_dir / f"{case_id}{suffix}").resolve().parent == db_dir
 
 
 @pytest.fixture

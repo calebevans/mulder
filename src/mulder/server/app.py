@@ -267,18 +267,37 @@ def slugify(name: str) -> str:
     return slug.strip("-") or "case"
 
 
-CASE_ID_RE: re.Pattern[str] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-"""A case ID is one filesystem path segment, and nothing more.
+_PATH_SEPARATORS: frozenset[str] = frozenset(
+    sep for sep in (os.sep, os.altsep, "/") if sep is not None
+)
+"""Every character this platform treats as a path separator.
 
-Every case ID becomes a path: ``db_dir / f"{case_id}.db"``, plus the sidecar
-files beside it. ``slugify`` guarantees that shape, but it was only applied to
-IDs mulder derived itself -- an ID supplied by an agent went to the filesystem
-verbatim.
+``/`` is included unconditionally: it separates on POSIX, and Windows accepts
+it as well, so a case ID containing one is never a single path segment.
 """
 
 
 def validate_case_id(case_id: str) -> str:
-    """Return *case_id* if it is a safe path segment, else raise.
+    """Return *case_id* if it names one path segment, else raise.
+
+    Every case ID becomes a path -- ``db_dir / f"{case_id}.db"`` and the
+    sidecars beside it, ``.audit.jsonl``, ``.report.md``, ``.iocs.csv`` and the
+    rest. ``slugify`` guarantees that shape, but it was only applied to IDs
+    mulder derived itself; an ID supplied by an agent went to the filesystem
+    verbatim, so ``"../../../../home/analyst/cases/CASE-2024-007"`` wrote its
+    case database outside the cases directory.
+
+    The rule is containment and nothing else: an ID that contains no path
+    separator is exactly one component once a suffix is appended, and one
+    component cannot be ``.`` or ``..``, so it cannot leave ``db_dir``. Case
+    IDs that were accepted before and do not escape -- ``Incident 2026``,
+    ``café``, ``-case``, ``case..2026``, ``.hidden`` -- keep working.
+
+    The one restriction beyond containment is control characters. A NUL
+    truncates the name in the C library underneath ``open()``, so the file
+    that is created is not the file that was named; the others corrupt the
+    ``.audit.jsonl`` records and log lines the ID is written into. Neither is
+    ever intentional in a case ID.
 
     Args:
         case_id: The identifier supplied by a caller.
@@ -287,19 +306,24 @@ def validate_case_id(case_id: str) -> str:
         The identifier, unchanged.
 
     Raises:
-        ValueError: If the identifier is empty, contains a path separator or a
-            parent reference, or is otherwise not a single path segment. The
-            check is a whitelist, so it also refuses NUL bytes, leading dots
-            and anything that would resolve outside the cases directory.
+        ValueError: If the identifier is empty, contains a path separator, or
+            contains a control character.
     """
-    if not case_id or not CASE_ID_RE.match(case_id):
+    if not case_id:
+        raise ValueError("Invalid case_id: a case ID cannot be empty.")
+
+    found = _PATH_SEPARATORS.intersection(case_id)
+    if found:
         raise ValueError(
-            f"Invalid case_id {case_id!r}: a case ID must be 1-128 characters of "
-            "letters, digits, dot, dash or underscore, starting with a letter or "
-            "digit, and cannot contain a path separator."
+            f"Invalid case_id {case_id!r}: a case ID is one path segment, so it "
+            f"cannot contain {''.join(sorted(found))!r}."
         )
-    if ".." in case_id:
-        raise ValueError(f"Invalid case_id {case_id!r}: parent references are not allowed.")
+
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in case_id):
+        raise ValueError(
+            f"Invalid case_id {case_id!r}: control characters are not allowed in a case ID."
+        )
+
     return case_id
 
 
