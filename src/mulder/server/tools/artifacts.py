@@ -27,7 +27,11 @@ from mulder.path_policy import PathPolicyError, resolve_allowed_path
 from mulder.patterns import parse_mmls_rows
 from mulder.server.app import get_cfg, get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
-from mulder.server.helpers import hash_output, make_tool_call_id
+from mulder.server.helpers import (
+    hash_output,
+    make_tool_call_id,
+    readonly_sqlite_uri,
+)
 from mulder.server.tool_access import Role, tool_access
 
 logger = logging.getLogger(__name__)
@@ -193,7 +197,7 @@ def parse_browser_history() -> dict[str, object]:
                     continue
 
                 try:
-                    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+                    conn = sqlite3.connect(readonly_sqlite_uri(db_path), uri=True)
                     conn.row_factory = sqlite3.Row
 
                     if browser == "chrome":
@@ -383,7 +387,7 @@ def query_sqlite_from_image(inode: int, query: str, description: str = "") -> di
             }
 
         try:
-            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            conn = sqlite3.connect(readonly_sqlite_uri(db_path), uri=True)
             conn.execute("PRAGMA trusted_schema=OFF")
             conn.set_authorizer(_readonly_authorizer)
             conn.row_factory = sqlite3.Row

@@ -28,6 +28,7 @@ from mulder.server.helpers import (
     error_response,
     interpreter_candidates,
     make_tool_call_id,
+    readonly_sqlite_uri,
     require_binary,
     tool_response,
 )
@@ -72,7 +73,7 @@ def _carve_sqlite_databases(
                 db_path.write_bytes(mm[pos : pos + db_size])
 
                 try:
-                    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+                    conn = sqlite3.connect(readonly_sqlite_uri(db_path), uri=True)
                     tables = [
                         r[0]
                         for r in conn.execute(
@@ -269,7 +270,7 @@ _ANDROID_ARTIFACTS: dict[str, dict[str, object]] = {
 def _query_sqlite_safe(db_path: Path, query: str) -> list[str]:
     """Run a read-only query, returning formatted rows or empty list on error."""
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = sqlite3.connect(readonly_sqlite_uri(db_path), uri=True)
         conn.row_factory = sqlite3.Row
         rows = conn.execute(query).fetchall()
         conn.close()
@@ -501,7 +502,7 @@ def _resolve_ios_manifest(backup_dir: Path) -> dict[str, Path]:
 
     mapping: dict[str, Path] = {}
     try:
-        conn = sqlite3.connect(f"file:{manifest}?mode=ro", uri=True)
+        conn = sqlite3.connect(readonly_sqlite_uri(manifest), uri=True)
         rows = conn.execute("SELECT fileID, relativePath, domain FROM Files").fetchall()
         conn.close()
     except sqlite3.Error:
@@ -791,7 +792,7 @@ def decrypt_app_data(
 
     for db_path in sqlite_files:
         try:
-            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            conn = sqlite3.connect(readonly_sqlite_uri(db_path), uri=True)
             tables = [
                 r[0]
                 for r in conn.execute(
@@ -804,7 +805,7 @@ def decrypt_app_data(
                 lines.append(f"Tables: {', '.join(tables)}")
                 for table in tables[:5]:
                     try:
-                        c2 = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+                        c2 = sqlite3.connect(readonly_sqlite_uri(db_path), uri=True)
                         c2.row_factory = sqlite3.Row
                         rows = c2.execute(f"SELECT * FROM [{table}] LIMIT 10").fetchall()
                         c2.close()
