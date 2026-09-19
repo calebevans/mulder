@@ -3,9 +3,17 @@
 from __future__ import annotations
 
 import time
-from unittest.mock import patch
+from collections.abc import Callable
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import MagicMock, patch
 
-from mulder.server.jobs import JobStore, _extract_error_detail, validate_tool_args
+from mulder.server.jobs import (
+    JobStore,
+    _extract_error_detail,
+    fill_case_id,
+    validate_tool_args,
+)
 
 
 def _noop_dispatch(**kwargs: object) -> dict[str, str]:
@@ -436,3 +444,146 @@ class TestRunParallelRejectsBadArgs:
         assert "unexpected parameter(s) 'image_path'" in results[0]["error"]
         assert results[1]["status"] == "ok"
         assert calls == [{"target_path": "/good"}]
+
+
+_case_calls: list[dict[str, str]] = []
+
+
+def _case_tool(case_id: str, image_path: str) -> dict[str, str]:
+    _case_calls.append({"case_id": case_id, "image_path": image_path})
+    return {"status": "ok"}
+
+
+def _open_case(case_id: str) -> SimpleNamespace:
+    return SimpleNamespace(case_id=case_id, audit=MagicMock())
+
+
+class TestFillCaseId:
+    def test_fills_when_tool_wants_it_and_task_omits_it(self) -> None:
+        assert fill_case_id(_case_tool, {"image_path": "/x"}, "c1") == {
+            "image_path": "/x",
+            "case_id": "c1",
+        }
+
+    def test_explicit_case_id_untouched(self) -> None:
+        args = {"image_path": "/x", "case_id": "explicit"}
+        assert fill_case_id(_case_tool, args, "c1") is args
+
+    def test_tool_without_case_id_param_unaffected(self) -> None:
+        args = {"target_path": "/x"}
+        assert fill_case_id(_typed_tool, args, "c1") is args
+
+    def test_no_open_case_leaves_args_alone(self) -> None:
+        args = {"image_path": "/x"}
+        assert fill_case_id(_case_tool, args, None) is args
+
+
+class TestBatchFillsCaseId:
+    """start_extraction_batch fills case_id from the open case instead of rejecting."""
+
+    @patch("mulder.server.app.wait_for_resources", return_value=None)
+    def test_omitted_case_id_filled_and_task_runs(self, _mock_wait: object) -> None:
+        from mulder.server import app
+        from mulder.server.tools import jobs as job_tools
+
+        start_extraction_batch = app._tool_dispatch_sync[job_tools.start_extraction_batch.__name__]
+        dispatch: dict[str, Callable[..., Any]] = {
+            "case_tool": _case_tool,
+            "typed_tool": _typed_tool,
+        }
+        store = JobStore(max_workers=2, tool_dispatch=dispatch)
+        _case_calls.clear()
+        with (
+            patch("mulder.server.app._tool_dispatch_sync", dispatch),
+            patch("mulder.server.app.get_job_store", return_value=store),
+            patch("mulder.server.app._ctx", _open_case("case-1")),
+            patch("mulder.server.tools.jobs.tool_already_indexed", return_value=None),
+        ):
+            result = start_extraction_batch(
+                [
+                    {"tool": "case_tool", "args": {"image_path": "/a"}},
+                    {"tool": "case_tool", "args": {"image_path": "/b", "case_id": "explicit"}},
+                    {"tool": "typed_tool", "args": {"target_path": "/c"}},
+                ]
+            )
+            assert store.wait_for_batch(result["batch_id"], timeout=5.0)
+        assert result["status"] == "submitted"
+        assert "tasks_rejected" not in result
+        assert [t["args_summary"] for t in result["tasks_submitted"]] == [
+            ["image_path", "case_id"],
+            ["image_path", "case_id"],
+            ["target_path"],
+        ]
+        status = store.get_batch_status(result["batch_id"])
+        assert status is not None and status["completed"] == 3 and status["failed"] == 0
+        assert sorted(_case_calls, key=str) == [
+            {"case_id": "case-1", "image_path": "/a"},
+            {"case_id": "explicit", "image_path": "/b"},
+        ]
+        store.shutdown(wait=True)
+
+    def test_no_open_case_still_rejected(self) -> None:
+        from mulder.server import app
+        from mulder.server.tools import jobs as job_tools
+
+        start_extraction_batch = app._tool_dispatch_sync[job_tools.start_extraction_batch.__name__]
+        dispatch = {"case_tool": _case_tool}
+        store = JobStore(max_workers=1, tool_dispatch=dispatch)
+        with (
+            patch("mulder.server.app._tool_dispatch_sync", dispatch),
+            patch("mulder.server.app.get_job_store", return_value=store),
+            patch("mulder.server.app._ctx", None),
+        ):
+            result = start_extraction_batch([{"tool": "case_tool", "args": {"image_path": "/a"}}])
+        assert result["status"] == "error"
+        assert "missing required parameter(s) 'case_id'" in result["tasks_rejected"][0]["error"]
+        assert store.batch_ids() == []
+        store.shutdown()
+
+
+class TestRunParallelFillsCaseId:
+    @staticmethod
+    def _run(
+        tasks: list[dict[str, Any]], ctx: object
+    ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+        import anyio
+
+        from mulder.server import app
+
+        calls: list[dict[str, str]] = []
+
+        async def case_tool(case_id: str, image_path: str) -> dict[str, str]:
+            calls.append({"case_id": case_id, "image_path": image_path})
+            return {"status": "ok"}
+
+        async def typed_tool(target_path: str) -> dict[str, str]:
+            calls.append({"target_path": target_path})
+            return {"status": "ok"}
+
+        with (
+            patch.dict(app._tool_dispatch, {"case_tool": case_tool, "typed_tool": typed_tool}),
+            patch("mulder.server.app._ctx", ctx),
+        ):
+            result = anyio.run(app.run_parallel, tasks)
+        return [r["result"] for r in result["parallel_results"]], calls
+
+    def test_omitted_case_id_filled_from_open_case(self) -> None:
+        results, calls = self._run(
+            [
+                {"tool": "case_tool", "args": {"image_path": "/a"}},
+                {"tool": "case_tool", "args": {"image_path": "/b", "case_id": "explicit"}},
+                {"tool": "typed_tool", "args": {"target_path": "/c"}},
+            ],
+            _open_case("case-1"),
+        )
+        assert [r["status"] for r in results] == ["ok", "ok", "ok"]
+        assert sorted(calls, key=str) == [
+            {"case_id": "case-1", "image_path": "/a"},
+            {"case_id": "explicit", "image_path": "/b"},
+            {"target_path": "/c"},
+        ]
+
+    def test_no_open_case_still_rejected(self) -> None:
+        results, calls = self._run([{"tool": "case_tool", "args": {"image_path": "/a"}}], None)
+        assert "missing required parameter(s) 'case_id'" in results[0]["error"]
+        assert calls == []

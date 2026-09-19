@@ -102,6 +102,24 @@ def validate_tool_args(fn: Callable[..., Any], args: dict[str, Any]) -> str | No
     return "; ".join(problems) + "; accepted: " + ", ".join(accepted)
 
 
+def fill_case_id(
+    fn: Callable[..., Any], args: dict[str, Any], case_id: str | None
+) -> dict[str, Any]:
+    """Return *args* with ``case_id`` set to the open case when *fn* wants one.
+
+    Planners are never asked to repeat ``case_id`` on every task, yet tools
+    such as ``index_app_files`` require it, so a batch submitted for an open
+    case would otherwise be rejected for a value the server already knows.
+    Only ``case_id`` is filled; nothing else is guessed.  With no open case
+    (*case_id* is None) the args are returned untouched and validation
+    rejects the task as before.
+    """
+    if case_id is None or "case_id" in args or "case_id" not in inspect.signature(fn).parameters:
+        return args
+    logger.debug("Filling implicit case_id=%r for %s", case_id, getattr(fn, "__name__", fn))
+    return {**args, "case_id": case_id}
+
+
 class JobStore:
     """Manages background extraction jobs via a bounded thread pool.
 

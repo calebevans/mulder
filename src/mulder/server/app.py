@@ -20,7 +20,7 @@ from mcp.server.mcpserver import MCPServer
 from mulder.audit import AuditLog
 from mulder.db import CaseDB
 from mulder.index.correlator import Correlator
-from mulder.server.jobs import JobStore, validate_tool_args
+from mulder.server.jobs import JobStore, fill_case_id, validate_tool_args
 from mulder.server.tool_access import EXECUTORS, tool_access
 
 logger = logging.getLogger(__name__)
@@ -673,6 +673,7 @@ async def run_parallel(tasks: list[dict[str, Any]]) -> dict[str, Any]:
 
     batch_id = f"bp_{uuid4().hex[:8]}"
     results: list[Any] = [None] * len(tasks)
+    open_case_id = get_ctx().case_id if has_ctx() else None
 
     async def _run_one(idx: int, tool_name: str, arguments: dict[str, Any]) -> None:
         """Execute a single task and store its result at *idx*."""
@@ -682,6 +683,7 @@ async def run_parallel(tasks: list[dict[str, Any]]) -> dict[str, Any]:
             if fn is None:
                 results[idx] = {"error": f"Unknown tool: {tool_name}"}
                 return
+            arguments = fill_case_id(fn, arguments, open_case_id)
             problem = validate_tool_args(fn, arguments)
             if problem is not None:
                 results[idx] = {"error": f"{tool_name}: {problem}"}
