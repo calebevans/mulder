@@ -15,6 +15,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from mulder.extractors.optical import probe_optical
 from mulder.orchestrator.types import PhaseResult, extract_catalog_result
 from mulder.patterns import DISK_IMAGE_EXTS, extract_iocs_from_text, resolve_db_dir
 
@@ -138,7 +139,14 @@ class EvidenceContext:
         if disk_images:
             lines.append("Disk images:")
             for p in sorted(disk_images):
-                lines.append(f"  {p}")
+                media = probe_optical(p)
+                if media is not None:
+                    lines.append(
+                        f"  {p}  (optical media, {media.upper()}: plan run_optical_listing, "
+                        "not run_fls/run_mmls)"
+                    )
+                else:
+                    lines.append(f"  {p}")
         if memory_dumps:
             lines.append("Extracted memory dumps (ready for Volatility):")
             for p in sorted(memory_dumps):

@@ -150,7 +150,6 @@ class TestExecuteAuthDetection:
                 allowed_tools=[],
                 disallowed_tools=[],
                 max_turns=1,
-                max_budget=1.0,
             )
 
         assert "Not logged in" in str(exc_info.value)
@@ -180,7 +179,6 @@ class TestExecuteAuthDetection:
                 allowed_tools=[],
                 disallowed_tools=[],
                 max_turns=1,
-                max_budget=1.0,
             )
 
         assert exc_info.value.model == "claude-sonnet-4-6@20250514"
@@ -203,7 +201,6 @@ class TestExecuteAuthDetection:
                 allowed_tools=[],
                 disallowed_tools=[],
                 max_turns=1,
-                max_budget=1.0,
             )
 
         assert not result.success
@@ -246,7 +243,6 @@ class TestTextBlockDetection:
                 allowed_tools=[],
                 disallowed_tools=[],
                 max_turns=1,
-                max_budget=1.0,
             )
 
     @pytest.mark.asyncio()
@@ -281,7 +277,6 @@ class TestTextBlockDetection:
                 allowed_tools=[],
                 disallowed_tools=[],
                 max_turns=1,
-                max_budget=1.0,
             )
 
         assert exc_info.value.alternative == "claude-haiku-4-5@20250414"

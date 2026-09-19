@@ -17,8 +17,17 @@ from mulder.orchestrator.gates import reset_gate_failure_counters
 
 
 def _install_sdk_stub() -> None:
-    """Install a claude_agent_sdk stub for orchestrator tests."""
-    if "claude_agent_sdk" in sys.modules:
+    """Install a claude_agent_sdk stub when the real SDK is not installed.
+
+    The real SDK is preferred so orchestrator tests run against its actual
+    message and options classes (the stub's ``MagicMock`` classes make every
+    ``isinstance`` check pass, hiding real mistakes).
+    """
+    try:
+        import claude_agent_sdk  # noqa: F401
+    except ImportError:
+        pass
+    else:
         return
     sdk = ModuleType("claude_agent_sdk")
     sdk.ClaudeAgentOptions = MagicMock  # type: ignore[attr-defined]

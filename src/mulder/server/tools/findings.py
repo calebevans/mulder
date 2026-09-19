@@ -33,7 +33,66 @@ logger = logging.getLogger(__name__)
 _MIDNIGHT_RE = re.compile(r"T00:00:00(?:Z|[+-]00:?00)?$")
 
 _MIN_NON_NEGATIVE_FINDINGS = 3
-_MIN_EVIDENCE_CITATION_PCT = 50.0
+
+# evidence_citation_coverage: below _CITATION_ADVISORY_PCT the gate still
+# passes but carries an advisory; below _MIN_CITED_SOURCES distinct cited
+# sources it blocks. An absolute floor rather than a fraction so breadth of
+# extraction (hundreds of feature files) is not penalised (issue #221).
+_CITATION_ADVISORY_PCT = 25.0
+_MIN_CITED_SOURCES = 3
+
+# Sources that are bookkeeping or derived from the run itself rather than
+# evidence a finding would cite. Excluded from the citation denominator.
+_AUXILIARY_SOURCES = frozenset(
+    {"bulk.bulk_extractor", "bulk.duplicates", "composite.correlation", "enrichment.iocs"}
+)
+_AUXILIARY_PREFIXES = ("registry.query.",)
+_AUXILIARY_SUFFIXES = (".stats", ".manifest", ".manifest.json")
+
+
+def is_evidence_source(source: SourceRow) -> bool:
+    """Return True when *source* is evidence a finding could cite.
+
+    Empty sources, run bookkeeping (extractor reports, stats, manifests),
+    ad-hoc registry query caches, and outputs derived from the findings
+    themselves (IOC enrichment, correlation) are not.
+    """
+    name = source.source_name
+    return (
+        source.line_count > 0
+        and name not in _AUXILIARY_SOURCES
+        and not name.startswith(_AUXILIARY_PREFIXES)
+        and not name.endswith(_AUXILIARY_SUFFIXES)
+    )
+
+
+# Findings the timestamp_coverage gate leaves alone: negative findings and
+# state-not-event severities. Keep in step with _evaluate_finalize_gates.
+_NEGATIVE_PREFIX = "[NEGATIVE]"
+_TS_EXEMPT_SEVERITIES = ("info", "informational")
+
+
+def _timestamp_gap(title: str, severity: str, event_time_start: str | None) -> str | None:
+    """Return the timestamp_coverage gate's complaint for this finding, or None.
+
+    Mirrors the gate's exemptions exactly so the model hears about a missing
+    ``event_time_start`` when it submits the finding, not from the phase gate
+    several sessions later. A warning rather than a rejection: submitting
+    first and timestamping via ``update_finding`` is how existing runs work,
+    and a hard reject would push a weaker model to fabricate a timestamp.
+    """
+    if event_time_start or title.startswith(_NEGATIVE_PREFIX):
+        return None
+    if severity in _TS_EXEMPT_SEVERITIES:
+        return None
+    return (
+        "This finding has no event_time_start and will block finalize_report "
+        "(timestamp_coverage gate). Either call update_finding with a precise "
+        "ISO-8601 event_time_start copied from tool output, set severity to "
+        "'info' if it describes a state rather than a timed event, or prefix "
+        f"the title with '{_NEGATIVE_PREFIX}' if it records a hypothesis you "
+        "ruled out. Do not fabricate a timestamp."
+    )
 
 
 def _evaluate_finalize_gates(
@@ -50,7 +109,7 @@ def _evaluate_finalize_gates(
     (which reports all gates).
     """
     gates: list[dict[str, object]] = []
-    non_negative = [f for f in findings if not f.title.startswith("[NEGATIVE]")]
+    non_negative = [f for f in findings if not f.title.startswith(_NEGATIVE_PREFIX)]
 
     # Gate 1: Minimum non-negative finding count
     count = len(non_negative)
@@ -70,7 +129,6 @@ def _evaluate_finalize_gates(
     # Configuration and informational findings may not have meaningful
     # timestamps (e.g., "BitLocker keys stored insecurely" is a state,
     # not a timed event). Exempt them to avoid incentivizing fabricated dates.
-    _TS_EXEMPT_SEVERITIES = ("info", "informational")
     ts_required = [f for f in non_negative if f.severity not in _TS_EXEMPT_SEVERITIES]
     missing_ts = [f for f in ts_required if not f.event_time_start]
     passed = len(missing_ts) == 0
@@ -114,40 +172,52 @@ def _evaluate_finalize_gates(
         )
     gates.append({"name": "audit_tools_called", "passed": passed, "detail": detail})
 
-    # Gate 5: Evidence citation coverage (advisory, not blocking)
-    # A low citation percentage is a signal to investigate more sources,
-    # NOT an instruction to manufacture findings. Only submit findings
-    # when the evidence genuinely warrants it. This gate passes at 25%
-    # to catch cases where major evidence categories were overlooked,
-    # without pressuring the analyst to cite every source.
+    # Gate 5: Evidence citation coverage. Measured over distinct
+    # evidence-bearing source names (rows repeat per device and per query,
+    # and findings cite by name). A low percentage is a signal to review
+    # uncited sources, NOT an instruction to manufacture findings, so it
+    # is advisory; only a degenerate run that cites fewer than
+    # _MIN_CITED_SOURCES distinct sources blocks.
     finding_source_names: set[str] = set()
     for f in findings:
         finding_source_names.update(f.sources)
 
-    non_empty_sources = [s for s in sources if s.line_count > 0]
-    total_non_empty = len(non_empty_sources)
-    if total_non_empty > 0:
-        cited_count = sum(
-            1 for s in non_empty_sources if source_is_cited(s.source_name, finding_source_names)
+    evidence_names = {s.source_name for s in sources if is_evidence_source(s)}
+    total = len(evidence_names)
+    advisory = False
+    if total > 0:
+        cited_count = sum(1 for n in evidence_names if source_is_cited(n, finding_source_names))
+        coverage_pct = round(cited_count / total * 100, 1)
+        passed = cited_count >= min(_MIN_CITED_SOURCES, total)
+        advisory = passed and coverage_pct < _CITATION_ADVISORY_PCT
+        figure = (
+            f"{coverage_pct}% of evidence sources cited ({cited_count}/{total} distinct names)"
         )
-        coverage_pct = round(cited_count / total_non_empty * 100, 1)
-        passed = coverage_pct >= 25.0
-        if passed:
+        if not passed:
             detail = (
-                f"{coverage_pct}% of non-empty sources cited in findings "
-                f"({cited_count}/{total_non_empty})"
+                f"Only {cited_count} distinct evidence source(s) cited; need at least "
+                f"{_MIN_CITED_SOURCES}. {figure}. Review uncited sources with "
+                f"audit_evidence_coverage and cite what the findings actually rest on."
             )
-        else:
+        elif advisory:
             detail = (
-                f"Only {coverage_pct}% of non-empty sources are cited "
-                f"({cited_count}/{total_non_empty}). Review uncited sources "
-                f"to verify nothing was missed, but do NOT create findings "
+                f"Advisory: {figure}, below {_CITATION_ADVISORY_PCT:g}%. Review uncited "
+                f"sources to verify nothing was missed, but do NOT create findings "
                 f"just to increase this percentage."
             )
+        else:
+            detail = figure
     else:
         passed = True
-        detail = "No non-empty sources to check"
-    gates.append({"name": "evidence_citation_coverage", "passed": passed, "detail": detail})
+        detail = "No evidence sources to check"
+    gate: dict[str, object] = {
+        "name": "evidence_citation_coverage",
+        "passed": passed,
+        "detail": detail,
+    }
+    if advisory:
+        gate["advisory"] = True
+    gates.append(gate)
 
     return gates
 
@@ -198,7 +268,9 @@ def submit_finding(
 
     Timestamps must be precise ISO-8601 values copied from tool output;
     pass null rather than fabricating. Day-precision placeholders are
-    auto-nullified.
+    auto-nullified. A non-negative finding above 'info' severity needs
+    event_time_start before finalize_report will run; the response says
+    so in timestamp_warnings when it is missing.
 
     Returns finding_id on acceptance. Severity must be
     critical/high/medium/low/info. Confidence must be "confirmed"
@@ -232,6 +304,9 @@ def submit_finding(
     event_time_end, w = _sanitize_event_time(event_time_end)
     if w:
         ts_warnings.append(w)
+    gap = _timestamp_gap(title, severity, event_time_start)
+    if gap:
+        ts_warnings.append(gap)
 
     try:
         finding = Finding(
@@ -406,6 +481,9 @@ def update_finding(
     }
     if updated is not None:
         result["finding"] = updated.model_dump()
+        gap = _timestamp_gap(updated.title, updated.severity, updated.event_time_start)
+        if gap:
+            ts_warnings.append(gap)
     if ts_warnings:
         result["timestamp_warnings"] = ts_warnings
     return result
@@ -495,7 +573,8 @@ def submit_narrative(narrative: str) -> dict[str, object]:
 
 @mcp.tool()
 @tool_access(
-    ANALYSTS | Role.CROSS_PLANNER | Role.NARRATIVE_PLANNER | Role.NARRATIVE_EXECUTOR | Role.REPORT
+    ANALYSTS | Role.CROSS_PLANNER | Role.NARRATIVE_PLANNER | Role.NARRATIVE_EXECUTOR | Role.REPORT,
+    unthrottled=True,
 )
 def get_findings(limit: int = 20, offset: int = 0) -> dict[str, object]:
     """Retrieve paginated findings submitted in this case.
@@ -704,6 +783,11 @@ _IOC_PATTERN = re.compile(
 )
 
 _SEVERITY_RANK = SEVERITY_ORDER
+# Guards for the model-callable dedup: a live merge below the default
+# threshold, or one that absorbs more than a quarter of the case, is refused.
+_MIN_DEDUP_THRESHOLD = 0.4
+_MAX_DEDUP_MERGE_FRACTION = 0.25
+_MERGED_HEADER = "\n\n**Merged findings:**\n"
 
 
 def _jaccard(a: set[str], b: set[str]) -> float:
@@ -853,11 +937,15 @@ def _group_duplicates(
 def _consolidate_group(
     group: list[Finding],
 ) -> tuple[Finding, list[str]]:
-    """Select the representative finding and merge metadata from duplicates.
+    """Select the representative finding and fold the duplicates into it.
 
-    Keeps the finding with the longest description. Merges unique
-    evidence_refs, sources, and MITRE IDs from all group members.
-    Elevates severity to the highest in the group.
+    Keeps the finding with the longest description as the survivor. The
+    merge is lossless for everything the report is built from: the
+    survivor gets the union of ``evidence_refs``, ``sources`` and
+    ``mitre_attack_ids``, the widest ``event_time_start``/``event_time_end``,
+    the highest severity and confidence, and every absorbed finding's
+    title and description appended under a ``Merged findings`` section
+    (with its finding_id, so the audit trail survives the delete).
 
     Args:
         group: List of similar findings to consolidate.
@@ -867,11 +955,14 @@ def _consolidate_group(
     """
     best = max(group, key=lambda f: len(f.description))
     to_delete: list[str] = []
+    absorbed: list[str] = []
 
     all_sources: set[str] = set()
     all_refs: set[str] = set()
     all_mitre: set[str] = set()
     highest_severity = best.severity
+    starts = [f.event_time_start for f in group if f.event_time_start]
+    ends = [f.event_time_end or f.event_time_start for f in group if f.event_time_start]
 
     for f in group:
         all_sources.update(f.sources)
@@ -881,11 +972,22 @@ def _consolidate_group(
             highest_severity = f.severity
         if f.finding_id != best.finding_id:
             to_delete.append(f.finding_id)
+            absorbed.append(
+                f"- **{f.title}** ({f.finding_id}, {f.severity}, {f.confidence}): "
+                f"{f.description.strip()}"
+            )
 
     best.sources = sorted(all_sources)
     best.evidence_refs = sorted(all_refs)
     best.mitre_attack_ids = sorted(all_mitre)
     best.severity = highest_severity
+    if any(f.confidence == "confirmed" for f in group):
+        best.confidence = "confirmed"
+    if starts:
+        best.event_time_start = min(starts)
+        best.event_time_end = max(ends)
+    if absorbed:
+        best.description = best.description.rstrip() + _MERGED_HEADER + "\n".join(absorbed)
 
     return best, to_delete
 
@@ -901,42 +1003,97 @@ def deduplicate_findings(
 
     Groups findings by evidence overlap, source overlap, time window
     overlap, MITRE technique overlap, title similarity, and IOC overlap.
-    For each duplicate group, keeps the most detailed finding and merges
-    system-specific metadata from the others.
+    For each duplicate group, keeps the most detailed finding and folds
+    the others into it: union of evidence_refs, sources and MITRE ids,
+    widest time range, highest severity and confidence, and each absorbed
+    finding's title and description appended under a "Merged findings"
+    section. Absorbed findings are deleted; their text and evidence live
+    on in the survivor.
+
+    Always call with dry_run=True first and review ``groups`` before
+    applying. Keep the default threshold: lowering it merges findings
+    that describe different events into one aggregate. A live call
+    (dry_run=False) is refused below the default threshold, and refused
+    when it would absorb more than 25% of the case's findings.
 
     Args:
         case_id: Active case identifier.
         similarity_threshold: Minimum combined similarity score (0.0 to
-            1.0) to consider two findings as duplicates. Default 0.4.
+            1.0) to consider two findings as duplicates. Default 0.4;
+            values below 0.4 are only allowed with dry_run=True.
         dry_run: If True, return the proposed groups without modifying
             findings.
 
     Returns:
-        Dict with ``groups`` (proposed or applied merge groups),
-        ``merged_count`` (findings removed), and ``kept_count``
-        (findings retained).
+        Dict with ``groups`` (proposed or applied merge groups, each with
+        ``representative_id``, ``merged_ids`` and ``merged_titles``),
+        ``absorbed`` (representative_id -> absorbed finding ids),
+        ``merged_count`` (findings removed), ``kept_count`` (findings
+        retained) and a human-readable ``summary``.
     """
     ctx = get_ctx()
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
+    params: dict[str, object] = {
+        "case_id": case_id,
+        "similarity_threshold": similarity_threshold,
+        "dry_run": dry_run,
+    }
+
+    if similarity_threshold < _MIN_DEDUP_THRESHOLD and not dry_run:
+        return error_response(
+            tc_id,
+            "deduplicate_findings",
+            params,
+            f"similarity_threshold={similarity_threshold} is below the minimum "
+            f"{_MIN_DEDUP_THRESHOLD} for a live merge. Low thresholds merge findings "
+            "that describe different events into one aggregate.",
+            error_type="invalid_params",
+            suggestion=(
+                f"Re-run with similarity_threshold>={_MIN_DEDUP_THRESHOLD}, or use "
+                "dry_run=True to preview. To combine two specific findings, edit one "
+                "with update_finding and delete the other with delete_finding."
+            ),
+        )
 
     findings = ctx.db.get_findings()
     groups = _group_duplicates(findings, similarity_threshold)
 
     multi_groups = [g for g in groups if len(g) > 1]
+    would_merge = sum(len(g) - 1 for g in multi_groups)
+    max_merge = int(len(findings) * _MAX_DEDUP_MERGE_FRACTION)
+    if would_merge > max_merge and not dry_run:
+        return error_response(
+            tc_id,
+            "deduplicate_findings",
+            params,
+            f"Refused: this call would absorb {would_merge} of {len(findings)} findings "
+            f"(limit {max_merge}, {_MAX_DEDUP_MERGE_FRACTION:.0%} per call). That is "
+            "almost certainly over-merging distinct findings into aggregates.",
+            error_type="invalid_params",
+            suggestion=(
+                "Run with dry_run=True and review the proposed groups. Merge only true "
+                "duplicates, one pair at a time, with update_finding + delete_finding."
+            ),
+        )
+
     merged_count = 0
     kept_count = len(findings)
     group_summaries: list[dict[str, Any]] = []
+    absorbed: dict[str, list[str]] = {}
 
     for group in multi_groups:
+        titles = {f.finding_id: f.title for f in group}
         representative, delete_ids = _consolidate_group(group)
         affected_systems = sorted({s for f in group for s in f.sources})
         suffix = f"\n\n**Affected Systems:** {', '.join(affected_systems)}"
+        absorbed[representative.finding_id] = delete_ids
 
         group_summary: dict[str, Any] = {
             "representative_id": representative.finding_id,
             "representative_title": representative.title,
             "merged_ids": delete_ids,
+            "merged_titles": [titles[fid] for fid in delete_ids],
             "affected_systems": affected_systems,
             "group_size": len(group),
         }
@@ -949,9 +1106,12 @@ def deduplicate_findings(
                 representative.finding_id,
                 description=representative.description,
                 severity=representative.severity,
+                confidence=representative.confidence,
                 sources=representative.sources,
                 evidence_refs=representative.evidence_refs,
                 mitre_attack_ids=representative.mitre_attack_ids,
+                event_time_start=representative.event_time_start,
+                event_time_end=representative.event_time_end,
             )
             for fid in delete_ids:
                 ctx.db.delete_finding(fid)
@@ -960,26 +1120,32 @@ def deduplicate_findings(
     if not dry_run:
         kept_count = len(findings) - merged_count
 
+    verb = "would be absorbed" if dry_run else "absorbed"
     result: dict[str, Any] = {
         "tool_call_id": tc_id,
         "status": "success",
         "dry_run": dry_run,
         "groups": group_summaries,
-        "merged_count": merged_count if not dry_run else 0,
-        "would_merge_count": sum(len(g["merged_ids"]) for g in group_summaries),
+        "absorbed": absorbed,
+        "merged_count": merged_count,
+        "would_merge_count": would_merge,
         "kept_count": kept_count,
         "total_groups": len(multi_groups),
+        "summary": (
+            f"{would_merge} of {len(findings)} findings {verb} into "
+            f"{len(multi_groups)} survivor(s). Absorbed findings keep their text and "
+            "evidence in the survivor's 'Merged findings' section; review with "
+            "get_findings."
+        ),
     }
 
     elapsed = (time.monotonic() - t0) * 1000
+    if not dry_run:
+        params["absorbed"] = absorbed
     ctx.audit.log_tool_call(
         tool_call_id=tc_id,
         tool_name="deduplicate_findings",
-        params={
-            "case_id": case_id,
-            "similarity_threshold": similarity_threshold,
-            "dry_run": dry_run,
-        },
+        params=params,
         output_hash=hash_output(result),
         duration_ms=elapsed,
     )

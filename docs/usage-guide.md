@@ -26,6 +26,8 @@ Try-it-out instructions for running Mulder, the forensic investigation platform.
     - [Provider Prefixes](#provider-prefixes)
     - [Mixing Providers Across Roles](#mixing-providers-across-roles)
     - [Local Models with Ollama](#local-models-with-ollama)
+    - [Thinking Through the Proxy](#thinking-through-the-proxy)
+    - [Models LiteLLM does not know](#models-litellm-does-not-know)
     - [Custom LiteLLM Configuration](#custom-litellm-configuration)
   - [Case Briefing](#case-briefing)
     - [What to Include](#what-to-include)
@@ -70,6 +72,8 @@ Nothing else. The image ships every tool and data set a native install obtains t
 Running `mulder setup` *inside* the container therefore exits 1 by design: `/opt` is root-owned
 and the process runs as the unprivileged `mulder` user, and there is nothing for it to do.
 `mulder setup --verify` works normally there, since it only reads.
+The same applies to the YARA rules: the image pins `/opt/signature-base` to a commit, and the
+server logs once per session that it is using that checkout rather than pulling newer rules.
 
 ### Native Install
 
@@ -216,7 +220,7 @@ To expose mulder's tools to Claude Desktop or any other MCP client, add:
 The pre-built container image includes all forensic tools, dependencies, and the Mulder server:
 
 ```bash
-docker pull ghcr.io/calebevans/mulder:1.4.1
+docker pull ghcr.io/calebevans/mulder:1.5.2
 ```
 
 ## Running a Container
@@ -238,7 +242,7 @@ mkdir -p ~/mulder-cases
 
 ### Privileged Access
 
-The `--privileged` flag is required for FUSE operations that several forensic tools depend on (`ewfmount` for E01 images, `guestmount` for VM disk images, etc.).
+The `--privileged` flag is required for FUSE operations that several forensic tools depend on (`ewfmount` for E01 images, `guestmount` for VM disk images, and the `xmount` + `ntfs-3g`/`fuse2fs` stack that mounts disk images for the MFT, prefetch, Amcache, Shimcache and registry parsers). Mounting is entirely user-space FUSE: it runs as the unprivileged `mulder` user and needs no loop devices.
 
 If `--privileged` is too permissive for your environment, use the narrower capability grant instead:
 
@@ -247,6 +251,11 @@ If `--privileged` is too permissive for your environment, use the narrower capab
 ```
 
 The container runs as a non-root `mulder` user. An entrypoint script handles credential copying and permission setup automatically.
+
+When entering an existing container, use `docker exec -it -u mulder <container> bash`.
+`docker exec` bypasses the entrypoint's user switch; investigations run as root are
+rejected by the agent CLI. Add `--show-cli-stderr` to `mulder investigate` to see
+the underlying diagnostic if a subprocess exits with a generic error.
 
 ### Using an Anthropic API Key
 
@@ -257,7 +266,7 @@ docker run -it --privileged \
   -v /path/to/evidence:/evidence:ro \
   -v ~/mulder-cases:/home/mulder/.mulder/cases \
   -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
-  ghcr.io/calebevans/mulder:1.4.1
+  ghcr.io/calebevans/mulder:1.5.2
 ```
 
 ### Using Google Cloud Vertex AI
@@ -273,7 +282,7 @@ docker run -it --privileged \
   -e ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project-id \
   -e GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcloud-creds.json \
   -v ~/.config/gcloud/application_default_credentials.json:/tmp/gcloud-creds.json:ro \
-  ghcr.io/calebevans/mulder:1.4.1
+  ghcr.io/calebevans/mulder:1.5.2
 ```
 
 Model IDs are passed through to the SDK exactly as specified, with no automatic translation or mapping. When using Vertex, you must provide the full Vertex model ID including the `@version` suffix (e.g. `--model claude-opus-4-6@20250514`). If you omit `--model`, the built-in defaults (`claude-opus-4-6` for planner/analyst, `claude-haiku-4-5` for executor) are used.
@@ -299,7 +308,8 @@ docker run -it --privileged \
   -e AWS_REGION=us-east-1 \
   -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
   -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
-  ghcr.io/calebevans/mulder:1.4.1
+  -v ~/.aws:/home/mulder/.aws \
+  ghcr.io/calebevans/mulder:1.5.2
 ```
 
 Model IDs are passed through to the SDK exactly as specified, with no automatic translation or mapping. When using Bedrock, you must provide the full Bedrock model ID with the `us.anthropic.` prefix (e.g. `--model us.anthropic.claude-opus-4-6`). If you omit `--model`, the built-in defaults (`claude-opus-4-6` for planner/analyst, `claude-haiku-4-5` for executor) are used.
@@ -311,7 +321,7 @@ Model IDs are passed through to the SDK exactly as specified, with no automatic 
 | `AWS_ACCESS_KEY_ID` | AWS access key |
 | `AWS_SECRET_ACCESS_KEY` | AWS secret key |
 
-You can also mount `~/.aws/credentials` if you prefer file credentials over environment variables.
+If you prefer file-based credentials, mount your whole `~/.aws` directory read-write at `/home/mulder/.aws` (as in the example above) instead of passing keys. This works for both static profiles in `~/.aws/credentials` and `aws login` sessions from AWS CLI 2.36+: the login token cache lives under `~/.aws/login/cache`, so the mount must be writable for the container to refresh it. The same mount serves `bedrock/` models routed through the LiteLLM proxy (see [Using Non-Anthropic Models via LiteLLM](#using-non-anthropic-models-via-litellm)).
 
 ## Starting an Investigation
 
@@ -370,7 +380,106 @@ To use a locally hosted model via Ollama, ensure the Ollama server is accessible
 
 ```bash
 mulder investigate /evidence my-case \
-  --model ollama/llama3.1:70b
+  --model ollama/llama3.1:70b --no-thinking
+```
+
+Auto-generated proxy configurations preserve the public `ollama/<model>` name
+and route it internally through LiteLLM's `ollama_chat/<model>` provider. This
+uses Ollama's native chat API so streamed tool calls retain their structure.
+Custom proxy YAML is used as supplied; configure its `litellm_params.model` with
+`ollama_chat/` too. Set `api_base` there if Ollama is at a different address, such
+as `http://host.docker.internal:11434` for a host server accessed from Docker Desktop.
+
+### Thinking Through the Proxy
+
+Thinking is on by default for every proxy-routed model that LiteLLM's model
+map says supports reasoning (`bedrock/deepseek.v3.2`, Qwen3, Kimi K2 thinking,
+gpt-oss, OpenAI o-series, ...). The auto-generated config adds
+`allowed_openai_params: [reasoning_effort]` to those models so the
+`reasoning_effort` that LiteLLM derives from Claude Code's `--effort` reaches
+the provider unchanged (without it, LiteLLM rewrites it into an Anthropic
+`thinking` block that non-Claude models on Bedrock silently ignore). Such models
+also get a 32768-token output cap instead of 8192, because reasoning tokens
+count against it; so do models LiteLLM's map does not know at all, since they
+may reason unasked (see [Models LiteLLM does not know](#models-litellm-does-not-know)). Phase queries run at `--effort` (`max` and `xhigh` reach
+Bedrock as `high`); utility queries run at `low`, which DeepSeek treats as
+non-reasoning.
+
+In a tool loop Claude Code sends each earlier turn's `thinking` block back in
+the assistant history. Bedrock's DeepSeek route returns those blocks without a
+signature, and LiteLLM 1.101.0 replays an unsigned thinking block as a plain
+assistant `text` block rather than a Bedrock `reasoningContent` block
+(`add_thinking_blocks_to_assistant_content` in
+`litellm_core_utils/prompt_templates/factory.py`). The loop continues
+normally; the cost is that prior reasoning is re-read as visible assistant
+prose on every turn.
+
+Models LiteLLM does not list as reasoning-capable are served without it and a
+warning is logged at proxy start. A custom `--proxy-config` is used verbatim;
+add `allowed_openai_params: [reasoning_effort]` to its `litellm_params` yourself.
+
+To turn thinking off, add `--no-thinking`. This disables thinking for every
+phase and utility query, overrides `--effort`, and serves every proxy model
+without the reasoning passthrough. The model/provider must support disabling
+thinking; this option does not establish that a model can complete an
+investigation reliably.
+
+### Models LiteLLM does not know
+
+Mulder asks LiteLLM for each proxy model's context window and reasoning
+support. A model absent from LiteLLM's model map (Bedrock's newest releases
+often are, e.g. `bedrock/us.moonshotai.kimi-k3`) gets no window, so Claude
+Code assumes 200K and never compacts before the provider rejects the request,
+and is served without the reasoning passthrough. Override what LiteLLM cannot
+tell us in the `--config` YAML: add an entry to `models:` keyed by the model
+id exactly as passed to `--model`, with any of `context_window`,
+`max_output_tokens` and `reasoning`. Role assignments and per-model entries
+share the mapping; a string value names a role's model, a mapping value
+describes a model.
+
+```yaml
+models:
+  planner: bedrock/us.moonshotai.kimi-k3
+  executor: bedrock/us.moonshotai.kimi-k3
+  analyst: bedrock/us.moonshotai.kimi-k3
+  bedrock/us.moonshotai.kimi-k3:
+    context_window: 262144
+    max_output_tokens: 32768
+    reasoning: true
+```
+
+Precedence per key is config override, then LiteLLM's value, then the
+default (no window, 32768 output tokens, no reasoning; 8192 output tokens
+only when LiteLLM positively reports a model as non-reasoning). `reasoning:
+true` adds the `reasoning_effort` passthrough exactly as LiteLLM-detected
+reasoning does, `max_output_tokens` sets the model's LiteLLM `max_tokens` and
+`CLAUDE_CODE_MAX_OUTPUT_TOKENS`, and `context_window` sets
+`CLAUDE_CODE_MAX_CONTEXT_TOKENS`. `--no-thinking` still turns reasoning off.
+Proxy start logs one line per model with the effective values and where each
+came from (`litellm`, `config`, `env` or `default`).
+
+An unknown `bedrock/` model is also served through LiteLLM's explicit
+Converse route (`litellm_params.model: bedrock/converse/<id>`, the public
+name is unchanged). For an unmapped id LiteLLM 1.101.0 infers the provider
+from the id itself (`moonshot` for Kimi) and a streaming request, which is
+what Claude Code always sends, comes back as an empty `end_turn` with no
+error; the Converse route streams the thinking and text correctly. The same
+model also gets `litellm_params.allowed_openai_params: [tools]`: LiteLLM
+treats `tools` as supported on Bedrock Converse only for models its map
+knows, and otherwise `drop_params` strips them from every request, so an
+unmapped model never sees a tool and can only answer in text (issue #207).
+Models LiteLLM knows keep their id as given.
+
+Where a config file is awkward, such as a container run, the same three keys
+are read from the environment and applied to every proxy model in the run
+(a coarse knob meant for single-model runs; env wins over the file):
+
+```bash
+docker run ... \
+  -e MULDER_MODEL_CONTEXT_WINDOW=262144 \
+  -e MULDER_MODEL_MAX_OUTPUT_TOKENS=32768 \
+  -e MULDER_MODEL_REASONING=true \
+  mulder investigate /evidence my-case --model bedrock/us.moonshotai.kimi-k3
 ```
 
 ### Custom LiteLLM Configuration
@@ -433,6 +542,8 @@ If no `MULDER.md` is present, the investigation proceeds without additional cont
 
 The extraction planner adapts its tool selection based on what the evidence actually contains, not just its type. Standard toolsets (Volatility for memory, Sleuthkit for disk) always run, but the planner also looks for signals that indicate targeted analysis is warranted.
 
+**Optical media** (CD/DVD images, UDF or ISO 9660) are recognised at catalog time by their volume recognition sequence and listed with `run_optical_listing` rather than the Sleuth Kit tools, which cannot read optical filesystems. Deleted files from earlier burn sessions on write-once media are listed and can be pulled out with `extract_optical_file`.
+
 **Windows disk images** automatically trigger registry queries for system metadata (timezone, install date, shutdown time) and NTUSER.DAT parsing for user activity artifacts (TypedURLs, RecentDocs, UserAssist, MRU lists).
 
 **Execution artifacts** (ShimCache, Prefetch, Amcache, UserAssist) are inspected for communication and networking tools. When the planner detects IRC clients, email clients, chat applications, or remote access tools in execution history, it plans `index_app_files` tasks targeting their configuration and data directories. When packet capture tools like Wireshark appear, the planner adds `analyze_disk_pcaps` to discover saved captures on disk.
@@ -459,10 +570,18 @@ Runs a full multi-phase forensic investigation.
 | `--analyst-model` | `claude-opus-4-6` | Model for analyst agents |
 | `--config` | None | YAML config file for models and settings |
 | `--effort` | `max` | Effort level (`max`, `xhigh`, `high`) |
+| `--no-thinking` | off | Disable extended thinking for all queries; overrides `--effort` |
 | `--workers` | `3` | Max concurrent extraction sessions |
+| `--max-compactions` | `3` | Continuation sessions allowed per role session after context exhaustion; `0` disables. Also settable via `MULDER_MAX_COMPACTIONS` (the flag wins) |
 | `--db-dir` | `~/.mulder/cases` | Case database directory |
 | `--cwd` | `~/.mulder/workspace` | Working directory for agent sessions. Also settable via `MULDER_CWD`; the container sets it to `/mulder-investigation`. Created on first use, along with a default `.mcp.json` |
 | `--proxy-config` | None | LiteLLM config YAML for custom model routing |
+| `--show-cli-stderr` | off | Stream agent CLI diagnostics to the dashboard and `orchestrator.log` |
+
+For subprocess failures that say "Check stderr output for details", rerun with
+`--show-cli-stderr`. This displays diagnostics as they arrive for both investigation
+and utility sessions, labeled by worker, model, or utility operation. The same lines
+are saved in `<db-dir>/orchestrator.log`. Without the flag, CLI stderr remains suppressed.
 
 ### `mulder setup`
 
@@ -589,6 +708,13 @@ cd mulder
 docker build -t mulder:dev .
 ```
 
+The `Dockerfile` requires BuildKit. Docker Desktop and docker-ce use it by
+default. On Debian/Ubuntu with the distro `docker.io` package, install the
+`docker-buildx` plugin (`sudo apt-get install docker-buildx`); if the build
+still prints legacy `Step N/M` output, set `DOCKER_BUILDKIT=1 docker build ...`.
+Without BuildKit the build fails with
+`failed to parse platform : "" is an invalid OS component of ""`.
+
 Then run with the same volume mounts, substituting `mulder:dev` for the registry image:
 
 ```bash
@@ -599,4 +725,6 @@ docker run -it --privileged \
   mulder:dev
 ```
 
-A `Makefile` is included for convenience. Run `make help` to see available targets.
+A `Makefile` is included for convenience. Run `make all` for pre-commit checks
+and tests, `make dist-check` to build and validate Python packages, or
+`make container-build` to build the image.

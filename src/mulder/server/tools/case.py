@@ -5,6 +5,10 @@ Tier 1 tools: help the agent orient before running any extractions.
 
 from __future__ import annotations
 
+import bz2
+import gzip
+import hashlib
+import json
 import logging
 import os
 import shutil
@@ -12,8 +16,12 @@ import subprocess
 import tarfile
 import time
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 
+from mulder.extractors.classifier import ClassifiedEvidence
+from mulder.extractors.optical import probe_optical
+from mulder.path_policy import PathPolicyError, resolve_allowed_path
 from mulder.server.app import (
     create_case,
     get_cfg,
@@ -22,6 +30,7 @@ from mulder.server.app import (
     load_case,
     mcp,
     slugify,
+    validate_case_id,
 )
 from mulder.server.helpers import error_response, hash_output, make_tool_call_id
 from mulder.server.tool_access import ALL_ROLES, Role, tool_access
@@ -45,6 +54,15 @@ dump.  Only the absolute size of what lands on disk is meaningful.
 
 class ArchiveLimitError(Exception):
     """An archive exceeded a resource limit and was not fully extracted."""
+
+
+_COMPLETION_MARKER = ".mulder-extraction-complete.json"
+"""Written only after an extraction runs to completion.
+
+The presence of *files* in a destination proves only that an extraction
+started.  A run killed by a timeout, a full disk or a crash leaves a partial
+tree behind that is indistinguishable from a finished one by that test.
+"""
 
 
 @mcp.tool()
@@ -103,6 +121,20 @@ def scan_evidence(
         case_id = enforced_id
     elif case_id is None:
         case_id = slugify(ev_path.name)
+
+    # slugify guarantees a safe path segment, but only for IDs mulder derives.
+    # One supplied by an agent has to be checked before it becomes a path.
+    try:
+        validate_case_id(case_id)
+    except ValueError as exc:
+        return error_response(
+            tc_id,
+            "scan_evidence",
+            params,
+            str(exc),
+            (time.monotonic() - t0) * 1000,
+            error_type="invalid_input",
+        )
 
     try:
         result = _scan_evidence_inner(ev_path, case_id, replace)
@@ -169,6 +201,27 @@ def _hash_and_register_evidence(manifest: list[dict[str, object]]) -> list[str]:
     return failed_files
 
 
+def _manifest_entry(item: ClassifiedEvidence) -> dict[str, object]:
+    """One evidence manifest row; disk images are probed for an optical signature."""
+    entry: dict[str, object] = {
+        "path": str(item.path),
+        "artifact_type": item.artifact_type,
+    }
+    try:
+        if item.path.is_file():
+            size = item.path.stat().st_size
+            entry["size_bytes"] = size
+            entry["size_human"] = _human_size(size)
+    except OSError:
+        pass
+    if item.artifact_type == "disk_image":
+        media = probe_optical(str(item.path))
+        if media is not None:
+            entry["media"] = f"optical ({media})"
+            entry["note"] = "CD/DVD image: use run_optical_listing, not run_fls/run_mmls"
+    return entry
+
+
 def _scan_evidence_inner(ev_path: Path, case_id: str, replace: bool) -> dict[str, object]:
     """Inner implementation of scan_evidence with full error propagation."""
     from mulder.extractors.classifier import ClassifierConfig, EvidenceClassifier
@@ -178,18 +231,7 @@ def _scan_evidence_inner(ev_path: Path, case_id: str, replace: bool) -> dict[str
 
     manifest: list[dict[str, object]] = []
     for item in classified:
-        entry: dict[str, object] = {
-            "path": str(item.path),
-            "artifact_type": item.artifact_type,
-        }
-        try:
-            if item.path.is_file():
-                size = item.path.stat().st_size
-                entry["size_bytes"] = size
-                entry["size_human"] = _human_size(size)
-        except OSError:
-            pass
-        manifest.append(entry)
+        manifest.append(_manifest_entry(item))
 
     type_counts: dict[str, int] = {}
     for mi in manifest:
@@ -207,6 +249,8 @@ def _scan_evidence_inner(ev_path: Path, case_id: str, replace: bool) -> dict[str
         name = Path(rel).name
         size_label = mi.get("size_human", "")
         atype = mi["artifact_type"]
+        if "media" in mi:
+            atype = f"{atype}, {mi['media']}"
         tree_lines.append(f"{indent}{name}  [{atype}] {size_label}")
 
     result = create_case(case_id, str(ev_path), replace=replace)
@@ -254,7 +298,7 @@ def _scan_evidence_inner(ev_path: Path, case_id: str, replace: bool) -> dict[str
 
 
 @mcp.tool()
-@tool_access(Role.CATALOG | Role.EXTRACT_PLANNER | Role.REPORT)
+@tool_access(Role.CATALOG | Role.EXTRACT_PLANNER | Role.REPORT, unthrottled=True)
 def list_cases() -> dict[str, object]:
     """List all cases in the database directory.
 
@@ -272,9 +316,14 @@ def list_cases() -> dict[str, object]:
         try:
             from mulder.db import CaseDB
 
-            db = CaseDB.open(cid, cfg.db_dir)
-            meta = db.get_case_metadata()
-            count = db.get_source_count()
+            # ``with``, not a trailing close(): CaseDB.open starts a writer
+            # thread and holds an engine, and if get_case_metadata() raises --
+            # a corrupt file, a schema older than the migrations -- the close()
+            # below it never runs. Listing a directory of such cases leaked one
+            # thread per case, and list_cases is called repeatedly.
+            with CaseDB.open(cid, cfg.db_dir) as db:
+                meta = db.get_case_metadata()
+                count = db.get_source_count()
             cases.append(
                 {
                     "case_id": cid,
@@ -283,7 +332,6 @@ def list_cases() -> dict[str, object]:
                     "ingested_at": meta.ingested_at,
                 }
             )
-            db.close()
         except Exception as exc:
             logger.warning("Failed to read case '%s': %s", cid, exc)
             cases.append({"case_id": cid, "error": str(exc)})
@@ -314,7 +362,7 @@ def list_cases() -> dict[str, object]:
 
 
 @mcp.tool()
-@tool_access(ALL_ROLES)
+@tool_access(ALL_ROLES, unthrottled=True)
 def open_case(case_id: str) -> dict[str, object]:
     """Switch the active case to an already-existing case.
 
@@ -326,6 +374,32 @@ def open_case(case_id: str) -> dict[str, object]:
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
     params: dict[str, object] = {"case_id": case_id}
+
+    try:
+        validate_case_id(case_id)
+    except ValueError as exc:
+        return error_response(
+            tc_id,
+            "open_case",
+            params,
+            str(exc),
+            (time.monotonic() - t0) * 1000,
+            error_type="invalid_input",
+        )
+
+    # scan_evidence and create_case both honour MULDER_CASE_ID; open_case did
+    # not, so an agent pinned to one case could attach to another and every
+    # later finding, note and export would be written there instead.
+    enforced_id = os.environ.get("MULDER_CASE_ID", "")
+    if enforced_id and case_id != enforced_id:
+        return error_response(
+            tc_id,
+            "open_case",
+            params,
+            f"MULDER_CASE_ID enforces case '{enforced_id}'; refusing to open '{case_id}'.",
+            (time.monotonic() - t0) * 1000,
+            error_type="forbidden",
+        )
 
     cfg = get_cfg()
     db_path = cfg.db_dir / f"{case_id}.db"
@@ -492,11 +566,90 @@ def _extract_tar(archive: Path, dest: Path) -> list[str]:
     return [str(f.relative_to(dest)) for f in dest.rglob("*") if f.is_file()]
 
 
+def _extract_single_stream(archive: Path, dest: Path) -> list[str]:
+    """Decompress a single-member gzip/bzip2 stream into *dest*.
+
+    ``evidence.dd.gz`` is one compressed file, not an archive of files.  The
+    output keeps the name with the compression suffix removed, so
+    ``evidence.dd.gz`` becomes ``evidence.dd``.
+    """
+    opener = gzip.open if archive.suffix.lower() == ".gz" else bz2.open
+    out = dest / archive.stem
+    with opener(archive, "rb") as src, open(out, "wb") as dst:
+        shutil.copyfileobj(src, dst)
+    return [str(out.relative_to(dest))]
+
+
+def _tar_member_count(archive: Path) -> int:
+    """Return how many members *archive* yields when read as a tar, else 0.
+
+    ``tarfile.is_tarfile`` cannot answer this for a compressed file: it sees
+    the gzip wrapper and returns True for a plain ``.dd.gz`` as readily as for
+    a real ``.tar.gz``.  Counting members is the only honest test.
+    """
+    try:
+        with tarfile.open(archive, "r:*") as tf:
+            return sum(1 for _ in tf)
+    except (tarfile.TarError, OSError, EOFError):
+        return 0
+
+
 def _extract_7z(archive: Path, dest: Path) -> list[str]:
     """Extract via the ``7z`` CLI to *dest*; return paths relative to *dest*."""
     cmd = ["7z", "x", f"-o{dest}", "-y", str(archive)]
     subprocess.run(cmd, capture_output=True, timeout=_EXTRACT_TIMEOUT, check=True)
     return [str(f.relative_to(dest)) for f in dest.rglob("*") if f.is_file()]
+
+
+def _extraction_is_complete(dest: Path, archive: Path) -> bool:
+    """Return True only if *dest* holds a finished extraction of *archive*."""
+    marker = dest / _COMPLETION_MARKER
+    if not marker.is_file():
+        return False
+    try:
+        recorded = json.loads(marker.read_text())
+    except (OSError, json.JSONDecodeError):
+        return False
+    return bool(recorded.get("archive") == str(archive))
+
+
+def _mark_extraction_complete(dest: Path, archive: Path, file_count: int) -> None:
+    """Record that *archive* was fully extracted into *dest*."""
+    try:
+        (dest / _COMPLETION_MARKER).write_text(
+            json.dumps(
+                {
+                    "archive": str(archive),
+                    "file_count": file_count,
+                    "completed_utc": datetime.now(timezone.utc).isoformat(),
+                },
+                indent=2,
+            )
+        )
+    except OSError as exc:
+        logger.warning("Could not write extraction marker in %s: %s", dest, exc)
+
+
+def _extracted_files(dest: Path) -> list[str]:
+    """List extracted files, excluding mulder's own completion marker."""
+    return [
+        str(f.relative_to(dest))
+        for f in dest.rglob("*")
+        if f.is_file() and f.name != _COMPLETION_MARKER
+    ]
+
+
+def _archive_slot(archive: Path) -> str:
+    """Return a per-archive directory name that cannot collide.
+
+    ``archive.stem`` alone is ambiguous: two unrelated archives called
+    ``evidence.zip`` collect in the same slot, and the second call then takes
+    the "already extracted" path and reports the *first* archive's files as
+    its own.  Appending a digest of the resolved source path keeps the name
+    readable while making it unique to one archive on disk.
+    """
+    digest = hashlib.blake2b(str(archive).encode(), digest_size=6).hexdigest()
+    return f"{archive.stem}-{digest}"
 
 
 @mcp.tool()
@@ -536,15 +689,28 @@ def extract_archive(
             error_type="file_not_found",
         )
 
-    if extract_to:
-        dest = Path(extract_to).expanduser().resolve()
-    else:
-        cfg = get_cfg()
-        dest = cfg.db_dir / "extracted" / archive.stem
+    cfg = get_cfg()
+    extract_root = Path(cfg.db_dir) / "extracted"
 
-    # Idempotent: if already extracted, return the existing files
-    if dest.exists() and any(dest.iterdir()):
-        existing_files = [str(f.relative_to(dest)) for f in dest.rglob("*") if f.is_file()]
+    if extract_to:
+        try:
+            dest = resolve_allowed_path(Path(extract_to).expanduser(), [extract_root])
+        except PathPolicyError as exc:
+            return error_response(
+                tc_id,
+                "extract_archive",
+                params,
+                f"{exc}: extract_to must stay under {extract_root}",
+                (time.monotonic() - t0) * 1000,
+                error_type="invalid_input",
+            )
+    else:
+        dest = extract_root / _archive_slot(archive)
+
+    # Idempotent, but only for an extraction that actually finished.  A
+    # non-empty directory may be the debris of a run that died partway.
+    if _extraction_is_complete(dest, archive):
+        existing_files = _extracted_files(dest)
         result: dict[str, object] = {
             "tool_call_id": tc_id,
             "status": "already_extracted",
@@ -580,12 +746,16 @@ def extract_archive(
     try:
         if ext == ".zip":
             files = _extract_zip(archive, dest)
-        elif (
-            ext in (".tar", ".tgz")
-            or name_lower.endswith((".tar.gz", ".tar.bz2"))
-            or (ext in (".gz", ".bz2") and ".tar" not in name_lower)
-        ):
+        elif ext in (".tar", ".tgz") or name_lower.endswith((".tar.gz", ".tar.bz2")):
             files = _extract_tar(archive, dest)
+        elif ext in (".gz", ".bz2"):
+            # A bare .gz/.bz2 is usually one compressed file (evidence.dd.gz),
+            # but it may also be a tar that was not named .tar.gz.  Ask the
+            # archive which it is instead of guessing from the name.
+            if _tar_member_count(archive):
+                files = _extract_tar(archive, dest)
+            else:
+                files = _extract_single_stream(archive, dest)
         elif ext in (".7z", ".rar") or ".7z." in name_lower:
             if not shutil.which("7z"):
                 return error_response(
@@ -635,23 +805,16 @@ def extract_archive(
 
     manifest: list[dict[str, object]] = []
     for item in classified:
-        entry: dict[str, object] = {
-            "path": str(item.path),
-            "artifact_type": item.artifact_type,
-        }
-        try:
-            if item.path.is_file():
-                size = item.path.stat().st_size
-                entry["size_bytes"] = size
-                entry["size_human"] = _human_size(size)
-        except OSError:
-            pass
-        manifest.append(entry)
+        manifest.append(_manifest_entry(item))
 
     type_counts: dict[str, int] = {}
     for mi in manifest:
         t = str(mi["artifact_type"])
         type_counts[t] = type_counts.get(t, 0) + 1
+
+    # Written last: the marker is mulder's own bookkeeping, so it must not be
+    # on disk while the classifier is walking the tree for evidence.
+    _mark_extraction_complete(dest, archive, len(files))
 
     result = {
         "tool_call_id": tc_id,

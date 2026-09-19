@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from mulder.patterns import IP_RE, UNIX_PATH_RE, WIN_PATH_RE
 from mulder.server.app import mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
@@ -36,6 +37,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _RABIN2_TIMEOUT = 60
+_STDERR_PREVIEW_CHARS = 500
 _CAPA_TIMEOUT = 300
 _FLOSS_TIMEOUT = 600
 _DIEC_TIMEOUT = 120
@@ -97,10 +99,13 @@ SUSPICIOUS_API_CATEGORIES: dict[str, list[str]] = {
     ],
 }
 
+# _URL_RE and _REGISTRY_RE have no counterpart in mulder.patterns and no other
+# caller, so they stay local. IP and filesystem paths do have one, and the
+# copies here had drifted: the local Unix pattern knew only /usr, /etc, /tmp
+# and /var, so strings like /root/.bash_history and /home/victim/.ssh/id_rsa
+# were classified as "not a path" and dropped from the categorised output.
 _URL_RE = re.compile(r"https?://[^\s\"']+")
-_IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _REGISTRY_RE = re.compile(r"HKLM\\|HKCU\\|HKCR\\|SOFTWARE\\", re.IGNORECASE)
-_FILEPATH_RE = re.compile(r"[A-Z]:\\[^\s\"]+|/(?:usr|etc|tmp|var)/[^\s\"]+")
 _BASE64_RE = re.compile(r"^[A-Za-z0-9+/]{20,}={0,2}$")
 _HEX_KEY_RE = re.compile(r"^[0-9a-fA-F]{16,}$")
 _RAHASH_RE = re.compile(r"(\w+):\s+([0-9a-fA-F]+)")
@@ -114,18 +119,49 @@ _RESOLVER_APIS = {"LoadLibraryA", "LoadLibraryW", "GetProcAddress"}
 # ---------------------------------------------------------------------------
 
 
-def _run_rabin2(flags: str, file_path: Path) -> dict[str, Any]:
+def _rabin2_parse_errors(stderr: str) -> list[str]:
+    """Return the ``ERROR:`` lines rabin2 wrote while parsing.
+
+    rabin2 reports a damaged or truncated container by printing ``ERROR:``
+    lines and **still exiting 0** with partial JSON on stdout, so the exit
+    code alone does not say whether the analysis is complete.
+
+    Only ``ERROR:`` counts. rabin2 prints ``WARN:`` routinely for healthy
+    binaries -- a stripped symbol table, an unknown section flag -- and
+    treating those as failure would make every ordinary triage inconclusive.
+
+    Args:
+        stderr: Captured standard error from a rabin2 invocation.
+
+    Returns:
+        The error lines, in order, with the ``ERROR:`` prefix retained.
+    """
+    return [line.strip() for line in stderr.splitlines() if line.strip().startswith("ERROR:")]
+
+
+def _run_rabin2(
+    flags: str, file_path: Path, incomplete: list[str] | None = None
+) -> dict[str, Any]:
     """Execute rabin2 with JSON output and return parsed result.
 
     Args:
         flags: rabin2 flag characters (e.g. "I", "i", "S").
         file_path: Path to the target binary.
+        incomplete: Collector for analysis steps that did not complete. When
+            rabin2 reports a parse error but exits 0 and returns partial JSON,
+            the data is returned *and* a note is appended here, so the caller
+            keeps the partial data without being able to call the file clean.
 
     Returns:
-        Parsed JSON output, or empty dict on failure.
+        Parsed JSON output. An empty dict means rabin2 ran successfully and
+        had nothing to report (a binary with no imports, say) -- never that
+        rabin2 failed, which raises or records instead.
 
     Raises:
         subprocess.TimeoutExpired: If rabin2 exceeds the timeout.
+        OSError: If rabin2 exits non-zero *and* produced no parseable output.
+            A non-zero exit that still yielded JSON is kept: rabin2 reports a
+            partial parse that way, and that data is real.
     """
     cmd = ["rabin2", f"-{flags}j", str(file_path)]
     proc = subprocess.run(
@@ -135,13 +171,28 @@ def _run_rabin2(flags: str, file_path: Path) -> dict[str, Any]:
         timeout=_RABIN2_TIMEOUT,
         check=False,
     )
-    if not proc.stdout.strip():
-        return {}
-    try:
-        loaded = json.loads(proc.stdout)
-    except json.JSONDecodeError:
-        logger.warning("Failed to parse rabin2 -%s JSON output", flags)
-        return {}
+    loaded: Any = None
+    if proc.stdout.strip():
+        try:
+            loaded = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            logger.warning("Failed to parse rabin2 -%s JSON output", flags)
+            loaded = None
+
+    if proc.returncode != 0 and loaded is None:
+        detail = (proc.stderr.strip() or proc.stdout.strip())[:_STDERR_PREVIEW_CHARS]
+        raise OSError(f"rabin2 -{flags} exited {proc.returncode} and produced no output: {detail}")
+
+    # A clean exit is not a clean parse. rabin2 exits 0 on a truncated Mach-O
+    # after printing "ERROR: parsing symtab", and the partial JSON that comes
+    # back has fewer imports than the real file -- which is exactly the shape
+    # of a benign binary.
+    errors = _rabin2_parse_errors(proc.stderr)
+    if errors and incomplete is not None:
+        detail = "; ".join(errors)[:_STDERR_PREVIEW_CHARS]
+        incomplete.append(f"rabin2 -{flags} reported a parse error: {detail}")
+        logger.warning("rabin2 -%s reported a parse error for %s: %s", flags, file_path, detail)
+
     if isinstance(loaded, dict):
         result: dict[str, Any] = loaded
         return result
@@ -254,11 +305,11 @@ def _categorize_string(value: str) -> str | None:
     """
     if _URL_RE.search(value):
         return "url"
-    if _IPV4_RE.search(value):
+    if IP_RE.search(value):
         return "ip"
     if _REGISTRY_RE.search(value):
         return "registry"
-    if _FILEPATH_RE.search(value):
+    if WIN_PATH_RE.search(value) or UNIX_PATH_RE.search(value):
         return "filepath"
     return None
 
@@ -452,11 +503,66 @@ def _assess_timestamp(raw_ts: str | None, bintype: str = "") -> dict[str, object
     }
 
 
+def _triage_findings_text(
+    file_info: dict[str, object],
+    timestamp: dict[str, object],
+    packing_indicators: list[str],
+    suspicious_imports: dict[str, list[str]],
+    verdict: dict[str, object],
+) -> str:
+    """Render the derived triage analysis as searchable text.
+
+    Everything here is computed from the raw rabin2 output and was then
+    discarded: only the raw JSON was indexed, so an analyst searching the case
+    for ``UPX`` or ``VirtualAllocEx`` could not find the tool's own conclusion
+    about the binary.
+
+    Args:
+        file_info: Parsed ``rabin2 -I`` metadata.
+        timestamp: The compilation-timestamp assessment.
+        packing_indicators: Packing signals detected.
+        suspicious_imports: Suspicious APIs grouped by category.
+        verdict: The computed classification.
+
+    Returns:
+        A text block, one finding per line.
+    """
+    lines = [
+        "Triage verdict: "
+        f"{verdict.get('classification', 'unknown')} "
+        f"(confidence {verdict.get('confidence', 'unknown')})"
+    ]
+    reasons = verdict.get("reasons")
+    if isinstance(reasons, list):
+        lines.extend(f"Reason: {reason}" for reason in reasons)
+
+    lines.append(
+        f"Format: {file_info.get('arch', '?')} {file_info.get('bits', '?')}-bit "
+        f"{file_info.get('os', '?')}"
+    )
+    compiler = file_info.get("compiler")
+    if compiler:
+        lines.append(f"Compiler: {compiler}")
+
+    lines.append(
+        f"Compilation timestamp: {timestamp.get('parsed_utc') or 'none'} "
+        f"[{timestamp.get('validity', 'unknown')}]"
+    )
+
+    lines.extend(f"Packing indicator: {indicator}" for indicator in packing_indicators)
+
+    for category, apis in suspicious_imports.items():
+        lines.append(f"Suspicious imports ({category}): {', '.join(str(a) for a in apis)}")
+
+    return "\n".join(lines)
+
+
 def _compute_verdict(
     packing_indicators: list[str],
     suspicious_imports: dict[str, list[str]],
     timestamp: dict[str, object],
     sections: list[dict[str, object]],
+    incomplete: list[str] | None = None,
 ) -> dict[str, object]:
     """Compute an overall triage verdict from analysis results.
 
@@ -469,6 +575,9 @@ def _compute_verdict(
         suspicious_imports: Imports grouped by threat category.
         timestamp: Timestamp validity assessment dict.
         sections: Section metadata with entropy and permissions.
+        incomplete: Descriptions of analysis steps that failed. A binary
+            whose analysis did not complete cannot be called benign, because
+            the absence of indicators may simply be the absence of data.
 
     Returns:
         Dict with classification, confidence, and reasons.
@@ -515,6 +624,15 @@ def _compute_verdict(
         classification = "benign_indicators"
         confidence = "medium"
 
+    if incomplete:
+        reasons.append("Analysis incomplete: " + "; ".join(incomplete))
+        # Indicators that *were* found are real evidence and are kept. What
+        # cannot survive a partial analysis is a clean bill of health: with
+        # data missing, "no indicators found" is not a finding.
+        if classification == "benign_indicators":
+            classification = "inconclusive"
+            confidence = "none"
+
     return {
         "classification": classification,
         "confidence": confidence,
@@ -556,14 +674,21 @@ def _parse_capa_output(raw: dict[str, Any], file_path: str) -> dict[str, object]
                     "tactic": tactic,
                     "technique_id": technique_id,
                     "technique_name": technique_name,
-                    "subtechnique_id": ref.get("subtechnique_id"),
+                    # capa's AttackSpec is (parts, tactic, technique,
+                    # subtechnique, id). There is no "subtechnique_id" field,
+                    # so this was always None; the sub-technique is a *name*,
+                    # and "id" already carries the full "T1059.006".
+                    "subtechnique": str(ref.get("subtechnique", "")),
                 }
             )
 
             if tactic:
                 if tactic not in mitre_summary:
                     mitre_summary[tactic] = []
-                desc = f"{technique_id}: {technique_name}"
+                subtechnique = str(ref.get("subtechnique", ""))
+                desc = f"{technique_id}: {technique_name}" + (
+                    f"::{subtechnique}" if subtechnique else ""
+                )
                 if desc not in mitre_summary[tactic]:
                     mitre_summary[tactic].append(desc)
 
@@ -622,6 +747,30 @@ def _extract_floss_strings(
     return results
 
 
+def _floss_runtime_seconds(raw: dict[str, Any]) -> float:
+    """Read FLOSS's own runtime, which it records as ``metadata.runtime.total``.
+
+    There is no ``elapsed_time`` anywhere in the document, so the previous
+    lookup reported 0.0 for every analysis.
+
+    Args:
+        raw: Parsed FLOSS ResultDocument.
+
+    Returns:
+        Total analysis seconds, or 0.0 if the field is absent or malformed.
+    """
+    metadata = raw.get("metadata", {})
+    if not isinstance(metadata, dict):
+        return 0.0
+    runtime = metadata.get("runtime", {})
+    if not isinstance(runtime, dict):
+        return 0.0
+    total = runtime.get("total")
+    if isinstance(total, bool) or not isinstance(total, int | float):
+        return 0.0
+    return float(total)
+
+
 def _parse_floss_output(raw: dict[str, Any], file_path: str) -> dict[str, object]:
     """Parse FLOSS JSON output into structured result.
 
@@ -634,10 +783,18 @@ def _parse_floss_output(raw: dict[str, Any], file_path: str) -> dict[str, object
     Returns:
         Dict with categorized decoded strings and stats.
     """
-    decoded = _extract_floss_strings(raw.get("decoded", []), "xor")
-    stack = _extract_floss_strings(raw.get("stack_strings", []), "stack")
-    tight = _extract_floss_strings(raw.get("tight_strings", []), "tight")
-    static = _extract_floss_strings(raw.get("static_strings", []), "static")
+    # FLOSS's ResultDocument is {metadata, analysis, strings}: all four string
+    # lists live under "strings", and the decoded one is "decoded_strings".
+    # Reading them from the top level found nothing for every sample, which the
+    # tool then reported as "no obfuscated strings recovered".
+    strings = raw.get("strings", {})
+    if not isinstance(strings, dict):
+        strings = {}
+
+    decoded = _extract_floss_strings(strings.get("decoded_strings", []), "xor")
+    stack = _extract_floss_strings(strings.get("stack_strings", []), "stack")
+    tight = _extract_floss_strings(strings.get("tight_strings", []), "tight")
+    static = _extract_floss_strings(strings.get("static_strings", []), "static")
 
     return {
         "file_path": file_path,
@@ -646,7 +803,7 @@ def _parse_floss_output(raw: dict[str, Any], file_path: str) -> dict[str, object
         "tight_strings": tight,
         "static_strings": static,
         "total_decoded": len(decoded) + len(stack) + len(tight),
-        "analysis_time_seconds": raw.get("metadata", {}).get("elapsed_time", 0.0),
+        "analysis_time_seconds": _floss_runtime_seconds(raw),
     }
 
 
@@ -772,9 +929,10 @@ def triage_binary(
         )
 
     raw_parts: list[str] = []
+    incomplete: list[str] = []
 
     try:
-        info_raw = _run_rabin2("I", target)
+        info_raw = _run_rabin2("I", target, incomplete)
     except subprocess.TimeoutExpired:
         return error_response(
             tc_id,
@@ -791,6 +949,7 @@ def triage_binary(
             params,
             f"Failed to execute rabin2: {exc}",
             (time.monotonic() - t0) * 1000,
+            error_type="tool_failed",
         )
 
     file_info = _parse_file_info(info_raw)
@@ -803,28 +962,31 @@ def triage_binary(
 
     if depth in ("standard", "deep"):
         try:
-            imports_raw = _run_rabin2("i", target)
+            imports_raw = _run_rabin2("i", target, incomplete)
             imports = _parse_imports(imports_raw)
             raw_parts.append(json.dumps(imports_raw, indent=2, default=str))
 
-            sections_raw = _run_rabin2("S", target)
+            sections_raw = _run_rabin2("S", target, incomplete)
             sections = _parse_sections(sections_raw)
             raw_parts.append(json.dumps(sections_raw, indent=2, default=str))
 
-            strings_raw = _run_rabin2("z", target)
+            strings_raw = _run_rabin2("z", target, incomplete)
             strings_of_interest = _parse_strings(strings_raw)
             raw_parts.append(json.dumps(strings_raw, indent=2, default=str))
         except subprocess.TimeoutExpired:
             logger.warning("rabin2 timed out during standard analysis of %s", file_path)
-        except OSError:
+            incomplete.append(f"imports/sections/strings timed out after {_RABIN2_TIMEOUT}s")
+        except OSError as exc:
             logger.warning("Failed to run rabin2 standard analysis on %s", file_path)
+            incomplete.append(f"imports/sections/strings unavailable ({exc})")
 
     if depth == "deep":
         try:
-            libs_raw = _run_rabin2("l", target)
+            libs_raw = _run_rabin2("l", target, incomplete)
             raw_parts.append(json.dumps(libs_raw, indent=2, default=str))
-        except (subprocess.TimeoutExpired, OSError):
+        except (subprocess.TimeoutExpired, OSError) as exc:
             logger.warning("rabin2 library enumeration failed for %s", file_path)
+            incomplete.append(f"library enumeration unavailable ({exc})")
 
         if require_binary("rahash2"):
             try:
@@ -853,9 +1015,26 @@ def triage_binary(
         raw_ts = None
     timestamp = _assess_timestamp(raw_ts, str(info_dict.get("bintype", "")))
 
-    verdict = _compute_verdict(packing_indicators, suspicious_imports, timestamp, sections)
+    verdict = _compute_verdict(
+        packing_indicators, suspicious_imports, timestamp, sections, incomplete
+    )
 
-    combined_output = "\n\n".join(raw_parts)
+    # The derived analysis has to be indexed too, not only the raw rabin2 JSON.
+    # Once a source is given, tool_response replaces the results dict with a
+    # short preview, so the verdict, the packing indicators and the suspicious
+    # imports do not reach the caller in the response; if they are not in the
+    # indexed text either, search(source="binary.triage") cannot recover them
+    # and the analysis exists only inside this function. It goes first so that
+    # the conclusion, rather than the head of a JSON dump, is what a preview
+    # and a keyword search both land on.
+    combined_output = "\n\n".join(
+        [
+            _triage_findings_text(
+                file_info, timestamp, packing_indicators, suspicious_imports, verdict
+            ),
+            *raw_parts,
+        ]
+    )
     summary = extract_and_index(combined_output, "binary.triage", file_path, "rabin2")
 
     summary["file_info"] = file_info
@@ -931,7 +1110,10 @@ def run_capa(
             error_type="file_not_found",
         )
 
-    cmd = [capa_bin, "--format", "json", "--quiet"]
+    # -f/--format selects capa's *input* format (auto/pe/elf/sc32/...); JSON
+    # output is -j/--json. Passing "json" to --format is an invalid choice and
+    # capa exits 2 from argparse before it opens the sample.
+    cmd = [capa_bin, "--json", "--quiet"]
     if rules_path:
         if not Path(rules_path).exists():
             return error_response(
@@ -1070,16 +1252,22 @@ def run_floss(
             error_type="file_not_found",
         )
 
+    # As with capa, -f/--format is FLOSS's *input* format (auto/pe/sc32/sc64)
+    # and JSON output is -j/--json.
     cmd = [
         floss_bin,
-        "--format",
-        "json",
+        "--json",
         "--minimum-length",
         str(minimum_length),
+        # The sample must precede --no/--only: both are nargs="+" with
+        # `choices`, so argparse otherwise consumes the sample path as one of
+        # their values and exits 2 on an invalid choice.
+        str(target),
     ]
     if not include_static:
-        cmd.append("--only")
-    cmd.append(str(target))
+        # Skipping static extraction is "--no static"; a bare "--only" is not
+        # a valid invocation, since --only requires at least one analysis type.
+        cmd.extend(["--no", "static"])
 
     floss_timeout = adaptive_timeout(file_path, base=_FLOSS_TIMEOUT)
     try:

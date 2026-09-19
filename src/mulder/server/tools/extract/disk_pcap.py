@@ -8,13 +8,13 @@ credential extraction for cleartext protocols.
 from __future__ import annotations
 
 import logging
-import re
 import subprocess
 import tempfile
 import time
 from pathlib import Path
 from typing import Any
 
+from mulder.patterns import fls_file_entries
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
@@ -41,13 +41,6 @@ _PCAP_EXTENSIONS: frozenset[str] = frozenset(
         ".snoop",
     }
 )
-
-_PCAP_FILENAME_RE = re.compile(
-    r"^[rd]/[rd*]\s+(\d+(?:-\d+-\d+)?):\s+"
-    r"(.+\.(?:cap|pcap|pcapng|eth|snoop))\s*$",
-    re.IGNORECASE | re.MULTILINE,
-)
-"""Matches fls entries with recognized packet capture extensions."""
 
 _ICAT_TIMEOUT = 60
 _TSHARK_TIMEOUT = 120
@@ -84,9 +77,12 @@ def _discover_pcap_files(
     seen: set[str] = set()
 
     for chunk in fls_chunks:
-        for m in _PCAP_FILENAME_RE.finditer(chunk):
-            inode_str = m.group(1).split("-")[0]
-            rel_path = m.group(2).strip()
+        for entry in fls_file_entries(chunk):
+            rel_path = entry.path
+            dot = rel_path.rfind(".")
+            if dot < 0 or rel_path[dot:].lower() not in _PCAP_EXTENSIONS:
+                continue
+            inode_str = entry.base_inode
 
             dedup_key = f"{offset}:{inode_str}"
             if dedup_key in seen:

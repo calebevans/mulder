@@ -27,6 +27,9 @@ SRC_TSK_FSSTAT = "tsk.fsstat"
 SRC_TSK_ICAT = "tsk.icat"
 SRC_TSK_ISTAT = "tsk.istat"
 
+# Optical media sources
+SRC_OPTICAL_LISTING = "optical.listing"
+
 # Plaso sources
 SRC_PLASO_TIMELINE = "plaso.timeline"
 

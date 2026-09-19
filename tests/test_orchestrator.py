@@ -153,6 +153,7 @@ class TestFollowUpCapping:
                 results=[],
                 turns_used=1,
                 has_failures=False,
+                tool_calls=1,
             )
 
         call_count = 0
@@ -335,7 +336,7 @@ class TestGateAfterAnalyst:
             phase: object, plan: Plan, log_prefix: str = "", task_system: str = ""
         ) -> ExecutionResults:
             return ExecutionResults(
-                plan_id=plan.plan_id, results=[], turns_used=1, has_failures=False
+                plan_id=plan.plan_id, results=[], turns_used=1, has_failures=False, tool_calls=1
             )
 
         async def mock_analyst(

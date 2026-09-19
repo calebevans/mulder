@@ -125,3 +125,76 @@ class TestTimestampSanitization:
         value, warning = _sanitize_event_time(None)
         assert value is None
         assert warning is None
+
+
+def _call_update_finding(
+    case_db: CaseDB, audit_log: AuditLog, **kwargs: object
+) -> dict[str, object]:
+    """Invoke the sync update_finding directly, bypassing the async MCP wrapper."""
+    ctx = MagicMock()
+    ctx.db = case_db
+    ctx.audit = audit_log
+    with patch("mulder.server.tools.findings.get_ctx", return_value=ctx):
+        return _tool_dispatch_sync["update_finding"](**kwargs)  # type: ignore[no-any-return]
+
+
+_BASE = {
+    "description": "d",
+    "confidence": "inference",
+    "evidence_refs": ["tc_aabbccdd"],
+    "sources": ["volatility.pslist"],
+}
+_GATE_TEXT = "will block finalize_report"
+
+
+def _gate_warned(result: dict[str, object]) -> bool:
+    warnings = result.get("timestamp_warnings", [])
+    assert isinstance(warnings, list)
+    return any(_GATE_TEXT in str(w) for w in warnings)
+
+
+class TestTimestampCoverageAtSubmission:
+    """submit_finding warns, at the boundary, exactly when the
+    timestamp_coverage gate would later fail (issue #195)."""
+
+    @pytest.mark.parametrize(
+        ("title", "severity", "ts", "warned"),
+        [
+            ("Exfil to USB", "high", None, True),
+            ("Exfil to USB", "low", None, True),
+            ("Exfil to USB", "high", "2025-01-15T08:30:00Z", False),
+            ("Exfil to USB", "high", "2025-01-15T00:00:00Z", True),  # nullified placeholder
+            ("[NEGATIVE] No exfil found", "high", None, False),
+            ("BitLocker keys stored insecurely", "info", None, False),
+        ],
+    )
+    def test_submit_mirrors_gate_exemptions(
+        self,
+        case_db: CaseDB,
+        audit_log: AuditLog,
+        title: str,
+        severity: str,
+        ts: str | None,
+        warned: bool,
+    ) -> None:
+        result = _call_submit_finding(
+            case_db, audit_log, title=title, severity=severity, event_time_start=ts, **_BASE
+        )
+        assert result["status"] == "accepted"  # a warning, never a rejection
+        assert _gate_warned(result) is warned
+
+    def test_update_finding_reports_and_clears_the_gap(
+        self, case_db: CaseDB, audit_log: AuditLog
+    ) -> None:
+        fid = _call_submit_finding(
+            case_db, audit_log, title="State only", severity="info", **_BASE
+        )["finding_id"]
+
+        raised = _call_update_finding(case_db, audit_log, finding_id=fid, severity="high")
+        assert raised["status"] == "updated"
+        assert _gate_warned(raised)
+
+        fixed = _call_update_finding(
+            case_db, audit_log, finding_id=fid, event_time_start="2025-01-15T08:30:00Z"
+        )
+        assert "timestamp_warnings" not in fixed

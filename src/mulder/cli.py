@@ -13,6 +13,7 @@ from mulder import __version__
 from mulder.patterns import (
     DB_DIR_ENV_VAR,
     DEFAULT_DB_DIR,
+    DEFAULT_MAX_COMPACTIONS,
     DEFAULT_WORKSPACE_DIR,
     resolve_db_dir,
 )
@@ -260,6 +261,11 @@ def report(case_id: str, db_dir: str) -> None:
     help="Effort level.",
 )
 @click.option(
+    "--no-thinking",
+    is_flag=True,
+    help="Disable extended thinking for all queries; overrides --effort.",
+)
+@click.option(
     "--db-dir",
     default=DEFAULT_DB_DIR,
     envvar=DB_DIR_ENV_VAR,
@@ -280,10 +286,24 @@ def report(case_id: str, db_dir: str) -> None:
     help="Max parallel extraction sessions.",
 )
 @click.option(
+    "--max-compactions",
+    default=DEFAULT_MAX_COMPACTIONS,
+    envvar="MULDER_MAX_COMPACTIONS",
+    type=click.IntRange(min=0),
+    show_default=True,
+    help="Continuation sessions allowed after context exhaustion; 0 disables "
+    "(env: MULDER_MAX_COMPACTIONS).",
+)
+@click.option(
     "--proxy-config",
     default=None,
     type=click.Path(exists=True),
     help="LiteLLM config YAML for custom model routing.",
+)
+@click.option(
+    "--show-cli-stderr",
+    is_flag=True,
+    help="Stream agent CLI diagnostics to the dashboard and orchestrator.log.",
 )
 def investigate(
     evidence_path: str,
@@ -297,7 +317,10 @@ def investigate(
     db_dir: str,
     cwd: str,
     workers: int,
+    max_compactions: int,
     proxy_config: str | None,
+    no_thinking: bool,
+    show_cli_stderr: bool,
 ) -> None:
     """Run a full multi-pass forensic investigation.
 
@@ -371,7 +394,10 @@ def investigate(
     click.echo(f"  Planner:  {model_config.planner}", err=True)
     click.echo(f"  Executor: {model_config.executor}", err=True)
     click.echo(f"  Analyst:  {model_config.analyst}", err=True)
-    click.echo(f"Effort: {effort}, Workers: {workers}", err=True)
+    if no_thinking:
+        click.echo(f"Thinking: disabled (effort ignored), Workers: {workers}", err=True)
+    else:
+        click.echo(f"Effort: {effort}, Workers: {workers}", err=True)
     click.echo(f"Logging to {log_file}", err=True)
 
     orchestrator = Orchestrator(
@@ -385,6 +411,9 @@ def investigate(
         proxy_config=proxy_config,
         case_id=case_id,
         db_dir=log_dir,
+        no_thinking=no_thinking,
+        show_cli_stderr=show_cli_stderr,
+        max_compactions=max_compactions,
     )
 
     from mulder.orchestrator.errors import (

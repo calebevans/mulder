@@ -241,28 +241,90 @@ class TestGateAuditToolsCalled:
 
 
 class TestGateEvidenceCitationCoverage:
-    """Gate 6: At least 50% of non-empty sources must be cited in findings."""
+    """Gate 5: distinct evidence-bearing sources cited; advisory below 25%,
+    blocking only under the absolute floor of 3 cited sources."""
 
     def test_passes_when_all_cited(self) -> None:
         findings, metadata, sources, audit = _passing_gate_inputs()
         gates = _evaluate_finalize_gates(findings, metadata, sources, audit)
         gate = next(g for g in gates if g["name"] == "evidence_citation_coverage")
         assert gate["passed"] is True
+        assert "advisory" not in gate
+        assert "100.0% of evidence sources cited (3/3" in str(gate["detail"])
 
-    def test_fails_below_threshold(self) -> None:
-        findings = [_make_finding("f_001", sources=["src_a"])] * 3
-        sources = [
-            _make_source("src_a", 10),
-            _make_source("src_b", 20),
-            _make_source("src_c", 30),
-            _make_source("src_d", 40),
-            _make_source("src_e", 50),
-        ]
+    def test_low_coverage_is_advisory_not_blocking(self) -> None:
+        """Three cited sources out of many: passes, flagged advisory, figure kept."""
+        findings = [_make_finding("f_001", sources=["src_a", "src_b", "src_c"])] * 3
+        sources = [_make_source(f"src_{i}", 10) for i in "abcdefghijklmnop"]
+        gates = _evaluate_finalize_gates(
+            findings, _make_metadata(), sources, _make_audit_summary()
+        )
+        gate = next(g for g in gates if g["name"] == "evidence_citation_coverage")
+        assert gate["passed"] is True
+        assert gate["advisory"] is True
+        assert "18.8% of evidence sources cited (3/16" in str(gate["detail"])
+        assert "do NOT create findings" in str(gate["detail"])
+
+    def test_blocks_below_absolute_floor(self) -> None:
+        """Fewer than 3 distinct cited sources blocks whatever the breadth."""
+        findings = [_make_finding("f_001", sources=["src_a", "src_b"])] * 3
+        sources = [_make_source(f"src_{i}", 10) for i in "abcde"]
         gates = _evaluate_finalize_gates(
             findings, _make_metadata(), sources, _make_audit_summary()
         )
         gate = next(g for g in gates if g["name"] == "evidence_citation_coverage")
         assert gate["passed"] is False
+        assert "advisory" not in gate
+        assert "Only 2 distinct evidence source(s) cited" in str(gate["detail"])
+
+    def test_floor_scales_down_to_tiny_cases(self) -> None:
+        """Two evidence sources, both cited: cannot be asked for a third."""
+        findings = [_make_finding("f_001", sources=["src_a", "src_b"])] * 3
+        sources = [_make_source("src_a", 10), _make_source("src_b", 10)]
+        gates = _evaluate_finalize_gates(
+            findings, _make_metadata(), sources, _make_audit_summary()
+        )
+        gate = next(g for g in gates if g["name"] == "evidence_citation_coverage")
+        assert gate["passed"] is True
+        assert "advisory" not in gate
+
+    def test_denominator_is_distinct_evidence_names(self) -> None:
+        """Repeated rows and auxiliary sources do not inflate the denominator.
+
+        Mirrors the K3 v2 shape: one hive name per device, one row per
+        registry query, stats/manifests, and the run's own derived outputs.
+        """
+        findings = [
+            _make_finding("f_001", sources=["registry.sam", "bulk.url", "tsk.filelist"])
+        ] * 3
+        sources = [
+            _make_source("registry.sam", 186),
+            _make_source("registry.sam", 7),
+            _make_source("registry.sam", 7),
+            _make_source("bulk.url", 500),
+            _make_source("bulk.url", 20),
+            _make_source("tsk.filelist", 900),
+            _make_source("ez.mft", 300),
+            # auxiliary: excluded from the denominator entirely
+            _make_source("registry.query.software", 1),
+            _make_source("registry.query.software", 1),
+            _make_source("registry.query.system.informant", 1),
+            _make_source("plaso.stats", 672820),
+            _make_source("evtx.manifest", 54),
+            _make_source("appfiles.users.appdata.manifest.json", 23),
+            _make_source("bulk.bulk_extractor", 1),
+            _make_source("bulk.duplicates", 12),
+            _make_source("composite.correlation", 1),
+            _make_source("enrichment.iocs", 60),
+            _make_source("binwalk.scan", 0),
+        ]
+        gates = _evaluate_finalize_gates(
+            findings, _make_metadata(), sources, _make_audit_summary()
+        )
+        gate = next(g for g in gates if g["name"] == "evidence_citation_coverage")
+        assert gate["passed"] is True
+        assert "advisory" not in gate
+        assert "75.0% of evidence sources cited (3/4 distinct names)" in str(gate["detail"])
 
     def test_empty_sources_skipped(self) -> None:
         """Sources with line_count=0 should not count toward coverage."""

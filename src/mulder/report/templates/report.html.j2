@@ -618,7 +618,7 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
 
   <div class="exec-summary">
     <div class="exec-summary-label">Executive Summary</div>
-    <p>{{ executive_summary }}</p>
+    <p>{{ executive_summary | safe }}</p>
   </div>
 
   <div class="stats-grid stagger-in">
@@ -657,7 +657,7 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
     <div class="card-header">&#9745; Forensic Soundness and Evidence Integrity</div>
     <div class="card-body" style="font-size:0.88rem;line-height:1.7;color:var(--text-muted);">
       Analysis was executed via a read-only Model Context Protocol (MCP) server mapped to the SANS SIFT toolchain. The MCP architecture enforces structural evidence protection: original evidence files were mounted as read-only volumes, all tool interactions are typed functions (no shell access), and every finding is validated against the append-only audit log before acceptance.
-      {% if evidence_integrity %}{{ evidence_integrity | length }} evidence files were cryptographically validated via SHA-256 hashes computed at ingestion.{% endif %}
+      {% if evidence_integrity %}SHA-256 hashes were computed at ingestion for {{ evidence_integrity | length }} original evidence file{{ '' if evidence_integrity | length == 1 else 's' }} and recorded in the case database.{% endif %}
       {{ total_tool_calls }} tool calls executed across {{ sources | length }} indexed sources with full provenance tracking.
     </div>
   </div>

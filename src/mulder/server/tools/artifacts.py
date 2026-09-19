@@ -24,10 +24,14 @@ from pathlib import Path
 from typing import Any
 
 from mulder.path_policy import PathPolicyError, resolve_allowed_path
-from mulder.patterns import parse_mmls_rows
+from mulder.patterns import fls_file_entries, parse_mmls_rows
 from mulder.server.app import get_cfg, get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
-from mulder.server.helpers import hash_output, make_tool_call_id
+from mulder.server.helpers import (
+    hash_output,
+    make_tool_call_id,
+    readonly_sqlite_uri,
+)
 from mulder.server.tool_access import Role, tool_access
 
 logger = logging.getLogger(__name__)
@@ -86,6 +90,8 @@ def _resolve_image_and_offset() -> tuple[str, int]:
     Returns:
         Tuple of ``(image_path, primary_partition_offset)``.
     """
+    from mulder.server.tools.extract.tsk import _partition_table_text
+
     ctx = get_ctx()
     sources = ctx.db.get_sources()
 
@@ -97,10 +103,7 @@ def _resolve_image_and_offset() -> tuple[str, int]:
 
     if part_src:
         image_path = part_src.source_path
-        windows = ctx.db.get_windows_by_source("tsk.partitions")
-
-        mmls_text = "\n".join(w.raw_text for w in windows)
-        for start, length, desc in parse_mmls_rows(mmls_text):
+        for start, length, desc in parse_mmls_rows(_partition_table_text(image_path)):
             if any(ind in desc for ind in ("ntfs", "0x07", "hfs", "apfs")) and length > 0:
                 offset = start
                 break
@@ -113,17 +116,21 @@ def _resolve_image_and_offset() -> tuple[str, int]:
 _KV_SOURCE_OFFSET_PREFIX = "tsk_source_offset:"
 
 
-def _find_inodes_by_pattern(pattern: str) -> list[tuple[str, str, int]]:
-    """Search all fls listings for files matching a name pattern.
+def _find_inodes_by_path(path_pattern: str) -> list[tuple[str, str, int]]:
+    """Search all fls listings for files whose path matches *path_pattern*.
 
     Searches the primary ``tsk.filelist`` and any secondary partition
     sources (``tsk.filelist.p1``, etc.), returning the correct partition
     offset for each match so callers can extract via ``icat`` with the
     right offset.
 
+    Callers supply only the path pattern. The row grammar of ``fls`` output
+    lives in ``parse_fls_rows`` and is no longer restated at each call site,
+    where six copies of it had all inherited the same two mistakes.
+
     Args:
-        pattern: Regex pattern with at least two capture groups:
-            group(1) = inode string, group(2) = relative path.
+        path_pattern: Regex matched against the entry's path. Anchored at
+            neither end, so a bare filename is a substring match.
 
     Returns:
         List of ``(inode_str, relative_path, partition_offset)`` tuples.
@@ -136,7 +143,7 @@ def _find_inodes_by_pattern(pattern: str) -> list[tuple[str, str, int]]:
     )
 
     _, primary_offset = _resolve_image_and_offset()
-    pat = re.compile(pattern, re.IGNORECASE | re.MULTILINE)
+    pat = re.compile(path_pattern, re.IGNORECASE)
     results: list[tuple[str, str, int]] = []
 
     for src in fls_sources:
@@ -145,15 +152,16 @@ def _find_inodes_by_pattern(pattern: str) -> list[tuple[str, str, int]]:
 
         windows = ctx.db.get_windows_by_source(src.source_name)
         for w in windows:
-            for m in pat.finditer(w.raw_text):
-                inode_str = m.group(1).split("-")[0]
-                rel_path = m.group(2).strip()
-                results.append((inode_str, rel_path, offset))
+            for entry in fls_file_entries(w.raw_text):
+                if pat.search(entry.path):
+                    results.append((entry.base_inode, entry.path, offset))
     return results
 
 
 @mcp.tool()
-@tool_access(Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR | Role.CROSS_ANALYST)
+@tool_access(
+    Role.EXTRACT_EXECUTOR | Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR | Role.CROSS_ANALYST
+)
 def parse_browser_history() -> dict[str, object]:
     """Extract browser history from Chrome, Firefox, and Safari databases.
 
@@ -173,27 +181,24 @@ def parse_browser_history() -> dict[str, object]:
         return {"tool_call_id": tc_id, "status": "error", "error_message": "No disk image indexed"}
 
     browser_patterns = [
-        (r"[rd]/[rd*]\s+(\d+(?:-\d+-\d+)?):\s+(.*?/Chrome/.*?/History)\s*$", "chrome"),
-        (
-            r"[rd]/[rd*]\s+(\d+(?:-\d+-\d+)?):\s+(.*?/Firefox/Profiles/.*?/places\.sqlite)\s*$",
-            "firefox",
-        ),
-        (r"[rd]/[rd*]\s+(\d+(?:-\d+-\d+)?):\s+(.*?/Safari/History\.db)\s*$", "safari"),
-        (r"[rd]/[rd*]\s+(\d+(?:-\d+-\d+)?):\s+(.*?/Google/Chrome/.*?/History)\s*$", "chrome"),
+        (r"/Chrome/.*?/History$", "chrome"),
+        (r"/Firefox/Profiles/.*?/places\.sqlite$", "firefox"),
+        (r"/Safari/History\.db$", "safari"),
+        (r"/Google/Chrome/.*?/History$", "chrome"),
     ]
 
     all_results: list[str] = []
 
     with tempfile.TemporaryDirectory(prefix="mulder_browser_") as tmpdir:
         for pattern, browser in browser_patterns:
-            matches = _find_inodes_by_pattern(pattern)
+            matches = _find_inodes_by_path(pattern)
             for inode_str, rel_path, match_offset in matches:
                 db_path = Path(tmpdir) / f"{browser}_{inode_str}.sqlite"
                 if not _icat_extract(image_path, match_offset, inode_str, db_path):
                     continue
 
                 try:
-                    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+                    conn = sqlite3.connect(readonly_sqlite_uri(db_path), uri=True)
                     conn.row_factory = sqlite3.Row
 
                     if browser == "chrome":
@@ -283,15 +288,14 @@ def parse_plist(plist_filter: str | None = None) -> dict[str, object]:
 
     if plist_filter:
         escaped_filter = re.escape(plist_filter)
-        pattern = rf"[rd]/[rd*]\s+(\d+(?:-\d+-\d+)?):\s+(.*?{escaped_filter}.*?\.plist)\s*$"
+        pattern = rf".*?{escaped_filter}.*?\.plist$"
     else:
         pattern = (
-            r"[rd]/[rd*]\s+(\d+(?:-\d+-\d+)?):\s+"
-            r"(.*?(?:loginitems|recentitems|wifi|known-networks|"
-            r"SystemVersion|loginwindow|LaunchAgents|LaunchDaemons).*?\.plist)\s*$"
+            r".*?(?:loginitems|recentitems|wifi|known-networks|"
+            r"SystemVersion|loginwindow|LaunchAgents|LaunchDaemons).*?\.plist$"
         )
 
-    matches = _find_inodes_by_pattern(pattern)
+    matches = _find_inodes_by_path(pattern)
     all_results: list[str] = []
 
     with tempfile.TemporaryDirectory(prefix="mulder_plist_") as tmpdir:
@@ -383,7 +387,7 @@ def query_sqlite_from_image(inode: int, query: str, description: str = "") -> di
             }
 
         try:
-            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            conn = sqlite3.connect(readonly_sqlite_uri(db_path), uri=True)
             conn.execute("PRAGMA trusted_schema=OFF")
             conn.set_authorizer(_readonly_authorizer)
             conn.row_factory = sqlite3.Row

@@ -266,6 +266,40 @@ class TestRenderAll:
         assert len(html_text) > 0
         assert "dual" in html_text
 
+    def test_evidence_integrity_sentence_counts_original_files(self, tmp_path: Path) -> None:
+        renderer = ReportRenderer()
+        meta = CaseMetadataRow(
+            case_id="integrity",
+            ingested_at="2025-01-01T00:00:00Z",
+            evidence_root="/evidence",
+            extractor_versions={},
+        )
+        summary = AuditSummary(
+            total_tool_calls=1,
+            total_findings=0,
+            tool_call_counts={},
+            total_duration_ms=1,
+            first_timestamp="2025-01-01T00:00:00Z",
+            last_timestamp="2025-01-01T00:00:01Z",
+        )
+        audit_path = tmp_path / "audit.jsonl"
+        audit_path.write_text("")
+        one = [{"file_path": "/evidence/disk.E01", "sha256": "ab" * 32, "size_bytes": 1024}]
+
+        md_text, html_text, _pdf = renderer.render_all(
+            meta, [], summary, audit_path, evidence_integrity=one, generate_pdf=False
+        )
+        for text in (md_text, html_text):
+            assert "1 evidence files" not in text
+            assert "for 1\noriginal evidence file and" in text or (
+                "for 1 original evidence file and" in text
+            )
+
+        md_text, _html, _pdf = renderer.render_all(
+            meta, [], summary, audit_path, evidence_integrity=one * 2, generate_pdf=False
+        )
+        assert "original evidence files and" in md_text
+
 
 class TestSourceCountReconciliation:
     def test_uses_breakdown_sum_when_present(self) -> None:

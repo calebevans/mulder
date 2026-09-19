@@ -78,3 +78,14 @@ class TestWorkspaceResolution:
         assert "~" not in resolved
         assert resolved == str(Path(DEFAULT_WORKSPACE_DIR).expanduser())
         assert Path(resolved, ".mcp.json").exists()
+
+
+@pytest.mark.parametrize("show_stderr", [False, True])
+def test_investigate_cli_stderr_opt_in(tmp_path: Path, show_stderr: bool) -> None:
+    """The flag reaches the orchestrator; ordinary runs keep stderr hidden."""
+    args = ["--cwd", str(tmp_path / "workspace")]
+    if show_stderr:
+        args.append("--show-cli-stderr")
+    result, orchestrator_cls = _invoke(args, tmp_path / "db")
+    assert result.exit_code == 0
+    assert orchestrator_cls.call_args.kwargs["show_cli_stderr"] is show_stderr

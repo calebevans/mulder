@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import contextlib
+import functools
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -36,6 +38,7 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
+_STDERR_PREVIEW_CHARS = 500
 _BULK_TIMEOUT = 1800
 _SCALPEL_TIMEOUT = 1800
 _PHOTOREC_TIMEOUT = 3600
@@ -109,18 +112,106 @@ def _bulk_page_size() -> int:
 
 
 _SCANNER_ALIASES: dict[str, str] = {
+    # Names models reach for that bulk_extractor does not have.
     "url": "email",
+    "urls": "email",
+    "emails": "email",
     "domain": "net",
+    "domains": "net",
     "ip": "net",
+    "ips": "net",
+    "ipv4": "net",
+    "ipv6": "net",
+    "network": "net",
+    "tcp": "net",
     "http": "httplogs",
+    "ccn": "accts",
+    "cc": "accts",
+    "card": "accts",
+    "cards": "accts",
+    "credit": "accts",
+    "creditcard": "accts",
+    "credit_card": "accts",
+    "creditcards": "accts",
+    "credit_cards": "accts",
+    "ssn": "accts",
+    "pii": "accts",
+    "phone": "accts",
+    "phones": "accts",
+    "telephone": "accts",
+    "jpeg": "exif",
+    "jpg": "exif",
+    "images": "exif",
+    "lnk": "winlnk",
+    "prefetch": "winprefetch",
+    "exe": "winpe",
+    "pe": "winpe",
+    "mft": "ntfsmft",
+    "usn": "ntfsusn",
+    "sql": "sqlite",
+    "sqlite3": "sqlite",
+    "evt": "evtx",
+    "eventlog": "evtx",
+    "xml": "msxml",
     "kml": "kml_carved",
     "vcard": "vcard_carved",
+    # bulk_extractor 1.x names.
     "email_lg": "email",
     "accts_lg": "accts",
     "gps_lg": "gps",
     "base16_lg": "base64",
     "httpheader_lg": "httplogs",
 }
+
+# Scanner list of bulk_extractor 2.2.1 as built by the Dockerfile.  Only used
+# when ``bulk_extractor -h`` cannot be run or parsed (see _known_scanners).
+_FALLBACK_SCANNERS: frozenset[str] = frozenset(
+    {
+        "accts", "aes", "base16", "base64", "elf", "email", "evtx", "exif",
+        "facebook", "find", "gps", "gzip", "hiberfile", "httplogs", "json",
+        "kml_carved", "msxml", "net", "ntfsindx", "ntfslogfile", "ntfsmft",
+        "ntfsusn", "outlook", "pdf", "rar", "rtti", "sqlite", "utmp",
+        "vcard_carved", "vin", "windirs", "winlnk", "winpe", "winprefetch",
+        "wordlist", "xor", "zip",
+    }
+)  # fmt: skip
+
+# ``bulk_extractor -h`` lists every scanner as "-x NAME - disable scanner NAME"
+# (enabled by default) or "-e NAME - enable scanner NAME" (opt-in).
+_SCANNER_HELP_RE = re.compile(r"^\s+-[xe] (\S+) - (?:dis|en)able scanner", re.MULTILINE)
+
+
+def _parse_scanner_help(help_text: str) -> frozenset[str]:
+    """Extract scanner names from ``bulk_extractor -h`` output."""
+    return frozenset(_SCANNER_HELP_RE.findall(help_text))
+
+
+@functools.lru_cache(maxsize=1)
+def _known_scanners() -> frozenset[str]:
+    """Scanner names the installed bulk_extractor accepts.
+
+    Parsed from ``bulk_extractor -h`` on first use so the set tracks the
+    installed version; falls back to ``_FALLBACK_SCANNERS`` when the binary
+    cannot be run or prints help in an unexpected format.
+    """
+    try:
+        # -h exits non-zero and prints to stdout.
+        proc = subprocess.run(
+            ["bulk_extractor", "-h"], capture_output=True, text=True, timeout=30, check=False
+        )
+        parsed = _parse_scanner_help(proc.stdout + proc.stderr)
+    except (OSError, subprocess.TimeoutExpired):
+        parsed = frozenset()
+    if not parsed:
+        logger.warning("Could not parse scanner list from bulk_extractor -h; using built-in list")
+        return _FALLBACK_SCANNERS
+    return parsed
+
+
+def _resolve_scanners(scanners: list[str]) -> list[str]:
+    """Map scanner names through aliases (case-insensitively) and dedupe."""
+    return list(dict.fromkeys(_SCANNER_ALIASES.get(s.lower(), s.lower()) for s in scanners))
+
 
 _FEATURE_SOURCE_MAP: dict[str, str] = {
     "email": "bulk.email",
@@ -167,8 +258,7 @@ def _build_bulk_extractor_cmd(
         cmd.extend(["-M", str(depth)])
 
     if scanners:
-        resolved = [_SCANNER_ALIASES.get(s, s) for s in scanners]
-        deduped = list(dict.fromkeys(resolved))
+        deduped = _resolve_scanners(scanners)
         cmd.extend(["-E", deduped[0]])
         for s in deduped[1:]:
             cmd.extend(["-e", s])
@@ -261,8 +351,16 @@ def run_bulk_extractor(
     Call on any disk image or raw partition. No prerequisite tools
     required. Pass specific scanners for faster runs (e.g.
     ``scanners=["email", "net", "httplogs"]``). Use max_depth=2 for a
-    quick first pass. NOTE: there is no "url" scanner; URLs come from
-    "email" and "httplogs". IPs/domains come from "net".
+    quick first pass.
+
+    Scanner names: accts (credit cards, SSNs, phone numbers; there is no
+    "ccn" scanner), aes, base16, base64, elf, email (also yields URLs;
+    there is no "url" scanner), evtx, exif, facebook, find, gps, gzip,
+    hiberfile, httplogs, json, kml_carved, msxml, net (IPs, domains,
+    packets), ntfsindx, ntfslogfile, ntfsmft, ntfsusn, outlook, pdf, rar,
+    rtti, sqlite, utmp, vcard_carved, vin, windirs, winlnk, winpe,
+    winprefetch, wordlist, xor, zip.  Unknown names are rejected before
+    the binary runs.
 
     Indexes each feature type as ``bulk.<feature>`` (e.g. ``bulk.email``,
     ``bulk.url``). Use get_carved_iocs() for a summary or search() to
@@ -273,8 +371,9 @@ def run_bulk_extractor(
         features: Optional list of feature types to index from the
             output (e.g. ["email", "url"]).  Indexes all if omitted.
         scanners: Optional list of bulk_extractor scanner names to
-            enable.  When provided, ONLY these scanners run (uses
-            -E/-e flags).  When omitted, all scanners run.
+            enable (see list above).  When provided, ONLY these
+            scanners run (uses -E/-e flags).  When omitted, all
+            scanners run.
         max_depth: Maximum recursion depth for decompressing nested
             archives (default: 12).  Use ``max_depth=2`` for a faster
             first-pass scan: most forensic artifacts are at depth
@@ -312,6 +411,19 @@ def run_bulk_extractor(
         return error_response(
             tc_id, "run_bulk_extractor", params, "bulk_extractor not found on PATH"
         )
+
+    if scanners:
+        known = _known_scanners()
+        unknown = [s for s in _resolve_scanners(scanners) if s not in known]
+        if unknown:
+            return error_response(
+                tc_id,
+                "run_bulk_extractor",
+                params,
+                f"Unknown bulk_extractor scanner(s): {', '.join(unknown)}",
+                error_type="invalid_scanner",
+                suggestion=f"Accepted scanners: {', '.join(sorted(known))}",
+            )
 
     if not Path(image_path).exists():
         return error_response(
@@ -639,7 +751,7 @@ def run_photorec(image_path: str) -> dict[str, object]:
             f"search,{tmpdir}/",
         ]
         try:
-            subprocess.run(
+            proc = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
@@ -656,6 +768,20 @@ def run_photorec(image_path: str) -> dict[str, object]:
             )
 
         report_path = Path(tmpdir) / "report.xml"
+        recovered_anything = report_path.exists() or any(
+            f.is_file() for f in Path(tmpdir).rglob("*")
+        )
+        if proc.returncode != 0 and not recovered_anything:
+            detail = (proc.stderr.strip() or proc.stdout.strip())[:_STDERR_PREVIEW_CHARS]
+            return error_response(
+                tc_id,
+                "run_photorec",
+                params,
+                f"photorec exited {proc.returncode} and carved nothing: {detail}",
+                (time.monotonic() - t0) * 1000,
+                error_type="tool_failed",
+            )
+
         report_text = ""
         if report_path.exists():
             report_text = report_path.read_text(errors="replace")

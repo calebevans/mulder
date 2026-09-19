@@ -71,7 +71,12 @@ REQUIRED ACTIONS:
      Q6. What is the full timeline of the incident?
      Q7. What is the total scope and business impact?
      Q8. What are the recommended remediation actions?
-5. Call check_finalize_readiness to verify all gates pass.
+5. Call check_finalize_readiness to verify all gates pass. The
+   narrative analyst normally runs the audits, but if the
+   audit_tools_called gate reports audit_evidence_coverage or
+   audit_tool_coverage as not yet called, call them yourself, then
+   re-check readiness. Fix a timestamp_coverage gap with update_finding
+   using timestamps already in the evidence; never fabricate one.
 6. Call finalize_report to generate the final report.
 
 OUTPUT REQUIREMENTS:
@@ -85,7 +90,8 @@ OUTPUT REQUIREMENTS:
 - The final report must be successfully generated.
 
 CONSTRAINTS:
-- Do not run extraction or analysis tools.
+- Do not run extraction or analysis tools; the audit tools named in
+  step 5 are the only exception.
 - Do not submit new findings (update existing ones if corrections are needed).
 - Focus solely on writing and finalizing.
 - Strategic Remediation must NOT contain generic security advice. Every

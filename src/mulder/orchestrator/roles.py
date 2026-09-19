@@ -25,15 +25,32 @@ from mulder.orchestrator.types import (
     Plan,
     extract_executor_results,
     extract_follow_up_request,
-    extract_json_from_text,
     extract_json_plan,
 )
 
 logger = logging.getLogger(__name__)
 
-_MAX_COMPACTIONS: int = 3
-
 _BATCH_ID_RE: re.Pattern[str] = re.compile(r"\bbg_[a-f0-9]{8}\b")
+
+_PLANNER_TURN_BUDGET: str = (
+    "\n\nTURN BUDGET: This session allows {max_turns} turns. Every tool call "
+    "uses one turn and your final JSON plan needs one, so make at most "
+    "{max_calls} tool calls. Stop reading as soon as you can write the plan; "
+    "a plan built from what you have already read is better than no plan."
+)
+
+_PLANNER_OUT_OF_TURNS: str = (
+    "OUT OF TURNS: Your previous planning session reached its turn limit "
+    "before emitting the plan. Tools are disabled now; do NOT call any "
+    "(ignore the instruction to call open_case). Using the case context "
+    "above and your notes below, respond with ONLY the JSON plan.\n\n"
+    "YOUR NOTES FROM THE PREVIOUS SESSION:\n"
+)
+
+_MAX_PLANNER_NOTES_CHARS: int = 20_000
+
+_REPAIR_MAX_CHARS: int = 24_000
+"""Cap on planner text sent to the JSON-repair utility model (~6K tokens)."""
 
 _EXECUTOR_CONTROL_TOOLS: frozenset[str] = frozenset(
     {
@@ -47,6 +64,45 @@ _EXECUTOR_CONTROL_TOOLS: frozenset[str] = frozenset(
         "mcp__mulder__run_parallel",
     }
 )
+
+_EXECUTOR_PASSIVE_TOOLS: frozenset[str] = frozenset(
+    t.removeprefix("mcp__mulder__")
+    for t in _EXECUTOR_CONTROL_TOOLS
+    if t not in {"mcp__mulder__start_extraction_batch", "mcp__mulder__run_parallel"}
+)
+"""Control tools that extract nothing: open the case, poll, wait, fetch.
+
+Batch launches are deliberately not here: ``start_extraction_batch`` and
+``run_parallel`` are how the executor runs most of its plan, so a session
+consisting of one batch launch plus a wait has done real work.
+"""
+
+_EXECUTOR_TOOLS_SECTION: str = (
+    "\n\nEXECUTOR TOOLS: the {phase} executor can call exactly these tools; "
+    "a task naming any other tool is dropped from the plan:\n{tools}"
+)
+
+
+def executor_tools_section(phase: PhaseConfig) -> str:
+    """Render the tools a planner may put in its plan for *phase*.
+
+    Built from the executor role allowlist so the prompt cannot drift from
+    what the executor is actually permitted to call. Executor control
+    tools (open_case, batch management) are omitted: they are not
+    something to plan.
+
+    Args:
+        phase: Split-mode phase configuration.
+
+    Returns:
+        Prompt suffix listing the plannable tool names, prefix stripped.
+    """
+    names = sorted(
+        t.removeprefix("mcp__mulder__")
+        for t in phase.executor_allowed_tools
+        if t not in _EXECUTOR_CONTROL_TOOLS
+    )
+    return _EXECUTOR_TOOLS_SECTION.format(phase=phase.name, tools=", ".join(names))
 
 
 def _sanitize_for_prompt(text: str, max_len: int = 200) -> str:
@@ -87,6 +143,7 @@ class RoleRunner:
         case_id: str,
         env: dict[str, str],
         cwd: str,
+        max_compactions: int,
     ) -> None:
         """Initialize the role runner.
 
@@ -97,6 +154,8 @@ class RoleRunner:
             case_id: Case identifier for plan IDs and utility queries.
             env: Environment variables for agent sessions.
             cwd: Working directory for agent sessions.
+            max_compactions: Continuation sessions allowed per role session
+                after context exhaustion.
         """
         self._session = session
         self._dashboard = dashboard
@@ -104,6 +163,7 @@ class RoleRunner:
         self._case_id = case_id
         self._env = env
         self._cwd = cwd
+        self._max_compactions = max_compactions
 
     async def run_planner(
         self,
@@ -122,7 +182,9 @@ class RoleRunner:
             log_prefix: Prefix for dashboard log lines.
 
         Returns:
-            Parsed Plan, or None if the planner failed to produce one.
+            Parsed Plan, or None if the planner failed to produce one. With
+            *follow_up_context* the Plan may have no tasks, meaning the
+            planner found nothing more to run.
         """
         model = self._model_config.resolve(phase.name, "planner")
         effective_vars = dict(prompt_vars or {})
@@ -149,8 +211,15 @@ class RoleRunner:
                     effective_vars[fname] = ""
             prompt = phase.planner_prompt_template.format(**effective_vars)
 
+        prompt += executor_tools_section(phase)
+
         if follow_up_context:
             prompt += f"\n\nFOLLOW-UP REQUEST:\n{follow_up_context}"
+
+        prompt += _PLANNER_TURN_BUDGET.format(
+            max_turns=phase.planner_max_turns,
+            max_calls=max(phase.planner_max_turns - 1, 1),
+        )
 
         result = await self._session.execute(
             system_prompt=phase.planner_system_prompt,
@@ -159,11 +228,16 @@ class RoleRunner:
             allowed_tools=phase.planner_allowed_tools,
             disallowed_tools=phase.disallowed_tools,
             max_turns=phase.planner_max_turns,
-            max_budget=phase.planner_max_budget_usd,
             log_prefix=log_prefix,
         )
 
-        plan_json = extract_json_plan(result.messages)
+        # On a follow-up cycle an empty plan is a valid answer ("nothing
+        # more to run"), not malformed output to send through JSON repair.
+        plan_json = extract_json_plan(result.messages, allow_empty=bool(follow_up_context))
+        if plan_json is None and result.context_exhausted:
+            plan_json = await self._request_plan_from_notes(
+                phase, prompt, model, result, log_prefix
+            )
         if plan_json is None:
             plan_json = await self._repair_json(result.messages, phase.name)
         if plan_json is None:
@@ -203,7 +277,15 @@ class RoleRunner:
             ExecutionResults with tool outputs and status.
         """
         model = self._model_config.resolve(phase.name, "executor")
-        plan_text = json.dumps({"tasks": plan.tasks}, indent=2)
+        tasks, dropped = self._executable_tasks(plan, phase.executor_allowed_tools)
+        if dropped:
+            msg = (
+                f"Plan names tools the {phase.name} executor role may not call; "
+                f"dropped from the plan: {', '.join(dropped)}"
+            )
+            logger.warning("[%s] %s", phase.name, msg)
+            self._dashboard.log_info(msg)
+        plan_text = json.dumps({"tasks": tasks}, indent=2)
 
         try:
             prompt = phase.executor_prompt_template.format(plan=plan_text, case_id=self._case_id)
@@ -219,7 +301,6 @@ class RoleRunner:
             allowed_tools=allowed_tools,
             disallowed_tools=phase.disallowed_tools,
             max_turns=phase.executor_max_turns,
-            max_budget=phase.executor_max_budget_usd,
             log_prefix=log_prefix,
             task_system=task_system,
         )
@@ -231,7 +312,6 @@ class RoleRunner:
             allowed_tools=allowed_tools,
             disallowed_tools=phase.disallowed_tools,
             max_turns=phase.executor_max_turns,
-            max_budget=phase.executor_max_budget_usd,
             continuation_prompt=(
                 "CONTINUATION: The previous executor session exhausted its "
                 "context window. All tool results have been saved. Continue "
@@ -269,6 +349,7 @@ class RoleRunner:
             ),
             messages=result.messages,
             batch_ids=result.batch_ids,
+            tool_calls=sum(t not in _EXECUTOR_PASSIVE_TOOLS for t in result.tool_names),
         )
 
     async def run_analyst(
@@ -322,6 +403,60 @@ class RoleRunner:
                 f"Investigation questions:\n{context['investigation_questions']}"
             )
 
+        return await self._analyst_session(phase, prompt, model, log_prefix, task_system)
+
+    async def run_remediation(
+        self,
+        phase: PhaseConfig,
+        gaps: list[str],
+        log_prefix: str = "",
+        task_system: str = "",
+    ) -> AnalystResult:
+        """Run an analyst-only session that fixes a failed gate's gaps.
+
+        Cheaper than a full planner/executor/analyst cycle: the gate has
+        already named what is missing, and every gap it reports is fixable
+        with the analyst's own tools (``update_finding``, ``submit_finding``,
+        ``submit_narrative``, the audit tools).
+
+        Args:
+            phase: Phase configuration with analyst fields.
+            gaps: Gap list from the failed ``GateResult``.
+            log_prefix: Prefix for dashboard log lines.
+            task_system: Task panel system name for tool tracking.
+
+        Returns:
+            AnalystResult for the remediation session.
+        """
+        model = self._model_config.resolve(phase.name, "analyst")
+        gap_text = "\n".join(f"- {gap}" for gap in gaps)
+        prompt = (
+            f"Case ID: {self._case_id}\n"
+            f"Call open_case(case_id='{self._case_id}') as your FIRST action.\n\n"
+            f"GATE FAILED for phase '{phase.name}':\n{gap_text}\n\n"
+            "Fix exactly these gaps and nothing else. For each finding named "
+            "above, either set event_time_start via update_finding using a "
+            "precise timestamp from evidence you have already examined, or, "
+            "if it describes a state rather than a timed event, set its "
+            "severity to 'info'; if it records a hypothesis you ruled out, "
+            "prefix its title with '[NEGATIVE]'. Do not fabricate timestamps. "
+            "Do not re-run extraction and do not submit new findings unless "
+            "a gap explicitly asks for one. Call check_finalize_readiness "
+            "when done."
+        )
+        self._dashboard.log_info(f"{phase.name}: Remediating gate gaps (analyst only)")
+        logger.info("[%s] Running gate remediation for gaps: %s", phase.name, gaps)
+        return await self._analyst_session(phase, prompt, model, log_prefix, task_system)
+
+    async def _analyst_session(
+        self,
+        phase: PhaseConfig,
+        prompt: str,
+        model: str,
+        log_prefix: str,
+        task_system: str,
+    ) -> AnalystResult:
+        """Run one analyst session plus its continuation loop."""
         result = await self._session.execute(
             system_prompt=phase.analyst_system_prompt,
             prompt=prompt,
@@ -329,7 +464,6 @@ class RoleRunner:
             allowed_tools=phase.analyst_allowed_tools,
             disallowed_tools=phase.disallowed_tools,
             max_turns=phase.analyst_max_turns,
-            max_budget=phase.analyst_max_budget_usd,
             log_prefix=log_prefix,
             task_system=task_system,
         )
@@ -341,12 +475,12 @@ class RoleRunner:
             allowed_tools=phase.analyst_allowed_tools,
             disallowed_tools=phase.disallowed_tools,
             max_turns=phase.analyst_max_turns,
-            max_budget=phase.analyst_max_budget_usd,
             continuation_prompt=(
-                "CONTINUATION: The previous analyst session exhausted its "
-                "context window. All submitted findings are saved. Review "
-                "the investigation summary and continue analysis. Submit "
-                "any remaining findings. Do NOT re-submit existing findings."
+                "CONTINUATION: The previous analyst session ended before it "
+                "finished (context window or turn limit). All submitted "
+                "findings are saved. Review the investigation summary and "
+                "continue analysis. Submit any remaining findings. Do NOT "
+                "re-submit existing findings."
             ),
             role_label="Analyst",
             log_prefix=log_prefix,
@@ -406,7 +540,6 @@ class RoleRunner:
             ],
             label="wait_all_batches",
             max_turns=5,
-            budget=1.50,
         )
 
         if result and result.get("all_done"):
@@ -427,7 +560,6 @@ class RoleRunner:
         allowed_tools: list[str],
         disallowed_tools: list[str],
         max_turns: int,
-        max_budget: float,
         continuation_prompt: str,
         role_label: str = "",
         log_prefix: str = "",
@@ -436,7 +568,7 @@ class RoleRunner:
         """Run compaction retries when a session exhausts its context window.
 
         Spawns continuation sessions until context is no longer exhausted
-        or ``_MAX_COMPACTIONS`` is reached. Continuation messages, tool names,
+        or ``max_compactions`` is reached. Continuation messages, tool names,
         and batch IDs are merged back into *result* in place.
 
         Args:
@@ -446,7 +578,6 @@ class RoleRunner:
             allowed_tools: Tool whitelist.
             disallowed_tools: Tool blocklist.
             max_turns: Maximum tool-use turns per continuation.
-            max_budget: Spend cap per continuation in USD.
             continuation_prompt: Prompt for the continuation session.
             role_label: Role name for dashboard messages (e.g. "Executor").
             log_prefix: Prefix for SDK query log lines.
@@ -457,10 +588,11 @@ class RoleRunner:
         """
         compaction_count = 0
         additional_turns = 0
-        while result.context_exhausted and compaction_count < _MAX_COMPACTIONS:
+        while result.context_exhausted and compaction_count < self._max_compactions:
             compaction_count += 1
+            why = "ran out of turns; continuing" if result.turns_exhausted else "auto-compacting"
             self._dashboard.log_info(
-                f"{role_label} auto-compacting (#{compaction_count}/{_MAX_COMPACTIONS})"
+                f"{role_label} {why} (#{compaction_count}/{self._max_compactions})"
             )
             continuation = await self._session.execute(
                 system_prompt=system_prompt,
@@ -469,7 +601,6 @@ class RoleRunner:
                 allowed_tools=allowed_tools,
                 disallowed_tools=disallowed_tools,
                 max_turns=max_turns,
-                max_budget=max_budget,
                 log_prefix=log_prefix,
                 task_system=task_system,
             )
@@ -477,8 +608,52 @@ class RoleRunner:
             result.messages.extend(continuation.messages)
             result.tool_names.extend(continuation.tool_names)
             result.context_exhausted = continuation.context_exhausted
+            result.turns_exhausted = continuation.turns_exhausted
             result.batch_ids.update(continuation.batch_ids)
         return additional_turns
+
+    async def _request_plan_from_notes(
+        self,
+        phase: PhaseConfig,
+        prompt: str,
+        model: str,
+        result: PhaseResult,
+        log_prefix: str = "",
+    ) -> dict[str, Any] | None:
+        """Ask a planner that ran out of turns to emit its plan from its notes.
+
+        A planner that spends every turn on read tools never reaches the
+        final JSON message, and JSON repair cannot fix output that does
+        not exist. This runs one tool-less, single-turn session with the
+        original case prompt plus the planner's own text messages so far.
+        The follow-up's messages and turns are merged into *result*.
+
+        Args:
+            phase: Phase configuration with planner fields.
+            prompt: The user prompt the planner session was given.
+            model: Model identifier.
+            result: Planner session result (mutated).
+            log_prefix: Prefix for dashboard log lines.
+
+        Returns:
+            Parsed JSON plan dict, or None if no plan was produced.
+        """
+        self._dashboard.log_info("Planner hit its turn limit; requesting plan from its notes")
+        logger.info("[%s] Planner exhausted turns without a plan; requesting plan", phase.name)
+        notes = "\n".join(result.messages)[-_MAX_PLANNER_NOTES_CHARS:]
+        follow_up = await self._session.execute(
+            system_prompt=phase.planner_system_prompt,
+            prompt=f"{prompt}\n\n{_PLANNER_OUT_OF_TURNS}{notes}",
+            model=model,
+            allowed_tools=[],
+            disallowed_tools=[*phase.disallowed_tools, *phase.planner_allowed_tools],
+            max_turns=1,
+            log_prefix=log_prefix,
+        )
+        result.messages.extend(follow_up.messages)
+        result.tool_names.extend(follow_up.tool_names)
+        result.turns_used += follow_up.turns_used
+        return extract_json_plan(follow_up.messages)
 
     async def _repair_json(
         self,
@@ -487,9 +662,9 @@ class RoleRunner:
     ) -> dict[str, Any] | None:
         """Attempt to repair malformed JSON from planner output.
 
-        Tries deterministic extraction first (regex + brace matching via
-        ``extract_json_from_text``). Falls back to an LLM utility session
-        only when deterministic parsing fails.
+        Tries deterministic extraction and task validation first via
+        ``extract_json_plan``. Falls back to an LLM utility session
+        when deterministic parsing or validation fails.
 
         Args:
             messages: Raw text messages from the planner session.
@@ -499,11 +674,16 @@ class RoleRunner:
             Parsed JSON plan dict, or None if repair failed.
         """
         raw_text = "\n".join(messages[-3:])
-        if not raw_text.strip():
+        # Nothing brace-shaped means nothing to repair (e.g. the planner ran
+        # out of turns mid-investigation); skip the utility call entirely.
+        start = raw_text.find("{")
+        if start == -1:
+            logger.info("[%s] No JSON object in planner output; skipping repair", phase_name)
             return None
+        raw_text = raw_text[start : start + _REPAIR_MAX_CHARS]
 
-        deterministic = extract_json_from_text(raw_text)
-        if deterministic and "tasks" in deterministic:
+        deterministic = extract_json_plan([raw_text])
+        if deterministic is not None:
             logger.info("[%s] Deterministic JSON extraction succeeded", phase_name)
             self._dashboard.log_info("JSON repair succeeded (deterministic)")
             return deterministic
@@ -514,8 +694,12 @@ class RoleRunner:
         repair_prompt = (
             "The following text contains a JSON plan that may have syntax errors, "
             "be wrapped in markdown fences, or have extra text around it. "
+            "It may also contain tool-call markup, special tokens, or reasoning "
+            "that is not JSON; ignore all of that. "
             "Extract and fix the JSON so it is valid. Return ONLY the corrected "
-            "JSON object with keys: tasks, investigation_questions, expected_sources.\n\n"
+            "JSON object with keys: tasks, investigation_questions, expected_sources. "
+            "tasks must be a non-empty array of objects with tool, args, and purpose keys, "
+            'not strings. If the text contains no plan at all, return {"tasks": []}.\n\n'
             f"TEXT:\n{raw_text}"
         )
 
@@ -527,7 +711,6 @@ class RoleRunner:
             allowed_tools=[],
             disallowed_tools=["Bash", "Shell"],
             max_turns=1,
-            max_budget=0.50,
         )
 
         repaired = extract_json_plan(repair_result.messages)
@@ -537,6 +720,36 @@ class RoleRunner:
         else:
             logger.warning("[%s] JSON repair failed", phase_name)
         return repaired
+
+    @staticmethod
+    def _executable_tasks(
+        plan: Plan,
+        executor_allowed: list[str],
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        """Split plan tasks into those the executor role may run and the rest.
+
+        A task whose tool is off the role allowlist would only ever fail
+        with "Tool not available", so it is removed from the plan handed
+        to the executor and its tool name reported for logging.
+
+        Args:
+            plan: Structured plan from the planner.
+            executor_allowed: Full phase-level executor allowlist.
+
+        Returns:
+            ``(tasks, dropped)``: executable tasks in plan order, and the
+            sorted unique tool names that were dropped.
+        """
+        allowed_set = frozenset(executor_allowed)
+        tasks: list[dict[str, Any]] = []
+        dropped: set[str] = set()
+        for task in plan.tasks:
+            tool = task.get("tool")
+            if tool and f"mcp__mulder__{tool}" not in allowed_set:
+                dropped.add(str(tool))
+            else:
+                tasks.append(task)
+        return tasks, sorted(dropped)
 
     @staticmethod
     def _build_dynamic_allowlist(

@@ -79,3 +79,16 @@ class TestPromptConstraints:
         that require polling with wait(). Other executors use fast queries.
         """
         assert "wait" in prompts.EXTRACT_EXECUTOR_PROMPT.lower()
+
+    def test_executor_prompts_correct_bad_arguments_on_retry(self) -> None:
+        """Executors retry verbatim only for transient errors; bad params get corrected."""
+        for name in (
+            "EXTRACT_EXECUTOR_PROMPT",
+            "CROSS_SYSTEM_EXECUTOR_PROMPT",
+            "NARRATIVE_EXECUTOR_PROMPT",
+        ):
+            val = getattr(prompts, name)
+            assert "transient error" in val, name
+            assert "unexpected or missing parameter" in val, name
+            assert "accepted" in val and "corrected" in val, name
+            assert "more than half of the planned tasks have failed" in val, name

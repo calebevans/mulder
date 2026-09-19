@@ -33,11 +33,11 @@ Each investigation runs through five phases with quality gates between them. Pha
 4. **Alternative Narrative** - challenge the primary narrative with counter-evidence, test alternative hypotheses, audit for tool and evidence coverage gaps
 5. **Report** - write the investigation narrative, generate Markdown/HTML reports, export IOCs and ATT&CK Navigator layers
 
-Each gate validates structural criteria (minimum sources indexed, findings submitted, MITRE mappings present, audit tools invoked). Failed gates trigger retries with escalating turn budgets and gap-specific remediation instructions. See [Architecture](https://github.com/calebevans/mulder/blob/main/docs/architecture.md) for the full pipeline design.
+Each gate validates structural criteria (minimum sources indexed, findings submitted, MITRE mappings present, audit tools invoked). Failed gates trigger bounded phase retries; single-agent retries include gap-specific remediation instructions. See [Architecture](https://github.com/calebevans/mulder/blob/main/docs/architecture.md) for the full pipeline design.
 
 ## Key Design Decisions
 
-**No shell access.** All 140+ tool invocations go through typed MCP interfaces with validated parameters. The agent never gets a shell. Every action is auditable and every parameter is constrained to its declared type.
+**No shell access, no built-in tools.** All 140+ tool invocations go through typed MCP interfaces with validated parameters. Every Claude Code built-in tool (Bash, Read, Grep, Glob, Write, Edit, WebFetch, WebSearch, ...) is disabled for every agent session, so the agent never gets a shell, never reads evidence or writes the workspace outside the audit log, and never reaches the network. Every action is auditable and every parameter is constrained to its declared type.
 
 **Anti-hallucination at the API boundary.** Every finding must cite `evidence_refs` that are real `tool_call_id` values from the append-only audit log. The MCP server validates these references at submission time and rejects findings that cite nonexistent tool calls. Timestamps are validated as ISO-8601 and auto-nullified when they appear fabricated. This is enforced architecturally, not by prompting.
 
@@ -65,7 +65,7 @@ On first run mulder creates a working directory at `~/.mulder/workspace` (overri
 ### Run with Docker (everything preinstalled)
 
 ```bash
-docker pull ghcr.io/calebevans/mulder:1.4.1
+docker pull ghcr.io/calebevans/mulder:1.5.2
 ```
 
 ```bash
@@ -75,7 +75,7 @@ docker run -it --privileged \
   -v /path/to/evidence:/evidence:ro \
   -v ~/mulder-cases:/home/mulder/.mulder/cases \
   -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
-  ghcr.io/calebevans/mulder:1.4.1
+  ghcr.io/calebevans/mulder:1.5.2
 ```
 
 ```bash

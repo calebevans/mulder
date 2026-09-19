@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock, patch
+
 from click.testing import CliRunner
 
 from mulder.cli import cli
@@ -76,3 +78,40 @@ class TestCliExportCommands:
         result = runner.invoke(cli, ["export-navigator", "--help"])
         assert result.exit_code == 0
         assert "CASE_ID" in result.output
+
+
+class TestMaxCompactions:
+    """``--max-compactions`` and ``MULDER_MAX_COMPACTIONS`` reach the orchestrator."""
+
+    @staticmethod
+    def _invoke(args: list[str], env: dict[str, str] | None = None) -> tuple[int, MagicMock]:
+        runner = CliRunner()
+        with (
+            patch("mulder.orchestrator.runner.Orchestrator") as orchestrator_cls,
+            patch("asyncio.run", return_value=MagicMock(success=True)),
+        ):
+            result = runner.invoke(cli, ["investigate", "/evidence", "case-1", *args], env=env)
+        return result.exit_code, orchestrator_cls
+
+    def _max_compactions(self, args: list[str], env: dict[str, str] | None = None) -> int:
+        exit_code, cls = self._invoke(args, env)
+        assert exit_code == 0
+        value: int = cls.call_args.kwargs["max_compactions"]
+        return value
+
+    def test_default_is_three(self) -> None:
+        assert self._max_compactions([]) == 3
+
+    def test_flag(self) -> None:
+        assert self._max_compactions(["--max-compactions", "7"]) == 7
+
+    def test_env_var(self) -> None:
+        assert self._max_compactions([], env={"MULDER_MAX_COMPACTIONS": "5"}) == 5
+
+    def test_flag_beats_env_var(self) -> None:
+        args = ["--max-compactions", "7"]
+        assert self._max_compactions(args, env={"MULDER_MAX_COMPACTIONS": "5"}) == 7
+
+    def test_negative_is_rejected(self) -> None:
+        exit_code, _ = self._invoke(["--max-compactions", "-1"])
+        assert exit_code != 0

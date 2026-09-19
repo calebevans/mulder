@@ -92,7 +92,10 @@ Synchronous tool calls pass through an async resource gate before execution (via
 ```mermaid
 flowchart LR
     request["MCP Request"] --> asyncWrapper["Async Wrapper\n(_wrap_sync_tool)"]
-    asyncWrapper --> resourceCheck{"Memory/CPU\nunder limit?"}
+    asyncWrapper --> exempt{"unthrottled\ntool?"}
+    exempt -->|"Yes"| plainThread["Worker Thread\n(default limiter)"]
+    plainThread --> syncTool
+    exempt -->|"No"| resourceCheck{"Memory/CPU\nunder limit?"}
     resourceCheck -->|"No"| wait["anyio.sleep\n(5s intervals)"]
     wait --> resourceCheck
     resourceCheck -->|"Yes"| threadPool["Worker Thread\n(CapacityLimiter)"]
@@ -101,6 +104,8 @@ flowchart LR
 ```
 
 The `CapacityLimiter` bounds concurrent tool execution to the `--workers` count (default 8). The `--mem-limit` and `--cpu-limit` flags set thresholds (default 90%) above which tools wait before proceeding.
+
+Cheap control and query tools are exempt from both the gate and the `CapacityLimiter`, declared with `@tool_access(..., unthrottled=True)` on the tool itself (`tool_access.UNTHROTTLED`). These are the job-control tools (`start_extraction_batch`, `check_extraction_status`, `get_completed_results`, `wait`, `wait_all`), which only enqueue or poll in-memory job state and are the executor's only way to learn that background work finished, plus small DB reads (`open_case`, `list_cases`, `list_sources`, `get_source_stats`, `get_findings`, `get_investigation_summary`, `check_finalize_readiness`). Without the exemption a fully loaded host held the executor's `wait` behind the very jobs it was waiting on, and each blocked `wait` also pinned a `--workers` slot for its whole poll loop. Background jobs still gate themselves in the `JobStore` worker thread (`wait_for_resources`), so exempting `start_extraction_batch` does not let heavy work start under pressure. Tools that run external binaries or scan indexed text (`search`, `get_raw_output`, every `run_*` / parser / carver / YARA tool) stay gated.
 
 ## Orchestration Pipeline
 
@@ -114,7 +119,7 @@ flowchart TD
     catalog["Phase 1: Catalog\n(Planner model, single agent)"]
     catalog --> catalogGate{"Catalog Gate\nCase created?"}
     catalogGate -->|"Pass"| identifySystems["Identify Systems\nfrom Catalog Output"]
-    catalogGate -->|"Fail"| retryC["Retry (1.5x turn limit)"]
+    catalogGate -->|"Fail"| retryC["Retry (gap-specific prompt)"]
     retryC --> catalog
 
     identifySystems --> extraction
@@ -129,7 +134,7 @@ flowchart TD
 
     extraction --> extractionGate{"Extraction Gate\nSources indexed?"}
     extractionGate -->|"Pass"| crossSystem
-    extractionGate -->|"Fail"| retryE["Retry (1.5x turn limit)"]
+    extractionGate -->|"Fail"| retryE["Retry phase"]
     retryE --> extraction
 
     subgraph crossSystem [Phase 3: Cross-System Analysis + TI Enrichment]
@@ -139,7 +144,7 @@ flowchart TD
 
     crossSystem --> crossGate{"Cross-System Gate\nFindings + MITRE?"}
     crossGate -->|"Pass"| altNarrative
-    crossGate -->|"Fail"| retryCS["Retry (1.5x turn limit)"]
+    crossGate -->|"Fail"| retryCS["Retry phase"]
     retryCS --> crossSystem
 
     subgraph altNarrative [Phase 4: Alternative Narrative + Audit]
@@ -149,45 +154,56 @@ flowchart TD
 
     altNarrative --> narrativeGate{"Narrative Gate\nAll finalize gates pass?"}
     narrativeGate -->|"Pass"| report
-    narrativeGate -->|"Fail"| retryN["Retry (1.5x turn limit)"]
+    narrativeGate -->|"Fail"| retryN["Retry phase"]
     retryN --> altNarrative
 
     report["Phase 5: Report\n(Analyst model, single agent)"]
     report --> reportGate{"Report Gate\nfinalize_report called?"}
     reportGate -->|"Pass"| done["Investigation Complete"]
-    reportGate -->|"Fail"| retryR["Retry (1.5x turn limit)"]
+    reportGate -->|"Fail"| retryR["Retry (gap-specific prompt)"]
     retryR --> report
 ```
 
-The Alternative Narrative phase (Phase 4) combines counter-analysis with audit responsibilities (evidence coverage, tool coverage, deduplication). Its gate checks finalize readiness before proceeding to the report phase.
+The Alternative Narrative phase (Phase 4) combines counter-analysis with audit responsibilities (evidence coverage, tool coverage, deduplication); its analyst owns the audit tools. Its gate checks finalize readiness before proceeding to the report phase. When a split phase's planner produces no plan, the executor is skipped and the analyst still runs on the results already indexed, so the audits and finding review happen and the gate decides (extraction re-plans instead, since nothing is indexed yet). As a fallback, the report role can also call `audit_evidence_coverage` and `audit_tool_coverage` itself when `check_finalize_readiness` reports them missing, so the `audit_tools_called` gate never strands the report phase (issue #217).
 
 ### Phase Configuration
 
 Each phase is defined by a `PhaseConfig` dataclass specifying:
 
 - **Pipeline mode**: Either `split` (planner/executor/analyst) or `single` (one agent session)
-- **Dynamic tool allowlists**: Built at import time from `@tool_access` declarations on each tool (see [Tool Access Control](#tool-access-control) below). Executors see only plan-relevant tools rather than the full 140+ surface.
+- **Dynamic tool allowlists**: Built at import time from `@tool_access` declarations on each tool (see [Tool Access Control](#tool-access-control) below). Every tool outside a role's allowlist is passed to the CLI as `disallowed_tools`, so executors see only plan-relevant tools rather than the full 140+ surface.
 - **Model assignment**: Each role resolves its model via `ModelConfig.resolve(phase, role)` with support for per-phase overrides via config file
 - **Turn limit**: Maximum tool-use round trips per role session
 - **Follow-up limit**: Maximum planner/executor cycles the analyst can request before being capped
 - **Workers**: Configurable via `--workers` for concurrent extraction sessions
-- **Auto-compaction**: When context is exhausted mid-phase, the orchestrator restarts with a compact prompt that recovers state from the database
-- **Retry policy**: Maximum retries with 1.5x turn limit multiplier on each retry (applied in single-mode phases only; split-mode phases retry without the budget multiplier)
+- **Auto-compaction**: When context is exhausted mid-phase, the orchestrator restarts with a compact prompt that recovers state from the database. Continuations per role session are capped by `--max-compactions` / `MULDER_MAX_COMPACTIONS` (default 3; `0` disables)
+- **Retry policy**: Maximum retries per phase; turn limits stay unchanged on retry
+
+### Planner Output Validation
+
+Plans must contain a non-empty `tasks` array of objects. String tasks and mixed
+object/string arrays are rejected before executor tool allowlists are built.
+Deterministic JSON repair uses the same validation; if that fails, one utility
+model request attempts to repair the plan. If the repaired output is still
+invalid, the phase fails cleanly. A rejected plan does not trigger the separate
+phase-gate retry loop. Dashboard rendering tolerates malformed task entries so
+they can reach validation without interrupting the session.
 
 ### Deferred Retry System
 
-When a quality gate fails after a phase completes, the orchestrator retries with escalating budgets:
+When a quality gate fails after a phase completes, the orchestrator retries with the same turn limits:
 
-1. **Budget multiplier**: In single-mode phases, each retry gets 1.5x the previous attempt's turn limit (`_RETRY_BUDGET_MULTIPLIER`). Split-mode phases retry without this multiplier.
-2. **Gap-specific remediation**: The gate reports specific gaps (e.g., "no sources indexed", "no MITRE mappings"), which are prepended to the retry prompt so the agent focuses on what's missing
-3. **Follow-up cycles**: Within a single attempt, the analyst can request additional planner/executor iterations (capped at `max_follow_ups`) when it identifies gaps that need more tool execution
-4. **Auto-compaction on exhaustion**: If context is exhausted mid-phase, the orchestrator restarts with a compact prompt that preserves state via the database rather than failing immediately
+1. **Gap-specific remediation**: Single-mode retries include the gate's reported gaps in the next prompt. Split-mode retries alternate: the attempt after a failed full cycle is an analyst-only remediation session that receives the gap list verbatim (`GATE FAILED: ...`) and is told to fix exactly those items with `update_finding` / `submit_finding` rather than re-run extraction; if that still fails, the next attempt is a full planner/executor/analyst cycle whose planner sees the gaps as a follow-up request. Every attempt, whatever its shape, counts against `max_retries`.
+2. **Follow-up cycles**: Within a single attempt, the analyst can request additional planner/executor iterations (capped at `max_follow_ups`) when it identifies gaps that need more tool execution
+3. **Continuation on exhaustion**: If a role session ends without a final answer, either because the provider rejected the prompt as too long or because the CLI stopped at `max_turns` (`ResultMessage.subtype == "error_max_turns"`), the orchestrator restarts it with a compact prompt that preserves state via the database rather than failing immediately, up to `--max-compactions` times per role session. Turn-limit continuations are logged as "ran out of turns" so they are distinguishable from context overflow.
 
 The retry system is bounded: each phase allows up to 2 retries (configurable), after which it reports failure and the investigation proceeds with partial results.
 
 ### Phase Gates
 
-Gates read the database directly to validate phase outcomes, avoiding LLM utility queries for validation checks.
+Extraction, cross-system, and narrative gates read the database directly.
+The catalog gate validates the final JSON's structure, and the report gate checks
+the recorded tool names. Gate validation does not require an LLM utility query.
 
 ```mermaid
 flowchart LR
@@ -206,9 +222,11 @@ flowchart LR
     reportGate --- reportChecks["finalize_report called successfully"]
 ```
 
+The narrative gate mirrors `check_finalize_readiness`: `minimum_findings`, `timestamp_coverage`, and `audit_tools_called` block; `narrative_submitted` is deferred to the report phase. `evidence_citation_coverage` is measured over *distinct evidence-bearing source names* (rows repeat per device and per registry query, and bookkeeping sources such as `*.stats`, `*.manifest`, `registry.query.*`, `bulk.bulk_extractor`, `bulk.duplicates`, `composite.correlation`, and `enrichment.iocs` are excluded). It blocks only when fewer than 3 distinct sources are cited; below 25% it passes with `advisory: true` and the figure in its detail, which the orchestrator logs as a warning. An advisory result never refuses `finalize_report`, never triggers a retry, and never sets the exit code (issue #221).
+
 When a gate fails, the orchestrator retries the phase with:
-- 1.5x the original turn limit
-- Gap-specific instructions prepended to the prompt (e.g., "No sources indexed after extraction")
+- The same turn limits as the original attempt
+- Gap-specific instructions in single-mode retry prompts and in split-mode remediation sessions
 - Up to 2 retries per phase (configurable)
 - Consecutive failure tracking prevents indefinite silent auto-passes
 
@@ -227,6 +245,20 @@ def run_volatility(...):
 ```
 
 The `Role` flag enum covers every pipeline slot: `CATALOG`, `EXTRACT_PLANNER`, `EXTRACT_EXECUTOR`, `EXTRACT_ANALYST`, `CROSS_PLANNER`, etc. Convenience unions (`PLANNERS`, `EXECUTORS`, `ANALYSTS`, `ALL_ROLES`) simplify common patterns.
+
+### Enforcement
+
+The Agent SDK's `allowed_tools` option only auto-approves permissions; with `permission_mode="bypassPermissions"` it restricts nothing, and `disallowed_tools` is the only option that removes a tool from the model's context. `SessionExecutor` therefore passes every registered mulder tool that is *not* on the role's allowlist as `disallowed_tools` (`off_role_tools` in `session.py`). An analyst never sees `run_mmls`; an executor sees the plan's tools plus its control tools (`open_case`, `start_extraction_batch`, `wait_all`, ...). Enforcement happens in the Claude Code CLI, not in the MCP server: `mulder serve` runs any tool a connected client calls.
+
+Claude Code's own built-in tools (`Read`, `Grep`, `Glob`, `Write`, `Edit`, `WebFetch`, `WebSearch`, `Task`, `Skill`, ... about thirty in the bundled CLI) are disabled wholesale with the SDK's `tools=[]` option (`--tools ""`), which removes every built-in while MCP tools stay loaded. This is set in `SessionExecutor._shared_options`, so it covers role sessions, continuation and remediation sessions, JSON repair and utility queries alike. Without it a model can read `/evidence` and the workspace with `Read`/`Grep`/`Glob`, write the workspace, or reach the network, all outside the audit log and the `evidence_refs` validation (issue #213). `Bash`/`Shell` remain on each phase's `disallowed_tools` list as belt and braces.
+
+Three more checks keep the tool surface deterministic:
+
+- Sessions run with `ENABLE_TOOL_SEARCH=false`, so the CLI never defers MCP tools behind its `ToolSearch` tool. The model sees the whole allowlist upfront.
+- The CLI's `init` message reports each MCP server's status and the loaded tool names. If the mulder server is not `connected`, or an allowed tool is missing, the session is aborted before the model answers and respawned (three attempts, logged as "Session started without its tools"). Without this the CLI runs the turn with built-in tools only. The same message is checked for any tool name that does not start with `mcp__`; one present after `tools=[]` means the CLI's built-in handling drifted, and it is logged as a warning naming the tools.
+- The workspace `.mcp.json` is passed to the CLI explicitly with `--strict-mcp-config`, so sessions do not depend on Claude Code's project MCP approval state and never load user-level MCP servers.
+
+An executor that finishes without a single tool call fails its attempt: the analyst is skipped and the phase's `max_retries` loop re-plans, instead of the analyst doing the extraction itself.
 
 ### The `@audited_tool` Decorator
 
@@ -477,7 +509,7 @@ flowchart TB
     mulderUser --> mulderCLI
 ```
 
-The container runs with `--privileged` (or `--cap-add SYS_ADMIN`) to support disk image mounting via `ewfmount`, `guestmount`, and `mount`.
+The container runs with `--privileged` (or `--cap-add SYS_ADMIN --device /dev/fuse`) to support FUSE: `ewfmount`, `guestmount`, and the `xmount` + `ntfs-3g`/`fuse2fs` stack that `mount_disk_image()` uses. Mounting never uses the kernel `mount -o loop` path, so it works as the unprivileged `mulder` user and needs no loop devices.
 
 ## Evidence Reference Validation
 
@@ -492,14 +524,17 @@ Before the alternative narrative phase, the orchestrator builds a dedup index fr
 Several enrichment tools are available for agents to call during relevant phases. These are exposed through tool access control and referenced in phase prompts, but do not run automatically at phase boundaries:
 
 - **TI enrichment** (cross-system phase): The `enrich_iocs` tool queries public threat intelligence sources for context on extracted indicators (IPs, domains, file hashes), annotating findings with reputation data and known campaign associations.
-- **Evidence gap detection** (narrative phase): The `audit_evidence_coverage` and `audit_tool_coverage` tools identify artifact types that were present but not examined, coverage blind spots, and systems with incomplete extraction. Gap reports are surfaced to the narrative planner and extraction analyst for remediation.
+- **Evidence gap detection** (narrative phase): The `audit_evidence_coverage` and `audit_tool_coverage` tools identify artifact types that were present but not examined, coverage blind spots, and systems with incomplete extraction. Gap reports are surfaced to the narrative planner and extraction analyst for remediation. The narrative analyst is the primary owner of these audits; the report role may run them as a fallback when readiness reports them missing.
 - **Finding deduplication** (narrative phase): The `deduplicate_findings` tool merges duplicate findings that describe the same artifact observed on multiple hosts, consolidating evidence references while preserving source attribution.
 
 ## Security Model
 
 ### No Shell Access
 
-The MCP server exposes only typed tool functions. Shell, Bash, and arbitrary command execution are explicitly blocked in both the MCP server permissions and in each phase's `disallowed_tools` list. All evidence access goes through audited MCP tools.
+The MCP server exposes only typed tool functions. Every Claude Code built-in tool (Bash, Read, Grep, Glob, Write, Edit, WebFetch, WebSearch, Task, ...) is disabled for every agent session with the SDK's `tools=[]` option, and Shell/Bash are additionally on each phase's `disallowed_tools` list. All evidence access goes through audited MCP tools; there is no unaudited way for the model to read evidence, write the workspace, or reach the network.
+
+`run_radare2` also enables radare2's own sandbox before executing the requested
+command batch, blocking shell escapes, writes, and opening additional files.
 
 ### Read-Only SQLite Authorizer
 
@@ -513,13 +548,19 @@ When the agent calls `submit_finding`, every entry in `evidence_refs` is validat
 
 `read_evidence_file` and `list_directory` validate that requested paths resolve to allowed roots using `Path.resolve()` for symlink canonicalization. Archive extraction filters prevent Zip Slip and tar traversal attacks.
 
+Case IDs are validated as a single path segment without separators or control
+characters before opening a case database. Explicit archive destinations must
+resolve under `<db-dir>/extracted`, including when symlinks are present.
+
 ### FTS5 Query Sanitization
 
 Full-text search queries are sanitized before execution. Special characters with FTS5 syntax meaning are escaped, and pipe-separated terms (common LLM mistakes) are converted to proper `OR` operators.
 
 ### Non-Root Container
 
-All processes run as the `mulder` user via `gosu`. The entrypoint handles credential copying and ownership fixups before dropping privileges.
+The entrypoint handles credential copying and ownership fixups before running
+the requested command as the `mulder` user via `gosu`. `docker exec` bypasses the
+entrypoint; use `docker exec -u mulder` for investigations in an existing container.
 
 ## Per-Model Token Tracking
 
@@ -535,6 +576,18 @@ The orchestrator uses a planner/executor/analyst role system for model assignmen
 Single-mode phases map to roles: catalog uses the planner model, report uses the analyst model. Per-phase overrides can be specified in a YAML config file via `--config`.
 
 All roles inherit from `--model` if not specified individually. Model IDs are passed through to the SDK exactly as specified, with no automatic translation between provider formats. Vertex users must include the `@version` suffix (e.g. `claude-opus-4-6@20250514`) and Bedrock users must include the `us.anthropic.` prefix (e.g. `us.anthropic.claude-opus-4-6`).
+
+For auto-generated LiteLLM configurations, the public `ollama/<model>` name is
+preserved while the internal provider route uses `ollama_chat/<model>`, whose
+native chat API carries structured streaming tool calls. Custom proxy YAML is
+used as supplied.
+
+`--no-thinking` applies to both phase and utility sessions. It sends the SDK's
+explicit disabled-thinking configuration and omits effort settings; without
+the flag, existing thinking defaults and effort settings are preserved.
+`--show-cli-stderr` independently enables subprocess diagnostics in the dashboard
+and `orchestrator.log`, with per-query labels and ANSI controls stripped. CLI
+stderr stays suppressed by default.
 
 ## Audit and Provenance
 
@@ -582,6 +635,7 @@ The pipeline incorporates several quality mechanisms that improve finding accura
 - **Behavioral context synthesis**: Extraction prompts gather user behavior context (location, network environment, usage patterns) to distinguish adversary artifacts from benign user activity.
 - **Anti-evasion awareness**: Counter-analysis prompts explicitly instruct the agent to consider anti-forensic techniques (timestomping, log clearing, process injection) when evaluating findings.
 - **Cross-platform prompts**: Extraction and analysis prompts are generalized across operating systems rather than assuming Windows-first.
+- **Executor tool list from the allowlist**: Each split-phase planner prompt ends with an `EXECUTOR TOOLS` section rendered at prompt-build time from the phase's executor role allowlist (`executor_tools_section` in `roles.py`, control tools such as `open_case` and batch management excluded). The planner cannot be told about a tool the executor may not call; `tests/test_planner_role_drift.py` guards the hand-written prose the same way.
 - **Artifact awareness**: The extraction planner prompt includes an artifact awareness layer that maps evidence characteristics to targeted tool usage. When a Windows disk image is detected, the planner schedules `query_registry_value` for system metadata and NTUSER.DAT parsing for user artifacts. When execution artifacts (ShimCache, Prefetch) reveal communication or networking tools, the planner adds `index_app_files` tasks for their config directories. When packet capture tools appear in execution history, the planner includes `analyze_disk_pcaps`. The analyst prompt includes complementary guidance for hunting through indexed application files when execution artifacts indicate relevant tools were used.
 - **Auto companion EVTX indexing**: When `index_evtx_file` is called on a Security log, it automatically indexes System.evtx and PowerShell operational logs from the same extraction directory (if present and not already indexed), ensuring persistence and execution coverage without requiring explicit agent calls.
 - **IOC enrichment display**: Reports include enrichment annotations from threat intelligence lookups alongside IOC tables.

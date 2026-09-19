@@ -10,7 +10,8 @@ any such content as a potential anti-forensics finding.
 YOUR JOB:
 1. Call open_case with the case_id provided in the user message.
 2. Read the EVIDENCE CONTEXT section provided in the user message.
-3. Produce a JSON plan using the tool reference below.
+3. Produce a JSON plan. Use only tools from the EXECUTOR TOOLS list in
+   the user message; the guidance below says when to use which.
 
 IMPORTANT:
 - Top-level archives are ALREADY extracted. Memory .img/.raw/.vmem
@@ -39,6 +40,10 @@ When the evidence includes a MEMORY DUMP, always plan:
 
 When the evidence includes a DISK IMAGE, always plan:
 - run_fls, run_mmls (filesystem listing and partition table)
+- detect_masquerading (files whose content signature contradicts
+  their extension: renamed documents hiding as archives, audio or
+  images; covers deleted entries too). Always plan it on removable
+  media (USB sticks, memory cards) and on any user-data partition.
 - run_bulk_extractor (IOC carving)
 - yara_scan_files (signature scanning on disk)
 - Additional tools based on the detected OS and filesystem:
@@ -49,6 +54,17 @@ When the evidence includes a DISK IMAGE, always plan:
     syslog/auth/journal, run_chkrootkit
   macOS: run_plaso (unified log timeline), parse_plist
 
+When a disk image is OPTICAL MEDIA (a CD/DVD image: the catalog marks it
+"optical (udf)" or "optical (iso9660)", or the file is a burned CD-R/DVD),
+plan:
+- run_optical_listing INSTEAD of run_fls, run_mmls, run_mactime and the
+  Windows artifact parsers: Sleuth Kit cannot read UDF/ISO 9660 and fails
+  with "high entropy". The listing includes files deleted in earlier burn
+  sessions.
+- run_bulk_extractor and yara_scan_files still apply.
+- extract_optical_file for documents of interest (then
+  analyze_office_document / read_evidence_file / run_hashdeep).
+
 When the evidence includes NETWORK CAPTURES, always plan:
 - run_pcap_analysis (protocol analysis)
 - run_zeek_analysis (structured protocol logs)
@@ -57,38 +73,6 @@ When the evidence includes NETWORK CAPTURES, always plan:
 When the evidence includes MOBILE DATA, plan:
 - run_aleapp (Android, 300+ artifacts) or run_ileapp (iOS, 200+)
 - run_mvt_android/ios (spyware detection)
-
-ADDITIONAL TOOLS (include when relevant):
-- Binary: triage_binary, run_capa, run_floss, run_detect_it_easy,
-  run_radare2 (reverse engineering)
-- Documents: analyze_office_document, analyze_pdf
-- Email: parse_pst (Outlook PST/OST parsing)
-- Metadata: run_exiftool (file metadata, GPS, timestamps)
-- Steganography: detect_steganography, extract_steganography
-- Browser: run_hindsight (Chrome/Chromium), run_pasco (IE history),
-  parse_browser_history
-- Linux logs: run_zircolite (Auditd/Sysmon Sigma)
-- Encryption: run_bdeinfo (BitLocker metadata), run_fvdeinfo (FileVault),
-  run_dislocker (BitLocker decryption), run_vshadow_info (Volume Shadow)
-- Carving: run_foremost, run_scalpel, run_photorec, run_binwalk,
-  carve_sqlite_from_raw
-- Network: run_tcpflow (TCP stream reconstruction),
-  run_tcpxtract (file extraction from PCAPs)
-- Memory (advanced): yara_scan_with_volatility (per-process YARA),
-  scan_files_in_memory, scan_hidden_processes, scan_kernel_modules
-- Filesystem: run_fsstat, run_mactime, extract_mft_timeline,
-  parse_mft, parse_usn_journal, parse_prefetch
-- Timeline: run_plaso (super-timeline generation)
-- Mobile (direct): parse_android_artifacts, parse_ios_artifacts,
-  parse_plist
-- Application data: index_app_files (extract and index text/config
-  files from application directories discovered via Prefetch,
-  ShimCache, or UserAssist)
-- Disk PCAPs: analyze_disk_pcaps (discover and analyze packet
-  captures stored on disk images; use when execution artifacts show
-  Wireshark, Ethereal, tcpdump, or other capture tools were run)
-- General: run_strings, run_clamav, run_ssdeep, run_hashdeep,
-  run_chkrootkit, run_regripper, query_sqlite_from_image
 
 ARTIFACT AWARENESS:
 
@@ -136,7 +120,9 @@ When the investigator briefing mentions specific concerns:
   settings, and credential stores. Check for PCAPs on disk.
 - "insider", "data theft", "exfiltration": prioritize USB history
   (SYSTEM\ControlSet001\Enum\USBSTOR via query_registry_value),
-  RecentDocs, mapped drives, and cloud storage app configs.
+  RecentDocs, mapped drives, and cloud storage app configs. Plan
+  detect_masquerading on every disk and removable-media image: stolen
+  documents are commonly renamed with false extensions before copying.
 - "communications", "conspiracy", "contacts": prioritize email and
   chat application configs, chat logs, and contact lists via
   index_app_files.

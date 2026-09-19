@@ -30,9 +30,9 @@ volumes, all tool interactions are typed functions (no shell access), and
 every finding is validated against the append-only audit log before
 acceptance.
 {% if evidence_integrity %}
-{{ evidence_integrity | length }} evidence files were cryptographically
-validated via SHA-256 hashes computed at ingestion and verified against the
-case database.
+SHA-256 hashes were computed at ingestion for {{ evidence_integrity | length }}
+original evidence file{{ '' if evidence_integrity | length == 1 else 's' }} and
+recorded in the case database.
 {% endif %}
 {{ total_tool_calls }} tool calls were executed across {{ sources | length }}
 indexed sources over the course of the investigation, with full provenance

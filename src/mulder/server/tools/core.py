@@ -68,7 +68,8 @@ def _truncated_window(w: Any, cap: int = _RAW_TEXT_SEARCH_CAP) -> dict[str, obje
     | Role.EXTRACT_ANALYST
     | Role.CROSS_ANALYST
     | Role.NARRATIVE_EXECUTOR
-    | Role.REPORT
+    | Role.REPORT,
+    unthrottled=True,
 )
 @audited_tool("list_sources")
 def list_sources() -> dict[str, object]:
@@ -105,7 +106,8 @@ def list_sources() -> dict[str, object]:
     | Role.CROSS_PLANNER
     | Role.CROSS_ANALYST
     | Role.NARRATIVE_EXECUTOR
-    | Role.REPORT
+    | Role.REPORT,
+    unthrottled=True,
 )
 @audited_tool("get_source_stats")
 def get_source_stats() -> dict[str, object]:

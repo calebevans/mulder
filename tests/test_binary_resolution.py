@@ -34,6 +34,20 @@ def _completed(**kwargs: Any) -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
 
+def _chainsaw_mapping(asset_root: Path) -> Path:
+    """Provision the mapping the chainsaw asset ships.
+
+    Chainsaw requires ``--mapping`` alongside ``--sigma``, so hunt mode
+    pre-flights it.  These tests are about binary resolution, so the mapping is
+    incidental setup here -- but it has to exist for the run to reach
+    ``subprocess.run`` at all.
+    """
+    mapping = asset_root / "chainsaw" / "mappings" / "sigma-event-logs-all.yml"
+    mapping.parent.mkdir(parents=True, exist_ok=True)
+    mapping.write_text("---\n")
+    return mapping
+
+
 class TestChainsaw:
     def test_execs_the_binary_the_gate_found(self, tmp_path: Path) -> None:
         from mulder.server.tools.chainsaw import run_chainsaw
@@ -41,6 +55,8 @@ class TestChainsaw:
         chainsaw = _fake_binary(tmp_path, "chainsaw")
         evidence = tmp_path / "evtx"
         evidence.mkdir()
+        mapping = tmp_path / "sigma-event-logs-all.yml"
+        mapping.write_text("---\n")
 
         with (
             patch("mulder.server.tools.chainsaw.sources_already_indexed", return_value=[]),
@@ -50,7 +66,9 @@ class TestChainsaw:
                 "mulder.server.tools.chainsaw.subprocess.run", return_value=_completed()
             ) as mock_run,
         ):
-            result = run_chainsaw.__wrapped__(str(evidence))  # type: ignore[attr-defined]
+            result = run_chainsaw.__wrapped__(  # type: ignore[attr-defined]
+                str(evidence), mapping_path=str(mapping)
+            )
 
         assert result.get("error_type") != "binary_missing"
         assert mock_run.call_args[0][0][0] == str(chainsaw)
@@ -76,6 +94,7 @@ class TestChainsaw:
         binary = installed / "chainsaw"
         binary.write_text("#!/bin/sh\n")
         binary.chmod(0o755)
+        _chainsaw_mapping(asset_root)
 
         with (
             patch("mulder.server.tools.chainsaw.sources_already_indexed", return_value=[]),
@@ -104,6 +123,7 @@ class TestChainsaw:
         chainsaw.mkdir()
         (chainsaw / "chainsaw").write_text("")
         (chainsaw / "chainsaw").chmod(0o755)
+        _chainsaw_mapping(asset_root)
 
         with (
             patch("mulder.server.tools.chainsaw.sources_already_indexed", return_value=[]),

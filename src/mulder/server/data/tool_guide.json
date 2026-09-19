@@ -163,6 +163,18 @@
       "related": ["run_mmls", "run_fls"]
     },
     {
+      "tool": "run_optical_listing",
+      "description": "List files on a CD/DVD image (UDF or ISO 9660), including deleted ones from earlier burn sessions; use instead of run_fls on optical media",
+      "input": "Disc image file path (.E01, .dd, .iso, .bin)",
+      "related": ["extract_optical_file", "run_fls", "run_bulk_extractor"]
+    },
+    {
+      "tool": "extract_optical_file",
+      "description": "Extract one file from a CD/DVD image for read_evidence_file, analyze_office_document or run_hashdeep",
+      "input": "Disc image file path and the file's path as listed by run_optical_listing",
+      "related": ["run_optical_listing", "read_evidence_file", "analyze_office_document"]
+    },
+    {
       "tool": "run_mactime",
       "description": "Generate MAC timeline from a disk image using TSK",
       "input": "Disk image file path, optional time range",

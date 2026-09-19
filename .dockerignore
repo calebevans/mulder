@@ -20,3 +20,6 @@ Dockerfile
 docker-compose*.yml
 .gitignore
 .claude/
+dist/
+build/
+.pytest_cache/

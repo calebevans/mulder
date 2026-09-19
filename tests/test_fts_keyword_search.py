@@ -89,6 +89,9 @@ class TestAnyQueryConstruction:
     def test_special_characters_are_still_quoted(self) -> None:
         assert _fts5_any_query("spinlock.exe rundll32") == '"spinlock.exe" OR rundll32'
 
+    def test_non_bareword_tokens_are_quoted(self) -> None:
+        assert _fts5_any_query("@nasa #tag a=b") == '"@nasa" OR "#tag" OR "a=b"'
+
     def test_a_trailing_operator_is_dropped(self) -> None:
         """A dangling AND/OR is an FTS5 syntax error."""
         assert _fts5_any_query("alpha OR") == "alpha"

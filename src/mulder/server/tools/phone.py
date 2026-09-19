@@ -18,6 +18,7 @@ import subprocess
 import tempfile
 import time
 import xml.etree.ElementTree as ET
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,7 @@ from mulder.server.helpers import (
     error_response,
     interpreter_candidates,
     make_tool_call_id,
+    readonly_sqlite_uri,
     require_binary,
     tool_response,
 )
@@ -72,7 +74,7 @@ def _carve_sqlite_databases(
                 db_path.write_bytes(mm[pos : pos + db_size])
 
                 try:
-                    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+                    conn = sqlite3.connect(readonly_sqlite_uri(db_path), uri=True)
                     tables = [
                         r[0]
                         for r in conn.execute(
@@ -269,7 +271,7 @@ _ANDROID_ARTIFACTS: dict[str, dict[str, object]] = {
 def _query_sqlite_safe(db_path: Path, query: str) -> list[str]:
     """Run a read-only query, returning formatted rows or empty list on error."""
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = sqlite3.connect(readonly_sqlite_uri(db_path), uri=True)
         conn.row_factory = sqlite3.Row
         rows = conn.execute(query).fetchall()
         conn.close()
@@ -501,7 +503,7 @@ def _resolve_ios_manifest(backup_dir: Path) -> dict[str, Path]:
 
     mapping: dict[str, Path] = {}
     try:
-        conn = sqlite3.connect(f"file:{manifest}?mode=ro", uri=True)
+        conn = sqlite3.connect(readonly_sqlite_uri(manifest), uri=True)
         rows = conn.execute("SELECT fileID, relativePath, domain FROM Files").fetchall()
         conn.close()
     except sqlite3.Error:
@@ -791,7 +793,7 @@ def decrypt_app_data(
 
     for db_path in sqlite_files:
         try:
-            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            conn = sqlite3.connect(readonly_sqlite_uri(db_path), uri=True)
             tables = [
                 r[0]
                 for r in conn.execute(
@@ -804,7 +806,7 @@ def decrypt_app_data(
                 lines.append(f"Tables: {', '.join(tables)}")
                 for table in tables[:5]:
                     try:
-                        c2 = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+                        c2 = sqlite3.connect(readonly_sqlite_uri(db_path), uri=True)
                         c2.row_factory = sqlite3.Row
                         rows = c2.execute(f"SELECT * FROM [{table}] LIMIT 10").fetchall()
                         c2.close()
@@ -978,6 +980,41 @@ def _classify_artifact_category(artifact_type: str) -> str:
     return "other"
 
 
+# How many rows per artifact the tool response carries back. The case index is
+# not bounded by this -- the response is a preview, the index is the evidence.
+_MAX_LEAPP_RESPONSE_ROWS = 100
+
+
+def _leapp_artifact_lines(artifact: Mapping[str, Any]) -> list[str]:
+    """Render one parsed LEAPP artifact as indexable text.
+
+    ``_parse_tsv_file`` zips headers to values non-strictly, so a truncated row
+    yields a short dict. Taking the union of keys in first-seen order keeps
+    every row on the same columns instead of letting one short row shift the
+    whole artifact.
+
+    Args:
+        artifact: One entry from ``_parse_leapp_output``'s ``artifacts`` list.
+
+    Returns:
+        Lines of tab-separated text, empty if the artifact has no rows.
+    """
+    rows = artifact.get("data") or []
+    if not rows:
+        return []
+
+    columns: dict[str, None] = {}
+    for row in rows:
+        for key in row:
+            columns.setdefault(key, None)
+    headers = list(columns)
+
+    lines = [f"[{artifact.get('category', '')}] {artifact.get('artifact_type', '')}"]
+    lines.append("\t".join(headers))
+    lines.extend("\t".join(str(row.get(h, "")) for h in headers) for row in rows)
+    return lines
+
+
 def _parse_tsv_file(tsv_path: Path) -> list[dict[str, str]]:
     """Parse a TSV file into a list of row dicts.
 
@@ -1005,6 +1042,48 @@ def _parse_tsv_file(tsv_path: Path) -> list[dict[str, str]]:
     return records
 
 
+_LEAPP_TSV_DIRNAME = "_TSV Exports"
+
+
+def _find_leapp_tsv_dir(output_dir: Path) -> Path | None:
+    """Locate the directory ALEAPP/iLEAPP wrote their TSV exports into.
+
+    Both tools create a timestamped report folder under the ``-o`` path and
+    write every TSV into a ``_TSV Exports`` directory inside it, so the layout
+    is ``<output_dir>/<TOOL>_Output_<timestamp>/_TSV Exports/*.tsv``. Looking
+    directly under *output_dir* finds nothing at all.
+
+    Args:
+        output_dir: The directory passed to the tool as ``-o``.
+
+    Returns:
+        The directory holding the ``.tsv`` files, or None if there is none.
+    """
+    nested = sorted(
+        (d for d in output_dir.glob(f"*/{_LEAPP_TSV_DIRNAME}") if d.is_dir()),
+        key=lambda d: d.parent.name,
+    )
+    if nested:
+        # A fresh temporary directory holds one run, but sort by the report
+        # folder's timestamped name so the newest wins if a caller reuses one.
+        return nested[-1]
+
+    direct = output_dir / _LEAPP_TSV_DIRNAME
+    if direct.is_dir():
+        return direct
+
+    # Older layouts, and anything that drops the files straight in.
+    legacy = output_dir / "tsv"
+    if legacy.is_dir():
+        return legacy
+    for candidate in sorted(output_dir.iterdir()) if output_dir.is_dir() else []:
+        if candidate.is_dir() and (candidate / "tsv").is_dir():
+            return candidate / "tsv"
+    if output_dir.is_dir() and any(output_dir.glob("*.tsv")):
+        return output_dir
+    return None
+
+
 def _parse_leapp_output(
     output_dir: Path,
     platform: str,
@@ -1030,16 +1109,8 @@ def _parse_leapp_output(
     categories: dict[str, int] = {}
     total_records = 0
 
-    tsv_dir = output_dir / "tsv"
-    if not tsv_dir.exists():
-        for candidate in output_dir.iterdir():
-            if candidate.is_dir() and (candidate / "tsv").exists():
-                tsv_dir = candidate / "tsv"
-                break
-        else:
-            tsv_dir = output_dir
-
-    tsv_files = sorted(tsv_dir.glob("*.tsv")) if tsv_dir.exists() else []
+    tsv_dir = _find_leapp_tsv_dir(output_dir)
+    tsv_files = sorted(tsv_dir.glob("*.tsv")) if tsv_dir is not None else []
 
     for tsv_file in tsv_files:
         artifact_type = tsv_file.stem
@@ -1060,7 +1131,9 @@ def _parse_leapp_output(
                 "category": category,
                 "artifact_type": artifact_type,
                 "record_count": record_count,
-                "data": records[:100],
+                # Not truncated here: run_aleapp/run_ileapp index these and
+                # then bound the response, so the case database sees every row.
+                "data": records,
                 "source_files": [str(tsv_file)],
             }
         )
@@ -1223,9 +1296,20 @@ def run_aleapp(
         for cat, count in result.get("categories", {}).items():
             text_parts.append(f"  {cat}: {count} records")
 
+        # Index the parsed rows themselves. Without this the case
+        # database learned that ALEAPP found N records and
+        # nothing about what they said -- no phone number, URL,
+        # filename or timestamp was searchable.
+        for artifact in result.get("artifacts", []):
+            text_parts.extend(_leapp_artifact_lines(artifact))
+
         summary = extract_and_index(
             "\n".join(text_parts), "phone.aleapp", extraction_path, "aleapp"
         )
+
+        # The response stays a bounded preview; the index does not.
+        for artifact in result.get("artifacts", []):
+            artifact["data"] = artifact["data"][:_MAX_LEAPP_RESPONSE_ROWS]
         summary.update(result)
 
     elapsed = (time.monotonic() - t0) * 1000
@@ -1381,9 +1465,20 @@ def run_ileapp(
         for cat, count in result.get("categories", {}).items():
             text_parts.append(f"  {cat}: {count} records")
 
+        # Index the parsed rows themselves. Without this the case
+        # database learned that iLEAPP found N records and
+        # nothing about what they said -- no phone number, URL,
+        # filename or timestamp was searchable.
+        for artifact in result.get("artifacts", []):
+            text_parts.extend(_leapp_artifact_lines(artifact))
+
         summary = extract_and_index(
             "\n".join(text_parts), "phone.ileapp", extraction_path, "ileapp"
         )
+
+        # The response stays a bounded preview; the index does not.
+        for artifact in result.get("artifacts", []):
+            artifact["data"] = artifact["data"][:_MAX_LEAPP_RESPONSE_ROWS]
         summary.update(result)
 
     elapsed = (time.monotonic() - t0) * 1000

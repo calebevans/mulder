@@ -49,22 +49,18 @@ class PhaseConfig:
         single_allowed_tools: Tool whitelist for single-mode agents.
         single_disallowed_tools: Extra tool blocklist for single-mode agents.
         single_max_turns: Turn limit for single-mode agents.
-        single_max_budget_usd: Spend cap for single-mode agents.
         planner_system_prompt: System prompt for the planner role.
         planner_prompt_template: User message template for the planner.
         planner_allowed_tools: Tool whitelist for the planner.
         planner_max_turns: Turn limit for the planner.
-        planner_max_budget_usd: Spend cap for the planner.
         executor_system_prompt: System prompt for the executor role.
         executor_prompt_template: User message template for the executor.
         executor_allowed_tools: Tool whitelist for the executor.
         executor_max_turns: Turn limit for the executor.
-        executor_max_budget_usd: Spend cap for the executor.
         analyst_system_prompt: System prompt for the analyst role.
         analyst_prompt_template: User message template for the analyst.
         analyst_allowed_tools: Tool whitelist for the analyst.
         analyst_max_turns: Turn limit for the analyst.
-        analyst_max_budget_usd: Spend cap for the analyst.
         max_retries: Retry attempts when a quality gate fails.
         max_follow_ups: Times the analyst can request additional work.
         disallowed_tools: Global tool blocklist applied to all roles.
@@ -80,28 +76,24 @@ class PhaseConfig:
     single_allowed_tools: list[str] = field(default_factory=list)
     single_disallowed_tools: list[str] = field(default_factory=list)
     single_max_turns: int = 20
-    single_max_budget_usd: float = 5.0
 
     # Split-mode planner fields
     planner_system_prompt: str = ""
     planner_prompt_template: str = ""
     planner_allowed_tools: list[str] = field(default_factory=list)
     planner_max_turns: int = 10
-    planner_max_budget_usd: float = 2.0
 
     # Split-mode executor fields
     executor_system_prompt: str = ""
     executor_prompt_template: str = ""
     executor_allowed_tools: list[str] = field(default_factory=list)
     executor_max_turns: int = 40
-    executor_max_budget_usd: float = 3.0
 
     # Split-mode analyst fields
     analyst_system_prompt: str = ""
     analyst_prompt_template: str = ""
     analyst_allowed_tools: list[str] = field(default_factory=list)
     analyst_max_turns: int = 30
-    analyst_max_budget_usd: float = 5.0
 
     # Shared across all roles
     max_retries: int = 2
@@ -121,7 +113,6 @@ CATALOG: PhaseConfig = PhaseConfig(
     single_prompt_template="Catalog all evidence in {evidence_path}.{case_id_instruction}",
     single_allowed_tools=get_tools_for_role(Role.CATALOG),
     single_max_turns=40,
-    single_max_budget_usd=8.0,
 )
 
 _EXECUTOR_CASE_ID_PREFIX: str = (
@@ -155,12 +146,10 @@ EXTRACTION: PhaseConfig = PhaseConfig(
     ),
     planner_allowed_tools=get_tools_for_role(Role.EXTRACT_PLANNER),
     planner_max_turns=15,
-    planner_max_budget_usd=2.0,
     executor_system_prompt=EXTRACT_EXECUTOR_PROMPT,
     executor_prompt_template=_EXECUTOR_CASE_ID_PREFIX + "{plan}",
     executor_allowed_tools=get_tools_for_role(Role.EXTRACT_EXECUTOR),
     executor_max_turns=80,
-    executor_max_budget_usd=5.0,
     analyst_system_prompt=EXTRACT_ANALYST_PROMPT,
     analyst_prompt_template=(
         "Case ID: {case_id}\n"
@@ -171,7 +160,6 @@ EXTRACTION: PhaseConfig = PhaseConfig(
     ),
     analyst_allowed_tools=get_tools_for_role(Role.EXTRACT_ANALYST),
     analyst_max_turns=60,
-    analyst_max_budget_usd=5.0,
 )
 
 CROSS_SYSTEM: PhaseConfig = PhaseConfig(
@@ -184,13 +172,11 @@ CROSS_SYSTEM: PhaseConfig = PhaseConfig(
         "{case_briefing}Review all findings and sources. Plan cross-system correlation queries."
     ),
     planner_allowed_tools=get_tools_for_role(Role.CROSS_PLANNER),
-    planner_max_turns=10,
-    planner_max_budget_usd=3.0,
+    planner_max_turns=15,
     executor_system_prompt=CROSS_SYSTEM_EXECUTOR_PROMPT,
     executor_prompt_template=_EXECUTOR_CASE_ID_PREFIX + "{plan}",
     executor_allowed_tools=get_tools_for_role(Role.CROSS_EXECUTOR),
     executor_max_turns=50,
-    executor_max_budget_usd=7.0,
     analyst_system_prompt=CROSS_SYSTEM_ANALYST_PROMPT,
     analyst_prompt_template=(
         "Case ID: {case_id}\n"
@@ -200,7 +186,6 @@ CROSS_SYSTEM: PhaseConfig = PhaseConfig(
     ),
     analyst_allowed_tools=get_tools_for_role(Role.CROSS_ANALYST),
     analyst_max_turns=50,
-    analyst_max_budget_usd=7.0,
 )
 
 ALTERNATIVE_NARRATIVE: PhaseConfig = PhaseConfig(
@@ -213,13 +198,11 @@ ALTERNATIVE_NARRATIVE: PhaseConfig = PhaseConfig(
         "{case_briefing}Review current findings and plan counter-analysis.\n\n{consistency_report}"
     ),
     planner_allowed_tools=get_tools_for_role(Role.NARRATIVE_PLANNER),
-    planner_max_turns=10,
-    planner_max_budget_usd=3.0,
+    planner_max_turns=15,
     executor_system_prompt=NARRATIVE_EXECUTOR_PROMPT,
     executor_prompt_template=_EXECUTOR_CASE_ID_PREFIX + "{plan}",
     executor_allowed_tools=get_tools_for_role(Role.NARRATIVE_EXECUTOR),
     executor_max_turns=35,
-    executor_max_budget_usd=5.0,
     analyst_system_prompt=NARRATIVE_ANALYST_PROMPT,
     analyst_prompt_template=(
         "Case ID: {case_id}\n"
@@ -229,7 +212,6 @@ ALTERNATIVE_NARRATIVE: PhaseConfig = PhaseConfig(
     ),
     analyst_allowed_tools=get_tools_for_role(Role.NARRATIVE_ANALYST),
     analyst_max_turns=35,
-    analyst_max_budget_usd=7.0,
 )
 
 REPORT: PhaseConfig = PhaseConfig(
@@ -242,5 +224,4 @@ REPORT: PhaseConfig = PhaseConfig(
     ),
     single_allowed_tools=get_tools_for_role(Role.REPORT),
     single_max_turns=25,
-    single_max_budget_usd=12.0,
 )

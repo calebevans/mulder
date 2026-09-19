@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from mulder.orchestrator.proxy import (
+    ModelSettings,
     ProxyManager,
     _build_proxy_config,
     is_proxy_model,
@@ -47,8 +48,14 @@ class TestIsProxyModel:
 class TestBuildProxyConfig:
     """Tests for proxy config generation."""
 
+    def test_ollama_uses_native_chat_tools_and_preserves_alias(self) -> None:
+        entry = _build_proxy_config(["ollama/qwen3:latest"], 4000)["model_list"][0]
+        assert entry["model_name"] == "ollama/qwen3:latest"
+        assert entry["litellm_params"]["model"] == "ollama_chat/qwen3:latest"
+
     def test_single_model(self) -> None:
-        config = _build_proxy_config(["bedrock/meta.llama3-1-70b"], 4000)
+        known = {"bedrock/meta.llama3-1-70b": ModelSettings(known=True)}
+        config = _build_proxy_config(["bedrock/meta.llama3-1-70b"], 4000, known)
         assert "model_list" in config
         assert len(config["model_list"]) == 1
         entry = config["model_list"][0]
@@ -86,6 +93,7 @@ class TestProxyManager:
         assert "8080" in pm.env_overrides["ANTHROPIC_BASE_URL"]
 
     @patch("shutil.which", return_value="/usr/local/bin/litellm")
+    @patch("mulder.orchestrator.proxy.fetch_model_windows", MagicMock(return_value={}))
     @patch("mulder.orchestrator.proxy._wait_for_health", return_value=True)
     @patch("subprocess.Popen")
     def test_start_success(
@@ -119,6 +127,7 @@ class TestProxyManager:
         mock_proc.terminate.assert_called_once()
 
     @patch("shutil.which", return_value="/usr/local/bin/litellm")
+    @patch("mulder.orchestrator.proxy.fetch_model_windows", MagicMock(return_value={}))
     @patch("mulder.orchestrator.proxy._wait_for_health", return_value=True)
     @patch("subprocess.Popen")
     def test_stop_terminates_process(
@@ -140,6 +149,7 @@ class TestProxyManager:
         pm.stop()  # Should not raise
 
     @patch("shutil.which", return_value="/usr/local/bin/litellm")
+    @patch("mulder.orchestrator.proxy.fetch_model_windows", MagicMock(return_value={}))
     @patch("mulder.orchestrator.proxy._wait_for_health", return_value=True)
     @patch("subprocess.Popen")
     def test_context_manager(

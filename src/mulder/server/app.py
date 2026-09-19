@@ -20,8 +20,8 @@ from mcp.server.mcpserver import MCPServer
 from mulder.audit import AuditLog
 from mulder.db import CaseDB
 from mulder.index.correlator import Correlator
-from mulder.server.jobs import JobStore
-from mulder.server.tool_access import EXECUTORS, tool_access
+from mulder.server.jobs import JobStore, fill_case_id, validate_tool_args
+from mulder.server.tool_access import EXECUTORS, UNTHROTTLED, tool_access
 
 logger = logging.getLogger(__name__)
 
@@ -52,17 +52,24 @@ def _wrap_sync_tool(fn: Callable[_P, _R]) -> Callable[_P, Awaitable[_R]]:
     transport stays responsive to heartbeats and new requests while
     the tool waits for CPU/memory pressure to subside.  The actual
     tool execution then runs in a worker thread.
+
+    Tools in ``UNTHROTTLED`` (declared via ``@tool_access(...,
+    unthrottled=True)``) skip both the gate and the tool limiter: they
+    are cheap job-control/query calls that must not queue behind the
+    heavy work they report on, and ``wait``/``wait_all`` must not hold
+    a ``--workers`` slot for their whole poll loop.  They run on anyio's
+    default thread limiter instead.
     """
     tool_name = getattr(fn, "__name__", "unknown")
 
     @functools.wraps(fn)
     async def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
         """Async bridge that throttles then dispatches *fn* in a thread."""
+        call = functools.partial(fn, *args, **kwargs)
+        if tool_name in UNTHROTTLED:
+            return await anyio.to_thread.run_sync(call)
         await async_wait_for_resources(tool_name)
-        return await anyio.to_thread.run_sync(
-            functools.partial(fn, *args, **kwargs),
-            limiter=_get_tool_limiter(),
-        )
+        return await anyio.to_thread.run_sync(call, limiter=_get_tool_limiter())
 
     return wrapper
 
@@ -267,6 +274,66 @@ def slugify(name: str) -> str:
     return slug.strip("-") or "case"
 
 
+_PATH_SEPARATORS: frozenset[str] = frozenset(
+    sep for sep in (os.sep, os.altsep, "/") if sep is not None
+)
+"""Every character this platform treats as a path separator.
+
+``/`` is included unconditionally: it separates on POSIX, and Windows accepts
+it as well, so a case ID containing one is never a single path segment.
+"""
+
+
+def validate_case_id(case_id: str) -> str:
+    """Return *case_id* if it names one path segment, else raise.
+
+    Every case ID becomes a path -- ``db_dir / f"{case_id}.db"`` and the
+    sidecars beside it, ``.audit.jsonl``, ``.report.md``, ``.iocs.csv`` and the
+    rest. ``slugify`` guarantees that shape, but it was only applied to IDs
+    mulder derived itself; an ID supplied by an agent went to the filesystem
+    verbatim, so ``"../../../../home/analyst/cases/CASE-2024-007"`` wrote its
+    case database outside the cases directory.
+
+    The rule is containment and nothing else: an ID that contains no path
+    separator is exactly one component once a suffix is appended, and one
+    component cannot be ``.`` or ``..``, so it cannot leave ``db_dir``. Case
+    IDs that were accepted before and do not escape -- ``Incident 2026``,
+    ``café``, ``-case``, ``case..2026``, ``.hidden`` -- keep working.
+
+    The one restriction beyond containment is control characters. A NUL
+    truncates the name in the C library underneath ``open()``, so the file
+    that is created is not the file that was named; the others corrupt the
+    ``.audit.jsonl`` records and log lines the ID is written into. Neither is
+    ever intentional in a case ID.
+
+    Args:
+        case_id: The identifier supplied by a caller.
+
+    Returns:
+        The identifier, unchanged.
+
+    Raises:
+        ValueError: If the identifier is empty, contains a path separator, or
+            contains a control character.
+    """
+    if not case_id:
+        raise ValueError("Invalid case_id: a case ID cannot be empty.")
+
+    found = _PATH_SEPARATORS.intersection(case_id)
+    if found:
+        raise ValueError(
+            f"Invalid case_id {case_id!r}: a case ID is one path segment, so it "
+            f"cannot contain {''.join(sorted(found))!r}."
+        )
+
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in case_id):
+        raise ValueError(
+            f"Invalid case_id {case_id!r}: control characters are not allowed in a case ID."
+        )
+
+    return case_id
+
+
 def init_server(
     db_dir: Path,
     case_id: str | None = None,
@@ -298,7 +365,17 @@ def init_server(
     _seed_psutil()
 
     if case_id is not None:
-        load_case(case_id)
+        validate_case_id(case_id)
+        if (db_dir / f"{case_id}.db").exists():
+            load_case(case_id)
+        else:
+            # The orchestrator passes --case-id to every agent session, including
+            # the catalog one that runs before scan_evidence creates the case.
+            logger.warning(
+                "Case '%s' has no database yet; starting without it "
+                "(scan_evidence will create it).",
+                case_id,
+            )
 
     logger.info("Mulder MCP server ready (db_dir=%s)", db_dir)
 
@@ -360,7 +437,20 @@ def load_case(case_id: str) -> ServerContext:
     Delegates context construction to ``_build_context``, which sets
     the global ``_ctx`` atomically under ``_ctx_lock``.  The old
     database is closed *after* the new context is installed.
+
+    This is the choke point for the case-ID check, because it is the only
+    place every path into a case database passes through: ``open_case``
+    calls it, and so do ``init_server`` and the orchestrator's
+    ``ServerBridge``, neither of which goes near the tool layer.
+    ``open_case`` validates as well, but only so it can return a structured
+    ``invalid_input`` response instead of raising -- the guard here is what
+    makes the containment property hold for *every* caller.
+
+    Raises:
+        ValueError: If *case_id* is not a single path segment.
     """
+    validate_case_id(case_id)
+
     cfg = get_cfg()
     logger.info("Opening case database for '%s' ...", case_id)
 
@@ -400,11 +490,17 @@ def _try_open_existing(
     when the caller should proceed to create a fresh database (only
     possible for empty, corrupt DBs with ``replace=True``).
     """
+    # ``existing`` is handed to _build_context on the success paths, which
+    # takes ownership of it. It is only orphaned when the open succeeded and a
+    # query on it then raised, so that is the case this pre-binding covers.
+    existing = None
     try:
         existing = CaseDB.open(case_id, db_dir)
         meta = existing.get_case_metadata()
         source_count = existing.get_source_count()
     except Exception as exc:
+        if existing is not None:
+            existing.close()
         if not replace:
             logger.exception("Failed to open existing case '%s'", case_id)
             from mulder.server.helpers import error_response, make_tool_call_id
@@ -481,6 +577,8 @@ def create_case(
     ID is allowed. Attempts to create a different case are rejected
     and the enforced case is loaded instead.
     """
+    validate_case_id(case_id)
+
     enforced_id = os.environ.get("MULDER_CASE_ID", "")
     if enforced_id and case_id != enforced_id:
         logger.warning(
@@ -592,6 +690,7 @@ async def run_parallel(tasks: list[dict[str, Any]]) -> dict[str, Any]:
 
     batch_id = f"bp_{uuid4().hex[:8]}"
     results: list[Any] = [None] * len(tasks)
+    open_case_id = get_ctx().case_id if has_ctx() else None
 
     async def _run_one(idx: int, tool_name: str, arguments: dict[str, Any]) -> None:
         """Execute a single task and store its result at *idx*."""
@@ -600,6 +699,11 @@ async def run_parallel(tasks: list[dict[str, Any]]) -> dict[str, Any]:
             fn = _tool_dispatch.get(tool_name)
             if fn is None:
                 results[idx] = {"error": f"Unknown tool: {tool_name}"}
+                return
+            arguments = fill_case_id(fn, arguments, open_case_id)
+            problem = validate_tool_args(fn, arguments)
+            if problem is not None:
+                results[idx] = {"error": f"{tool_name}: {problem}"}
                 return
             try:
                 results[idx] = await fn(**arguments)

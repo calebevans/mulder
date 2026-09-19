@@ -1,4 +1,12 @@
+# syntax=docker/dockerfile:1
+
 # libewf: build from source (GIFT PPA lacks arm64 packages)
+# Build against FUSE 2 (libfuse-dev), not libfuse3-dev: this libewf release's
+# configure prefers fuse3 and then defines only HAVE_LIBFUSE3, but ewfmount.c
+# compiles its mount code under HAVE_LIBFUSE, so a fuse3 build yields an
+# ewfmount that prints "No sub system to mount EWF format." The runtime image
+# already carries libfuse2 (dislocker, afflib-tools, libvshadow-utils) and
+# fuse3 provides the fusermount symlink libfuse2 execs.
 FROM ubuntu:22.04 AS libewf-builder
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -11,7 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         zlib1g-dev \
         libbz2-dev \
         libssl-dev \
-        libfuse3-dev \
+        libfuse-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL https://github.com/libyal/libewf/releases/download/20240506/libewf-experimental-20240506.tar.gz \
@@ -21,6 +29,29 @@ RUN curl -fsSL https://github.com/libyal/libewf/releases/download/20240506/libew
     && ./configure --prefix=/opt/libewf \
     && make -j"$(nproc)" \
     && make install
+
+# ntfs-3g: rebuild with external FUSE (libfuse2 -> setuid fusermount3) so the
+# unprivileged mulder user can mount NTFS image files. Ubuntu's package uses
+# integrated FUSE without setuid, which refuses every non-root mount; making it
+# setuid would parse hostile evidence with root privileges instead.
+# --disable-library links libntfs-3g statically so nothing shadows the distro
+# copy that libguestfs-tools depends on.
+FROM libewf-builder AS ntfs-3g-builder
+RUN curl -fsSL https://tuxera.com/opensource/ntfs-3g_ntfsprogs-2022.10.3.tgz \
+        -o /tmp/ntfs-3g.tgz \
+    && tar xzf /tmp/ntfs-3g.tgz -C /tmp \
+    && cd /tmp/ntfs-3g_ntfsprogs-2022.10.3 \
+    && ./configure --with-fuse=external \
+        --disable-library --disable-ntfsprogs \
+    && make -j"$(nproc)" \
+    && make install DESTDIR=/opt/ntfs-3g \
+    && strip --strip-debug /opt/ntfs-3g/bin/ntfs-3g
+
+# Keep headers/static libraries available to bulk-builder, but out of runtime.
+FROM libewf-builder AS libewf-runtime
+RUN strip --strip-debug /opt/libewf/bin/* /opt/libewf/lib/libewf.so.* \
+    && rm -rf /opt/libewf/include /opt/libewf/lib/pkgconfig \
+    && rm -f /opt/libewf/lib/libewf.a /opt/libewf/lib/libewf.la
 
 # bulk_extractor: build from source with libewf support
 FROM ubuntu:22.04 AS bulk-builder
@@ -57,6 +88,8 @@ RUN git clone --recursive --depth 1 \
     && ./configure --prefix=/opt/bulk_extractor --with-libewf=/opt/libewf \
     && make -j"$(nproc)" \
     && make install
+
+RUN strip --strip-debug /opt/bulk_extractor/bin/bulk_extractor
 
 # Eric Zimmerman tools: .NET runtime + forensic parsers
 FROM ubuntu:22.04 AS eztools-fetch
@@ -108,8 +141,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 ARG SIGNATURE_BASE_SHA=e737ebd96c27a52ee99485d4d3e02e9c256d1d3a
-RUN git clone https://github.com/Neo23x0/signature-base.git /opt/signature-base \
-    && cd /opt/signature-base && git checkout $SIGNATURE_BASE_SHA
+RUN git init /opt/signature-base \
+    && cd /opt/signature-base \
+    && git remote add origin https://github.com/Neo23x0/signature-base.git \
+    && git fetch --depth 1 origin "$SIGNATURE_BASE_SHA" \
+    && git checkout --detach FETCH_HEAD
 
 # Hayabusa: Sigma rule engine for Windows EVTX logs.
 # amd64: pre-built musl binary (statically linked, no GLIBC dependency).
@@ -197,6 +233,8 @@ RUN git clone https://github.com/redNixon/stegdetect.git /tmp/stegdetect \
     && make -j"$(nproc)" \
     && mkdir -p /opt/stegdetect/bin /opt/stegdetect/share /opt/stegdetect/man/man1 \
     && make install
+
+RUN strip --strip-debug /opt/stegdetect/bin/stegdetect /opt/stegdetect/bin/stegbreak
 
 # CAPA: download pre-built binary (multi-arch)
 FROM ubuntu:22.04 AS capa-fetch
@@ -300,6 +338,14 @@ RUN mkdir -p /opt/suricata /etc/suricata \
         && rm -rf /tmp/suricata*; \
     fi
 
+RUN if [ "$TARGETARCH" = "arm64" ]; then \
+        strip --strip-debug /opt/suricata/bin/suricata \
+        && find /opt/suricata/lib -type f -name 'libhtp.so.*' \
+            -exec strip --strip-debug {} + \
+        && rm -rf /opt/suricata/include /opt/suricata/lib/pkgconfig \
+        && rm -f /opt/suricata/lib/libhtp.a /opt/suricata/lib/libhtp.la; \
+    fi
+
 # Runtime image
 FROM ubuntu:22.04 AS runtime
 
@@ -330,7 +376,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libssl3 \
         libre2-9 \
         fuse3 \
-        libfuse3-dev \
+        libfuse2 \
+        xmount \
+        fuse2fs \
+        libffi8 \
+        libsqlite3-0 \
         regripper \
         clamav clamav-freshclam \
         hashdeep \
@@ -358,29 +408,34 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libheif-examples \
         p7zip-full \
         python3.12 \
-        python3.12-dev \
         python3.12-venv \
-        libsqlite3-dev \
-        libffi-dev \
     && (freshclam --quiet || true) \
     && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1 \
     && update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
+# Set symbol ownership while copying to avoid a second archive-sized chown layer.
+RUN useradd -m -s /bin/bash mulder \
+    && install -d -o mulder -g mulder /home/mulder/.cache \
+        /home/mulder/.cache/volatility3 /home/mulder/.cache/volatility3/symbols
+
 COPY --from=bulk-builder /opt/bulk_extractor /usr/local
-COPY --from=libewf-builder /opt/libewf /usr/local
+COPY --from=libewf-runtime /opt/libewf /usr/local
+# /usr/local/bin precedes /usr/bin, so this shadows the distro ntfs-3g binary.
+COPY --from=ntfs-3g-builder /opt/ntfs-3g/bin/ntfs-3g /usr/local/bin/ntfs-3g
 COPY --from=eztools-fetch /opt/dotnet /usr/local/share/dotnet
 COPY --from=eztools-fetch /opt/zimmermantools /opt/zimmermantools
-COPY --from=symbols-fetch /opt/vol-symbols/windows.zip /home/mulder/.cache/volatility3/symbols/windows.zip
-COPY --from=symbols-fetch /opt/vol-symbols/linux.zip /home/mulder/.cache/volatility3/symbols/linux.zip
+COPY --from=symbols-fetch --chown=mulder:mulder /opt/vol-symbols/windows.zip /home/mulder/.cache/volatility3/symbols/windows.zip
+COPY --from=symbols-fetch --chown=mulder:mulder /opt/vol-symbols/linux.zip /home/mulder/.cache/volatility3/symbols/linux.zip
 COPY --from=stegdetect-builder /opt/stegdetect/bin/stegdetect /usr/local/bin/stegdetect
 COPY --from=stegdetect-builder /opt/stegdetect/bin/stegbreak /usr/local/bin/stegbreak
+# Deliberately root-owned: the server (running as mulder) sees a read-only clone
+# and uses the pinned rules instead of pulling at scan time.
 COPY --from=yara-fetch /opt/signature-base /opt/signature-base
 COPY --from=attack-fetch /opt/attack/enterprise-attack.json /opt/attack/enterprise-attack.json
 COPY --from=attack-fetch /opt/attack/ics-attack.json /opt/attack/ics-attack.json
 COPY --from=hayabusa-fetch /opt/hayabusa /opt/hayabusa
-COPY --from=radare2-fetch /tmp/radare2.deb /tmp/radare2.deb
 # Keep capa where the asset manifest says it lives, then link it onto PATH --
 # same shape as chainsaw below. Copying only the binary to /usr/local/bin
 # left /opt/capa absent, so `mulder setup --verify` called capa missing on
@@ -394,8 +449,8 @@ COPY --from=chainsaw-fetch /opt/sigma-rules/ /opt/sigma-rules/
 COPY --from=suricata-builder /opt/suricata/ /opt/suricata/
 COPY --from=suricata-builder /etc/suricata/ /etc/suricata/
 
-RUN dpkg -i /tmp/radare2.deb || apt-get install -yf --no-install-recommends \
-    && rm /tmp/radare2.deb
+RUN --mount=type=bind,from=radare2-fetch,source=/tmp/radare2.deb,target=/tmp/radare2.deb \
+    dpkg -i /tmp/radare2.deb || apt-get install -yf --no-install-recommends
 
 ARG TARGETARCH
 
@@ -427,14 +482,14 @@ RUN mkdir -p /etc/suricata/rules \
     && rm /tmp/et-rules.tar.gz
 
 # Zeek: install from OBS repository (provides amd64 and arm64 packages).
-# Mark as manual so later apt-get autoremove steps do not uninstall it.
+# Install the runtime packages directly; the metapackage adds development/test
+# files that later compiler purges remove, leaving their bytes in earlier layers.
 RUN echo "deb http://download.opensuse.org/repositories/security:/zeek/xUbuntu_22.04/ /" \
         > /etc/apt/sources.list.d/zeek.list \
     && curl -fsSL "https://download.opensuse.org/repositories/security:/zeek/xUbuntu_22.04/Release.key" \
         | gpg --dearmor -o /etc/apt/trusted.gpg.d/zeek.gpg \
     && apt-get update \
-    && apt-get install -y --no-install-recommends zeek \
-    && apt-mark manual zeek-core zeekctl \
+    && apt-get install -y --no-install-recommends zeek-core zeekctl \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -445,6 +500,7 @@ RUN ldconfig || true
 RUN apt-get update && apt-get install -y --no-install-recommends \
         gcc g++ make pkg-config python3.12-dev \
         zlib1g-dev libbz2-dev libssl-dev libsqlcipher-dev \
+        libffi-dev libsqlite3-dev libfuse3-dev \
     && uv pip install --system --no-cache \
         volatility3 plaso mvt pysqlcipher3 pyhindsight oletools \
     && if [ "$TARGETARCH" = "arm64" ]; then \
@@ -453,6 +509,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get purge -y \
         gcc g++ make pkg-config python3.12-dev \
         zlib1g-dev libbz2-dev libssl-dev libsqlcipher-dev \
+        libffi-dev libsqlite3-dev libfuse3-dev \
     && apt-get autoremove -y \
     && apt-get install -y --no-install-recommends libsqlcipher0 \
     && apt-get clean \
@@ -462,28 +519,33 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN uv pip install --system --no-cache \
         stix2 evtx jsonpath-ng colorama tqdm aiohttp lark
 
-# Clone forensic tool repositories
+# Keep real Git metadata for setup --verify, excluding mobile test fixtures
+# from both the working tree and the partial clone's object store.
 RUN git clone --depth 1 --branch 2.20.0 \
         https://github.com/wagga40/Zircolite.git /opt/zircolite \
     && chmod +x /opt/zircolite/zircolite.py \
-    && git clone --depth 1 --branch v2026.3.2 \
+    && git clone --depth 1 --filter=blob:none --sparse --branch v2026.3.2 \
         https://github.com/abrignoni/ALEAPP.git /opt/aleapp \
-    && git clone --depth 1 --branch v2026.3.2 \
+    && git -C /opt/aleapp sparse-checkout set --no-cone '/*' '!/admin/test/' \
+    && git clone --depth 1 --filter=blob:none --sparse --branch v2026.3.2 \
         https://github.com/abrignoni/iLEAPP.git /opt/ileapp \
-    && git clone https://github.com/DidierStevens/DidierStevensSuite.git \
-        /opt/didier-stevens \
-    && cd /opt/didier-stevens && git checkout dea6816048fb2fd3a3597f2e131449fc87f60138 \
+    && git -C /opt/ileapp sparse-checkout set --no-cone '/*' '!/admin/test/' \
+    && git init /opt/didier-stevens \
+    && cd /opt/didier-stevens \
+    && git remote add origin https://github.com/DidierStevens/DidierStevensSuite.git \
+    && git fetch --depth 1 origin dea6816048fb2fd3a3597f2e131449fc87f60138 \
+    && git checkout --detach FETCH_HEAD \
     && chmod +x /opt/didier-stevens/pdfid.py /opt/didier-stevens/pdf-parser.py
 
 # Install ALEAPP and iLEAPP Python dependencies; strip version pins and
 # filter non-PyPI entries to avoid conflicts between the two projects
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        gcc g++ python3.12-dev \
+        gcc g++ python3.12-dev libffi-dev libsqlite3-dev libfuse3-dev \
     && cat /opt/aleapp/requirements.txt /opt/ileapp/requirements.txt \
         | sed 's/[;].*//; s/==.*//; s/>=.*//; s/<=.*//; s/~=.*//' \
         | grep -v '^\s*#' | grep -v '^\s*$' | grep -v '/' | sort -u \
         | xargs uv pip install --system --no-cache \
-    && apt-get purge -y gcc g++ python3.12-dev \
+    && apt-get purge -y gcc g++ python3.12-dev libffi-dev libsqlite3-dev libfuse3-dev \
     && apt-get autoremove -y \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
@@ -493,28 +555,30 @@ RUN mkdir -p /opt/zircolite/rules/linux \
 
 RUN python3 -c "import pyewf; print('libewf-python', pyewf.get_version())"
 
-RUN useradd -m -s /bin/bash mulder
-
 COPY . /app
 RUN uv pip install --system --no-cache -e /app
 
 # LiteLLM proxy in isolated venv (hard dependency conflicts with mulder's
 # mcp>=2.0 and rich>=15.0; litellm pins older versions of both).
 RUN python3 -m venv /opt/litellm \
-    && /opt/litellm/bin/pip install --no-cache-dir 'litellm[proxy]' pyyaml \
+    && find /opt/litellm -type d -name __pycache__ -prune -exec rm -rf {} + \
+    && /opt/litellm/bin/pip install --no-cache-dir --no-compile 'litellm[proxy]' pyyaml 'botocore[crt]' \
     && ln -s /opt/litellm/bin/litellm /usr/local/bin/litellm
 
 RUN mkdir -p /mulder-investigation \
     && cp /app/.mcp.json /mulder-investigation/.mcp.json \
     && cd /mulder-investigation && git init && git config user.email "mulder@local" && git config user.name "mulder" && git add -A && git commit -m "init"
 
-RUN chown -R mulder:mulder /home/mulder /mulder-investigation
+RUN chown -R mulder:mulder /mulder-investigation
 
 COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# NOTE: disk image mount operations (mount, ewfmount, guestmount) require
-# --privileged or --cap-add SYS_ADMIN when running this container.
+# NOTE: disk image mounting is pure FUSE (xmount + ntfs-3g/fuse2fs, see
+# src/mulder/extractors/disk.py) and needs --privileged or
+# --cap-add SYS_ADMIN --device /dev/fuse when running this container. No loop
+# devices and no root: the kernel `mount -o loop` path was removed because a
+# --cap-add container exposes no loop device even to root.
 # The container runs as non-root user 'mulder'; the entrypoint handles
 # credential setup and permission fixups before dropping to that user.
 

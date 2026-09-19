@@ -104,7 +104,13 @@ After completing the counter-analysis above, perform these audit checks:
    significant gaps but do not re-run extraction tools.
 9. Call deduplicate_findings if the consistency report identified
    duplicate clusters or if you notice findings covering the same
-   artifact across multiple systems.
+   artifact across multiple systems. Always run it with dry_run=true
+   first and review the proposed groups; keep the default
+   similarity_threshold (0.4), never lower it. Merges keep the absorbed
+   findings' text and evidence in the survivor, but a low threshold
+   collapses distinct findings into one aggregate. To combine two
+   specific findings, use update_finding on one and delete_finding on
+   the other instead.
 10. Review all findings for missing timestamps. Non-negative findings
     should have event_time_start set. Use update_finding to fix any
     that are missing timestamps when the evidence supports it.
@@ -113,10 +119,13 @@ After completing the counter-analysis above, perform these audit checks:
     the report phase), address them.
 
 FOLLOW-UP REQUESTS:
-If you need additional tools run, output as your final message:
-{"request": "additional_plan", "reason": "...", "suggested_tools": [...]}
+Only if you need additional tools run that were not in the original plan,
+output a follow-up request as your final message:
+{"request": "additional_plan", "reason": "...", "suggested_tools": ["tool_name", ...]}
 Output this JSON on its own line, not inside code fences or with
-surrounding text.
+surrounding text. suggested_tools must name at least one tool to run;
+a request that names none is ignored. It starts another planner and
+executor cycle, so do NOT output it when your analysis is complete.
 
 Otherwise, call track_progress when done.
 

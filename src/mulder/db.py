@@ -146,18 +146,24 @@ _IX_WINDOWS_SOURCE_LINE = (
 )
 
 _FTS5_OPERATORS = frozenset({"AND", "OR", "NOT", "NEAR"})
-_FTS5_SPECIAL = re.compile(r'["./$:^{}()*+\-~]')
+# FTS5's bareword grammar: ASCII alphanumerics, "_" and codepoints >= 0x80.
+# Any token outside it (`@nasa`, `#tag`, `a=b`, `file.exe`, ...) is a syntax
+# error unless quoted, so the check is "is it a bareword", not a list of
+# special characters -- that list was an allowlist that missed `@`.
+_FTS5_BAREWORD = re.compile(r"[A-Za-z0-9_\u0080-\U0010ffff]+")
 _FTS5_TOKEN_RE = re.compile(r'"[^"]*"|\S+')
 
 
 def _sanitize_fts5_query(query: str) -> str:
-    """Quote tokens that contain FTS5 special characters.
+    """Quote every token that is not an FTS5 bareword.
 
     Preserves FTS5 boolean operators (AND, OR, NOT, NEAR) and
     already-quoted phrases.  Converts pipe characters to OR operators
     (common mistake by LLMs using regex-style syntax).  All other
-    tokens containing special characters are wrapped in double quotes
-    so FTS5 treats them as literals.
+    non-bareword tokens are wrapped in double quotes so FTS5 treats them
+    as literal phrases.  A punctuation-only token quotes to a phrase with
+    no tokens, which FTS5 accepts and matches nothing; only the empty
+    string is still a syntax error, and callers short-circuit that.
     """
     # Convert pipe-separated queries to FTS5 OR syntax before tokenizing.
     # e.g., "subject_srv|powershell|cmd" -> "subject_srv OR powershell OR cmd"
@@ -168,9 +174,11 @@ def _sanitize_fts5_query(query: str) -> str:
     parts = _FTS5_TOKEN_RE.findall(query)
     tokens: list[str] = []
     for token in parts:
-        if token in _FTS5_OPERATORS or token.startswith('"') and token.endswith('"'):
+        if token in _FTS5_OPERATORS or (
+            len(token) >= 2 and token.startswith('"') and token.endswith('"')
+        ):
             tokens.append(token)
-        elif _FTS5_SPECIAL.search(token):
+        elif not _FTS5_BAREWORD.fullmatch(token):
             safe = token.replace('"', '""')
             tokens.append(f'"{safe}"')
         else:
@@ -736,6 +744,8 @@ class CaseDB:
                 )
 
         safe_query = _sanitize_fts5_query(query)
+        if not safe_query:
+            return 0
 
         with self._engine.connect() as conn:
             try:

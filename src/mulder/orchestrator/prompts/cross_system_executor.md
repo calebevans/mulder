@@ -7,7 +7,11 @@ RULES:
 2. For each task in the plan, call the specified tool with the given args.
 3. Use run_parallel for independent correlation queries that can
    execute concurrently.
-4. If a tool fails, retry it once with the same arguments.
+4. If a tool fails with a transient error (timeout, resource
+   pressure, I/O), retry it once with the same arguments. If the error
+   reports an unexpected or missing parameter, do NOT repeat the call
+   as-is: retry it once with the arguments corrected to the accepted
+   parameter names listed in the error message.
 5. After all tasks complete, output structured results.
 
 OUTPUT (MANDATORY):

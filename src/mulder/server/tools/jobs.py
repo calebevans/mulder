@@ -18,7 +18,8 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any
 
-from mulder.server.app import get_ctx, mcp
+from mulder.server.app import get_ctx, has_ctx, mcp
+from mulder.server.jobs import fill_case_id, validate_tool_args
 from mulder.server.tool_access import Role, tool_access
 
 if TYPE_CHECKING:
@@ -36,7 +37,7 @@ def _get_job_store() -> JobStore:
 
 
 @mcp.tool()
-@tool_access(Role.CATALOG | Role.EXTRACT_EXECUTOR)
+@tool_access(Role.CATALOG | Role.EXTRACT_EXECUTOR, unthrottled=True)
 def start_extraction_batch(tasks: list[dict[str, Any]]) -> dict[str, Any]:
     """Submit long-running extraction tools for background execution and return immediately.
 
@@ -91,10 +92,19 @@ def start_extraction_batch(tasks: list[dict[str, Any]]) -> dict[str, Any]:
 
     tasks_to_submit: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+
+    open_case_id = get_ctx().case_id if has_ctx() else None
 
     for task in tasks:
         tool_name = task["tool"]
-        args = task.get("args", {})
+        args = fill_case_id(_tool_dispatch_sync[tool_name], task.get("args", {}), open_case_id)
+        task = {**task, "args": args}
+        problem = validate_tool_args(_tool_dispatch_sync[tool_name], args)
+        if problem is not None:
+            logger.warning("Rejecting %s in batch: %s", tool_name, problem)
+            rejected.append({"tool": tool_name, "args": args, "error": problem})
+            continue
         force = args.get("force", False)
         if not force:
             evidence_path = (
@@ -130,11 +140,22 @@ def start_extraction_batch(tasks: list[dict[str, Any]]) -> dict[str, Any]:
                 tool_call_id=tc_id,
                 tool_name="start_extraction_batch",
                 params={"tasks": [t["tool"] for t in tasks]},
-                output_hash=hash_output({"status": "all_skipped"}),
+                output_hash=hash_output({"status": "all_skipped", "rejected": rejected}),
                 duration_ms=elapsed,
             )
         except RuntimeError:
             logger.warning("Audit skipped: no active case context for start_extraction_batch")
+        if rejected:
+            return {
+                "tool_call_id": tc_id,
+                "status": "error",
+                "error_message": (
+                    f"{len(rejected)} task(s) rejected for invalid arguments; nothing submitted. "
+                    "Fix the arguments listed in tasks_rejected and resubmit."
+                ),
+                "tasks_rejected": rejected,
+                "tasks_skipped": skipped,
+            }
         return {
             "tool_call_id": tc_id,
             "status": "all_skipped",
@@ -174,11 +195,18 @@ def start_extraction_batch(tasks: list[dict[str, Any]]) -> dict[str, Any]:
     }
     if skipped:
         result["tasks_skipped"] = skipped
+    if rejected:
+        result["tasks_rejected"] = rejected
+        result["hint"] = (
+            f"{len(rejected)} task(s) were NOT submitted because their arguments do not "
+            "match the tool signature (see tasks_rejected). Resubmit those with the "
+            "accepted parameter names. " + result["hint"]
+        )
     return result
 
 
 @mcp.tool()
-@tool_access(Role.CATALOG | Role.EXTRACT_EXECUTOR)
+@tool_access(Role.CATALOG | Role.EXTRACT_EXECUTOR, unthrottled=True)
 def check_extraction_status(batch_id: str) -> dict[str, Any]:
     """Poll the progress of a background extraction batch.
 
@@ -252,7 +280,7 @@ def check_extraction_status(batch_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-@tool_access(Role.CATALOG | Role.EXTRACT_EXECUTOR)
+@tool_access(Role.CATALOG | Role.EXTRACT_EXECUTOR, unthrottled=True)
 def get_completed_results(
     batch_id: str,
     tool_names: list[str] | None = None,
@@ -352,7 +380,7 @@ def get_completed_results(
 
 
 @mcp.tool()
-@tool_access(Role.CATALOG | Role.EXTRACT_EXECUTOR)
+@tool_access(Role.CATALOG | Role.EXTRACT_EXECUTOR, unthrottled=True)
 def wait_all(
     batch_ids: list[str],
     poll_interval: int = 5,
@@ -464,7 +492,7 @@ def wait_all(
 
 
 @mcp.tool()
-@tool_access(Role.CATALOG | Role.EXTRACT_EXECUTOR)
+@tool_access(Role.CATALOG | Role.EXTRACT_EXECUTOR, unthrottled=True)
 def wait(
     seconds: int = 300,
     batch_id: str | None = None,

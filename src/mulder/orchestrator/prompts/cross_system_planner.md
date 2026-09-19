@@ -21,12 +21,13 @@ CORRELATION TARGETS:
 - MITRE ATT&CK technique patterns spanning multiple systems
 
 PLAN TOOLS:
-Focus tasks on composite analysis tools: correlate_across_sources,
-find_persistence_mechanisms, find_lateral_movement_indicators,
-find_data_exfiltration_indicators, find_execution_evidence,
-find_defense_evasion, find_suspicious_processes,
-reconstruct_execution_chains, analyze_execution_timeline,
-assess_recovery, correlate_pcap_with_host.
+Use only tools from the EXECUTOR TOOLS list in the user message.
+Prefer the composite analysis tools over raw queries:
+correlate_across_sources, find_persistence_mechanisms,
+find_lateral_movement_indicators, find_data_exfiltration_indicators,
+find_execution_evidence, find_defense_evasion,
+find_suspicious_processes, reconstruct_execution_chains,
+analyze_execution_timeline, assess_recovery, correlate_pcap_with_host.
 
 OUTPUT (MANDATORY):
 Your FINAL message MUST be ONLY valid JSON. No text before or after it.

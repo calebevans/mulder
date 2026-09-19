@@ -278,6 +278,96 @@ class TestSanitizeFts5Query:
         result = _sanitize_fts5_query("simple query")
         assert result == "simple query"
 
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "@nasa",
+            "#tag",
+            "a=b",
+            "foo&bar",
+            "'nasa'",
+            "x\\y",
+            "[nasa]",
+            "a,b",
+            "a;b",
+            "nasa?",
+            "nasa!",
+            "50%",
+            "<nasa>",
+            "ünïcode@x",
+        ],
+    )
+    def test_non_bareword_tokens_are_quoted(self, query: str) -> None:
+        """Anything outside FTS5's bareword grammar must be quoted.
+
+        FTS5 barewords are ASCII alphanumerics, ``_`` and codepoints >= 0x80;
+        every other character is a syntax error when it reaches MATCH bare.
+        """
+        assert _sanitize_fts5_query(query) == f'"{query}"'
+
+    def test_lone_double_quote_is_quoted(self) -> None:
+        """A stray ``"`` is not a phrase; unescaped it is a syntax error."""
+        assert _sanitize_fts5_query('nasa "') == 'nasa """"'
+
+    def test_operators_between_quoted_tokens_preserved(self) -> None:
+        assert _sanitize_fts5_query("@nasa AND #tag") == '"@nasa" AND "#tag"'
+
+
+class TestSanitizeFts5QueryAgainstRealFts5:
+    """Every sanitized query must be accepted by a real FTS5 MATCH.
+
+    Motivating incident: the model searched for ``@nasa`` and was told there
+    were zero hits, because the sanitizer let ``@`` through unquoted and the
+    resulting ``fts5: syntax error near "@"`` was swallowed as "no results".
+    """
+
+    @pytest.fixture(autouse=True)
+    def fts(self) -> None:
+        import sqlite3
+
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.execute("CREATE VIRTUAL TABLE t USING fts5(raw_text)")
+        except sqlite3.OperationalError:
+            pytest.skip("sqlite3 built without FTS5")
+        conn.execute(
+            "INSERT INTO t VALUES ('mail from @nasa and user@example.com #tag a=b foo&bar')"
+        )
+        self.conn = conn
+
+    def count(self, query: str) -> int:
+        row = self.conn.execute(
+            "SELECT count(*) FROM t WHERE t MATCH ?", (_sanitize_fts5_query(query),)
+        ).fetchone()
+        return int(row[0])
+
+    @pytest.mark.parametrize(
+        "query", ["@nasa", "#tag", "a=b", "foo&bar", "user@example.com", "@nasa AND #tag"]
+    )
+    def test_punctuated_terms_hit(self, query: str) -> None:
+        assert self.count(query) == 1
+
+    def test_quoted_phrase_and_operators_still_work(self) -> None:
+        assert self.count('"user@example.com"') == 1
+        assert self.count("nasa OR zzz") == 1
+        assert self.count("nasa NOT zzz") == 1
+        assert self.count("nasa AND zzz") == 0
+        assert self.count("a|zzz") == 1
+
+    @pytest.mark.parametrize("query", ["@", "@@@", "?!", '"'])
+    def test_entirely_punctuation_matches_nothing_without_error(self, query: str) -> None:
+        """Punctuation-only input quotes to a phrase with no tokens: zero rows, no raise."""
+        assert self.count(query) == 0
+
+    @pytest.mark.parametrize("query", ["", "   "])
+    def test_empty_query_returns_zero_rows_and_zero_count(
+        self, query: str, tmp_case_db: CaseDB
+    ) -> None:
+        """An empty MATCH string is an FTS5 syntax error; callers short-circuit it."""
+        assert _sanitize_fts5_query(query) == ""
+        assert tmp_case_db.search_windows(query) == []
+        assert tmp_case_db.count_search_windows(query) == 0
+
 
 class TestMigrations:
     """Verify migration idempotency."""

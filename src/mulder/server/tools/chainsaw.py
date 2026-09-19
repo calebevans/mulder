@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import subprocess
 import tempfile
 import time
@@ -32,6 +33,9 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 _CHAINSAW_TIMEOUT = 600
+_STDERR_PREVIEW_CHARS = 500
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+_BANNER_RE = re.compile(r"^[\u2550-\u257f\s]+$|^By WithSecure")
 
 
 def _chainsaw_binary() -> str | None:
@@ -55,6 +59,17 @@ def _chainsaw_binary() -> str | None:
 def _default_sigma_rules() -> Path:
     """The Sigma rules directory ``mulder setup`` provisions for hunt mode."""
     return asset_display_path("sigma-rules", "rules", "windows")
+
+
+def _default_chainsaw_mapping() -> Path:
+    """The Sigma-to-EVTX mapping Chainsaw requires alongside ``--sigma``.
+
+    Chainsaw cannot apply third-party Sigma rules without a mapping that tells
+    it which event fields those rules refer to, so ``--sigma`` *requires*
+    ``--mapping``.  The mapping ships in the Chainsaw release tarball and is
+    also pulled by the asset supplement, so ``mulder setup`` always provides it.
+    """
+    return asset_display_path("chainsaw", "mappings", "sigma-event-logs-all.yml")
 
 
 def _resolve_evtx_evidence(evidence_path: str) -> str:
@@ -108,24 +123,28 @@ def _run_chainsaw_hunt(
     binary: str,
     evidence_path: Path,
     sigma_rules_path: Path,
+    mapping_path: Path,
     output_dir: Path,
     time_start: str | None = None,
     time_end: str | None = None,
     timeout: int = _CHAINSAW_TIMEOUT,
-) -> Path:
+) -> tuple[Path, subprocess.CompletedProcess[str]]:
     """Execute Chainsaw in hunt mode against EVTX files.
 
     Args:
         binary: Resolved Chainsaw executable.
         evidence_path: Directory containing .evtx files.
         sigma_rules_path: Path to Sigma rules directory.
+        mapping_path: Chainsaw mapping file; required alongside --sigma.
         output_dir: Output directory for results.
         time_start: Optional time range start (ISO 8601).
         time_end: Optional time range end (ISO 8601).
         timeout: Subprocess timeout in seconds.
 
     Returns:
-        Path to the JSON results file.
+        Tuple of (path to the JSON results file, the completed
+        process). The caller needs the process to tell an empty result set
+        from a Chainsaw run that never produced one.
 
     Raises:
         subprocess.TimeoutExpired: If Chainsaw exceeds the timeout.
@@ -137,6 +156,8 @@ def _run_chainsaw_hunt(
         str(evidence_path),
         "-s",
         str(sigma_rules_path),
+        "--mapping",
+        str(mapping_path),
         "--json",
         "--output",
         str(output_file),
@@ -146,14 +167,14 @@ def _run_chainsaw_hunt(
     if time_end:
         cmd.extend(["--to", time_end])
 
-    subprocess.run(
+    proc = subprocess.run(
         cmd,
         capture_output=True,
         text=True,
         timeout=timeout,
         check=False,
     )
-    return output_file
+    return output_file, proc
 
 
 def _run_chainsaw_search(
@@ -164,7 +185,7 @@ def _run_chainsaw_search(
     time_start: str | None = None,
     time_end: str | None = None,
     timeout: int = _CHAINSAW_TIMEOUT,
-) -> Path:
+) -> tuple[Path, subprocess.CompletedProcess[str]]:
     """Execute Chainsaw in search mode against EVTX files.
 
     Args:
@@ -177,7 +198,9 @@ def _run_chainsaw_search(
         timeout: Subprocess timeout in seconds.
 
     Returns:
-        Path to the JSON results file.
+        Tuple of (path to the JSON results file, the completed
+        process). The caller needs the process to tell an empty result set
+        from a Chainsaw run that never produced one.
 
     Raises:
         subprocess.TimeoutExpired: If Chainsaw exceeds the timeout.
@@ -197,29 +220,40 @@ def _run_chainsaw_search(
     if time_end:
         cmd.extend(["--to", time_end])
 
-    subprocess.run(
+    proc = subprocess.run(
         cmd,
         capture_output=True,
         text=True,
         timeout=timeout,
         check=False,
     )
-    return output_file
+    return output_file, proc
 
 
 def _run_chainsaw_srum(
-    binary: str, srum_path: Path, output_dir: Path, timeout: int = _CHAINSAW_TIMEOUT
-) -> Path:
+    binary: str,
+    srum_path: Path,
+    software_hive_path: Path,
+    output_dir: Path,
+    timeout: int = _CHAINSAW_TIMEOUT,
+) -> tuple[Path, subprocess.CompletedProcess[str]]:
     """Execute Chainsaw SRUM parsing mode.
+
+    ``analyse srum`` takes neither ``--json`` (it always writes JSON to
+    ``--output``) nor a bare database path: it requires the SOFTWARE hive to
+    resolve the SRUM extension GUIDs into table names.
 
     Args:
         binary: Resolved Chainsaw executable.
         srum_path: Path to the SRUDB.dat file.
+        software_hive_path: Path to the SOFTWARE registry hive.
         output_dir: Output directory for results.
         timeout: Subprocess timeout in seconds.
 
     Returns:
-        Path to the JSON results file.
+        Tuple of (path to the JSON results file, the completed
+        process). The caller needs the process to tell an empty result set
+        from a Chainsaw run that never produced one.
 
     Raises:
         subprocess.TimeoutExpired: If Chainsaw exceeds the timeout.
@@ -230,18 +264,19 @@ def _run_chainsaw_srum(
         "analyse",
         "srum",
         str(srum_path),
-        "--json",
+        "--software",
+        str(software_hive_path),
         "--output",
         str(output_file),
     ]
-    subprocess.run(
+    proc = subprocess.run(
         cmd,
         capture_output=True,
         text=True,
         timeout=timeout,
         check=False,
     )
-    return output_file
+    return output_file, proc
 
 
 def _run_chainsaw_timeline(
@@ -251,7 +286,7 @@ def _run_chainsaw_timeline(
     time_start: str | None = None,
     time_end: str | None = None,
     timeout: int = _CHAINSAW_TIMEOUT,
-) -> Path:
+) -> tuple[Path, subprocess.CompletedProcess[str]]:
     """Execute Chainsaw in dump/timeline mode against EVTX files.
 
     Args:
@@ -263,7 +298,9 @@ def _run_chainsaw_timeline(
         timeout: Subprocess timeout in seconds.
 
     Returns:
-        Path to the JSON results file.
+        Tuple of (path to the JSON results file, the completed
+        process). The caller needs the process to tell an empty result set
+        from a Chainsaw run that never produced one.
 
     Raises:
         subprocess.TimeoutExpired: If Chainsaw exceeds the timeout.
@@ -282,14 +319,37 @@ def _run_chainsaw_timeline(
     if time_end:
         cmd.extend(["--to", time_end])
 
-    subprocess.run(
+    proc = subprocess.run(
         cmd,
         capture_output=True,
         text=True,
         timeout=timeout,
         check=False,
     )
-    return output_file
+    return output_file, proc
+
+
+def _chainsaw_error_detail(proc: subprocess.CompletedProcess[str]) -> str:
+    """Pull the reason out of Chainsaw's output, not its ASCII banner.
+
+    Chainsaw prints a nine-line logo to stderr before anything else, so the
+    first 500 characters of stderr are the logo and the actual message is cut
+    off. The reason is marked with ``[x]``, wrapped in an ANSI colour escape.
+
+    Args:
+        proc: The completed Chainsaw process.
+
+    Returns:
+        The error lines Chainsaw printed, or a trimmed tail of its output if
+        it did not mark any.
+    """
+    text = (proc.stderr or "") + "\n" + (proc.stdout or "")
+    lines = [_ANSI_RE.sub("", line).strip() for line in text.splitlines()]
+    lines = [line for line in lines if line and not _BANNER_RE.match(line)]
+
+    marked = [line for line in lines if line.startswith("[x]")]
+    chosen = marked or lines[-3:]
+    return "; ".join(chosen)[:_STDERR_PREVIEW_CHARS] or "no output"
 
 
 def _parse_chainsaw_hunt_results(results_path: Path) -> dict[str, Any]:
@@ -342,7 +402,7 @@ def _parse_chainsaw_hunt_results(results_path: Path) -> dict[str, Any]:
         )
 
     return {
-        "detections": detections[:500],
+        "detections": detections,
         "total_findings": len(detections),
         "severity_counts": severity_counts,
         "mitre_techniques": sorted(mitre_techniques),
@@ -382,7 +442,7 @@ def _parse_chainsaw_srum_results(results_path: Path) -> dict[str, Any]:
         )
 
     return {
-        "srum_entries": entries[:500],
+        "srum_entries": entries,
         "total_entries": len(entries),
     }
 
@@ -408,9 +468,63 @@ def _parse_chainsaw_timeline_results(results_path: Path) -> dict[str, Any]:
         raw = [raw] if raw else []
 
     return {
-        "timeline_entries": raw[:1000],
+        "timeline_entries": raw,
         "total_entries": len(raw),
     }
+
+
+_RESPONSE_RECORD_CAP = 500
+
+
+def _detection_lines(result: dict[str, Any], mode: str) -> list[str]:
+    """One searchable line per record, for the case DB.
+
+    Only counts used to be indexed, so the detections themselves -- rule names,
+    computers, event IDs, SRUM process names -- were never searchable.  This is
+    deliberately a module-local helper rather than a shared formatter: the
+    fields worth indexing differ per tool.
+    """
+    lines: list[str] = []
+    if mode in ("hunt", "search"):
+        for d in result.get("detections", []):
+            lines.append(
+                " | ".join(
+                    str(part)
+                    for part in (
+                        d.get("timestamp", ""),
+                        d.get("rule_level", ""),
+                        d.get("rule_name", ""),
+                        d.get("computer", ""),
+                        d.get("channel", ""),
+                        f"EventID={d.get('event_id', '')}",
+                        d.get("sigma_id", ""),
+                        " ".join(d.get("mitre_attack", []) or []),
+                    )
+                    if str(part)
+                )
+            )
+    elif mode == "srum":
+        for e in result.get("srum_entries", []):
+            lines.append(
+                " | ".join(str(v) for v in e.values() if str(v)) if isinstance(e, dict) else str(e)
+            )
+    else:
+        for e in result.get("timeline_entries", []):
+            lines.append(
+                " | ".join(str(v) for v in e.values() if str(v)) if isinstance(e, dict) else str(e)
+            )
+    return [line for line in lines if line.strip()]
+
+
+def _cap_records(result: dict[str, Any]) -> dict[str, Any]:
+    """Trim the record lists in the *response* only, never before indexing."""
+    capped = dict(result)
+    for key in ("detections", "srum_entries", "timeline_entries"):
+        records = capped.get(key)
+        if isinstance(records, list) and len(records) > _RESPONSE_RECORD_CAP:
+            capped[key] = records[:_RESPONSE_RECORD_CAP]
+            capped[f"{key}_truncated"] = True
+    return capped
 
 
 @mcp.tool()
@@ -419,6 +533,8 @@ def run_chainsaw(
     evidence_path: str,
     mode: Literal["hunt", "search", "srum", "timeline"] = "hunt",
     sigma_rules_path: str = "",
+    software_hive_path: str = "",
+    mapping_path: str = "",
     search_term: str | None = None,
     time_range_start: str | None = None,
     time_range_end: str | None = None,
@@ -440,6 +556,13 @@ def run_chainsaw(
             "timeline" dumps all events chronologically.
         sigma_rules_path: Path to the Sigma rules directory. Empty
             resolves to the rules installed by 'mulder setup'.
+        software_hive_path: Path to the SOFTWARE registry hive. Required
+            when mode="srum"; Chainsaw needs it to resolve the SRUM
+            extension GUIDs into table names.
+        mapping_path: Path to the Chainsaw mapping file that tells it how
+            to read third-party Sigma rules. Chainsaw requires this
+            whenever Sigma rules are supplied. Empty resolves to the
+            mapping installed by 'mulder setup'.
         search_term: Required when mode="search". The keyword or
             regex pattern to search for in EVTX records.
         time_range_start: Optional ISO 8601 timestamp to filter results
@@ -454,6 +577,8 @@ def run_chainsaw(
         "evidence_path": evidence_path,
         "mode": mode,
         "sigma_rules_path": sigma_rules_path,
+        "software_hive_path": software_hive_path,
+        "mapping_path": mapping_path,
         "search_term": search_term,
         "time_range_start": time_range_start,
         "time_range_end": time_range_end,
@@ -511,17 +636,52 @@ def run_chainsaw(
             error_type="invalid_argument",
         )
 
+    if mode == "srum":
+        if not software_hive_path:
+            return error_response(
+                tc_id,
+                "run_chainsaw",
+                params,
+                "software_hive_path is required when mode='srum': Chainsaw "
+                "needs the SOFTWARE hive to resolve the SRUM extension GUIDs",
+                error_type="invalid_argument",
+            )
+        if not Path(software_hive_path).exists():
+            return error_response(
+                tc_id,
+                "run_chainsaw",
+                params,
+                f"SOFTWARE hive not found: {software_hive_path}",
+                error_type="file_not_found",
+            )
+
     rules = Path(sigma_rules_path) if sigma_rules_path else _default_sigma_rules()
+
+    mapping = Path(mapping_path) if mapping_path else _default_chainsaw_mapping()
+
+    if mode == "hunt" and not mapping.exists():
+        return error_response(
+            tc_id,
+            "run_chainsaw",
+            params,
+            f"Chainsaw Sigma mapping not found: {mapping}",
+            error_type="file_not_found",
+            suggestion=(
+                "Run 'mulder setup' (provisions Chainsaw 2.16.0 and its "
+                "mappings/ directory), or pass mapping_path explicitly."
+            ),
+        )
 
     timeout = adaptive_timeout(evidence_path, base=_CHAINSAW_TIMEOUT)
     with tempfile.TemporaryDirectory(prefix="mulder_chainsaw_") as tmpdir:
         output_dir = Path(tmpdir)
         try:
             if mode == "hunt":
-                results_path = _run_chainsaw_hunt(
+                results_path, proc = _run_chainsaw_hunt(
                     binary,
                     Path(evidence_path),
                     rules,
+                    mapping,
                     output_dir,
                     time_range_start,
                     time_range_end,
@@ -531,7 +691,7 @@ def run_chainsaw(
                 source_name = "chainsaw.hunt"
             elif mode == "search":
                 assert search_term is not None
-                results_path = _run_chainsaw_search(
+                results_path, proc = _run_chainsaw_search(
                     binary,
                     Path(evidence_path),
                     search_term,
@@ -543,13 +703,17 @@ def run_chainsaw(
                 result = _parse_chainsaw_hunt_results(results_path)
                 source_name = "chainsaw.search"
             elif mode == "srum":
-                results_path = _run_chainsaw_srum(
-                    binary, Path(evidence_path), output_dir, timeout=timeout
+                results_path, proc = _run_chainsaw_srum(
+                    binary,
+                    Path(evidence_path),
+                    Path(software_hive_path),
+                    output_dir,
+                    timeout=timeout,
                 )
                 result = _parse_chainsaw_srum_results(results_path)
                 source_name = "chainsaw.srum"
             else:
-                results_path = _run_chainsaw_timeline(
+                results_path, proc = _run_chainsaw_timeline(
                     binary,
                     Path(evidence_path),
                     output_dir,
@@ -579,6 +743,23 @@ def run_chainsaw(
                 error_type="os_error",
             )
 
+        # The output file is not evidence that the run worked. Chainsaw opens
+        # it before it validates the evidence path, so a run that never
+        # scanned anything still leaves a zero-byte file behind, and the
+        # parsers read that as "no detections". Verified with Chainsaw 2.16.0:
+        # `search -e x /nonexistent` exits 1, creates the file, writes 0 bytes.
+        # A nonzero exit is the only signal there is, so it is the whole test.
+        if proc.returncode != 0:
+            detail = _chainsaw_error_detail(proc)
+            return error_response(
+                tc_id,
+                "run_chainsaw",
+                params,
+                f"Chainsaw {mode} exited {proc.returncode}: {detail}",
+                (time.monotonic() - t0) * 1000,
+                error_type="tool_failed",
+            )
+
         text_parts = [f"Chainsaw {mode} analysis of {evidence_path}"]
         if mode in ("hunt", "search"):
             text_parts.append(f"Total findings: {result.get('total_findings', 0)}")
@@ -589,8 +770,10 @@ def run_chainsaw(
         else:
             text_parts.append(f"Timeline entries: {result.get('total_entries', 0)}")
 
+        text_parts.extend(_detection_lines(result, mode))
+
         summary = extract_and_index("\n".join(text_parts), source_name, evidence_path, "chainsaw")
-        summary.update(result)
+        summary.update(_cap_records(result))
 
     elapsed = (time.monotonic() - t0) * 1000
     return tool_response(tc_id, "run_chainsaw", params, summary, source_name, elapsed)

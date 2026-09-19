@@ -89,6 +89,7 @@ class TestFollowUpDetection:
                 "request": "additional_plan",
                 "reason": "Need more network data",
                 "focus_areas": ["lateral_movement"],
+                "suggested_tools": ["parse_evtx"],
             }
         )
         result = extract_follow_up_request(["Analysis complete.", follow_up])
@@ -100,7 +101,8 @@ class TestFollowUpDetection:
         msg = (
             "I need more data:\n"
             "```json\n"
-            '{"request": "additional_plan", "reason": "incomplete"}\n'
+            '{"request": "additional_plan", "reason": "incomplete", '
+            '"suggested_tools": ["parse_evtx"]}\n'
             "```"
         )
         result = extract_follow_up_request([msg])

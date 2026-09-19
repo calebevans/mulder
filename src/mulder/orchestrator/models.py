@@ -9,6 +9,7 @@ built-in default.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -16,9 +17,45 @@ from typing import Any
 import click
 import yaml
 
-from mulder.orchestrator.proxy import is_proxy_model
+from mulder.orchestrator.proxy import ModelOverride, is_proxy_model
 
 logger = logging.getLogger(__name__)
+
+#: Env vars that override the same-named ``models:`` keys for every proxy
+#: model in the run. A coarse knob for container runs with one model.
+_OVERRIDE_ENV: dict[str, str] = {
+    "context_window": "MULDER_MODEL_CONTEXT_WINDOW",
+    "max_output_tokens": "MULDER_MODEL_MAX_OUTPUT_TOKENS",
+    "reasoning": "MULDER_MODEL_REASONING",
+}
+_TRUE, _FALSE = {"1", "true", "yes", "on"}, {"0", "false", "no", "off"}
+
+
+def _parse_override(raw: dict[str, Any], source: str, where: str) -> ModelOverride:
+    """Validate one override mapping; values may be YAML-typed or env strings.
+
+    Raises:
+        click.ClickException: On an unknown key, a non-positive or non-integer
+            token count, or a non-boolean ``reasoning``.
+    """
+    override = ModelOverride(sources=dict.fromkeys(raw, source))
+    for key, value in raw.items():
+        if key not in _OVERRIDE_ENV:
+            raise click.ClickException(
+                f"Unknown key {key!r} in {where}; expected {', '.join(_OVERRIDE_ENV)}"
+            )
+        label = _OVERRIDE_ENV[key] if source == "env" else f"{key} in {where}"
+        if key == "reasoning":
+            text = str(value).strip().lower()
+            if text not in _TRUE | _FALSE:
+                raise click.ClickException(f"{label} must be true or false, got {value!r}")
+            override.reasoning = text in _TRUE
+            continue
+        if isinstance(value, bool) or not str(value).strip().isdigit() or int(value) <= 0:
+            raise click.ClickException(f"{label} must be a positive integer, got {value!r}")
+        setattr(override, key, int(value))
+    return override
+
 
 _BUILT_IN_DEFAULTS: dict[str, str] = {
     "planner": "claude-opus-4-6",
@@ -46,12 +83,22 @@ class ModelConfig:
         analyst: Model identifier for analyst agents (analysis, reporting).
         phase_overrides: Per-phase model overrides keyed by phase name,
             with inner dicts mapping role names to model identifiers.
+        model_overrides: Context/output/reasoning overrides keyed by model
+            identifier, from the config file's ``models:`` mapping.
+        env_override: The same overrides from ``MULDER_MODEL_*`` env vars,
+            applied to every proxy model ahead of the file.
     """
 
     planner: str = _BUILT_IN_DEFAULTS["planner"]
     executor: str = _BUILT_IN_DEFAULTS["executor"]
     analyst: str = _BUILT_IN_DEFAULTS["analyst"]
     phase_overrides: dict[str, dict[str, str]] = field(default_factory=dict)
+    model_overrides: dict[str, ModelOverride] = field(default_factory=dict)
+    env_override: ModelOverride = field(default_factory=ModelOverride)
+
+    def override_for(self, model: str) -> ModelOverride:
+        """Effective user override for *model*: env over config file."""
+        return self.env_override.merged_over(self.model_overrides.get(model, ModelOverride()))
 
     def resolve(self, phase: str, role: str) -> str:
         """Return the model identifier for a given phase and role.
@@ -120,10 +167,22 @@ class ModelConfig:
         """
         file_config = _load_config_file(config_path) if config_path else {}
 
+        # ``models:`` holds both role assignments (string values) and
+        # per-model overrides (mapping values keyed by the model id).
         file_models: dict[str, str] = {}
+        model_overrides: dict[str, ModelOverride] = {}
         raw_models = file_config.get("models")
         if isinstance(raw_models, dict):
-            file_models = {k: str(v) for k, v in raw_models.items()}
+            for key, value in raw_models.items():
+                if isinstance(value, dict):
+                    model_overrides[str(key)] = _parse_override(
+                        value, "config", f"models.{key} in {config_path}"
+                    )
+                else:
+                    file_models[str(key)] = str(value)
+
+        env_raw = {k: os.environ[v] for k, v in _OVERRIDE_ENV.items() if v in os.environ}
+        env_override = _parse_override(env_raw, "env", "MULDER_MODEL_* environment")
 
         phase_overrides: dict[str, dict[str, str]] = {}
         raw_phases = file_config.get("phases")
@@ -158,6 +217,8 @@ class ModelConfig:
             executor=executor,
             analyst=analyst,
             phase_overrides=phase_overrides,
+            model_overrides=model_overrides,
+            env_override=env_override,
         )
 
 

@@ -477,3 +477,77 @@ class TestRunFlsMultiPartition:
         )
         assert result["status"] == "success"
         mock_index_secondary.assert_called_once_with("/fake/image.dd", 0)
+
+
+class TestPartitionTableScoping:
+    """Issue #227: tsk.partitions is shared by every image in the case.
+
+    Reading all of its windows hands image B image A's offsets; each
+    lookup must use only the table whose source_path is the image asked for.
+    """
+
+    MMLS_A = "DOS Partition Table\n002:000   0000000032   0007864319   0007864288   NTFS (0x07)\n"
+    MMLS_B = "DOS Partition Table\n002:000   0000000128   0007864319   0007864192   NTFS (0x07)\n"
+
+    @classmethod
+    def _ctx(cls) -> MagicMock:
+        from mulder.models import SourceRow, WindowRow
+
+        def src(sid: int, path: str) -> SourceRow:
+            return SourceRow(
+                source_id=sid,
+                case_id="c",
+                source_name="tsk.partitions",
+                source_path=path,
+                source_hash="h",
+                extractor="sleuthkit",
+                line_count=2,
+            )
+
+        def win(sid: int, text: str) -> WindowRow:
+            return WindowRow(
+                window_id=sid,
+                source_id=sid,
+                line_start=1,
+                line_end=2,
+                event_time=None,
+                raw_text=text,
+            )
+
+        ctx = MagicMock()
+        ctx.db.get_kv.return_value = None
+        # B is registered first so a "first tsk.partitions source" lookup picks B.
+        ctx.db.get_sources.return_value = [src(2, "/ev/b.E01"), src(1, "/ev/a.E01")]
+        ctx.db.get_windows_by_source.return_value = [win(1, cls.MMLS_A), win(2, cls.MMLS_B)]
+        return ctx
+
+    @patch("mulder.server.tools.extract.tsk.get_ctx")
+    def test_resolver_and_discovery_use_only_that_images_table(self, mock_ctx: MagicMock) -> None:
+        from mulder.server.tools.extract.tsk import _discover_partitions, _resolve_partition_offset
+
+        mock_ctx.return_value = self._ctx()
+        assert _resolve_partition_offset("/ev/b.E01") == 128
+        assert _resolve_partition_offset("/ev/a.E01") == 32
+        assert [p[0] for p in _discover_partitions("/ev/b.E01")] == [128]
+        assert [p[0] for p in _discover_partitions("/ev/a.E01")] == [32]
+
+    @patch("mulder.server.tools.extract.tsk.require_binary", return_value=None)
+    @patch("mulder.server.tools.extract.tsk.get_ctx")
+    def test_unindexed_image_does_not_borrow_another_images_table(
+        self, mock_ctx: MagicMock, _req: MagicMock
+    ) -> None:
+        from mulder.server.tools.extract.tsk import _discover_partitions, _resolve_partition_offset
+
+        mock_ctx.return_value = self._ctx()
+        assert _resolve_partition_offset("/ev/c.E01") == 0
+        assert _discover_partitions("/ev/c.E01") == []
+
+    @patch("mulder.server.tools.extract.tsk.get_ctx")
+    @patch("mulder.server.tools.artifacts.get_ctx")
+    def test_artifacts_lookup_uses_the_first_images_own_table(
+        self, mock_art_ctx: MagicMock, mock_tsk_ctx: MagicMock
+    ) -> None:
+        from mulder.server.tools.artifacts import _resolve_image_and_offset
+
+        mock_art_ctx.return_value = mock_tsk_ctx.return_value = self._ctx()
+        assert _resolve_image_and_offset() == ("/ev/b.E01", 128)

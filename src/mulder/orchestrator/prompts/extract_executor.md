@@ -13,7 +13,11 @@ RULES:
    Then call get_completed_results to retrieve all results.
    For individual tools not in a batch, use wait(job_id="<the job_id>").
    Do NOT call check_extraction_status in a loop.
-5. If a tool fails, retry it once with the same arguments.
+5. If a tool fails with a transient error (timeout, resource
+   pressure, I/O), retry it once with the same arguments. If the error
+   reports an unexpected or missing parameter, do NOT repeat the call
+   as-is: retry it once with the arguments corrected to the accepted
+   parameter names listed in the error message.
 6. After all tasks complete, output structured results.
 
 PARALLEL EXECUTION AND BATCH ORDERING:

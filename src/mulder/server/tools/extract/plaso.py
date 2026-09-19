@@ -30,6 +30,37 @@ logger = logging.getLogger(__name__)
 
 _PLASO_TIMEOUT = 3600
 
+# Never wait on stdin: -u makes plaso abort instead of prompting, and the
+# explicit partition/volume/VSS selections are what it would otherwise ask for.
+# --storage_file has been the only accepted form since plaso dropped the
+# positional storage file argument years ago; current plaso rejects the positional
+# form with "unrecognized arguments".
+_L2T_FLAGS = [
+    "--status_view",
+    "none",
+    "-u",
+    "--partitions",
+    "all",
+    "--volumes",
+    "all",
+    "--vss_stores",
+    "none",
+]
+
+
+def _failure_detail(name: str, proc: subprocess.CompletedProcess[str]) -> str:
+    """Summarise a failed plaso process: exit code plus the tail of its output.
+
+    The informative line is always last: argparse prints its usage banner then
+    ``prog: error: ...`` on stderr, while plaso's own failures (``No supported
+    file system found in source.``) go to stdout after the dependency check.
+    """
+    tails = []
+    for stream in (proc.stdout, proc.stderr):
+        lines = [ln.strip() for ln in (stream or "").splitlines() if ln.strip()]
+        tails.extend(lines[-2:])
+    return f"{name} exited {proc.returncode}: " + " | ".join(tails)[-_PREVIEW_CHAR_LIMIT:]
+
 
 def _find_plaso_cmd(tool: str) -> list[str] | None:
     """Locate a Plaso CLI tool, trying multiple install conventions.
@@ -105,15 +136,20 @@ def run_plaso(
     with tempfile.TemporaryDirectory(prefix="mulder_plaso_") as tmpdir:
         plaso_file = Path(tmpdir) / "timeline.plaso"
 
-        l2t_cmd = [*l2t_cmd_prefix, "--status_view", "none"]
+        l2t_cmd = [*l2t_cmd_prefix, "--storage_file", str(plaso_file), *_L2T_FLAGS]
         if parsers:
             l2t_cmd.extend(["--parsers", parsers])
-        l2t_cmd.extend([str(plaso_file), evidence_path])
+        l2t_cmd.append(evidence_path)
 
         plaso_timeout = adaptive_timeout(evidence_path, base=_PLASO_TIMEOUT)
         try:
             proc = subprocess.run(
-                l2t_cmd, capture_output=True, text=True, timeout=plaso_timeout, check=False
+                l2t_cmd,
+                capture_output=True,
+                text=True,
+                timeout=plaso_timeout,
+                check=False,
+                stdin=subprocess.DEVNULL,
             )
         except subprocess.TimeoutExpired:
             return error_response(
@@ -121,28 +157,57 @@ def run_plaso(
             )
 
         if proc.returncode != 0 and not plaso_file.exists():
-            stderr = (proc.stderr or "")[:_PREVIEW_CHAR_LIMIT]
-            return error_response(tc_id, "run_plaso", params, f"log2timeline failed: {stderr}")
+            return error_response(
+                tc_id,
+                "run_plaso",
+                params,
+                _failure_detail("log2timeline", proc),
+                error_type="tool_failed",
+            )
 
         persistent_plaso = cfg.db_dir / f"{ctx.case_id}.plaso"
         with contextlib.suppress(OSError):
             shutil.copy2(str(plaso_file), str(persistent_plaso))
 
+        # l2tcsv refuses to write to stdout ("requires an output file"), and
+        # stdout would carry psort's own diagnostics anyway.
+        csv_file = Path(tmpdir) / "timeline.csv"
         psort_prefix = _find_plaso_cmd("psort") or ["psort.py"]
-        psort_cmd = [*psort_prefix, "-o", "l2tcsv"]
+        psort_cmd = [
+            *psort_prefix,
+            "--status_view",
+            "none",
+            "-u",
+            "-o",
+            "l2tcsv",
+            "-w",
+            str(csv_file),
+            str(plaso_file),
+        ]
         if time_range:
-            psort_cmd.extend([str(plaso_file), f"date > '{time_range}'"])
-        else:
-            psort_cmd.append(str(plaso_file))
+            psort_cmd.append(f"date > '{time_range}'")
 
         try:
             psort_proc = subprocess.run(
-                psort_cmd, capture_output=True, text=True, timeout=plaso_timeout, check=False
+                psort_cmd,
+                capture_output=True,
+                text=True,
+                timeout=plaso_timeout,
+                check=False,
+                stdin=subprocess.DEVNULL,
             )
         except subprocess.TimeoutExpired:
             return error_response(tc_id, "run_plaso", params, "psort timed out")
 
-        timeline_text = psort_proc.stdout.strip()
+        timeline_text = csv_file.read_text(errors="replace").strip() if csv_file.exists() else ""
+        if psort_proc.returncode != 0 and not timeline_text:
+            return error_response(
+                tc_id,
+                "run_plaso",
+                params,
+                _failure_detail("psort", psort_proc),
+                error_type="tool_failed",
+            )
 
         stats_text = ""
         pinfo_prefix = _find_plaso_cmd("pinfo")
@@ -154,6 +219,7 @@ def run_plaso(
                     text=True,
                     timeout=60,
                     check=False,
+                    stdin=subprocess.DEVNULL,
                 )
                 stats_text = stats_proc.stdout.strip()
             except (subprocess.TimeoutExpired, OSError):

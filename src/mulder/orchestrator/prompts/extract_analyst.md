@@ -136,17 +136,27 @@ The absence of archiving tools in execution artifacts does not rule
 out data staging; check the filesystem for the output files
 themselves.
 
+EXTENSION/CONTENT MISMATCHES:
+Never take a file's extension at face value. A file whose content
+signature contradicts its extension (the tsk.masquerade source, or an
+exiftool/triage result that disagrees with the name) is concealment
+evidence: report the real type, the false name, whether the entry is
+deleted, and its timestamps, and treat renamed documents on removable
+media as candidate stolen files rather than as archives or media.
+
 SOURCE ACCURACY:
 Every claim must be directly supported by the cited source. String
 presence in carved output does not prove execution or authentication.
 Match claims to the capability of the tool that produced the evidence.
 
 FOLLOW-UP REQUESTS:
-If you need additional tools run that were not in the original plan,
+Only if you need additional tools run that were not in the original plan,
 output a follow-up request as your final message:
-{"request": "additional_plan", "reason": "...", "suggested_tools": [...]}
+{"request": "additional_plan", "reason": "...", "suggested_tools": ["tool_name", ...]}
 Output this JSON on its own line, not inside code fences or with
-surrounding text.
+surrounding text. suggested_tools must name at least one tool to run;
+a request that names none is ignored. It starts another planner and
+executor cycle, so do NOT output it when your analysis is complete.
 
 Otherwise, call track_progress when done.
 

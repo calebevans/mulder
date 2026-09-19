@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -342,6 +343,10 @@ def validate_narrative(
         )
         if not gate_passed:
             gaps.append(f"{gate_name}: {gate_detail}")
+        elif gate.get("advisory"):
+            # Passed with a warning: surfaced in the log, never a gap, so
+            # it cannot trigger a retry or fail the run.
+            logger.warning("Narrative gate: %s: %s", gate_name, gate_detail)
 
     # Fail when no checks were evaluated (prevents vacuous pass)
     if not checks:
@@ -370,38 +375,58 @@ def validate_narrative(
     )
 
 
-def validate_report(tool_names: list[str]) -> GateResult:
-    """Validate that finalize_report was invoked during the report phase.
+def validate_report(
+    tool_names: list[str],
+    report_path: Path,
+    readiness: dict[str, Any] | None = None,
+    started_at: float = 0.0,
+) -> GateResult:
+    """Validate that the report phase actually produced a report.
 
-    Checks the structured tool call log for a ``finalize_report``
-    invocation rather than scanning assistant prose for text indicators.
+    ``finalize_report`` refuses (``status: blocked``) when its readiness
+    gates fail and writes nothing, so having been *called* proves nothing.
+    The Markdown report is written only after every readiness gate passes,
+    which makes its presence the exact success signal.
 
     Args:
-        tool_names: List of MCP tool short names invoked during the
-            report phase (captured from ToolUseBlock events).
+        tool_names: MCP tool short names invoked during the report phase.
+        report_path: Where ``finalize_report`` writes the Markdown report
+            (``<db_dir>/<case_id>.report.md``).
+        readiness: Output of ``check_finalize_readiness``; its failing
+            gates are surfaced in the gap so a retry knows what to fix.
+        started_at: Phase start (``time.time()``); a report older than
+            this is a leftover from an earlier run, not this phase's.
 
     Returns:
-        GateResult indicating whether the report was generated.
+        GateResult indicating whether the report exists.
     """
-    checks: list[GateCheck] = []
+    # 1s slack for filesystems with whole-second mtimes.
+    written = report_path.is_file() and report_path.stat().st_mtime >= started_at - 1.0
+    invoked = "finalize_report" in tool_names
+
+    if written:
+        detail = f"report written to {report_path}"
+    elif invoked:
+        detail = f"finalize_report was called but no report exists at {report_path}"
+    else:
+        detail = "finalize_report was never invoked"
+    checks = [GateCheck(name="report_written", passed=written, detail=detail)]
+
     gaps: list[str] = []
-
-    finalized = "finalize_report" in tool_names
-
-    check = GateCheck(
-        name="report_finalized",
-        passed=finalized,
-        detail=(
-            "finalize_report was called" if finalized else "finalize_report was never invoked"
-        ),
-    )
-    checks.append(check)
-    if not check.passed:
+    if not written and not invoked:
         gaps.append("The report was not finalized. Call finalize_report to generate it.")
+    elif not written:
+        failing = [
+            f"{g.get('name', 'unknown')}: {g.get('detail', '')}"
+            for g in (readiness or {}).get("gates", [])
+            if not g.get("passed", False)
+        ]
+        fix = (
+            "Fix these readiness gates, then call finalize_report again: " + "; ".join(failing)
+            if failing
+            else "Call check_finalize_readiness, fix what it reports, "
+            "then call finalize_report again."
+        )
+        gaps.append(f"finalize_report was called but refused, so no report was written. {fix}")
 
-    return GateResult(
-        passed=all(c.passed for c in checks),
-        phase_name="report",
-        checks=checks,
-        gaps=gaps,
-    )
+    return GateResult(passed=written, phase_name="report", checks=checks, gaps=gaps)

@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import contextlib
 import logging
-import re
 import shutil
 import subprocess
 import tempfile
 import threading
 import time
+from collections.abc import Mapping
 from pathlib import Path
 
-from mulder.patterns import parse_mmls_rows
+from mulder.extractors.optical import probe_optical
+from mulder.patterns import fls_file_entries, parse_mmls_rows
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
@@ -30,6 +31,7 @@ __all__ = [
     "_cleanup_tsk_extract_dir",
     "_collect_fls_chunks",
     "_detect_partition_offset",
+    "_partition_table_text",
     "_parse_all_partitions",
     "_parse_partition_offset",
     "_resolve_partition_offset",
@@ -152,8 +154,8 @@ def _resolve_partition_offset(image_path: str) -> int:
 
     Checks, in order:
       1. The DB ``kv_store`` (set by a prior successful ``run_fls``).
-      2. The indexed ``tsk.partitions`` source (mmls output).
-      3. Live ``_detect_partition_offset`` (runs mmls on the fly).
+      2. The ``tsk.partitions`` source indexed for this image, else live
+         mmls (``_partition_table_text``).
 
     This ensures that when ``run_fls`` was called with an explicit offset
     (e.g. on multi-segment E01 images where mmls may not work),
@@ -166,16 +168,7 @@ def _resolve_partition_offset(image_path: str) -> int:
         with contextlib.suppress(ValueError):
             return int(stored)
 
-    sources = ctx.db.get_sources()
-    part_src = next((s for s in sources if s.source_name == "tsk.partitions"), None)
-    if part_src:
-        part_windows = ctx.db.get_windows_by_source("tsk.partitions")
-        mmls_text = "\n".join(w.raw_text for w in part_windows)
-        parsed = _parse_partition_offset(mmls_text)
-        if parsed > 0:
-            return parsed
-
-    return _detect_partition_offset(image_path)
+    return _parse_partition_offset(_partition_table_text(image_path))
 
 
 _tsk_extract_dirs: list[str] = []
@@ -283,26 +276,39 @@ def _discover_partitions(image_path: str) -> list[tuple[int, int, str]]:
         List of ``(start_sector, length, description)`` from
         ``_parse_all_partitions``, largest first.
     """
+    return _parse_all_partitions(_partition_table_text(image_path))
+
+
+def _partition_table_text(image_path: str) -> str:
+    """Raw mmls output for *image_path* alone: its ``tsk.partitions`` source, else live mmls.
+
+    ``run_mmls`` indexes every image's table under the same source name, so
+    the windows are filtered to the source whose ``source_path`` is this
+    image.  Reading them all hands one image another image's offsets: on a
+    three-image case RM2 was scanned at RM1's sector 32, where TSK finds a
+    phantom FAT with no real files, and reported a clean image (#227).
+    """
     ctx = get_ctx()
-    sources = ctx.db.get_sources()
-    part_src = next((s for s in sources if s.source_name == "tsk.partitions"), None)
-
-    if part_src:
+    src = next(
+        (
+            s
+            for s in ctx.db.get_sources()
+            if s.source_name == "tsk.partitions" and s.source_path == image_path
+        ),
+        None,
+    )
+    if src is not None:
         windows = ctx.db.get_windows_by_source("tsk.partitions")
-        mmls_text = "\n".join(w.raw_text for w in windows)
-        return _parse_all_partitions(mmls_text)
-
+        return "\n".join(w.raw_text for w in windows if w.source_id == src.source_id)
     if not require_binary("mmls"):
-        return []
+        return ""
     try:
         proc = subprocess.run(
             ["mmls", image_path], capture_output=True, text=True, timeout=30, check=False
         )
-        if proc.returncode != 0:
-            return []
-        return _parse_all_partitions(proc.stdout)
     except (subprocess.TimeoutExpired, OSError):
-        return []
+        return ""
+    return proc.stdout if proc.returncode == 0 else ""
 
 
 def _index_secondary_partitions(
@@ -401,20 +407,15 @@ def _tsk_extract_files(
         return []
 
     ctx = get_ctx()
-    inode_re = re.compile(
-        r"^[rd]/[rd*]\s+(\d+(?:-\d+-\d+)?):\s+(.+)\s*$",
-        re.IGNORECASE | re.MULTILINE,
-    )
-
     extract_dir: Path | None = None
     extracted: list[tuple[str, Path]] = []
     seen: set[str] = set()
 
     for chunks, offset in chunk_groups:
         for chunk in chunks:
-            for m in inode_re.finditer(chunk):
-                inode_str = m.group(1).split("-")[0]
-                rel_path = m.group(2).strip()
+            for entry in fls_file_entries(chunk):
+                inode_str = entry.base_inode
+                rel_path = entry.path
                 rel_lower = rel_path.lower().replace("\\", "/")
 
                 if not any(pat.lower() in rel_lower for pat in path_patterns):
@@ -450,6 +451,33 @@ def _tsk_extract_files(
                     continue
 
     return extracted
+
+
+def _optical_redirect(
+    tc_id: str, tool_name: str, params: Mapping[str, object], image_path: str
+) -> dict[str, object] | None:
+    """An error response pointing at run_optical_listing when *image_path* is a disc.
+
+    Sleuth Kit has no UDF/ISO 9660 support: on a burned CD-R ``fls`` and
+    ``fsstat`` exit 1 with "Possible encryption detected (High entropy)" and
+    ``mmls`` finds no partition table, which sent every model in the NDLC
+    benchmark looking for the disc's files on other devices.
+    """
+    media = probe_optical(image_path)
+    if media is None:
+        return None
+    return error_response(
+        tc_id,
+        tool_name,
+        params,
+        f"optical media ({media.upper()}) - Sleuth Kit cannot read CD/DVD filesystems; "
+        "use run_optical_listing",
+        error_type="optical_media",
+        suggestion=(
+            f"Call run_optical_listing(image_path={image_path!r}) to list the disc "
+            "(deleted files included), then extract_optical_file for individual files."
+        ),
+    )
 
 
 def _classify_mmls_failure(returncode: int, stderr: str) -> tuple[str, str, str]:
@@ -519,6 +547,9 @@ def run_mmls(image_path: str) -> dict[str, object]:
         return error_response(tc_id, "run_mmls", params, "mmls timed out", error_type="timeout")
 
     if proc.returncode != 0:
+        redirect = _optical_redirect(tc_id, "run_mmls", params, image_path)
+        if redirect is not None:
+            return redirect
         stderr_text = (proc.stderr or "").strip()
         error_type, error_msg, suggestion = _classify_mmls_failure(proc.returncode, stderr_text)
         logger.info("mmls failed on %s: %s", image_path, error_type)
@@ -625,6 +656,11 @@ def run_fls(
 
     stdout_text = proc.stdout.decode("utf-8", errors="replace")
     stderr_text = (proc.stderr or b"").decode("utf-8", errors="replace")
+
+    if proc.returncode != 0 or not stdout_text.strip():
+        redirect = _optical_redirect(tc_id, "run_fls", params, image_path)
+        if redirect is not None:
+            return redirect
 
     if proc.returncode != 0:
         stderr_hint = stderr_text[:_HINT_CHAR_LIMIT].strip()
@@ -749,6 +785,11 @@ def run_fsstat(image_path: str) -> dict[str, object]:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60, check=False)
     except subprocess.TimeoutExpired:
         return error_response(tc_id, "run_fsstat", params, "fsstat timed out")
+
+    if proc.returncode != 0:
+        redirect = _optical_redirect(tc_id, "run_fsstat", params, image_path)
+        if redirect is not None:
+            return redirect
 
     summary = extract_and_index(proc.stdout.strip(), "tsk.fsstat", image_path, "sleuthkit")
     elapsed = (time.monotonic() - t0) * 1000

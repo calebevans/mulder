@@ -159,7 +159,7 @@ def _extract_hive(
 
 
 @mcp.tool()
-@tool_access(Role.EXTRACT_ANALYST)
+@tool_access(Role.EXTRACT_EXECUTOR | Role.EXTRACT_ANALYST)
 def query_registry_value(
     case_id: str,
     image_path: str,

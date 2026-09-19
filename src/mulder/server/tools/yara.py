@@ -81,6 +81,16 @@ def _update_community_rules() -> None:
     base = _signature_base_dir()
     if base is None or not (base / ".git").is_dir():
         return
+    if not (os.access(base, os.W_OK) and os.access(base / ".git", os.W_OK)):
+        # A pull has to write objects, refs and the worktree, and git also
+        # refuses to touch a clone owned by another user. The container image
+        # ships a root-owned, SHA-pinned clone under /opt and runs the server
+        # as `mulder`, so there the pinned rules are the rules by design.
+        logger.info(
+            "YARA rules: %s is not writable by this user; using the installed checkout as-is",
+            base,
+        )
+        return
     try:
         proc = subprocess.run(
             ["git", "-C", str(base), "pull", "--ff-only", "-q"],

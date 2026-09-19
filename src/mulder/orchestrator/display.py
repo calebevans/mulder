@@ -943,6 +943,10 @@ class InvestigationDashboard:
         summary.add_row("Throughput", f"{format_token_count(tpm)}/min")
         summary.add_row("Findings", self._format_findings_summary())
         summary.add_row("Elapsed", elapsed_str)
+        if any(p.phase_name == "report" and not p.success for p in result.phases):
+            summary.add_row(
+                "Report", Text("MISSING (report phase failed; nothing written)", style="bold red")
+            )
 
         # Per-model breakdown
         for model_name, counts in sorted(self._model_tokens.items()):

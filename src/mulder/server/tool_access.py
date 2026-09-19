@@ -38,12 +38,20 @@ ALL_ROLES = Role.CATALOG | PLANNERS | EXECUTORS | ANALYSTS | Role.REPORT
 
 _registry: dict[str, Role] = {}
 
+# Tools that skip the memory/CPU resource gate and the worker CapacityLimiter
+# in ``app._wrap_sync_tool``. Only for cheap control/query tools (job polling,
+# small DB reads); never for anything that runs a binary or scans a source.
+UNTHROTTLED: set[str] = set()
 
-def tool_access(*roles: Role) -> Callable[[F], F]:
+
+def tool_access(*roles: Role, unthrottled: bool = False) -> Callable[[F], F]:
     """Declare which pipeline roles may call this tool.
 
     Place this decorator BELOW ``@mcp.tool()`` so it runs first
     and registers the function before MCPServer wraps it.
+
+    ``unthrottled=True`` exempts the tool from the resource gate and
+    the tool thread limiter (see ``UNTHROTTLED``).
 
     Example::
 
@@ -58,6 +66,8 @@ def tool_access(*roles: Role) -> Callable[[F], F]:
 
     def decorator(fn: F) -> F:
         _registry[fn.__name__] = combined
+        if unthrottled:
+            UNTHROTTLED.add(fn.__name__)
         return fn
 
     return decorator
