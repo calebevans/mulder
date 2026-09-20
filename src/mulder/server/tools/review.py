@@ -150,6 +150,8 @@ def audit_evidence_coverage() -> dict[str, object]:
         ),
     }
 
+    if invalid := ctx.db.get_invalid_findings():
+        result["invalid_findings"] = invalid
     if coverage_pct < 50:
         result["warning"] = (
             f"Only {coverage_pct:.0f}% of sources are cited by findings. "
@@ -289,6 +291,13 @@ def check_finalize_readiness() -> dict[str, object]:
         "gates": gate_results,
         "action": action,
     }
+    if invalid := ctx.db.get_invalid_findings():
+        result["invalid_findings"] = invalid
+        result["action"] = (
+            f"{action} Also fix invalid finding(s) excluded from the report "
+            f"{[i['finding_id'] for i in invalid]}: update_finding with valid "
+            "evidence_refs, or delete_finding."
+        )
 
     elapsed = (time.monotonic() - t0) * 1000
     ctx.audit.log_tool_call(
@@ -411,6 +420,12 @@ def get_investigation_summary() -> dict[str, object]:
         remaining_work.append("Run audit_evidence_coverage to check for uncited sources")
     if "audit_tool_coverage" not in tool_counts:
         remaining_work.append("Run audit_tool_coverage to verify all applicable tools were used")
+    invalid = ctx.db.get_invalid_findings()
+    if invalid:
+        remaining_work.append(
+            f"Fix invalid finding(s) {[i['finding_id'] for i in invalid]} with "
+            "update_finding (valid evidence_refs) or delete_finding"
+        )
 
     elapsed = (time.monotonic() - t0) * 1000
     ctx.audit.log_tool_call(
@@ -436,6 +451,7 @@ def get_investigation_summary() -> dict[str, object]:
         "ready_to_finalize": all_passed,
         "finalize_blockers": blockers if blockers else "none",
         "elapsed_ms": round(elapsed, 1),
+        **({"invalid_findings": invalid} if invalid else {}),
     }
 
 
@@ -526,6 +542,8 @@ def get_ioc_summary() -> dict[str, object]:
             + len(user_accounts)
         ),
     }
+    if invalid := ctx.db.get_invalid_findings():
+        result["invalid_findings"] = invalid
 
     elapsed = (time.monotonic() - t0) * 1000
     ctx.audit.log_tool_call(
