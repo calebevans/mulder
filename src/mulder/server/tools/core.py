@@ -164,13 +164,16 @@ def get_source_stats() -> dict[str, object]:
         )
 
     cited_count = sum(1 for s in stats if s["cited_by_finding"])
-    return {
+    result: dict[str, object] = {
         "status": "success",
         "total_sources": len(stats),
         "cited_sources": cited_count,
         "uncited_sources": len(stats) - cited_count,
         "sources": stats,
     }
+    if invalid := ctx.db.get_invalid_findings():
+        result["invalid_findings"] = invalid
+    return result
 
 
 def _search_regex(

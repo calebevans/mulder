@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import Any, Literal, cast
 from uuid import uuid4
 
+from pydantic import ValidationError
+
 from mulder.models import AuditSummary, CaseMetadataRow, Finding, SourceRow
 from mulder.patterns import SEVERITY_ORDER, source_is_cited
 from mulder.report.renderer import ReportRenderer
@@ -423,6 +425,8 @@ def update_finding(
             error_type="not_found",
         )
 
+    if evidence_refs == []:
+        evidence_refs = None  # a finding must keep >=1 ref; treat [] as "unchanged" (#239)
     if evidence_refs is not None:
         invalid_refs = [ref for ref in evidence_refs if not ctx.audit.has_tool_call(ref)]
         if invalid_refs:
@@ -462,7 +466,18 @@ def update_finding(
         if value is not None:
             update_kwargs[field] = value
 
-    ctx.db.update_finding(finding_id, **update_kwargs)
+    try:
+        ctx.db.update_finding(finding_id, **update_kwargs)
+    except ValidationError as exc:
+        return error_response(
+            tc_id,
+            "update_finding",
+            {"finding_id": finding_id, **update_kwargs},
+            "Update rejected, it would leave an invalid finding: "
+            + "; ".join(str(e["msg"]) for e in exc.errors()),
+            (time.monotonic() - t0) * 1000,
+            error_type="invalid_params",
+        )
 
     updated = ctx.db.get_finding(finding_id)
     ctx.audit.log_tool_call(
@@ -610,6 +625,8 @@ def get_findings(limit: int = 20, offset: int = 0) -> dict[str, object]:
         resp["hint"] = (
             f"Showing {len(results)} of {total} findings. Use offset={offset + limit} to see more."
         )
+    if invalid := ctx.db.get_invalid_findings():
+        resp["invalid_findings"] = invalid
 
     elapsed = (time.monotonic() - t0) * 1000
     ctx.audit.log_tool_call(
@@ -762,6 +779,8 @@ def finalize_report() -> dict[str, object]:
     }
     if html_warning:
         result["html_warning"] = html_warning
+    if invalid := ctx.db.get_invalid_findings():
+        result["invalid_findings"] = invalid
 
     elapsed = (time.monotonic() - t0) * 1000
     ctx.audit.log_tool_call(
