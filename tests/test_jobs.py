@@ -14,6 +14,7 @@ from mulder.server.jobs import (
     fill_case_id,
     validate_tool_args,
 )
+from mulder.server.tool_access import EXECUTORS
 
 
 def _noop_dispatch(**kwargs: object) -> dict[str, str]:
@@ -431,6 +432,7 @@ class TestRunParallelRejectsBadArgs:
 
         with (
             patch.dict(app._tool_dispatch, {"typed_tool": typed_tool}),
+            patch.dict("mulder.server.tool_access._registry", {"typed_tool": EXECUTORS}),
             patch("mulder.server.app.has_ctx", return_value=False),
         ):
             result = anyio.run(
@@ -562,6 +564,10 @@ class TestRunParallelFillsCaseId:
 
         with (
             patch.dict(app._tool_dispatch, {"case_tool": case_tool, "typed_tool": typed_tool}),
+            patch.dict(
+                "mulder.server.tool_access._registry",
+                {"case_tool": EXECUTORS, "typed_tool": EXECUTORS},
+            ),
             patch("mulder.server.app._ctx", ctx),
         ):
             result = anyio.run(app.run_parallel, tasks)
