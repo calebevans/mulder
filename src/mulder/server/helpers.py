@@ -199,6 +199,7 @@ def audited_tool(
                     params=dict(kwargs),
                     output_hash=hash_output(result),
                     duration_ms=elapsed,
+                    status="error" if result.get("status") == "error" else None,
                 )
                 result["tool_call_id"] = tc_id
                 return result
@@ -210,6 +211,7 @@ def audited_tool(
                     params=dict(kwargs),
                     output_hash="error",
                     duration_ms=elapsed,
+                    status="error",
                 )
                 raise
 
@@ -416,6 +418,7 @@ def error_response(
             output_hash=hash_output({"error": error}),
             duration_ms=elapsed_ms,
             batch_id=current_batch_id.get(),
+            status="error",
         )
     result: dict[str, object] = {
         "tool_call_id": tc_id,
