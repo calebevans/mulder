@@ -20,13 +20,17 @@ from typing import TYPE_CHECKING, Any
 
 from mulder.server.app import get_ctx, has_ctx, mcp
 from mulder.server.jobs import fill_case_id, validate_tool_args
-from mulder.server.tool_access import Role, tool_access
+from mulder.server.tool_access import Role, _registry, tool_access
 
 if TYPE_CHECKING:
     from mulder.server.jobs import JobStore
 from mulder.server.helpers import hash_output, make_tool_call_id, tool_already_indexed
 
 logger = logging.getLogger(__name__)
+
+# Dispatchers never run inside a batch: a nested one would apply its own,
+# different role check to the tasks it is handed.
+_NOT_BATCHABLE = frozenset({"run_parallel", "start_extraction_batch"})
 
 
 def _get_job_store() -> JobStore:
@@ -98,6 +102,19 @@ def start_extraction_batch(tasks: list[dict[str, Any]]) -> dict[str, Any]:
 
     for task in tasks:
         tool_name = task["tool"]
+        # The server does not know which role is calling, so only tools a role
+        # that may start a batch could also call directly are accepted.
+        allowed = _registry.get(tool_name, Role(0))
+        if tool_name in _NOT_BATCHABLE or not (allowed & _registry["start_extraction_batch"]):
+            logger.warning("Rejecting %s in batch: not available to batch callers", tool_name)
+            rejected.append(
+                {
+                    "tool": tool_name,
+                    "args": task.get("args", {}),
+                    "error": f"{tool_name} is not available through start_extraction_batch",
+                }
+            )
+            continue
         args = fill_case_id(_tool_dispatch_sync[tool_name], task.get("args", {}), open_case_id)
         task = {**task, "args": args}
         problem = validate_tool_args(_tool_dispatch_sync[tool_name], args)
@@ -150,8 +167,8 @@ def start_extraction_batch(tasks: list[dict[str, Any]]) -> dict[str, Any]:
                 "tool_call_id": tc_id,
                 "status": "error",
                 "error_message": (
-                    f"{len(rejected)} task(s) rejected for invalid arguments; nothing submitted. "
-                    "Fix the arguments listed in tasks_rejected and resubmit."
+                    f"{len(rejected)} task(s) rejected; nothing submitted. "
+                    "Fix the tasks listed in tasks_rejected and resubmit."
                 ),
                 "tasks_rejected": rejected,
                 "tasks_skipped": skipped,
@@ -198,9 +215,8 @@ def start_extraction_batch(tasks: list[dict[str, Any]]) -> dict[str, Any]:
     if rejected:
         result["tasks_rejected"] = rejected
         result["hint"] = (
-            f"{len(rejected)} task(s) were NOT submitted because their arguments do not "
-            "match the tool signature (see tasks_rejected). Resubmit those with the "
-            "accepted parameter names. " + result["hint"]
+            f"{len(rejected)} task(s) were NOT submitted; tasks_rejected gives the reason "
+            "for each. Resubmit those with the accepted parameter names. " + result["hint"]
         )
     return result
 
