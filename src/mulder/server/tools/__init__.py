@@ -19,6 +19,7 @@ from mulder.server.tools import (  # noqa: F401  # noqa: F401
     hindsight,
     jobs,
     mvt,
+    netflow,
     phone,
     plaso,
     review,
