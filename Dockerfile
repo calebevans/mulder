@@ -346,6 +346,50 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
         && rm -f /opt/suricata/lib/libhtp.a /opt/suricata/lib/libhtp.la; \
     fi
 
+# nfdump: build from source (Ubuntu 22.04 packages 1.6, which cannot read the
+# layout-2 files that nfdump 1.7 collectors write). The tag is mutable upstream;
+# the commit assertion is what pins the build. The binaries find their own shared
+# libraries through the libtool rpath /opt/nfdump/lib, so the copy destination
+# must stay /opt/nfdump and no LD_LIBRARY_PATH is needed. --enable-nfpcapd fails
+# to link and is not needed.
+FROM ubuntu:22.04 AS nfdump-builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        git \
+        autoconf \
+        automake \
+        libtool \
+        pkg-config \
+        flex \
+        bison \
+        libbz2-dev \
+        zlib1g-dev \
+        libpcap-dev \
+        liblz4-dev \
+        libzstd-dev \
+        libbsd-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG NFDUMP_VERSION=1.7.10
+ARG NFDUMP_COMMIT=9e47b47
+RUN git clone --depth 1 --branch "v${NFDUMP_VERSION}" \
+        https://github.com/phaag/nfdump.git /tmp/nfdump \
+    && cd /tmp/nfdump \
+    && test "$(git rev-parse --short=7 HEAD)" = "${NFDUMP_COMMIT}" \
+    && ./autogen.sh \
+    && ./configure --prefix=/opt/nfdump \
+    && make -j"$(nproc)" \
+    && make install
+
+RUN rm -f /opt/nfdump/bin/updateGeoDB.sh /opt/nfdump/bin/updateTorDB.sh \
+    && strip --strip-debug /opt/nfdump/bin/* /opt/nfdump/lib/lib*-*.so \
+    && rm -rf /opt/nfdump/lib/*.a /opt/nfdump/lib/*.la /opt/nfdump/lib/pkgconfig \
+    && /opt/nfdump/bin/nfdump -V | grep -q "Version: ${NFDUMP_VERSION}-${NFDUMP_COMMIT}"
+
 # Runtime image
 FROM ubuntu:22.04 AS runtime
 
@@ -448,6 +492,8 @@ RUN ln -sf /opt/chainsaw/chainsaw /usr/local/bin/chainsaw
 COPY --from=chainsaw-fetch /opt/sigma-rules/ /opt/sigma-rules/
 COPY --from=suricata-builder /opt/suricata/ /opt/suricata/
 COPY --from=suricata-builder /etc/suricata/ /etc/suricata/
+# Runtime libraries (bz2, z, lz4, zstd, bsd) and prlimit (util-linux) are already present.
+COPY --from=nfdump-builder /opt/nfdump /opt/nfdump
 
 RUN --mount=type=bind,from=radare2-fetch,source=/tmp/radare2.deb,target=/tmp/radare2.deb \
     dpkg -i /tmp/radare2.deb || apt-get install -yf --no-install-recommends
@@ -493,7 +539,7 @@ RUN echo "deb http://download.opensuse.org/repositories/security:/zeek/xUbuntu_2
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-ENV PATH="/opt/zeek/bin:/opt/chainsaw:/opt/hayabusa:${PATH}"
+ENV PATH="/opt/nfdump/bin:/opt/zeek/bin:/opt/chainsaw:/opt/hayabusa:${PATH}"
 RUN ldconfig || true
 
 # Install Python forensic packages that require C compilation, then purge build deps

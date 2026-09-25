@@ -71,6 +71,7 @@ def main() -> None:
         ("r2", "-v"),
         ("dotnet", "--list-runtimes"),
         ("zeek", "--version"),
+        ("nfdump", "-V"),
         ("suricata", "-V"),
         ("chainsaw", "--version"),
         ("hayabusa", "help"),
