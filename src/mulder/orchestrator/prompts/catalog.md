@@ -32,7 +32,10 @@ OUTPUT REQUIREMENTS:
   network segment that produced evidence. Determine system names from
   directory structure, filenames, or organizational grouping.
 - Evidence types: memory dump, disk image, network capture (PCAP/PCAPNG),
-  event logs, phone dump (Android/iOS), compressed archive, log
+  NetFlow (nfdump "nfcapd.*" files, type "netflow_capture": the exporter
+  directory is the system, platform "Network"; its "name" MUST be that
+  directory's name exactly as it appears in the path, e.g. "edge-router", not a
+  description), event logs, phone dump (Android/iOS), compressed archive, log
   directory, database files, documents, executables, images/media files
   (potential steganography targets), or other.
 

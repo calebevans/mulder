@@ -70,6 +70,32 @@ When the evidence includes NETWORK CAPTURES, always plan:
 - run_zeek_analysis (structured protocol logs)
 - run_suricata (IDS signature matching)
 
+When the evidence includes NETFLOW (nfdump "nfcapd.YYYYMMDDhhmm" files, catalog
+type "netflow_capture"), always plan the tools below. Every run_netflow_* task
+is independent: put ALL of them in group "foundation" (none waits for another;
+the executor batches them). Pass the nfcapd DIRECTORY from the evidence context
+as evidence_path, spelled identically in every task. Timestamps are UTC in the
+form 'YYYY-MM-DDTHH:MM:SS'. Parameter names:
+- run_netflow_inventory(evidence_path)            -- exporter, data window, talkers,
+  services, /24 segment matrix (slow on large directories)
+- run_netflow_sweep(evidence_path, ports=[22,135,139,445,3389,5985,5986],
+  min_targets=3)                                  -- internal fan-out: lateral
+  movement, scanning
+- run_netflow_top(evidence_path, stat="dstip", order="bytes", direction="egress")
+  and run_netflow_top(evidence_path, stat="srcip", order="flows",
+  filter="dst port 80 or dst port 443")           -- external destinations; internal
+  hosts making direct outbound web connections
+- run_netflow_host_profile(evidence_path, host="<ip>") for every host named in
+  the briefing or by other systems
+Follow-ups (also "foundation"): run_netflow_pair_timeline(evidence_path,
+src="<ip>", dst="<ip>", dport=<port>) for any suspicious pair (beaconing,
+long-lived sessions, SYN-only retries, nightly transfers); run_netflow_query(
+evidence_path, filter="<nfdump filter>", aggregate=["srcip","dstip","dstport"],
+order="flows", limit=100, t_start=..., t_end=...) for time-window pivots.
+dport, limit and n are integers, not quoted strings. flows= and bytes= include
+exporter duplicates even when aggregated: state them as record counts, not
+connection counts or transferred volume.
+
 When the evidence includes MOBILE DATA, plan:
 - run_aleapp (Android, 300+ artifacts) or run_ileapp (iOS, 200+)
 - run_mvt_android/ios (spyware detection)

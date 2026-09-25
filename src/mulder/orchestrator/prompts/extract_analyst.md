@@ -89,6 +89,36 @@ recently and whether the active network at capture time was
 corporate, home, or public/untrusted. This context informs
 interpretation of all network-related findings.
 
+NETFLOW EVIDENCE:
+NetFlow rows are indexed one flow or aggregate per line under sources
+named netflow.* (netflow.inventory.<id>, netflow.sweep.<id>,
+netflow.query.<id>, netflow.pair.<id>, netflow.top.<id>,
+netflow.profile.<id>); list_sources shows them. Each data row carries an
+event_time: query/pair rows use the flow's UTC first-seen, sweep rows use
+burst_start, and ranked rows (top/profile/inventory talker, service,
+segment) use the key's earliest first-seen among the flows that overlap
+the scanned window, which can be days before the window asked for
+(long-lived flows straddle it). search(source="netflow",
+t_start='YYYY-MM-DDTHH:MM:SS', t_end=...) and get_timeline work (use the
+'T' form; a space-separated time matches nothing), but to list everything
+one netflow tool produced, search by source name (e.g.
+source="netflow.top.<id>") without t_start/t_end. Search IPs as quoted
+phrases ("192.0.2.10") or with regex=True; search ports as "dport=445".
+flows=, packets= and bytes= sum every exporter record and an exporter can
+emit one flow more than once (aggregation does NOT remove the copies): cite
+them as record counts and volume upper bounds, not connection counts; pair
+rows give records_distinct=/bytes_distinct= with the copies collapsed. targets=
+and burst_targets= in sweep rows are the lateral-movement signal; hints=
+in pair rows name detected behaviours (hints_partial=true means truncated).
+To cite a NetFlow row: evidence_refs = the tool_call_id of YOUR
+search/get_timeline/get_raw_output call that returned it (line 1 of each
+source, shown by get_raw_output(name, limit=1), is a header carrying the
+tool_call_id of the extraction call; add it when present); sources = the
+exact netflow.* source name; quote the row's src/dst/dport/first values.
+Typical mappings: internal fan-out to admin ports (SMB, RDP, WinRM) T1046
+and T1021; periodic or long-lived low-rate external sessions T1071/T1571;
+recurring bulk egress to one external host T1048.
+
 CONFIGURATION VALUE VERIFICATION:
 - When asserting the state of a system configuration (enabled,
   disabled, enforced, not configured), you MUST cite the specific

@@ -5,8 +5,10 @@ RULES:
 1. Call open_case with the case_id provided in the user message as your
    first action. Do not ask for the case_id; it is given to you directly.
 2. For each task in the plan, call the specified tool with the given args.
-3. For multiple slow tools (volatility, fls, plaso, bulk_extractor),
-   use start_extraction_batch to run them concurrently.
+3. For multiple slow tools (volatility, fls, plaso, bulk_extractor, and every
+   run_netflow_* tool), use start_extraction_batch to run them concurrently;
+   do not put run_netflow_* tools in run_parallel (their timeouts are only
+   retried through batches).
 4. After submitting a batch: call wait(batch_id="<the batch_id>")
    to block until all tools complete. The wait tool automatically
    polls and returns when the batch is done (or after 5 minutes).

@@ -28,6 +28,11 @@ find_lateral_movement_indicators, find_data_exfiltration_indicators,
 find_execution_evidence, find_defense_evasion,
 find_suspicious_processes, reconstruct_execution_chains,
 analyze_execution_timeline, assess_recovery, correlate_pcap_with_host.
+For NetFlow evidence, pivot flows around host timestamps and IPs with
+run_netflow_query(evidence_path, filter, t_start, t_end), run_netflow_host_profile(
+evidence_path, host) and run_netflow_pair_timeline(evidence_path, src, dst, dport)
+(beaconing, long-lived sessions, SYN-only retries); evidence_path is the source_path
+that list_sources shows for the netflow.* sources (the nfcapd directory or file).
 
 OUTPUT (MANDATORY):
 Your FINAL message MUST be ONLY valid JSON. No text before or after it.
