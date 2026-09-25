@@ -375,6 +375,42 @@
       "description": "Extract files from TCP streams in a PCAP",
       "input": "PCAP file path",
       "related": ["run_tcpflow", "run_pcap_analysis"]
+    },
+    {
+      "tool": "run_netflow_inventory",
+      "description": "Inventory a directory of nfdump nfcapd NetFlow files: exporter identity, data window, per-file manifest, top talkers, top services, top byte sources/destinations and a /24 segment matrix",
+      "input": "nfcapd directory path (or one nfcapd file)",
+      "related": ["run_netflow_sweep", "run_netflow_top", "run_netflow_host_profile"]
+    },
+    {
+      "tool": "run_netflow_top",
+      "description": "Rank the top-N values of one NetFlow field (srcip, dstip, ip, srcport, dstport, port) by flows, packets, bytes, pps, bps or bpp with percent-of-total",
+      "input": "nfcapd directory path, field, order, optional filter/window/direction",
+      "related": ["run_netflow_query", "run_netflow_host_profile", "run_netflow_pair_timeline"]
+    },
+    {
+      "tool": "run_netflow_host_profile",
+      "description": "Profile one IP address from NetFlow: outbound and inbound peers and services, exact per-direction totals, first/last seen and external peers",
+      "input": "nfcapd directory path, host IP",
+      "related": ["run_netflow_pair_timeline", "run_netflow_top", "run_netflow_query"]
+    },
+    {
+      "tool": "run_netflow_sweep",
+      "description": "Detect internal lateral-movement sweeps and scans in NetFlow: distinct internal targets, flows, SYN-only flows and bursts per (source IP, destination port)",
+      "input": "nfcapd directory path, optional port list",
+      "related": ["run_netflow_pair_timeline", "run_netflow_host_profile", "find_lateral_movement_indicators"]
+    },
+    {
+      "tool": "run_netflow_pair_timeline",
+      "description": "Pull every flow record between two IPs and characterise the relationship: sessions, source ports, flag mix, SYN-only retries, inter-arrival statistics and flow-size uniformity",
+      "input": "nfcapd directory path, src IP, dst IP, optional dport",
+      "related": ["run_netflow_host_profile", "run_netflow_query", "run_netflow_sweep"]
+    },
+    {
+      "tool": "run_netflow_query",
+      "description": "Run a bounded nfdump query over NetFlow: a filter, an optional UTC window and direction, raw flow records or rows aggregated by up to five keys",
+      "input": "nfcapd directory path, nfdump filter, optional aggregate keys/window",
+      "related": ["run_netflow_top", "run_netflow_pair_timeline", "run_netflow_inventory"]
     }
   ],
   "browser_forensics": [
