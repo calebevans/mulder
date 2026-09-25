@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import fnmatch
+import functools
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from mulder.patterns import DISK_IMAGE_EXTS
 
 logger = logging.getLogger(__name__)
+
+_NFCAPD_NAME_RE = re.compile(r"^nfcapd\.\d{12}(?:\d{2})?$")  # nfcapd.YYYYMMDDhhmm[ss]
+_NFDUMP_MAGIC = b"\x0c\xa5"  # uint16 0xA50C little-endian
+_NFDUMP_LAYOUTS = frozenset({1, 2})
 
 _MEMORY_DUMP_EXTS = {".mem", ".vmem", ".dmp", ".001"}
 _NETWORK_CAPTURE_EXTS = {".pcap", ".pcapng", ".cap"}
@@ -135,6 +141,52 @@ def _is_evidence_sidecar(path: Path) -> bool:
     return stem_lower.endswith("-raw") or stem_lower.endswith("_raw")
 
 
+def has_nfdump_magic(path: Path) -> bool:
+    """4-byte header check; empty, short, unreadable and symlinked files fail."""
+    try:
+        if path.is_symlink():
+            return False
+        with path.open("rb") as fh:
+            head = fh.read(4)
+    except OSError:
+        return False
+    return (
+        len(head) == 4
+        and head[:2] == _NFDUMP_MAGIC
+        and head[2] in _NFDUMP_LAYOUTS
+        and head[3] == 0
+    )
+
+
+@functools.lru_cache(maxsize=4096)
+def _dir_has_named_nfcapd(parent: str) -> bool:
+    """One listdir per directory: does it contain a rotation-named nfcapd file?"""
+    try:
+        return any(_NFCAPD_NAME_RE.match(p.name.lower()) for p in Path(parent).iterdir())
+    except OSError:
+        return False
+
+
+def is_nfcapd(path: Path) -> bool:
+    """nfdump capture file: header magic, sniffed only for plausible candidates.
+
+    Candidates: (a) rotation-style names (``nfcapd.YYYYMMDDhhmm[ss]``), or (b) files
+    with no suffix or an all-digit suffix (renamed captures, ``nfcapd.current.<pid>``)
+    whose directory also holds a rotation-named file. Rule (b) keeps a large disk
+    export (memory.001, wtmp, auth.log.1 ...) from costing one ``open()`` per file on
+    a large tree. Empty, short and symlinked files fail.
+    """
+    name = path.name.lower()
+    if _NFCAPD_NAME_RE.match(name):
+        return has_nfdump_magic(path)
+    suffix = path.suffix
+    if suffix and not suffix[1:].isdigit():
+        return False
+    if not _dir_has_named_nfcapd(str(path.parent)):
+        return False
+    return has_nfdump_magic(path)
+
+
 @dataclass
 class ClassifiedEvidence:
     """A single evidence item with its detected artifact type."""
@@ -164,6 +216,9 @@ class EvidenceClassifier:
 
     def classify(self, evidence_root: Path) -> list[ClassifiedEvidence]:
         """Resolve *evidence_root* and return classified files and notable directories."""
+        # one listdir per directory per WALK: a directory that gained a rotation-named nfcapd
+        # file since an earlier classify() in this process must be re-sniffed (never stale)
+        _dir_has_named_nfcapd.cache_clear()
         evidence_root = Path(evidence_root).resolve()
         if not evidence_root.exists():
             raise FileNotFoundError(f"Evidence path does not exist: {evidence_root}")
@@ -245,6 +300,9 @@ class EvidenceClassifier:
 
         if name in _SKIP_FILENAMES or ext in _SKIP_EXTENSIONS:
             return None
+
+        if is_nfcapd(path):
+            return ClassifiedEvidence(path=path, artifact_type="netflow_capture")
 
         if ext in _MEMORY_DUMP_EXTS:
             return ClassifiedEvidence(path=path, artifact_type="memory_dump")

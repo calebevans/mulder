@@ -15,6 +15,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from mulder.extractors.classifier import _dir_has_named_nfcapd, is_nfcapd
 from mulder.extractors.optical import probe_optical
 from mulder.orchestrator.types import PhaseResult, extract_catalog_result
 from mulder.patterns import DISK_IMAGE_EXTS, extract_iocs_from_text, resolve_db_dir
@@ -47,6 +48,7 @@ class EvidenceContext:
             evidence_path: Filesystem path to the evidence directory.
         """
         self.evidence_path = evidence_path
+        self._catalog_systems: dict[str, dict[str, Any]] = {}
 
     def load_case_briefing(self) -> str:
         """Load optional MULDER.md case briefing from the evidence directory.
@@ -135,6 +137,61 @@ class EvidenceContext:
                         ) and str(f) not in memory_dumps:
                             memory_dumps.append(str(f))
 
+        # parent dir -> (file count, first name, last name, matches system name)
+        netflow_dirs: dict[str, tuple[int, str, str, bool]] = {}
+        # the sibling-name cache is per walk: a directory that gained a rotation-named file
+        # since an earlier scan in this process must be re-sniffed
+        _dir_has_named_nfcapd.cache_clear()
+        if evidence_path.is_dir():
+            for f in evidence_path.rglob("*"):
+                if not f.is_file() or not is_nfcapd(f):
+                    continue
+                if f.parent.is_relative_to(evidence_path):
+                    rel_dir = str(f.parent.relative_to(evidence_path)).lower()
+                else:
+                    rel_dir = str(f.parent).lower()
+                key = str(f.parent)
+                cnt, first, last, _ = netflow_dirs.get(key, (0, f.name, f.name, False))
+                netflow_dirs[key] = (
+                    cnt + 1,
+                    min(first, f.name),
+                    max(last, f.name),
+                    sys_lower in rel_dir,
+                )
+        # NetFlow delivered inside an archive lands under the extracted slot named after the
+        # archive (case.py extracts to extracted/<stem>-<digest>/): scan the slots whose name
+        # contains the system name, as the memory-dump pass above does
+        if extracted_dir.is_dir():
+            for subdir in extracted_dir.iterdir():
+                if not (subdir.is_dir() and sys_lower in subdir.name.lower()):
+                    continue
+                for f in subdir.rglob("*"):
+                    if not f.is_file() or not is_nfcapd(f):
+                        continue
+                    key = str(f.parent)
+                    cnt, first, last, _ = netflow_dirs.get(key, (0, f.name, f.name, True))
+                    netflow_dirs[key] = (cnt + 1, min(first, f.name), max(last, f.name), True)
+        catalog_ev = self._catalog_systems.get(sys_lower, {}).get("evidence", [])
+        catalog_says_netflow = isinstance(catalog_ev, list) and any(
+            "netflow" in str(e).lower() for e in catalog_ev
+        )
+        mine = {d: v for d, v in netflow_dirs.items() if v[3]}
+        # rescue path (the catalog named the system descriptively): show only the directories
+        # no OTHER catalog system claims by name, so two exporters are not both planned under
+        # each system
+        others = [n for n in self._catalog_systems if n and n != sys_lower]
+
+        def _claimed_by_other(d: str) -> bool:
+            path = Path(d)
+            if path.is_relative_to(evidence_path):
+                rel = str(path.relative_to(evidence_path)).lower()
+            else:
+                rel = d.lower()
+            return any(n in rel for n in others)
+
+        unclaimed = {d: v for d, v in netflow_dirs.items() if not _claimed_by_other(d)}
+        shown = mine if mine else (unclaimed if catalog_says_netflow else {})
+
         lines: list[str] = [f"System: {system_name}"]
         if disk_images:
             lines.append("Disk images:")
@@ -158,7 +215,36 @@ class EvidenceContext:
             )
             for p in sorted(nested_archives):
                 lines.append(f"  {p}")
-        if not disk_images and not memory_dumps and not nested_archives:
+        if shown:
+            lines.append(
+                "NetFlow (nfdump nfcapd files; pass the DIRECTORY as evidence_path, "
+                "spelled exactly as below):"
+            )
+            for d, (cnt, first, last, _) in sorted(shown.items()):
+                lines.append(f"  {d}  ({cnt} files, {first} .. {last})")
+            if not mine and shown:
+                lines.append(
+                    "  (directory name does not contain the system name; listed because "
+                    "the catalog assigns netflow_capture to this system)"
+                )
+                if len(shown) > 1:
+                    lines.append(
+                        "  (several exporter directories; plan only the one that belongs to "
+                        "this system per the catalog description and ignore the others)"
+                    )
+            lines.append(
+                "  Plan run_netflow_inventory, run_netflow_sweep, "
+                'run_netflow_top(direction="egress") and'
+            )
+            lines.append(
+                '  run_netflow_top(stat="srcip", filter="dst port 80 or dst port 443") '
+                'as independent "foundation" tasks;'
+            )
+            lines.append(
+                "  pivot with run_netflow_host_profile, run_netflow_pair_timeline, "
+                "run_netflow_query."
+            )
+        if not disk_images and not memory_dumps and not nested_archives and not shown:
             lines.append(
                 "(No pre-populated paths available. "
                 f"Call list_directory on {self.evidence_path} to discover files.)"
@@ -199,6 +285,11 @@ class EvidenceContext:
             return [], {}
 
         systems = [str(s["name"]) for s in catalog_data["systems"]]
+        self._catalog_systems = {
+            str(s.get("name", "")).lower(): s
+            for s in catalog_data["systems"]
+            if isinstance(s, dict)
+        }
         logger.info(
             "Identified %d system(s) from catalog JSON: %s",
             len(systems),

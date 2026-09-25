@@ -48,6 +48,11 @@ _EVIDENCE_TOOL_MAP: dict[str, list[str]] = {
     "network_capture": [
         "run_pcap_analysis",
     ],
+    "netflow_capture": [
+        "run_netflow_inventory",
+        "run_netflow_sweep",
+        "run_netflow_top",
+    ],
     "evtx": [
         "run_evtx_parser",
         "run_hayabusa",
@@ -213,23 +218,41 @@ def audit_tool_coverage() -> dict[str, object]:
     items: list[dict[str, object]] = []
     total_gaps = 0
 
+    # nfcapd files are classified one by one; report their exporter directory once
+    netflow_dirs: dict[str, int] = {}
+    for ev in classified:
+        if ev.artifact_type == "netflow_capture":
+            parent = str(ev.path.parent)
+            netflow_dirs[parent] = netflow_dirs.get(parent, 0) + 1
+
+    seen_netflow_dirs: set[str] = set()
     for ev in classified:
         applicable = _EVIDENCE_TOOL_MAP.get(ev.artifact_type, [])
         if not applicable:
             continue
 
+        item_path = str(ev.path)
+        files: int | None = None
+        if ev.artifact_type == "netflow_capture":
+            item_path = str(ev.path.parent)
+            if item_path in seen_netflow_dirs:
+                continue
+            seen_netflow_dirs.add(item_path)
+            files = netflow_dirs[item_path]
+
         run = [t for t in applicable if t in tools_invoked]
         not_run = [t for t in applicable if t not in tools_invoked]
         total_gaps += len(not_run)
 
-        items.append(
-            {
-                "path": str(ev.path),
-                "artifact_type": ev.artifact_type,
-                "tools_run": run,
-                "tools_not_run": not_run,
-            }
-        )
+        item: dict[str, object] = {
+            "path": item_path,
+            "artifact_type": ev.artifact_type,
+            "tools_run": run,
+            "tools_not_run": not_run,
+        }
+        if files is not None:
+            item["files"] = files
+        items.append(item)
 
     result = {
         "tool_call_id": tc_id,
