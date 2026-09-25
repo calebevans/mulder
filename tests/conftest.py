@@ -6,6 +6,7 @@ import sys
 from collections.abc import Generator
 from pathlib import Path
 from types import ModuleType
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
 import pytest
@@ -14,6 +15,9 @@ from mulder.audit import AuditLog
 from mulder.db import CaseDB
 from mulder.models import Finding
 from mulder.orchestrator.gates import reset_gate_failure_counters
+
+if TYPE_CHECKING:
+    from tests.netflow_harness import Env as NetflowEnv
 
 
 def _install_sdk_stub() -> None:
@@ -138,3 +142,17 @@ def sample_finding() -> Finding:
         event_time_end="2025-01-15T09:00:00Z",
         submitted_at="2025-01-15T12:00:00Z",
     )
+
+
+@pytest.fixture()
+def nf_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[NetflowEnv]:
+    """Real CaseDB + AuditLog + ServerContext with a fake nfdump (``tests/netflow_harness.py``).
+
+    Imported lazily: the harness pulls in ``mulder.server.app`` (which registers every tool),
+    and only the NetFlow tests need that at fixture time.
+    """
+    from tests.netflow_harness import make_env
+
+    env = make_env(tmp_path, monkeypatch)
+    yield env
+    env.db.close()

@@ -1,0 +1,21 @@
+Ident: edge-router
+Flows: 197
+Flows_tcp: 132
+Flows_udp: 41
+Flows_icmp: 24
+Flows_other: 0
+Packets: 34703
+Packets_tcp: 34597
+Packets_udp: 82
+Packets_icmp: 24
+Packets_other: 0
+Bytes: 12362331
+Bytes_tcp: 12354514
+Bytes_udp: 5793
+Bytes_icmp: 2024
+Bytes_other: 0
+First: 981160567
+Last: 981254910
+msec_first: 0
+msec_last: 0
+Sequence failures: 0
