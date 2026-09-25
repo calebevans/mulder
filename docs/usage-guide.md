@@ -34,6 +34,7 @@ Try-it-out instructions for running Mulder, the forensic investigation platform.
     - [How It Works](#how-it-works)
     - [Example](#example)
   - [Artifact Awareness](#artifact-awareness)
+  - [NetFlow Evidence](#netflow-evidence)
   - [CLI Reference](#cli-reference)
     - [`mulder investigate`](#mulder-investigate)
     - [`mulder setup`](#mulder-setup)
@@ -91,6 +92,9 @@ mulder setup                     # everything mulder owns - no sudo
 - **The SIFT forensic toolchain** on `$PATH`. SIFT already provides Sleuth Kit, plaso, Zeek,
   Suricata, radare2, bulk_extractor and the .NET runtime; the `yara` binary above is the one
   fatal gap.
+- **nfdump 1.7 or newer** on `$PATH` for NetFlow evidence (optional). Ubuntu 22.04 packages
+  nfdump 1.6, which cannot read the layout-2 files that 1.7 collectors write, so build 1.7 from
+  source as the container image does; see [NetFlow Evidence](#netflow-evidence).
 - **Node.js is usually _not_ required**: `claude-agent-sdk`'s platform wheels bundle the Claude
   Code CLI. Node 18+ matters only if you install from an sdist or run where no wheel exists.
 
@@ -551,6 +555,71 @@ The extraction planner adapts its tool selection based on what the evidence actu
 **Investigator briefing keywords** also influence tool selection. Briefings mentioning hacking or intrusion trigger searches for exploit tool configs and PCAPs. Briefings about insider threats or data theft prioritize USB history and cloud storage artifacts. Briefings about communications prioritize email and chat application data.
 
 The analyst receives complementary guidance: when execution artifacts show communication tools were used, the analyst searches indexed application files for contacts, server addresses, and credentials, then cross-references those with network connection data.
+
+## NetFlow Evidence
+
+Mulder reads NetFlow/IPFIX evidence stored by an nfdump collector (`nfcapd.*` files) through six
+typed MCP tools: `run_netflow_inventory`, `run_netflow_top`, `run_netflow_host_profile`,
+`run_netflow_sweep`, `run_netflow_pair_timeline` and `run_netflow_query`. Like every other
+forensic tool in Mulder they take typed parameters, build an argv list (never a shell string),
+bound their output, and index every result row in the case database so findings can cite it.
+
+**Evidence layout.** An nfdump collector writes one binary file per rotation interval, usually
+below one directory per exporter:
+
+```
+evidence/
+  netflow/
+    edge-router/                  one directory per exporter (router, firewall, probe)
+      2001/02/
+        nfcapd.200102030000       rotation name nfcapd.YYYYMMDDhhmm[ss]
+        nfcapd.200102040000
+        nfcapd.current.4242       a collector's live temp file (read like any other)
+```
+
+Pass the **directory** (any level: exporter, year, month) as `evidence_path`; the tools walk it
+recursively, and a single file also works. Files are admitted by their 4-byte nfdump magic, never
+by name: a text file named like a rotation file is excluded, a renamed capture beside
+rotation-named siblings is kept, and empty files, symlinks and files without the magic are
+reported in `files_excluded` with a reason. The catalog classifies such files as
+`netflow_capture` (the exporter directory is the system, platform "Network"), the evidence
+context lists each nfcapd directory for the extraction planner, and the coverage audit reports one
+item per directory.
+
+**Requirements.** nfdump 1.7 or newer on the server's `PATH`; the container image builds nfdump
+1.7.10 from source into `/opt/nfdump`. nfdump 1.7 writes file layout 2 by default and nfdump 1.6
+(the version Ubuntu 22.04 packages) cannot read layout-2 files at all, so native installs must
+provide 1.7 or later. `prlimit` (util-linux) is also required: every nfdump child runs under a
+4 GiB address-space limit. Without nfdump the tools return `error_type: binary_missing` and
+nothing else in Mulder changes.
+
+**Bounded outputs.** Every call returns at most `max_inline_rows` rows inline (default 20, max
+100) while every row is indexed. Filters are nfdump filter expressions checked against a token
+whitelist (ASCII only, at most 1000 characters; quotes, shell metacharacters and hostnames are
+rejected before any process starts). Timestamps are UTC (`YYYY-MM-DDTHH:MM:SS`); a flow counts
+when it was *active* in the window, and the window also selects the day files read (one day
+before `t_start` to eight days after `t_end`, because a record is written when it expires). Over
+more than three files `run_netflow_query` refuses a volume ordering without aggregation, or an
+aggregation keyed by `srcport` or by both `srcip` and `dstip`, unless a filter narrows it. All
+nfdump processes share two slots per server, and any message nfdump prints on stderr (a truncated
+or block-corrupt file) fails the call instead of returning an undercount.
+
+**Source names.** Each call indexes its rows under a deterministic name, `netflow.<kind>.<id>`
+(`inventory`, `top`, `profile`, `sweep`, `pair` or `query`), where `<id>` is a digest of the
+tool, the resolved `evidence_path` and the effective parameters. Repeating an identical call
+returns `status: skipped`; `force=True` runs again and registers `<name>-r1`, `<name>-r2`, ...;
+a call that matches nothing registers an empty source (`status: indexed_empty`).
+`search(source="netflow")` spans every NetFlow source of the case.
+
+**Citation.** Line 1 of every non-empty source is a header row (no event time) naming the tool,
+the originating `tool_call_id`, the files read and every effective parameter, so
+`get_raw_output('<name>', limit=1)` recovers the provenance of any `netflow.*` source. Every other
+row is one line, `<event_time> netflow <kind> key=value ...`, with its own UTC `event_time`, so
+`search` with `t_start`/`t_end` and `get_timeline` work on NetFlow rows and phrase searches such
+as `search(query='"dport=445"', source='netflow')` hit exactly the rows that carry the value.
+`flows=`, `packets=` and `bytes=` sum every exporter record (an exporter can emit one flow more
+than once), so cite them as record counts and upper bounds; `run_netflow_pair_timeline` reports
+`records_distinct=` and `bytes_distinct=` with exporter copies collapsed.
 
 ## CLI Reference
 
