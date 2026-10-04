@@ -130,8 +130,13 @@ class AuditLog:
         duration_ms: float = 0,
         sub_calls: list[str] | None = None,
         batch_id: str | None = None,
+        status: str | None = None,
     ) -> None:
-        """Record a tool invocation as one JSONL line and index ``tool_call_id``."""
+        """Record a tool invocation as one JSONL line and index ``tool_call_id``.
+
+        ``status="error"`` marks a call that failed, so it cannot be cited as
+        evidence. Entries without a status (including older logs) are successes.
+        """
         entry: dict[str, object] = {
             "type": "tool_call",
             "tool_call_id": tool_call_id,
@@ -145,11 +150,18 @@ class AuditLog:
             entry["sub_calls"] = sub_calls
         if batch_id is not None:
             entry["batch_id"] = batch_id
+        if status is not None:
+            entry["status"] = status
         self._append(entry)
 
     def has_tool_call(self, tool_call_id: str) -> bool:
         """Return True if ``tool_call_id`` appears in this audit log."""
         return tool_call_id in self._tool_call_ids
+
+    def get_tool_call(self, tool_call_id: str) -> dict[str, object] | None:
+        """Return the logged entry for ``tool_call_id``, or None if absent."""
+        entry = self._tool_calls.get(tool_call_id)
+        return dict(entry) if entry is not None else None
 
     @property
     def tool_call_ids(self) -> set[str]:
