@@ -115,8 +115,14 @@ class AuditLog:
         """Append ``entry`` to the JSONL log file and update in-memory indexes."""
         with self._lock:
             self._log_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self._log_path, "a") as fh:
-                fh.write(json.dumps(entry, separators=(",", ":")) + "\n")
+            with open(self._log_path, "ab+") as fh:
+                # A writer that died mid-line leaves no trailing newline; end
+                # that fragment first so this entry is not glued onto it.
+                if fh.seek(0, os.SEEK_END) > 0:
+                    fh.seek(-1, os.SEEK_END)
+                    if fh.read(1) != b"\n":
+                        fh.write(b"\n")
+                fh.write((json.dumps(entry, separators=(",", ":")) + "\n").encode())
                 fh.flush()
                 os.fsync(fh.fileno())
             self._index_entry(entry)
