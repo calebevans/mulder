@@ -109,6 +109,53 @@ class TestValidateCatalog:
         assert "evidence_discovered" in check_names
 
 
+def _catalog(*names: str) -> dict[str, object]:
+    return {
+        "case_id": "ndlc",
+        "evidence_root": "/evidence",
+        "systems": [{"name": n, "evidence": ["disk_image"]} for n in names],
+    }
+
+
+def _touch(root: Path, *names: str) -> None:
+    for n in names:
+        (root / n).write_bytes(b"x")
+
+
+class TestValidateCatalogImageCount:
+    """One system per distinct disk image, or the gate fails (#237)."""
+
+    def test_fewer_systems_than_images_fails_listing_images(self, tmp_path: Path) -> None:
+        _touch(tmp_path, "pc.E01", "pc.E02", "rm1.E01", "rm2.E01", "rm3.E01")
+        result = validate_catalog(_catalog("cfreds_2015_data_leakage"), str(tmp_path))
+        assert not result.passed
+        assert [c.name for c in result.checks if not c.passed] == ["images_covered"]
+        gap = result.gaps[0]
+        assert "1 system(s)" in gap and "4 disk image(s)" in gap
+        for name in ("pc.E01", "rm1.E01", "rm2.E01", "rm3.E01"):
+            assert name in gap
+        assert "pc.E02" not in gap
+
+    def test_one_system_per_image_passes(self, tmp_path: Path) -> None:
+        _touch(tmp_path, "pc.E01", "rm1.E01", "rm2.E01", "rm3.E01")
+        result = validate_catalog(_catalog("pc", "rm1", "rm2", "rm3"), str(tmp_path))
+        assert result.passed
+
+    def test_ewf_segments_count_as_one_image(self, tmp_path: Path) -> None:
+        _touch(tmp_path, "pc.E01", "pc.E02")
+        assert validate_catalog(_catalog("pc"), str(tmp_path)).passed
+
+    def test_memory_dump_is_not_a_system(self, tmp_path: Path) -> None:
+        _touch(tmp_path, "pc.E01", "pc-memory.mem", "capture.pcap", "notes.7z.001")
+        assert validate_catalog(_catalog("pc"), str(tmp_path)).passed
+
+    def test_unreadable_evidence_warns_instead_of_failing(self, tmp_path: Path) -> None:
+        result = validate_catalog(_catalog("pc"), str(tmp_path / "missing"))
+        assert result.passed
+        check = next(c for c in result.checks if c.name == "images_covered")
+        assert "not verified" in check.detail
+
+
 class TestValidateCrossSystemWithData:
     """Tests for validate_cross_system with realistic data."""
 

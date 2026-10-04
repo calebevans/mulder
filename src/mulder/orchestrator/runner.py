@@ -842,7 +842,7 @@ class Orchestrator:
         if phase.name == "catalog":
             catalog_json = extract_catalog_result(phase_result.messages)
             self._cached_catalog_data = catalog_json
-            return validate_catalog(catalog_json or {})
+            return validate_catalog(catalog_json or {}, self.evidence_path)
 
         if phase.name == "extraction":
             summary_result = self._server.get_summary()

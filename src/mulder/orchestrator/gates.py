@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from mulder.extractors.classifier import EvidenceClassifier
+
 logger = logging.getLogger(__name__)
 
 _consecutive_extraction_failures: int = 0
@@ -62,7 +64,10 @@ class GateResult:
     gaps: list[str] = field(default_factory=list)
 
 
-def validate_catalog(catalog_json: dict[str, Any]) -> GateResult:
+def validate_catalog(
+    catalog_json: dict[str, Any],
+    evidence_path: str | None = None,
+) -> GateResult:
     """Validate that the catalog phase produced structured JSON output.
 
     The catalog agent must emit a final JSON message containing
@@ -70,9 +75,17 @@ def validate_catalog(catalog_json: dict[str, Any]) -> GateResult:
     This gate validates that structure directly rather than scanning
     assistant text for keywords.
 
+    A disk image is a distinct system, so ``systems`` must also have at
+    least one entry per disk image in the evidence set (#237). EWF
+    segments count once: the classifier only recognises ``.E01``, and
+    split ``.7z.001`` parts and memory dumps are not disk images.
+
     Args:
         catalog_json: Parsed JSON from the catalog agent's final message,
             or an empty dict if parsing failed.
+        evidence_path: Evidence directory to count disk images in. When
+            omitted, or when it cannot be classified, the image-count
+            check is skipped with a warning rather than failing.
 
     Returns:
         GateResult indicating whether the catalog output is valid.
@@ -119,6 +132,37 @@ def validate_catalog(catalog_json: dict[str, Any]) -> GateResult:
             "Catalog JSON must include a non-empty 'systems' array. "
             "Each entry needs at minimum a 'name' field."
         )
+
+    if check_systems.passed and evidence_path:
+        root = Path(evidence_path)
+        try:
+            images = sorted(
+                str(e.path.relative_to(root.resolve()))
+                for e in EvidenceClassifier().classify(root)
+                if e.artifact_type == "disk_image"
+            )
+        except Exception:
+            logger.warning("Catalog gate: cannot classify %s", evidence_path, exc_info=True)
+            images = None
+        if images is None:
+            detail = "Evidence could not be classified; disk image count not verified"
+            logger.warning("Catalog gate: %s", detail)
+            checks.append(GateCheck(name="images_covered", passed=True, detail=detail))
+        else:
+            covered = system_count >= len(images)
+            checks.append(
+                GateCheck(
+                    name="images_covered",
+                    passed=covered,
+                    detail=f"{system_count} system(s) for {len(images)} disk image(s)",
+                )
+            )
+            if not covered:
+                gaps.append(
+                    f"Catalog registered {system_count} system(s) but the evidence "
+                    f"contains {len(images)} disk image(s). Each disk image is a "
+                    "distinct system: register one system per image. Images: " + ", ".join(images)
+                )
 
     return GateResult(
         passed=all(c.passed for c in checks),
