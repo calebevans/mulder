@@ -509,3 +509,60 @@ class TestQueryRegistryValueTool:
         mock_index.assert_called_once()
         call_args = mock_index.call_args
         assert call_args[0][1] == "registry.query.ntuser.jdoe"
+
+    @patch("mulder.server.tools.extract.registry_query._cleanup_tsk_extract_dir")
+    @patch("mulder.server.tools.extract.registry_query.extract_and_index")
+    @patch("mulder.server.tools.extract.registry_query._tsk_extract_files")
+    @patch("mulder.server.tools.extract.registry_query.get_ctx")
+    def test_hive_name_is_case_insensitive(
+        self,
+        mock_ctx: MagicMock,
+        mock_tsk: MagicMock,
+        mock_index: MagicMock,
+        mock_cleanup: MagicMock,
+    ) -> None:
+        """ "SYSTEM" and "system" resolve to the same hive paths (#241)."""
+        fn = self._get_sync_fn()
+        ctx = MagicMock()
+        ctx.case_id = "test-case"
+        mock_ctx.return_value = ctx
+        mock_tsk.return_value = []
+
+        for spelling in ("SYSTEM", "system", "System"):
+            result = fn(
+                case_id="test-case",
+                image_path="/images/disk.dd",
+                hive=spelling,
+                key_path="ControlSet001\\Control\\Windows",
+                value_name=None,
+                username=None,
+            )
+            assert result["error_type"] == "hive_not_found", spelling
+
+        patterns = {call.args[1][0] for call in mock_tsk.call_args_list}
+        assert patterns == {"config/SYSTEM"}
+
+    @patch("mulder.server.tools.extract.registry_query.extract_and_index")
+    @patch("mulder.server.tools.extract.registry_query._extract_hive")
+    @patch("mulder.server.tools.extract.registry_query.get_ctx")
+    def test_unknown_hive_returns_invalid_params(
+        self,
+        mock_ctx: MagicMock,
+        mock_extract: MagicMock,
+        mock_index: MagicMock,
+    ) -> None:
+        """An unknown hive name returns an error response, not a KeyError."""
+        fn = self._get_sync_fn()
+
+        result = fn(
+            case_id="test-case",
+            image_path="/images/disk.dd",
+            hive="BCD",
+            key_path="Objects",
+            value_name=None,
+            username=None,
+        )
+        assert result["status"] == "error"
+        assert result["error_type"] == "invalid_params"
+        assert "system, software, sam, security, ntuser, usrclass" in result["error_message"]
+        mock_extract.assert_not_called()
