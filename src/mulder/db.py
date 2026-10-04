@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, TypedDict, TypeVar, cast
 
+from pydantic import ValidationError
 from sqlalchemy import (
     Column,
     ForeignKey,
@@ -418,6 +419,24 @@ class _WriteQueue:
                 "DB writer thread did not finish within timeout; %d queued items may be lost",
                 remaining,
             )
+
+
+def _finding_fields(row: Any) -> dict[str, Any]:
+    """Map a ``findings`` row to ``Finding`` constructor fields."""
+    return {
+        "finding_id": row.finding_id,
+        "case_id": row.case_id,
+        "title": row.title,
+        "description": row.description,
+        "severity": row.severity,
+        "confidence": row.confidence,
+        "evidence_refs": json.loads(row.evidence_refs),
+        "sources": json.loads(row.sources),
+        "mitre_attack_ids": json.loads(row.mitre_attack_ids) if row.mitre_attack_ids else [],
+        "event_time_start": row.event_time_start,
+        "event_time_end": row.event_time_end,
+        "submitted_at": row.submitted_at,
+    }
 
 
 class CaseDB:
@@ -1083,8 +1102,20 @@ class CaseDB:
             else:
                 values[key] = val
 
+        # Validate the merged row the way submit_finding validates a new one,
+        # so no write path can persist a row the readers refuse to load
+        # (e.g. evidence_refs=[]). Raises pydantic.ValidationError.
+        stmt = select(findings_t).where(findings_t.c.finding_id == finding_id)
+        with self._engine.connect() as conn:
+            row = conn.execute(stmt).fetchone()
+        if row is None:
+            return False
+        Finding.model_validate(
+            {**_finding_fields(row), **{k: v for k, v in kwargs.items() if v is not None}}
+        )
+
         if not values:
-            return self._finding_exists(finding_id)
+            return True
 
         def _do_update() -> bool:
             """Execute the UPDATE and return whether a row was matched."""
@@ -1125,49 +1156,46 @@ class CaseDB:
             return conn.execute(stmt).fetchone() is not None
 
     def get_finding(self, finding_id: str) -> Finding | None:
-        """Return a single finding by ID, or None if not found."""
+        """Return a single finding by ID, or None if not found or invalid."""
         stmt = select(findings_t).where(findings_t.c.finding_id == finding_id)
         with self._engine.connect() as conn:
             row = conn.execute(stmt).fetchone()
         if row is None:
             return None
-        return Finding(
-            finding_id=row.finding_id,
-            case_id=row.case_id,
-            title=row.title,
-            description=row.description,
-            severity=row.severity,
-            confidence=row.confidence,
-            evidence_refs=json.loads(row.evidence_refs),
-            sources=json.loads(row.sources),
-            mitre_attack_ids=json.loads(row.mitre_attack_ids) if row.mitre_attack_ids else [],
-            event_time_start=row.event_time_start,
-            event_time_end=row.event_time_end,
-            submitted_at=row.submitted_at,
-        )
+        try:
+            return Finding.model_validate(_finding_fields(row))
+        except ValidationError as exc:
+            logger.warning("Skipping invalid finding row %s: %s", finding_id, exc)
+            return None
 
-    def get_findings(self) -> list[Finding]:
-        """Return all findings ordered by submission time."""
+    def _load_findings(self) -> tuple[list[Finding], list[dict[str, str]]]:
+        """Return (valid findings, invalid rows) ordered by submission time.
+
+        A row that fails ``Finding`` validation is skipped and reported as
+        ``{"finding_id", "title", "error"}`` instead of raising, so one bad
+        row cannot block every tool that loads findings (issue #239).
+        """
         stmt = select(findings_t).order_by(findings_t.c.submitted_at)
         with self._engine.connect() as conn:
             rows = conn.execute(stmt).fetchall()
-        return [
-            Finding(
-                finding_id=row.finding_id,
-                case_id=row.case_id,
-                title=row.title,
-                description=row.description,
-                severity=row.severity,
-                confidence=row.confidence,
-                evidence_refs=json.loads(row.evidence_refs),
-                sources=json.loads(row.sources),
-                mitre_attack_ids=json.loads(row.mitre_attack_ids) if row.mitre_attack_ids else [],
-                event_time_start=row.event_time_start,
-                event_time_end=row.event_time_end,
-                submitted_at=row.submitted_at,
-            )
-            for row in rows
-        ]
+        valid: list[Finding] = []
+        invalid: list[dict[str, str]] = []
+        for row in rows:
+            try:
+                valid.append(Finding.model_validate(_finding_fields(row)))
+            except ValidationError as exc:
+                error = "; ".join(str(e["msg"]) for e in exc.errors())
+                logger.warning("Skipping invalid finding row %s: %s", row.finding_id, error)
+                invalid.append({"finding_id": row.finding_id, "title": row.title, "error": error})
+        return valid, invalid
+
+    def get_findings(self) -> list[Finding]:
+        """Return all valid findings ordered by submission time."""
+        return self._load_findings()[0]
+
+    def get_invalid_findings(self) -> list[dict[str, str]]:
+        """Return stored finding rows that fail ``Finding`` validation."""
+        return self._load_findings()[1]
 
     def update_extractor_versions(self, versions: dict[str, str]) -> None:
         """Update the stored extractor version map."""
