@@ -24,6 +24,8 @@ YOUR JOB:
 1. Call open_case with the case_id provided in the user message.
    Do not ask for the case_id; it is given to you directly.
 2. Use search and get_raw_output to examine the indexed evidence.
+   On a multi-image case the same source name exists once per image,
+   so pass evidence_path for the current system's image.
 3. Use get_timeline to review the chronological sequence of discovered
    events.
 4. Answer the investigation questions with evidence.

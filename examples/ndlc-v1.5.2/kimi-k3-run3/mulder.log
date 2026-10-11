@@ -1,0 +1,1225 @@
+2026-09-19 21:17:27,070 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 21:17:29,088 [AnyIO worker thread] INFO mulder.server.app: Creating empty case database for 'ndlc' ...
+2026-09-19 21:17:29,169 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 21:17:38,725 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 21:17:38,751 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 21:17:38,752 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 21:17:40,842 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 21:17:40,868 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 21:17:43,072 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 21:17:43,098 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 21:17:45,169 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 21:17:45,195 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 21:17:57,791 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 21:18:01,981 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 21:18:04,135 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 21:18:09,004 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 21:18:09,030 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 21:18:10,812 [AnyIO worker thread] INFO mulder.server.jobs: Submitted batch bg_5ea266f2 with 4 jobs: ['run_mmls', 'run_fls', 'run_bulk_extractor', 'detect_masquerading']
+2026-09-19 21:18:10,864 [mulder-job_0] INFO mulder.server.jobs: Job job_0d0a218d (run_mmls) completed
+2026-09-19 21:18:10,865 [mulder-job_0] INFO mulder.server.jobs: [JOB_COMPLETE] run_mmls|completed|
+2026-09-19 21:18:10,902 [mulder-job_1] INFO mulder.server.tools.extract.tsk: run_fls: offset 0 failed, retrying with mmls-detected offset 206848
+2026-09-19 21:18:21,079 [mulder-job_1] INFO mulder.server.tools.extract.tsk: Indexed secondary partition tsk.filelist.p1: offset=2048, desc=ntfs / exfat (0x07)
+2026-09-19 21:18:21,083 [mulder-job_1] INFO mulder.server.jobs: Job job_d47e3cc2 (run_fls) completed
+2026-09-19 21:18:21,084 [mulder-job_1] INFO mulder.server.jobs: [JOB_COMPLETE] run_fls|completed|
+2026-09-19 21:18:25,123 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 21:18:25,163 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 21:18:28,595 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 0s)
+2026-09-19 21:18:28,596 [AnyIO worker thread] INFO mulder.server.jobs: Submitted batch bg_fd37f697 with 4 jobs: ['run_fls', 'run_bulk_extractor', 'detect_masquerading', 'run_mactime']
+2026-09-19 21:18:29,156 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 21:18:29,230 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 21:18:30,292 [mulder-job_3] INFO mulder.server.jobs: Job job_9bb9bfff (run_mactime) completed
+2026-09-19 21:18:30,293 [mulder-job_3] INFO mulder.server.jobs: [JOB_COMPLETE] run_mactime|completed|
+2026-09-19 21:18:31,928 [mulder-job_2] INFO mulder.server.jobs: Job job_511c1493 (detect_masquerading) completed
+2026-09-19 21:18:31,929 [mulder-job_2] INFO mulder.server.jobs: [JOB_COMPLETE] detect_masquerading|completed|
+2026-09-19 21:18:33,598 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 5s)
+2026-09-19 21:18:33,915 [AnyIO worker thread] INFO mulder.server.jobs: Submitted batch bg_8b1a96b7 with 4 jobs: ['run_fls', 'run_bulk_extractor', 'detect_masquerading', 'run_mactime']
+2026-09-19 21:18:34,107 [mulder-job_0] INFO mulder.server.tools.extract.tsk: run_fls: offset 0 failed, retrying with mmls-detected offset 32
+2026-09-19 21:18:38,623 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 10s)
+2026-09-19 21:18:41,089 [mulder-job_3] INFO mulder.server.jobs: Job job_b954e85e (run_mactime) completed
+2026-09-19 21:18:41,091 [mulder-job_3] INFO mulder.server.jobs: [JOB_COMPLETE] run_mactime|completed|
+2026-09-19 21:18:42,046 [mulder-job_0] INFO mulder.server.jobs: Job job_8b79f79d (run_fls) completed
+2026-09-19 21:18:42,048 [mulder-job_0] INFO mulder.server.jobs: [JOB_COMPLETE] run_fls|completed|
+2026-09-19 21:18:42,869 [mulder-job_2] INFO mulder.server.jobs: Job job_4ab7d2fc (detect_masquerading) completed
+2026-09-19 21:18:42,870 [mulder-job_2] INFO mulder.server.jobs: [JOB_COMPLETE] detect_masquerading|completed|
+2026-09-19 21:18:43,629 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 15s)
+2026-09-19 21:18:48,634 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 20s)
+2026-09-19 21:18:53,636 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 25s)
+2026-09-19 21:18:58,637 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 30s)
+2026-09-19 21:19:03,641 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 35s)
+2026-09-19 21:19:08,645 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 40s)
+2026-09-19 21:19:13,651 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 45s)
+2026-09-19 21:19:18,654 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 50s)
+2026-09-19 21:19:23,660 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 55s)
+2026-09-19 21:19:28,661 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 60s)
+2026-09-19 21:19:33,664 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 65s)
+2026-09-19 21:19:38,672 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 70s)
+2026-09-19 21:19:43,673 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 75s)
+2026-09-19 21:19:48,678 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 80s)
+2026-09-19 21:19:53,680 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 85s)
+2026-09-19 21:19:58,682 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 90s)
+2026-09-19 21:20:03,689 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 95s)
+2026-09-19 21:20:08,692 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 100s)
+2026-09-19 21:20:13,697 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 105s)
+2026-09-19 21:20:18,525 [mulder-job_1] INFO mulder.server.jobs: Job job_1f1c5700 (run_bulk_extractor) completed
+2026-09-19 21:20:18,527 [mulder-job_1] INFO mulder.server.jobs: [JOB_COMPLETE] run_bulk_extractor|completed|
+2026-09-19 21:20:18,700 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 110s)
+2026-09-19 21:20:19,010 [mulder-job_1] INFO mulder.server.jobs: Job job_6143d6ff (run_bulk_extractor) completed
+2026-09-19 21:20:19,011 [mulder-job_1] INFO mulder.server.jobs: [JOB_COMPLETE] run_bulk_extractor|completed|
+2026-09-19 21:20:23,704 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 115s)
+2026-09-19 21:20:25,398 [mulder-job_3] INFO mulder.server.app: Resource throttle: run_evtx_parser waiting (cpu=100%>=90.0%, waited 0s)
+2026-09-19 21:20:25,405 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 0s)
+2026-09-19 21:20:25,407 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_amcache_parser waiting (cpu=100%>=90.0%, waited 0s)
+2026-09-19 21:20:25,413 [mulder-job_1] INFO mulder.server.app: Resource throttle: parse_browser_history waiting (cpu=100%>=90.0%, waited 0s)
+2026-09-19 21:20:25,415 [AnyIO worker thread] INFO mulder.server.jobs: Submitted batch bg_d3296b15 with 9 jobs: ['run_registry_parser', 'run_evtx_parser', 'run_prefetch_parser', 'run_shimcache_parser', 'run_amcache_parser', 'run_mft_parser', 'parse_browser_history', 'yara_scan_files', 'run_strings']
+2026-09-19 21:20:25,417 [mulder-job_7] INFO mulder.server.tools.yara: YARA rules: /opt/signature-base is not writable by this user; using the installed checkout as-is
+2026-09-19 21:20:25,485 [mulder-job_6] INFO mulder.server.jobs: Job job_524e9c45 (run_mft_parser) completed
+2026-09-19 21:20:25,486 [mulder-job_6] INFO mulder.server.jobs: [JOB_COMPLETE] run_mft_parser|completed|
+2026-09-19 21:20:25,487 [mulder-job_6] INFO mulder.server.app: Resource throttle: run_strings waiting (cpu=100%>=90.0%, waited 0s)
+2026-09-19 21:20:28,705 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 120s)
+2026-09-19 21:20:30,408 [mulder-job_3] INFO mulder.server.app: Resource throttle: run_evtx_parser waiting (cpu=100%>=90.0%, waited 5s)
+2026-09-19 21:20:30,410 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_amcache_parser waiting (cpu=100%>=90.0%, waited 5s)
+2026-09-19 21:20:30,430 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 5s)
+2026-09-19 21:20:30,417 [mulder-job_1] INFO mulder.server.app: Resource throttle: parse_browser_history waiting (cpu=100%>=90.0%, waited 5s)
+2026-09-19 21:20:30,527 [mulder-job_6] INFO mulder.server.app: Resource throttle: run_strings waiting (cpu=100%>=90.0%, waited 5s)
+2026-09-19 21:20:31,039 [mulder-job_4] INFO mulder.extractors.disk: Detected partition at sector 32 (byte offset 16384) in /evidence/cfreds_2015_data_leakage_rm1.E01: ntfs / exfat (0x07)
+2026-09-19 21:20:31,242 [mulder-job_4] WARNING mulder.extractors.disk: ntfs-3g exited 12: NTFS signature is missing. Failed to mount '/tmp/mulder_mount_luatitqh.raw/cfreds_2015_data_leakage_rm1.dd': Invalid argument The device '/tmp/mulder_mount_luatitqh.raw/cfreds_2015_data_leakage_rm1.dd' doesn't seem to have a valid NTFS. Maybe the wrong device is used? Or the whole disk instead of a partition (e.g. /dev/sda, not /dev/sda1)? Or the other way around? (argv: ntfs-3g -o ro,noexec,no_def_opts /tmp/mulder_mount_luatitqh.raw/cfreds_2015_data_leakage_rm1.dd /tmp/mulder_mount_luatitqh)
+2026-09-19 21:20:31,257 [mulder-job_4] WARNING mulder.extractors.disk: fuse2fs exited 2: Mounting read-only. /tmp/mulder_mount_luatitqh.raw/cfreds_2015_data_leakage_rm1.dd: Bad magic number in super-block. Please run e2fsck -fy /tmp/mulder_mount_luatitqh.raw/cfreds_2015_data_leakage_rm1.dd. (argv: fuse2fs -o ro,noexec /tmp/mulder_mount_luatitqh.raw/cfreds_2015_data_leakage_rm1.dd /tmp/mulder_mount_luatitqh)
+2026-09-19 21:20:31,260 [mulder-job_4] ERROR mulder.extractors.disk: No FUSE filesystem driver could mount /evidence/cfreds_2015_data_leakage_rm1.E01 (offset 16384)
+2026-09-19 21:20:31,271 [mulder-job_4] WARNING mulder.server.jobs: Job job_ce748772 (run_registry_parser) returned error: No registry hives found via TSK extraction or mount
+2026-09-19 21:20:31,272 [mulder-job_4] INFO mulder.server.jobs: [JOB_COMPLETE] run_registry_parser|failed|No registry hives found via TSK extraction or mount
+2026-09-19 21:20:33,399 [mulder-job_5] INFO mulder.extractors.disk: Detected partition at sector 32 (byte offset 16384) in /evidence/cfreds_2015_data_leakage_rm1.E01: ntfs / exfat (0x07)
+2026-09-19 21:20:33,567 [mulder-job_5] WARNING mulder.extractors.disk: ntfs-3g exited 12: NTFS signature is missing. Failed to mount '/tmp/mulder_mount_pwl31lvx.raw/cfreds_2015_data_leakage_rm1.dd': Invalid argument The device '/tmp/mulder_mount_pwl31lvx.raw/cfreds_2015_data_leakage_rm1.dd' doesn't seem to have a valid NTFS. Maybe the wrong device is used? Or the whole disk instead of a partition (e.g. /dev/sda, not /dev/sda1)? Or the other way around? (argv: ntfs-3g -o ro,noexec,no_def_opts /tmp/mulder_mount_pwl31lvx.raw/cfreds_2015_data_leakage_rm1.dd /tmp/mulder_mount_pwl31lvx)
+2026-09-19 21:20:33,578 [mulder-job_5] WARNING mulder.extractors.disk: fuse2fs exited 2: Mounting read-only. /tmp/mulder_mount_pwl31lvx.raw/cfreds_2015_data_leakage_rm1.dd: Bad magic number in super-block. Please run e2fsck -fy /tmp/mulder_mount_pwl31lvx.raw/cfreds_2015_data_leakage_rm1.dd. (argv: fuse2fs -o ro,noexec /tmp/mulder_mount_pwl31lvx.raw/cfreds_2015_data_leakage_rm1.dd /tmp/mulder_mount_pwl31lvx)
+2026-09-19 21:20:33,580 [mulder-job_5] ERROR mulder.extractors.disk: No FUSE filesystem driver could mount /evidence/cfreds_2015_data_leakage_rm1.E01 (offset 16384)
+2026-09-19 21:20:33,591 [mulder-job_5] WARNING mulder.server.jobs: Job job_d50a127e (run_prefetch_parser) returned error: No Prefetch files found via TSK extraction or mount
+2026-09-19 21:20:33,593 [mulder-job_5] INFO mulder.server.jobs: [JOB_COMPLETE] run_prefetch_parser|failed|No Prefetch files found via TSK extraction or mount
+2026-09-19 21:20:33,708 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 125s)
+2026-09-19 21:20:35,418 [mulder-job_3] INFO mulder.server.app: Resource throttle: run_evtx_parser waiting (cpu=100%>=90.0%, waited 10s)
+2026-09-19 21:20:35,430 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_amcache_parser waiting (cpu=100%>=90.0%, waited 10s)
+2026-09-19 21:20:35,431 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 10s)
+2026-09-19 21:20:35,433 [mulder-job_1] INFO mulder.server.app: Resource throttle: parse_browser_history waiting (cpu=100%>=90.0%, waited 10s)
+2026-09-19 21:20:35,547 [mulder-job_6] INFO mulder.server.app: Resource throttle: run_strings waiting (cpu=100%>=90.0%, waited 10s)
+2026-09-19 21:20:38,710 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 130s)
+2026-09-19 21:20:38,846 [mulder-job_7] INFO mulder.server.tools.yara: YARA rule validation: 733/746 files valid (individual)
+2026-09-19 21:20:40,420 [mulder-job_3] INFO mulder.server.app: Resource throttle: run_evtx_parser waiting (cpu=100%>=90.0%, waited 15s)
+2026-09-19 21:20:40,434 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_amcache_parser waiting (cpu=100%>=90.0%, waited 15s)
+2026-09-19 21:20:40,438 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 15s)
+2026-09-19 21:20:40,439 [mulder-job_1] INFO mulder.server.app: Resource throttle: parse_browser_history waiting (cpu=100%>=90.0%, waited 15s)
+2026-09-19 21:20:40,549 [mulder-job_6] INFO mulder.server.app: Resource throttle: run_strings waiting (cpu=100%>=90.0%, waited 15s)
+2026-09-19 21:20:41,582 [mulder-job_7] INFO mulder.server.jobs: Job job_061545bd (yara_scan_files) completed
+2026-09-19 21:20:41,583 [mulder-job_7] INFO mulder.server.jobs: [JOB_COMPLETE] yara_scan_files|completed|
+2026-09-19 21:20:43,712 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 135s)
+2026-09-19 21:20:45,422 [mulder-job_3] INFO mulder.server.app: Resource throttle: run_evtx_parser waiting (cpu=100%>=90.0%, waited 20s)
+2026-09-19 21:20:45,436 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_amcache_parser waiting (cpu=100%>=90.0%, waited 20s)
+2026-09-19 21:20:45,439 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 20s)
+2026-09-19 21:20:45,442 [mulder-job_1] INFO mulder.server.app: Resource throttle: parse_browser_history waiting (cpu=100%>=90.0%, waited 20s)
+2026-09-19 21:20:45,552 [mulder-job_6] INFO mulder.server.app: Resource throttle: run_strings waiting (cpu=100%>=90.0%, waited 20s)
+2026-09-19 21:20:48,714 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=97%>=90.0%, waited 140s)
+2026-09-19 21:20:50,425 [mulder-job_3] INFO mulder.server.app: Resource throttle: run_evtx_parser waiting (cpu=95%>=90.0%, waited 25s)
+2026-09-19 21:20:50,438 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_amcache_parser waiting (cpu=95%>=90.0%, waited 25s)
+2026-09-19 21:20:50,443 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=95%>=90.0%, waited 25s)
+2026-09-19 21:20:50,446 [mulder-job_1] INFO mulder.server.app: Resource throttle: parse_browser_history waiting (cpu=95%>=90.0%, waited 25s)
+2026-09-19 21:20:50,554 [mulder-job_6] INFO mulder.server.app: Resource throttle: run_strings waiting (cpu=95%>=90.0%, waited 25s)
+2026-09-19 21:20:53,717 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=94%>=90.0%, waited 145s)
+2026-09-19 21:20:55,427 [mulder-job_3] INFO mulder.server.app: Resource throttle: run_evtx_parser waiting (cpu=94%>=90.0%, waited 30s)
+2026-09-19 21:20:55,440 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_amcache_parser waiting (cpu=94%>=90.0%, waited 30s)
+2026-09-19 21:20:55,446 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=94%>=90.0%, waited 30s)
+2026-09-19 21:20:55,447 [mulder-job_1] INFO mulder.server.app: Resource throttle: parse_browser_history waiting (cpu=94%>=90.0%, waited 30s)
+2026-09-19 21:20:55,556 [mulder-job_6] INFO mulder.server.app: Resource throttle: run_strings waiting (cpu=94%>=90.0%, waited 30s)
+2026-09-19 21:20:58,720 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=98%>=90.0%, waited 150s)
+2026-09-19 21:21:00,429 [mulder-job_3] INFO mulder.server.app: Resource throttle: run_evtx_parser waiting (cpu=100%>=90.0%, waited 35s)
+2026-09-19 21:21:00,442 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_amcache_parser waiting (cpu=100%>=90.0%, waited 35s)
+2026-09-19 21:21:00,451 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 35s)
+2026-09-19 21:21:00,452 [mulder-job_1] INFO mulder.server.app: Resource throttle: parse_browser_history waiting (cpu=100%>=90.0%, waited 35s)
+2026-09-19 21:21:00,558 [mulder-job_6] INFO mulder.server.app: Resource throttle: run_strings waiting (cpu=100%>=90.0%, waited 35s)
+2026-09-19 21:21:03,723 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 155s)
+2026-09-19 21:21:05,431 [mulder-job_3] INFO mulder.server.app: Resource throttle: run_evtx_parser waiting (cpu=100%>=90.0%, waited 40s)
+2026-09-19 21:21:05,444 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_amcache_parser waiting (cpu=100%>=90.0%, waited 40s)
+2026-09-19 21:21:05,452 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 40s)
+2026-09-19 21:21:05,457 [mulder-job_1] INFO mulder.server.app: Resource throttle: parse_browser_history waiting (cpu=100%>=90.0%, waited 40s)
+2026-09-19 21:21:05,560 [mulder-job_6] INFO mulder.server.app: Resource throttle: run_strings waiting (cpu=100%>=90.0%, waited 40s)
+2026-09-19 21:21:08,725 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 160s)
+2026-09-19 21:21:10,433 [mulder-job_3] INFO mulder.server.app: Resource throttle: run_evtx_parser waiting (cpu=100%>=90.0%, waited 45s)
+2026-09-19 21:21:10,446 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_amcache_parser waiting (cpu=100%>=90.0%, waited 45s)
+2026-09-19 21:21:10,454 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 45s)
+2026-09-19 21:21:10,458 [mulder-job_1] INFO mulder.server.app: Resource throttle: parse_browser_history waiting (cpu=100%>=90.0%, waited 45s)
+2026-09-19 21:21:10,562 [mulder-job_6] INFO mulder.server.app: Resource throttle: run_strings waiting (cpu=100%>=90.0%, waited 45s)
+2026-09-19 21:21:13,727 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 165s)
+2026-09-19 21:21:15,435 [mulder-job_3] INFO mulder.server.app: Resource throttle: run_evtx_parser waiting (cpu=100%>=90.0%, waited 50s)
+2026-09-19 21:21:15,448 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_amcache_parser waiting (cpu=100%>=90.0%, waited 50s)
+2026-09-19 21:21:15,456 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 50s)
+2026-09-19 21:21:15,460 [mulder-job_1] INFO mulder.server.app: Resource throttle: parse_browser_history waiting (cpu=100%>=90.0%, waited 50s)
+2026-09-19 21:21:15,564 [mulder-job_6] INFO mulder.server.app: Resource throttle: run_strings waiting (cpu=100%>=90.0%, waited 50s)
+2026-09-19 21:21:18,729 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 170s)
+2026-09-19 21:21:20,440 [mulder-job_3] INFO mulder.server.app: Resource throttle: run_evtx_parser waiting (cpu=100%>=90.0%, waited 55s)
+2026-09-19 21:21:20,456 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_amcache_parser waiting (cpu=100%>=90.0%, waited 55s)
+2026-09-19 21:21:20,458 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 55s)
+2026-09-19 21:21:20,466 [mulder-job_1] INFO mulder.server.app: Resource throttle: parse_browser_history waiting (cpu=100%>=90.0%, waited 55s)
+2026-09-19 21:21:20,566 [mulder-job_6] INFO mulder.server.app: Resource throttle: run_strings waiting (cpu=100%>=90.0%, waited 55s)
+2026-09-19 21:21:23,731 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 175s)
+2026-09-19 21:21:25,446 [mulder-job_3] INFO mulder.server.app: Resource throttle: run_evtx_parser waiting (cpu=100%>=90.0%, waited 60s)
+2026-09-19 21:21:25,457 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_amcache_parser waiting (cpu=100%>=90.0%, waited 60s)
+2026-09-19 21:21:25,459 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 60s)
+2026-09-19 21:21:25,467 [mulder-job_1] INFO mulder.server.app: Resource throttle: parse_browser_history waiting (cpu=100%>=90.0%, waited 60s)
+2026-09-19 21:21:25,568 [mulder-job_6] INFO mulder.server.app: Resource throttle: run_strings waiting (cpu=100%>=90.0%, waited 60s)
+2026-09-19 21:21:28,733 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 180s)
+2026-09-19 21:21:30,448 [mulder-job_3] INFO mulder.server.app: Resource throttle: run_evtx_parser waiting (cpu=100%>=90.0%, waited 65s)
+2026-09-19 21:21:30,459 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_amcache_parser waiting (cpu=100%>=90.0%, waited 65s)
+2026-09-19 21:21:30,463 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 65s)
+2026-09-19 21:21:30,471 [mulder-job_1] INFO mulder.server.app: Resource throttle: parse_browser_history waiting (cpu=100%>=90.0%, waited 65s)
+2026-09-19 21:21:30,570 [mulder-job_6] INFO mulder.server.app: Resource throttle: run_strings waiting (cpu=100%>=90.0%, waited 65s)
+2026-09-19 21:21:33,735 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 185s)
+2026-09-19 21:21:35,451 [mulder-job_3] INFO mulder.server.app: Resource throttle: run_evtx_parser waiting (cpu=100%>=90.0%, waited 70s)
+2026-09-19 21:21:35,461 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_amcache_parser waiting (cpu=100%>=90.0%, waited 70s)
+2026-09-19 21:21:35,464 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 70s)
+2026-09-19 21:21:35,472 [mulder-job_1] INFO mulder.server.app: Resource throttle: parse_browser_history waiting (cpu=100%>=90.0%, waited 70s)
+2026-09-19 21:21:35,572 [mulder-job_6] INFO mulder.server.app: Resource throttle: run_strings waiting (cpu=100%>=90.0%, waited 70s)
+2026-09-19 21:21:38,737 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 190s)
+2026-09-19 21:21:40,453 [mulder-job_3] INFO mulder.server.app: Resource throttle: run_evtx_parser waiting (cpu=100%>=90.0%, waited 75s)
+2026-09-19 21:21:40,463 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_amcache_parser waiting (cpu=100%>=90.0%, waited 75s)
+2026-09-19 21:21:40,471 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 75s)
+2026-09-19 21:21:40,478 [mulder-job_1] INFO mulder.server.app: Resource throttle: parse_browser_history waiting (cpu=100%>=90.0%, waited 75s)
+2026-09-19 21:21:40,574 [mulder-job_6] INFO mulder.server.app: Resource throttle: run_strings waiting (cpu=100%>=90.0%, waited 75s)
+2026-09-19 21:21:43,740 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 195s)
+2026-09-19 21:21:45,455 [mulder-job_3] INFO mulder.server.app: Resource throttle: run_evtx_parser waiting (cpu=100%>=90.0%, waited 80s)
+2026-09-19 21:21:45,465 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_amcache_parser waiting (cpu=100%>=90.0%, waited 80s)
+2026-09-19 21:21:45,472 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 80s)
+2026-09-19 21:21:45,480 [mulder-job_1] INFO mulder.server.app: Resource throttle: parse_browser_history waiting (cpu=100%>=90.0%, waited 80s)
+2026-09-19 21:21:45,576 [mulder-job_6] INFO mulder.server.app: Resource throttle: run_strings waiting (cpu=100%>=90.0%, waited 80s)
+2026-09-19 21:21:48,742 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 200s)
+2026-09-19 21:21:50,457 [mulder-job_3] INFO mulder.server.app: Resource throttle: run_evtx_parser waiting (cpu=100%>=90.0%, waited 85s)
+2026-09-19 21:21:50,467 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_amcache_parser waiting (cpu=100%>=90.0%, waited 85s)
+2026-09-19 21:21:50,476 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 85s)
+2026-09-19 21:21:50,485 [mulder-job_1] INFO mulder.server.app: Resource throttle: parse_browser_history waiting (cpu=100%>=90.0%, waited 85s)
+2026-09-19 21:21:50,578 [mulder-job_6] INFO mulder.server.app: Resource throttle: run_strings waiting (cpu=100%>=90.0%, waited 85s)
+2026-09-19 21:21:53,744 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 205s)
+2026-09-19 21:21:55,461 [mulder-job_3] INFO mulder.server.app: Resource throttle: run_evtx_parser waiting (cpu=100%>=90.0%, waited 90s)
+2026-09-19 21:21:55,470 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_amcache_parser waiting (cpu=100%>=90.0%, waited 90s)
+2026-09-19 21:21:55,477 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 90s)
+2026-09-19 21:21:55,486 [mulder-job_1] INFO mulder.server.app: Resource throttle: parse_browser_history waiting (cpu=100%>=90.0%, waited 90s)
+2026-09-19 21:21:55,582 [mulder-job_6] INFO mulder.server.app: Resource throttle: run_strings waiting (cpu=100%>=90.0%, waited 90s)
+2026-09-19 21:21:58,746 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 210s)
+2026-09-19 21:22:00,463 [mulder-job_3] INFO mulder.server.app: Resource throttle: run_evtx_parser waiting (cpu=100%>=90.0%, waited 95s)
+2026-09-19 21:22:00,472 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_amcache_parser waiting (cpu=100%>=90.0%, waited 95s)
+2026-09-19 21:22:00,482 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 95s)
+2026-09-19 21:22:00,489 [mulder-job_1] INFO mulder.server.app: Resource throttle: parse_browser_history waiting (cpu=100%>=90.0%, waited 95s)
+2026-09-19 21:22:00,584 [mulder-job_6] INFO mulder.server.app: Resource throttle: run_strings waiting (cpu=100%>=90.0%, waited 95s)
+2026-09-19 21:22:03,748 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=100%>=90.0%, waited 215s)
+2026-09-19 21:22:05,469 [mulder-job_3] INFO mulder.server.app: Resource throttle: run_evtx_parser waiting (cpu=99%>=90.0%, waited 100s)
+2026-09-19 21:22:05,474 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_amcache_parser waiting (cpu=99%>=90.0%, waited 100s)
+2026-09-19 21:22:05,483 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=99%>=90.0%, waited 100s)
+2026-09-19 21:22:05,491 [mulder-job_1] INFO mulder.server.app: Resource throttle: parse_browser_history waiting (cpu=99%>=90.0%, waited 100s)
+2026-09-19 21:22:05,586 [mulder-job_6] INFO mulder.server.app: Resource throttle: run_strings waiting (cpu=99%>=90.0%, waited 100s)
+2026-09-19 21:22:08,752 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=96%>=90.0%, waited 220s)
+2026-09-19 21:22:10,471 [mulder-job_3] INFO mulder.server.app: Resource throttle: run_evtx_parser waiting (cpu=95%>=90.0%, waited 105s)
+2026-09-19 21:22:10,476 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_amcache_parser waiting (cpu=95%>=90.0%, waited 105s)
+2026-09-19 21:22:10,485 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=95%>=90.0%, waited 105s)
+2026-09-19 21:22:10,493 [mulder-job_1] INFO mulder.server.app: Resource throttle: parse_browser_history waiting (cpu=95%>=90.0%, waited 105s)
+2026-09-19 21:22:10,588 [mulder-job_6] INFO mulder.server.app: Resource throttle: run_strings waiting (cpu=95%>=90.0%, waited 105s)
+2026-09-19 21:22:13,754 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=95%>=90.0%, waited 225s)
+2026-09-19 21:22:15,473 [mulder-job_3] INFO mulder.server.app: Resource throttle: run_evtx_parser waiting (cpu=95%>=90.0%, waited 110s)
+2026-09-19 21:22:15,477 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_amcache_parser waiting (cpu=95%>=90.0%, waited 110s)
+2026-09-19 21:22:15,487 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=95%>=90.0%, waited 110s)
+2026-09-19 21:22:15,495 [mulder-job_1] INFO mulder.server.app: Resource throttle: parse_browser_history waiting (cpu=95%>=90.0%, waited 110s)
+2026-09-19 21:22:15,590 [mulder-job_6] INFO mulder.server.app: Resource throttle: run_strings waiting (cpu=95%>=90.0%, waited 110s)
+2026-09-19 21:22:18,756 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_fls waiting (cpu=92%>=90.0%, waited 230s)
+2026-09-19 21:22:21,865 [mulder-job_6] INFO mulder.server.jobs: Job job_312dbf03 (run_strings) completed
+2026-09-19 21:22:21,882 [mulder-job_6] INFO mulder.server.jobs: [JOB_COMPLETE] run_strings|completed|
+2026-09-19 21:22:23,096 [mulder-job_2] INFO mulder.extractors.disk: Detected partition at sector 32 (byte offset 16384) in /evidence/cfreds_2015_data_leakage_rm1.E01: ntfs / exfat (0x07)
+2026-09-19 21:22:23,230 [mulder-job_2] WARNING mulder.extractors.disk: ntfs-3g exited 12: NTFS signature is missing. Failed to mount '/tmp/mulder_mount_bfyvw9e5.raw/cfreds_2015_data_leakage_rm1.dd': Invalid argument The device '/tmp/mulder_mount_bfyvw9e5.raw/cfreds_2015_data_leakage_rm1.dd' doesn't seem to have a valid NTFS. Maybe the wrong device is used? Or the whole disk instead of a partition (e.g. /dev/sda, not /dev/sda1)? Or the other way around? (argv: ntfs-3g -o ro,noexec,no_def_opts /tmp/mulder_mount_bfyvw9e5.raw/cfreds_2015_data_leakage_rm1.dd /tmp/mulder_mount_bfyvw9e5)
+2026-09-19 21:22:23,234 [mulder-job_2] WARNING mulder.extractors.disk: fuse2fs exited 2: Mounting read-only. /tmp/mulder_mount_bfyvw9e5.raw/cfreds_2015_data_leakage_rm1.dd: Bad magic number in super-block. Please run e2fsck -fy /tmp/mulder_mount_bfyvw9e5.raw/cfreds_2015_data_leakage_rm1.dd. (argv: fuse2fs -o ro,noexec /tmp/mulder_mount_bfyvw9e5.raw/cfreds_2015_data_leakage_rm1.dd /tmp/mulder_mount_bfyvw9e5)
+2026-09-19 21:22:23,238 [mulder-job_2] ERROR mulder.extractors.disk: No FUSE filesystem driver could mount /evidence/cfreds_2015_data_leakage_rm1.E01 (offset 16384)
+2026-09-19 21:22:23,257 [mulder-job_2] WARNING mulder.server.jobs: Job job_01c352c9 (run_amcache_parser) returned error: Amcache.hve not found via TSK extraction or mount
+2026-09-19 21:22:23,258 [mulder-job_2] INFO mulder.server.jobs: [JOB_COMPLETE] run_amcache_parser|failed|Amcache.hve not found via TSK extraction or mount
+2026-09-19 21:22:23,847 [mulder-job_0] INFO mulder.server.tools.extract.tsk: run_fls: offset 0 failed, retrying with mmls-detected offset 128
+2026-09-19 21:22:25,283 [mulder-job_0] INFO mulder.server.jobs: Job job_80fce0f4 (run_fls) completed
+2026-09-19 21:22:25,284 [mulder-job_0] INFO mulder.server.jobs: [JOB_COMPLETE] run_fls|completed|
+2026-09-19 21:22:27,390 [mulder-job_3] WARNING mulder.server.jobs: Job job_9f13f494 (run_evtx_parser) returned error: No EVTX files found in disk image. Ensure run_fls has been called first, or run run_bulk_extractor which can carve EVTX fragments even when fls fails.
+2026-09-19 21:22:27,402 [mulder-job_3] INFO mulder.server.jobs: [JOB_COMPLETE] run_evtx_parser|failed|No EVTX files found in disk image. Ensure run_fls has been called first, or run run_bulk_extractor which can carve EVTX fragments even when fls fails.
+2026-09-19 21:22:27,852 [mulder-job_0] INFO mulder.extractors.disk: Detected partition at sector 32 (byte offset 16384) in /evidence/cfreds_2015_data_leakage_rm1.E01: ntfs / exfat (0x07)
+2026-09-19 21:22:28,058 [mulder-job_0] WARNING mulder.extractors.disk: ntfs-3g exited 12: NTFS signature is missing. Failed to mount '/tmp/mulder_mount_a1fumfmh.raw/cfreds_2015_data_leakage_rm1.dd': Invalid argument The device '/tmp/mulder_mount_a1fumfmh.raw/cfreds_2015_data_leakage_rm1.dd' doesn't seem to have a valid NTFS. Maybe the wrong device is used? Or the whole disk instead of a partition (e.g. /dev/sda, not /dev/sda1)? Or the other way around? (argv: ntfs-3g -o ro,noexec,no_def_opts /tmp/mulder_mount_a1fumfmh.raw/cfreds_2015_data_leakage_rm1.dd /tmp/mulder_mount_a1fumfmh)
+2026-09-19 21:22:28,128 [mulder-job_0] WARNING mulder.extractors.disk: fuse2fs exited 2: Mounting read-only. /tmp/mulder_mount_a1fumfmh.raw/cfreds_2015_data_leakage_rm1.dd: Bad magic number in super-block. Please run e2fsck -fy /tmp/mulder_mount_a1fumfmh.raw/cfreds_2015_data_leakage_rm1.dd. (argv: fuse2fs -o ro,noexec /tmp/mulder_mount_a1fumfmh.raw/cfreds_2015_data_leakage_rm1.dd /tmp/mulder_mount_a1fumfmh)
+2026-09-19 21:22:28,141 [mulder-job_0] ERROR mulder.extractors.disk: No FUSE filesystem driver could mount /evidence/cfreds_2015_data_leakage_rm1.E01 (offset 16384)
+2026-09-19 21:22:28,280 [mulder-job_0] WARNING mulder.server.jobs: Job job_d291b29e (run_shimcache_parser) returned error: SYSTEM hive not found via TSK extraction or mount
+2026-09-19 21:22:28,292 [mulder-job_0] INFO mulder.server.jobs: [JOB_COMPLETE] run_shimcache_parser|failed|SYSTEM hive not found via TSK extraction or mount
+2026-09-19 21:22:32,728 [mulder-job_1] INFO mulder.server.jobs: Job job_4946c523 (parse_browser_history) completed
+2026-09-19 21:22:32,729 [mulder-job_1] INFO mulder.server.jobs: [JOB_COMPLETE] parse_browser_history|completed|
+2026-09-19 21:22:32,859 [mulder-job_3] INFO mulder.server.app: Resource throttle: run_registry_parser waiting (cpu=98%>=90.0%, waited 0s)
+2026-09-19 21:22:32,861 [mulder-job_2] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=98%>=90.0%, waited 0s)
+2026-09-19 21:22:32,862 [AnyIO worker thread] INFO mulder.server.jobs: Submitted batch bg_bdc32d3c with 10 jobs: ['run_registry_parser', 'query_registry_value', 'query_registry_value', 'query_registry_value', 'run_evtx_parser', 'run_prefetch_parser', 'run_amcache_parser', 'run_shimcache_parser', 'run_mft_parser', 'parse_browser_history']
+2026-09-19 21:22:32,862 [mulder-job_5] INFO mulder.server.app: Resource throttle: run_prefetch_parser waiting (cpu=100%>=90.0%, waited 0s)
+2026-09-19 21:22:32,862 [mulder-job_1] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=98%>=90.0%, waited 0s)
+2026-09-19 21:22:35,784 [mulder-job_6] INFO mulder.extractors.disk: Detected partition at sector 128 (byte offset 65536) in /evidence/cfreds_2015_data_leakage_rm2.E01: win95 fat32 (0x0b)
+2026-09-19 21:22:36,028 [mulder-job_6] WARNING mulder.extractors.disk: ntfs-3g exited 12: NTFS signature is missing. Failed to mount '/tmp/mulder_mount_xf608_ai.raw/cfreds_2015_data_leakage_rm2.dd': Invalid argument The device '/tmp/mulder_mount_xf608_ai.raw/cfreds_2015_data_leakage_rm2.dd' doesn't seem to have a valid NTFS. Maybe the wrong device is used? Or the whole disk instead of a partition (e.g. /dev/sda, not /dev/sda1)? Or the other way around? (argv: ntfs-3g -o ro,noexec,no_def_opts /tmp/mulder_mount_xf608_ai.raw/cfreds_2015_data_leakage_rm2.dd /tmp/mulder_mount_xf608_ai)
+2026-09-19 21:22:36,128 [mulder-job_6] WARNING mulder.extractors.disk: fuse2fs exited 2: Mounting read-only. /tmp/mulder_mount_xf608_ai.raw/cfreds_2015_data_leakage_rm2.dd: Bad magic number in super-block. Please run e2fsck -fy /tmp/mulder_mount_xf608_ai.raw/cfreds_2015_data_leakage_rm2.dd. (argv: fuse2fs -o ro,noexec /tmp/mulder_mount_xf608_ai.raw/cfreds_2015_data_leakage_rm2.dd /tmp/mulder_mount_xf608_ai)
+2026-09-19 21:22:36,130 [mulder-job_6] ERROR mulder.extractors.disk: No FUSE filesystem driver could mount /evidence/cfreds_2015_data_leakage_rm2.E01 (offset 65536)
+2026-09-19 21:22:36,204 [mulder-job_6] WARNING mulder.server.jobs: Job job_07e0f520 (run_amcache_parser) returned error: Amcache.hve not found via TSK extraction or mount
+2026-09-19 21:22:36,206 [mulder-job_6] INFO mulder.server.jobs: [JOB_COMPLETE] run_amcache_parser|failed|Amcache.hve not found via TSK extraction or mount
+2026-09-19 21:22:36,257 [mulder-job_6] INFO mulder.server.jobs: Job job_db9f89db (run_mft_parser) completed
+2026-09-19 21:22:36,259 [mulder-job_6] INFO mulder.server.jobs: [JOB_COMPLETE] run_mft_parser|completed|
+2026-09-19 21:22:38,486 [mulder-job_4] WARNING mulder.server.jobs: Job job_132db8d1 (query_registry_value) returned error: Could not locate software hive in image /evidence/cfreds_2015_data_leakage_rm2.E01. Ensure run_fls has been executed on this image.
+2026-09-19 21:22:38,493 [mulder-job_4] INFO mulder.server.jobs: [JOB_COMPLETE] query_registry_value|failed|Could not locate software hive in image /evidence/cfreds_2015_data_leakage_rm2.E01. Ensure run_fls has been executed on this image.
+2026-09-19 21:22:40,976 [mulder-job_0] WARNING mulder.server.jobs: Job job_d8b72a37 (run_evtx_parser) returned error: No EVTX files found in disk image. Ensure run_fls has been called first, or run run_bulk_extractor which can carve EVTX fragments even when fls fails.
+2026-09-19 21:22:40,978 [mulder-job_0] INFO mulder.server.jobs: [JOB_COMPLETE] run_evtx_parser|failed|No EVTX files found in disk image. Ensure run_fls has been called first, or run run_bulk_extractor which can carve EVTX fragments even when fls fails.
+2026-09-19 21:22:40,997 [mulder-job_7] INFO mulder.extractors.disk: Detected partition at sector 128 (byte offset 65536) in /evidence/cfreds_2015_data_leakage_rm2.E01: win95 fat32 (0x0b)
+2026-09-19 21:22:41,050 [mulder-job_7] WARNING mulder.extractors.disk: ntfs-3g exited 12: NTFS signature is missing. Failed to mount '/tmp/mulder_mount_7cexwdhs.raw/cfreds_2015_data_leakage_rm2.dd': Invalid argument The device '/tmp/mulder_mount_7cexwdhs.raw/cfreds_2015_data_leakage_rm2.dd' doesn't seem to have a valid NTFS. Maybe the wrong device is used? Or the whole disk instead of a partition (e.g. /dev/sda, not /dev/sda1)? Or the other way around? (argv: ntfs-3g -o ro,noexec,no_def_opts /tmp/mulder_mount_7cexwdhs.raw/cfreds_2015_data_leakage_rm2.dd /tmp/mulder_mount_7cexwdhs)
+2026-09-19 21:22:41,054 [mulder-job_7] WARNING mulder.extractors.disk: fuse2fs exited 2: Mounting read-only. /tmp/mulder_mount_7cexwdhs.raw/cfreds_2015_data_leakage_rm2.dd: Bad magic number in super-block. Please run e2fsck -fy /tmp/mulder_mount_7cexwdhs.raw/cfreds_2015_data_leakage_rm2.dd. (argv: fuse2fs -o ro,noexec /tmp/mulder_mount_7cexwdhs.raw/cfreds_2015_data_leakage_rm2.dd /tmp/mulder_mount_7cexwdhs)
+2026-09-19 21:22:41,055 [mulder-job_7] ERROR mulder.extractors.disk: No FUSE filesystem driver could mount /evidence/cfreds_2015_data_leakage_rm2.E01 (offset 65536)
+2026-09-19 21:22:41,061 [mulder-job_7] WARNING mulder.server.jobs: Job job_e14f0025 (run_shimcache_parser) returned error: SYSTEM hive not found via TSK extraction or mount
+2026-09-19 21:22:41,062 [mulder-job_7] INFO mulder.server.jobs: [JOB_COMPLETE] run_shimcache_parser|failed|SYSTEM hive not found via TSK extraction or mount
+2026-09-19 21:22:44,471 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=97%>=90.0%, waited 0s)
+2026-09-19 21:22:44,473 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 0s)
+2026-09-19 21:22:49,859 [mulder-job_2] WARNING mulder.server.jobs: Job job_cc3e0034 (query_registry_value) returned error: Could not locate system hive in image /evidence/cfreds_2015_data_leakage_rm2.E01. Ensure run_fls has been executed on this image.
+2026-09-19 21:22:49,861 [mulder-job_2] INFO mulder.server.jobs: [JOB_COMPLETE] query_registry_value|failed|Could not locate system hive in image /evidence/cfreds_2015_data_leakage_rm2.E01. Ensure run_fls has been executed on this image.
+2026-09-19 21:22:50,526 [mulder-job_1] WARNING mulder.server.jobs: Job job_350c9e3e (query_registry_value) returned error: Could not locate system hive in image /evidence/cfreds_2015_data_leakage_rm2.E01. Ensure run_fls has been executed on this image.
+2026-09-19 21:22:50,532 [mulder-job_1] INFO mulder.server.jobs: [JOB_COMPLETE] query_registry_value|failed|Could not locate system hive in image /evidence/cfreds_2015_data_leakage_rm2.E01. Ensure run_fls has been executed on this image.
+2026-09-19 21:22:50,931 [mulder-job_3] INFO mulder.extractors.disk: Detected partition at sector 128 (byte offset 65536) in /evidence/cfreds_2015_data_leakage_rm2.E01: win95 fat32 (0x0b)
+2026-09-19 21:22:51,081 [mulder-job_3] WARNING mulder.extractors.disk: ntfs-3g exited 12: NTFS signature is missing. Failed to mount '/tmp/mulder_mount_wc94q6m8.raw/cfreds_2015_data_leakage_rm2.dd': Invalid argument The device '/tmp/mulder_mount_wc94q6m8.raw/cfreds_2015_data_leakage_rm2.dd' doesn't seem to have a valid NTFS. Maybe the wrong device is used? Or the whole disk instead of a partition (e.g. /dev/sda, not /dev/sda1)? Or the other way around? (argv: ntfs-3g -o ro,noexec,no_def_opts /tmp/mulder_mount_wc94q6m8.raw/cfreds_2015_data_leakage_rm2.dd /tmp/mulder_mount_wc94q6m8)
+2026-09-19 21:22:51,166 [mulder-job_3] WARNING mulder.extractors.disk: fuse2fs exited 2: Mounting read-only. /tmp/mulder_mount_wc94q6m8.raw/cfreds_2015_data_leakage_rm2.dd: Bad magic number in super-block. Please run e2fsck -fy /tmp/mulder_mount_wc94q6m8.raw/cfreds_2015_data_leakage_rm2.dd. (argv: fuse2fs -o ro,noexec /tmp/mulder_mount_wc94q6m8.raw/cfreds_2015_data_leakage_rm2.dd /tmp/mulder_mount_wc94q6m8)
+2026-09-19 21:22:51,168 [mulder-job_3] ERROR mulder.extractors.disk: No FUSE filesystem driver could mount /evidence/cfreds_2015_data_leakage_rm2.E01 (offset 65536)
+2026-09-19 21:22:51,395 [mulder-job_3] WARNING mulder.server.jobs: Job job_3bdab581 (run_registry_parser) returned error: No registry hives found via TSK extraction or mount
+2026-09-19 21:22:51,402 [mulder-job_3] INFO mulder.server.jobs: [JOB_COMPLETE] run_registry_parser|failed|No registry hives found via TSK extraction or mount
+2026-09-19 21:22:52,934 [AnyIO worker thread] INFO mulder.server.jobs: Submitted batch bg_3429c524 with 3 jobs: ['index_app_files', 'index_app_files', 'analyze_disk_pcaps']
+2026-09-19 21:22:52,936 [mulder-job_4] INFO mulder.server.app: Resource throttle: index_app_files waiting (cpu=91%>=90.0%, waited 0s)
+2026-09-19 21:22:52,937 [mulder-job_7] INFO mulder.server.app: Resource throttle: analyze_disk_pcaps waiting (cpu=91%>=90.0%, waited 0s)
+2026-09-19 21:22:52,939 [mulder-job_5] INFO mulder.server.app: Resource throttle: index_app_files waiting (cpu=91%>=90.0%, waited 0s)
+2026-09-19 21:22:54,056 [mulder-job_5] INFO mulder.extractors.disk: Detected partition at sector 128 (byte offset 65536) in /evidence/cfreds_2015_data_leakage_rm2.E01: win95 fat32 (0x0b)
+2026-09-19 21:22:54,110 [mulder-job_5] WARNING mulder.extractors.disk: ntfs-3g exited 12: NTFS signature is missing. Failed to mount '/tmp/mulder_mount__7c4z4rs.raw/cfreds_2015_data_leakage_rm2.dd': Invalid argument The device '/tmp/mulder_mount__7c4z4rs.raw/cfreds_2015_data_leakage_rm2.dd' doesn't seem to have a valid NTFS. Maybe the wrong device is used? Or the whole disk instead of a partition (e.g. /dev/sda, not /dev/sda1)? Or the other way around? (argv: ntfs-3g -o ro,noexec,no_def_opts /tmp/mulder_mount__7c4z4rs.raw/cfreds_2015_data_leakage_rm2.dd /tmp/mulder_mount__7c4z4rs)
+2026-09-19 21:22:54,113 [mulder-job_5] WARNING mulder.extractors.disk: fuse2fs exited 2: Mounting read-only. /tmp/mulder_mount__7c4z4rs.raw/cfreds_2015_data_leakage_rm2.dd: Bad magic number in super-block. Please run e2fsck -fy /tmp/mulder_mount__7c4z4rs.raw/cfreds_2015_data_leakage_rm2.dd. (argv: fuse2fs -o ro,noexec /tmp/mulder_mount__7c4z4rs.raw/cfreds_2015_data_leakage_rm2.dd /tmp/mulder_mount__7c4z4rs)
+2026-09-19 21:22:54,114 [mulder-job_5] ERROR mulder.extractors.disk: No FUSE filesystem driver could mount /evidence/cfreds_2015_data_leakage_rm2.E01 (offset 65536)
+2026-09-19 21:22:54,119 [mulder-job_5] WARNING mulder.server.jobs: Job job_2b99c47b (run_prefetch_parser) returned error: No Prefetch files found via TSK extraction or mount
+2026-09-19 21:22:54,120 [mulder-job_5] INFO mulder.server.jobs: [JOB_COMPLETE] run_prefetch_parser|failed|No Prefetch files found via TSK extraction or mount
+2026-09-19 21:22:54,277 [mulder-job_6] INFO mulder.server.jobs: Job job_e569f465 (parse_browser_history) completed
+2026-09-19 21:22:54,278 [mulder-job_6] INFO mulder.server.jobs: [JOB_COMPLETE] parse_browser_history|completed|
+2026-09-19 21:22:59,691 [mulder-job_7] INFO mulder.server.jobs: Job job_748e587d (analyze_disk_pcaps) completed
+2026-09-19 21:22:59,697 [mulder-job_7] INFO mulder.server.jobs: [JOB_COMPLETE] analyze_disk_pcaps|completed|
+2026-09-19 21:23:00,845 [mulder-job_4] INFO mulder.server.jobs: Job job_504911fb (index_app_files) completed
+2026-09-19 21:23:00,848 [mulder-job_4] INFO mulder.server.jobs: [JOB_COMPLETE] index_app_files|completed|
+2026-09-19 21:23:04,693 [mulder-job_5] INFO mulder.server.jobs: Job job_9235c431 (index_app_files) completed
+2026-09-19 21:23:04,694 [mulder-job_5] INFO mulder.server.jobs: [JOB_COMPLETE] index_app_files|completed|
+2026-09-19 21:23:07,584 [MainThread] INFO mulder.server.app: Resource throttle: run_registry_parser waiting (cpu=91%>=90.0%, waited 0s)
+2026-09-19 21:23:07,591 [AnyIO worker thread] INFO mulder.server.tools.yara: YARA rules: /opt/signature-base is not writable by this user; using the installed checkout as-is
+2026-09-19 21:23:07,593 [AnyIO worker thread] INFO mulder.server.tools.hayabusa: Hayabusa: no prior EVTX extraction found; extracting inline from /evidence/cfreds_2015_data_leakage_rm2.E01
+2026-09-19 21:23:09,106 [mulder-job_2] INFO mulder.server.jobs: Job job_ea4a6adb (run_bulk_extractor) completed
+2026-09-19 21:23:09,107 [mulder-job_2] INFO mulder.server.jobs: [JOB_COMPLETE] run_bulk_extractor|completed|
+2026-09-19 21:23:10,849 [mulder-job_3] INFO mulder.server.jobs: Job job_0aa33ce4 (detect_masquerading) completed
+2026-09-19 21:23:10,850 [mulder-job_3] INFO mulder.server.jobs: [JOB_COMPLETE] detect_masquerading|completed|
+2026-09-19 21:23:13,133 [AnyIO worker thread] INFO mulder.server.tools.yara: YARA rule validation: 733/746 files valid (individual)
+2026-09-19 21:23:15,434 [AnyIO worker thread] INFO mulder.extractors.disk: Detected partition at sector 128 (byte offset 65536) in /evidence/cfreds_2015_data_leakage_rm2.E01: win95 fat32 (0x0b)
+2026-09-19 21:23:15,484 [AnyIO worker thread] WARNING mulder.extractors.disk: ntfs-3g exited 12: NTFS signature is missing. Failed to mount '/tmp/mulder_mount_668gllhv.raw/cfreds_2015_data_leakage_rm2.dd': Invalid argument The device '/tmp/mulder_mount_668gllhv.raw/cfreds_2015_data_leakage_rm2.dd' doesn't seem to have a valid NTFS. Maybe the wrong device is used? Or the whole disk instead of a partition (e.g. /dev/sda, not /dev/sda1)? Or the other way around? (argv: ntfs-3g -o ro,noexec,no_def_opts /tmp/mulder_mount_668gllhv.raw/cfreds_2015_data_leakage_rm2.dd /tmp/mulder_mount_668gllhv)
+2026-09-19 21:23:15,489 [AnyIO worker thread] WARNING mulder.extractors.disk: fuse2fs exited 2: Mounting read-only. /tmp/mulder_mount_668gllhv.raw/cfreds_2015_data_leakage_rm2.dd: Bad magic number in super-block. Please run e2fsck -fy /tmp/mulder_mount_668gllhv.raw/cfreds_2015_data_leakage_rm2.dd. (argv: fuse2fs -o ro,noexec /tmp/mulder_mount_668gllhv.raw/cfreds_2015_data_leakage_rm2.dd /tmp/mulder_mount_668gllhv)
+2026-09-19 21:23:15,491 [AnyIO worker thread] ERROR mulder.extractors.disk: No FUSE filesystem driver could mount /evidence/cfreds_2015_data_leakage_rm2.E01 (offset 65536)
+2026-09-19 21:23:17,079 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 21:23:18,267 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 21:23:18,295 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 21:23:22,325 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 21:23:24,112 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 21:23:24,138 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 21:23:25,609 [AnyIO worker thread] WARNING mulder.server.tools.jobs: Rejecting run_hindsight in batch: unexpected parameter(s) 'image_path'; missing required parameter(s) 'profile_path'; accepted: profile_path, browser
+2026-09-19 21:23:25,610 [AnyIO worker thread] WARNING mulder.server.tools.jobs: Rejecting parse_browser_history in batch: unexpected parameter(s) 'image_path'; accepted: 
+2026-09-19 21:23:25,610 [AnyIO worker thread] WARNING mulder.server.tools.jobs: Rejecting yara_scan_files in batch: unexpected parameter(s) 'image_path'; missing required parameter(s) 'target_path'; accepted: target_path, rules, ruleset
+2026-09-19 21:23:25,611 [AnyIO worker thread] WARNING mulder.server.tools.jobs: Rejecting run_exiftool in batch: unexpected parameter(s) 'image_path'; accepted: target_path, file_path
+2026-09-19 21:23:25,617 [AnyIO worker thread] INFO mulder.server.jobs: Submitted batch bg_b1601e98 with 8 jobs: ['run_registry_parser', 'query_registry_value', 'query_registry_value', 'run_evtx_parser', 'run_prefetch_parser', 'run_shimcache_parser', 'run_amcache_parser', 'run_mft_parser']
+2026-09-19 21:23:27,851 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 21:23:28,933 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 21:23:28,965 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 21:23:30,069 [AnyIO worker thread] INFO mulder.server.jobs: Submitted batch bg_2e242918 with 4 jobs: ['run_hindsight', 'parse_browser_history', 'yara_scan_files', 'run_exiftool']
+2026-09-19 21:23:30,942 [mulder-job_3] INFO mulder.extractors.disk: Detected partition at sector 2048 (byte offset 1048576) in /evidence/cfreds_2015_data_leakage_pc.E01: ntfs / exfat (0x07)
+2026-09-19 21:23:31,112 [mulder-job_3] WARNING mulder.server.jobs: Job job_a11e7963 (run_amcache_parser) returned error: Amcache.hve not found
+2026-09-19 21:23:31,113 [mulder-job_3] INFO mulder.server.jobs: [JOB_COMPLETE] run_amcache_parser|failed|Amcache.hve not found
+2026-09-19 21:23:31,116 [mulder-job_3] WARNING mulder.server.jobs: Job job_a434d8af (run_hindsight) returned error: Profile directory not found: /evidence/cfreds_2015_data_leakage_pc.E01
+2026-09-19 21:23:31,118 [mulder-job_3] INFO mulder.server.jobs: [JOB_COMPLETE] run_hindsight|failed|Profile directory not found: /evidence/cfreds_2015_data_leakage_pc.E01
+2026-09-19 21:23:33,401 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 21:23:36,891 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 21:23:36,918 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 21:23:43,245 [mulder-job_7] INFO mulder.server.jobs: Job job_1e4e2961 (run_mft_parser) completed
+2026-09-19 21:23:43,246 [mulder-job_7] INFO mulder.server.jobs: [JOB_COMPLETE] run_mft_parser|completed|
+2026-09-19 21:23:43,248 [mulder-job_5] INFO mulder.server.jobs: Job job_b2be6db8 (run_evtx_parser) completed
+2026-09-19 21:23:43,250 [mulder-job_7] INFO mulder.server.tools.yara: YARA rules: /opt/signature-base is not writable by this user; using the installed checkout as-is
+2026-09-19 21:23:43,251 [mulder-job_5] INFO mulder.server.jobs: [JOB_COMPLETE] run_evtx_parser|completed|
+2026-09-19 21:23:43,278 [mulder-job_0] INFO mulder.server.jobs: Job job_491941d0 (query_registry_value) completed
+2026-09-19 21:23:43,280 [mulder-job_0] INFO mulder.server.jobs: [JOB_COMPLETE] query_registry_value|completed|
+2026-09-19 21:23:43,290 [mulder-job_1] INFO mulder.server.jobs: Job job_d3fd2e57 (query_registry_value) completed
+2026-09-19 21:23:43,291 [mulder-job_1] INFO mulder.server.jobs: [JOB_COMPLETE] query_registry_value|completed|
+2026-09-19 21:23:43,300 [mulder-job_6] INFO mulder.server.jobs: Job job_b92ad454 (run_shimcache_parser) completed
+2026-09-19 21:23:43,301 [mulder-job_6] INFO mulder.server.jobs: [JOB_COMPLETE] run_shimcache_parser|completed|
+2026-09-19 21:23:43,316 [mulder-job_5] WARNING mulder.server.jobs: Job job_abf1cd7f (run_exiftool) returned error: exiftool exited 1 and produced no output: Error: File not found - /Users
+2026-09-19 21:23:43,318 [mulder-job_5] INFO mulder.server.jobs: [JOB_COMPLETE] run_exiftool|failed|exiftool exited 1 and produced no output: Error: File not found - /Users
+2026-09-19 21:23:43,486 [mulder-job_3] INFO mulder.server.jobs: Job job_7d698a62 (parse_browser_history) completed
+2026-09-19 21:23:43,487 [mulder-job_3] INFO mulder.server.jobs: [JOB_COMPLETE] parse_browser_history|completed|
+2026-09-19 21:23:47,201 [mulder-job_2] WARNING mulder.server.jobs: Job job_b30906a4 (run_prefetch_parser) returned error: PECmd.dll produced no CSV output
+2026-09-19 21:23:47,202 [mulder-job_2] INFO mulder.server.jobs: [JOB_COMPLETE] run_prefetch_parser|failed|PECmd.dll produced no CSV output
+2026-09-19 21:23:48,837 [mulder-job_7] INFO mulder.server.tools.yara: YARA rule validation: 733/746 files valid (individual)
+2026-09-19 21:24:04,309 [mulder-job_7] INFO mulder.server.jobs: Job job_6d36ecc0 (yara_scan_files) completed
+2026-09-19 21:24:04,310 [mulder-job_7] INFO mulder.server.jobs: [JOB_COMPLETE] yara_scan_files|completed|
+2026-09-19 21:24:06,173 [mulder-job_4] INFO mulder.server.jobs: Job job_290d0e67 (run_registry_parser) completed
+2026-09-19 21:24:06,174 [mulder-job_4] INFO mulder.server.jobs: [JOB_COMPLETE] run_registry_parser|completed|
+2026-09-19 21:24:09,447 [AnyIO worker thread] INFO mulder.server.jobs: Submitted batch bg_1fc3d201 with 1 jobs: ['run_hayabusa']
+2026-09-19 21:24:21,047 [mulder-job_0] INFO mulder.server.jobs: Job job_d5a062c4 (run_hayabusa) completed
+2026-09-19 21:24:21,048 [mulder-job_0] INFO mulder.server.jobs: [JOB_COMPLETE] run_hayabusa|completed|
+2026-09-19 21:24:29,182 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 21:24:30,145 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 21:24:30,172 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 21:24:34,365 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 21:24:35,339 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 21:24:35,366 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 21:31:23,457 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 21:31:26,457 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 21:31:26,486 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 21:31:35,775 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 21:31:36,958 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 21:31:36,985 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 21:31:47,832 [AnyIO worker thread] INFO mulder.server.jobs: Submitted batch bg_5e1eb97c with 4 jobs: ['run_optical_listing', 'run_bulk_extractor', 'detect_masquerading', 'yara_scan_files']
+2026-09-19 21:31:47,836 [mulder-job_3] INFO mulder.server.tools.yara: YARA rules: /opt/signature-base is not writable by this user; using the installed checkout as-is
+2026-09-19 21:31:47,886 [mulder-job_2] WARNING mulder.server.jobs: Job job_1bd08104 (detect_masquerading) returned error: fls could not open any partition: offset 0 (fls exited 1: Possible encryption detected (High entropy (7.65)))
+2026-09-19 21:31:47,887 [mulder-job_2] INFO mulder.server.jobs: [JOB_COMPLETE] detect_masquerading|failed|fls could not open any partition: offset 0 (fls exited 1: Possible encryption detected (High entropy (7.65)))
+2026-09-19 21:31:47,912 [mulder-job_0] INFO mulder.server.jobs: Job job_9ccba195 (run_optical_listing) completed
+2026-09-19 21:31:47,913 [mulder-job_0] INFO mulder.server.jobs: [JOB_COMPLETE] run_optical_listing|completed|
+2026-09-19 21:31:52,305 [mulder-job_3] INFO mulder.server.tools.yara: YARA rule validation: 733/746 files valid (individual)
+2026-09-19 21:31:53,794 [mulder-job_3] INFO mulder.server.jobs: Job job_ccbea84f (yara_scan_files) completed
+2026-09-19 21:31:53,795 [mulder-job_3] INFO mulder.server.jobs: [JOB_COMPLETE] yara_scan_files|completed|
+2026-09-19 21:31:53,967 [mulder-job_1] INFO mulder.server.jobs: Job job_3835b8aa (run_bulk_extractor) completed
+2026-09-19 21:31:53,968 [mulder-job_1] INFO mulder.server.jobs: [JOB_COMPLETE] run_bulk_extractor|completed|
+2026-09-19 21:32:51,081 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 21:32:52,212 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 21:32:52,241 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 21:33:00,762 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 21:33:02,587 [MainThread] ERROR mcp.server.mcpserver.server: Tool 'get_investigation_summary' raised an unexpected exception
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 176, in run
+    result = await self.fn_metadata.call_fn(self.fn, self.is_async, validated, pass_directly)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/utilities/func_metadata.py", line 163, in call_fn
+    return await fn(**kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 70, in wrapper
+    return await anyio.to_thread.run_sync(call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/to_thread.py", line 65, in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 2706, in run_sync_in_worker_thread
+    return await future
+           ^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 1100, in run
+    result = context.run(func, *args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/tools/review.py", line 373, in get_investigation_summary
+    ctx = get_ctx()
+          ^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 254, in get_ctx
+    raise RuntimeError("No case loaded. Call scan_evidence or open_case first.")
+RuntimeError: No case loaded. Call scan_evidence or open_case first.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 433, in _handle_call_tool
+    return await self.call_tool(params.name, params.arguments or {}, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 539, in call_tool
+    return await self._tool_manager.call_tool(name, arguments, context, convert_result=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/tool_manager.py", line 87, in call_tool
+    return await tool.run(arguments, context, convert_result=convert_result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 210, in run
+    raise UnexpectedToolError(f"Error executing tool {self.name}") from exc
+mcp.server.mcpserver.exceptions.UnexpectedToolError: Error executing tool get_investigation_summary
+2026-09-19 21:33:03,012 [MainThread] ERROR mcp.server.mcpserver.server: Tool 'get_findings' raised an unexpected exception
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 176, in run
+    result = await self.fn_metadata.call_fn(self.fn, self.is_async, validated, pass_directly)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/utilities/func_metadata.py", line 163, in call_fn
+    return await fn(**kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 70, in wrapper
+    return await anyio.to_thread.run_sync(call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/to_thread.py", line 65, in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 2706, in run_sync_in_worker_thread
+    return await future
+           ^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 1100, in run
+    result = context.run(func, *args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/tools/findings.py", line 593, in get_findings
+    ctx = get_ctx()
+          ^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 254, in get_ctx
+    raise RuntimeError("No case loaded. Call scan_evidence or open_case first.")
+RuntimeError: No case loaded. Call scan_evidence or open_case first.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 433, in _handle_call_tool
+    return await self.call_tool(params.name, params.arguments or {}, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 539, in call_tool
+    return await self._tool_manager.call_tool(name, arguments, context, convert_result=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/tool_manager.py", line 87, in call_tool
+    return await tool.run(arguments, context, convert_result=convert_result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 210, in run
+    raise UnexpectedToolError(f"Error executing tool {self.name}") from exc
+mcp.server.mcpserver.exceptions.UnexpectedToolError: Error executing tool get_findings
+2026-09-19 21:33:04,257 [MainThread] ERROR mcp.server.mcpserver.server: Tool 'list_sources' raised an unexpected exception
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 176, in run
+    result = await self.fn_metadata.call_fn(self.fn, self.is_async, validated, pass_directly)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/utilities/func_metadata.py", line 163, in call_fn
+    return await fn(**kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 70, in wrapper
+    return await anyio.to_thread.run_sync(call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/to_thread.py", line 65, in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 2706, in run_sync_in_worker_thread
+    return await future
+           ^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 1100, in run
+    result = context.run(func, *args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/helpers.py", line 190, in wrapper
+    ctx = get_ctx()
+          ^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 254, in get_ctx
+    raise RuntimeError("No case loaded. Call scan_evidence or open_case first.")
+RuntimeError: No case loaded. Call scan_evidence or open_case first.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 433, in _handle_call_tool
+    return await self.call_tool(params.name, params.arguments or {}, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 539, in call_tool
+    return await self._tool_manager.call_tool(name, arguments, context, convert_result=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/tool_manager.py", line 87, in call_tool
+    return await tool.run(arguments, context, convert_result=convert_result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 210, in run
+    raise UnexpectedToolError(f"Error executing tool {self.name}") from exc
+mcp.server.mcpserver.exceptions.UnexpectedToolError: Error executing tool list_sources
+2026-09-19 21:33:06,150 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 21:33:06,177 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 21:37:35,298 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 21:37:38,852 [MainThread] ERROR mcp.server.mcpserver.server: Tool 'get_investigation_summary' raised an unexpected exception
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 176, in run
+    result = await self.fn_metadata.call_fn(self.fn, self.is_async, validated, pass_directly)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/utilities/func_metadata.py", line 163, in call_fn
+    return await fn(**kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 70, in wrapper
+    return await anyio.to_thread.run_sync(call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/to_thread.py", line 65, in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 2706, in run_sync_in_worker_thread
+    return await future
+           ^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 1100, in run
+    result = context.run(func, *args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/tools/review.py", line 373, in get_investigation_summary
+    ctx = get_ctx()
+          ^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 254, in get_ctx
+    raise RuntimeError("No case loaded. Call scan_evidence or open_case first.")
+RuntimeError: No case loaded. Call scan_evidence or open_case first.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 433, in _handle_call_tool
+    return await self.call_tool(params.name, params.arguments or {}, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 539, in call_tool
+    return await self._tool_manager.call_tool(name, arguments, context, convert_result=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/tool_manager.py", line 87, in call_tool
+    return await tool.run(arguments, context, convert_result=convert_result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 210, in run
+    raise UnexpectedToolError(f"Error executing tool {self.name}") from exc
+mcp.server.mcpserver.exceptions.UnexpectedToolError: Error executing tool get_investigation_summary
+2026-09-19 21:37:40,154 [MainThread] ERROR mcp.server.mcpserver.server: Tool 'list_sources' raised an unexpected exception
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 176, in run
+    result = await self.fn_metadata.call_fn(self.fn, self.is_async, validated, pass_directly)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/utilities/func_metadata.py", line 163, in call_fn
+    return await fn(**kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 70, in wrapper
+    return await anyio.to_thread.run_sync(call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/to_thread.py", line 65, in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 2706, in run_sync_in_worker_thread
+    return await future
+           ^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 1100, in run
+    result = context.run(func, *args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/helpers.py", line 190, in wrapper
+    ctx = get_ctx()
+          ^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 254, in get_ctx
+    raise RuntimeError("No case loaded. Call scan_evidence or open_case first.")
+RuntimeError: No case loaded. Call scan_evidence or open_case first.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 433, in _handle_call_tool
+    return await self.call_tool(params.name, params.arguments or {}, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 539, in call_tool
+    return await self._tool_manager.call_tool(name, arguments, context, convert_result=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/tool_manager.py", line 87, in call_tool
+    return await tool.run(arguments, context, convert_result=convert_result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 210, in run
+    raise UnexpectedToolError(f"Error executing tool {self.name}") from exc
+mcp.server.mcpserver.exceptions.UnexpectedToolError: Error executing tool list_sources
+2026-09-19 21:37:40,445 [MainThread] ERROR mcp.server.mcpserver.server: Tool 'get_findings' raised an unexpected exception
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 176, in run
+    result = await self.fn_metadata.call_fn(self.fn, self.is_async, validated, pass_directly)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/utilities/func_metadata.py", line 163, in call_fn
+    return await fn(**kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 70, in wrapper
+    return await anyio.to_thread.run_sync(call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/to_thread.py", line 65, in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 2706, in run_sync_in_worker_thread
+    return await future
+           ^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 1100, in run
+    result = context.run(func, *args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/tools/findings.py", line 593, in get_findings
+    ctx = get_ctx()
+          ^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 254, in get_ctx
+    raise RuntimeError("No case loaded. Call scan_evidence or open_case first.")
+RuntimeError: No case loaded. Call scan_evidence or open_case first.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 433, in _handle_call_tool
+    return await self.call_tool(params.name, params.arguments or {}, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 539, in call_tool
+    return await self._tool_manager.call_tool(name, arguments, context, convert_result=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/tool_manager.py", line 87, in call_tool
+    return await tool.run(arguments, context, convert_result=convert_result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 210, in run
+    raise UnexpectedToolError(f"Error executing tool {self.name}") from exc
+mcp.server.mcpserver.exceptions.UnexpectedToolError: Error executing tool get_findings
+2026-09-19 21:37:41,756 [MainThread] ERROR mcp.server.mcpserver.server: Tool 'read_evidence_file' raised an unexpected exception
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 176, in run
+    result = await self.fn_metadata.call_fn(self.fn, self.is_async, validated, pass_directly)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/utilities/func_metadata.py", line 163, in call_fn
+    return await fn(**kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 72, in wrapper
+    return await anyio.to_thread.run_sync(call, limiter=_get_tool_limiter())
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/to_thread.py", line 65, in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 2706, in run_sync_in_worker_thread
+    return await future
+           ^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 1100, in run
+    result = context.run(func, *args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/tools/artifacts.py", line 546, in read_evidence_file
+    ctx = get_ctx()
+          ^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 254, in get_ctx
+    raise RuntimeError("No case loaded. Call scan_evidence or open_case first.")
+RuntimeError: No case loaded. Call scan_evidence or open_case first.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 433, in _handle_call_tool
+    return await self.call_tool(params.name, params.arguments or {}, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 539, in call_tool
+    return await self._tool_manager.call_tool(name, arguments, context, convert_result=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/tool_manager.py", line 87, in call_tool
+    return await tool.run(arguments, context, convert_result=convert_result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 210, in run
+    raise UnexpectedToolError(f"Error executing tool {self.name}") from exc
+mcp.server.mcpserver.exceptions.UnexpectedToolError: Error executing tool read_evidence_file
+2026-09-19 21:37:42,939 [MainThread] ERROR mcp.server.mcpserver.server: Tool 'read_evidence_file' raised an unexpected exception
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 176, in run
+    result = await self.fn_metadata.call_fn(self.fn, self.is_async, validated, pass_directly)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/utilities/func_metadata.py", line 163, in call_fn
+    return await fn(**kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 72, in wrapper
+    return await anyio.to_thread.run_sync(call, limiter=_get_tool_limiter())
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/to_thread.py", line 65, in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 2706, in run_sync_in_worker_thread
+    return await future
+           ^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 1100, in run
+    result = context.run(func, *args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/tools/artifacts.py", line 546, in read_evidence_file
+    ctx = get_ctx()
+          ^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 254, in get_ctx
+    raise RuntimeError("No case loaded. Call scan_evidence or open_case first.")
+RuntimeError: No case loaded. Call scan_evidence or open_case first.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 433, in _handle_call_tool
+    return await self.call_tool(params.name, params.arguments or {}, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 539, in call_tool
+    return await self._tool_manager.call_tool(name, arguments, context, convert_result=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/tool_manager.py", line 87, in call_tool
+    return await tool.run(arguments, context, convert_result=convert_result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 210, in run
+    raise UnexpectedToolError(f"Error executing tool {self.name}") from exc
+mcp.server.mcpserver.exceptions.UnexpectedToolError: Error executing tool read_evidence_file
+2026-09-19 21:37:44,296 [MainThread] ERROR mcp.server.mcpserver.server: Tool 'list_partitions' raised an unexpected exception
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 176, in run
+    result = await self.fn_metadata.call_fn(self.fn, self.is_async, validated, pass_directly)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/utilities/func_metadata.py", line 163, in call_fn
+    return await fn(**kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 72, in wrapper
+    return await anyio.to_thread.run_sync(call, limiter=_get_tool_limiter())
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/to_thread.py", line 65, in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 2706, in run_sync_in_worker_thread
+    return await future
+           ^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 1100, in run
+    result = context.run(func, *args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/tools/tsk.py", line 223, in list_partitions
+    ctx = get_ctx()
+          ^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 254, in get_ctx
+    raise RuntimeError("No case loaded. Call scan_evidence or open_case first.")
+RuntimeError: No case loaded. Call scan_evidence or open_case first.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 433, in _handle_call_tool
+    return await self.call_tool(params.name, params.arguments or {}, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 539, in call_tool
+    return await self._tool_manager.call_tool(name, arguments, context, convert_result=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/tool_manager.py", line 87, in call_tool
+    return await tool.run(arguments, context, convert_result=convert_result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 210, in run
+    raise UnexpectedToolError(f"Error executing tool {self.name}") from exc
+mcp.server.mcpserver.exceptions.UnexpectedToolError: Error executing tool list_partitions
+2026-09-19 21:37:45,553 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 21:37:45,582 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 21:42:48,569 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 21:42:49,478 [MainThread] ERROR mcp.server.mcpserver.server: Tool 'get_investigation_summary' raised an unexpected exception
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 176, in run
+    result = await self.fn_metadata.call_fn(self.fn, self.is_async, validated, pass_directly)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/utilities/func_metadata.py", line 163, in call_fn
+    return await fn(**kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 70, in wrapper
+    return await anyio.to_thread.run_sync(call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/to_thread.py", line 65, in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 2706, in run_sync_in_worker_thread
+    return await future
+           ^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 1100, in run
+    result = context.run(func, *args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/tools/review.py", line 373, in get_investigation_summary
+    ctx = get_ctx()
+          ^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 254, in get_ctx
+    raise RuntimeError("No case loaded. Call scan_evidence or open_case first.")
+RuntimeError: No case loaded. Call scan_evidence or open_case first.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 433, in _handle_call_tool
+    return await self.call_tool(params.name, params.arguments or {}, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 539, in call_tool
+    return await self._tool_manager.call_tool(name, arguments, context, convert_result=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/tool_manager.py", line 87, in call_tool
+    return await tool.run(arguments, context, convert_result=convert_result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 210, in run
+    raise UnexpectedToolError(f"Error executing tool {self.name}") from exc
+mcp.server.mcpserver.exceptions.UnexpectedToolError: Error executing tool get_investigation_summary
+2026-09-19 21:42:50,684 [MainThread] ERROR mcp.server.mcpserver.server: Tool 'get_findings' raised an unexpected exception
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 176, in run
+    result = await self.fn_metadata.call_fn(self.fn, self.is_async, validated, pass_directly)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/utilities/func_metadata.py", line 163, in call_fn
+    return await fn(**kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 70, in wrapper
+    return await anyio.to_thread.run_sync(call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/to_thread.py", line 65, in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 2706, in run_sync_in_worker_thread
+    return await future
+           ^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 1100, in run
+    result = context.run(func, *args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/tools/findings.py", line 593, in get_findings
+    ctx = get_ctx()
+          ^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 254, in get_ctx
+    raise RuntimeError("No case loaded. Call scan_evidence or open_case first.")
+RuntimeError: No case loaded. Call scan_evidence or open_case first.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 433, in _handle_call_tool
+    return await self.call_tool(params.name, params.arguments or {}, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 539, in call_tool
+    return await self._tool_manager.call_tool(name, arguments, context, convert_result=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/tool_manager.py", line 87, in call_tool
+    return await tool.run(arguments, context, convert_result=convert_result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 210, in run
+    raise UnexpectedToolError(f"Error executing tool {self.name}") from exc
+mcp.server.mcpserver.exceptions.UnexpectedToolError: Error executing tool get_findings
+2026-09-19 21:42:52,020 [MainThread] ERROR mcp.server.mcpserver.server: Tool 'list_sources' raised an unexpected exception
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 176, in run
+    result = await self.fn_metadata.call_fn(self.fn, self.is_async, validated, pass_directly)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/utilities/func_metadata.py", line 163, in call_fn
+    return await fn(**kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 70, in wrapper
+    return await anyio.to_thread.run_sync(call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/to_thread.py", line 65, in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 2706, in run_sync_in_worker_thread
+    return await future
+           ^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 1100, in run
+    result = context.run(func, *args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/helpers.py", line 190, in wrapper
+    ctx = get_ctx()
+          ^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 254, in get_ctx
+    raise RuntimeError("No case loaded. Call scan_evidence or open_case first.")
+RuntimeError: No case loaded. Call scan_evidence or open_case first.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 433, in _handle_call_tool
+    return await self.call_tool(params.name, params.arguments or {}, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 539, in call_tool
+    return await self._tool_manager.call_tool(name, arguments, context, convert_result=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/tool_manager.py", line 87, in call_tool
+    return await tool.run(arguments, context, convert_result=convert_result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 210, in run
+    raise UnexpectedToolError(f"Error executing tool {self.name}") from exc
+mcp.server.mcpserver.exceptions.UnexpectedToolError: Error executing tool list_sources
+2026-09-19 21:42:56,027 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 21:42:56,056 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 21:49:24,011 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 21:49:24,970 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 21:49:25,000 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 21:49:58,745 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 21:50:01,509 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 21:50:01,539 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 21:50:13,480 [MainThread] INFO mulder.server.app: Resource throttle: find_data_exfiltration_indicators waiting (cpu=100%>=90.0%, waited 0s)
+2026-09-19 21:50:13,598 [MainThread] INFO httpx: HTTP Request: GET http://ip-api.com/json/10.11.11.128?fields=status%2Cmessage%2Ccountry%2CregionName%2Ccity%2Cisp%2Cas%2Cquery "HTTP/1.1 200 OK"
+2026-09-19 21:50:13,830 [MainThread] INFO httpx: HTTP Request: GET http://ip-api.com/json/10.11.11.129?fields=status%2Cmessage%2Ccountry%2CregionName%2Ccity%2Cisp%2Cas%2Cquery "HTTP/1.1 200 OK"
+2026-09-19 21:51:45,507 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 21:51:46,517 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 21:51:46,548 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 21:59:10,778 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 21:59:12,112 [MainThread] ERROR mcp.server.mcpserver.server: Tool 'get_investigation_summary' raised an unexpected exception
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 176, in run
+    result = await self.fn_metadata.call_fn(self.fn, self.is_async, validated, pass_directly)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/utilities/func_metadata.py", line 163, in call_fn
+    return await fn(**kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 70, in wrapper
+    return await anyio.to_thread.run_sync(call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/to_thread.py", line 65, in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 2706, in run_sync_in_worker_thread
+    return await future
+           ^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 1100, in run
+    result = context.run(func, *args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/tools/review.py", line 373, in get_investigation_summary
+    ctx = get_ctx()
+          ^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 254, in get_ctx
+    raise RuntimeError("No case loaded. Call scan_evidence or open_case first.")
+RuntimeError: No case loaded. Call scan_evidence or open_case first.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 433, in _handle_call_tool
+    return await self.call_tool(params.name, params.arguments or {}, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 539, in call_tool
+    return await self._tool_manager.call_tool(name, arguments, context, convert_result=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/tool_manager.py", line 87, in call_tool
+    return await tool.run(arguments, context, convert_result=convert_result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 210, in run
+    raise UnexpectedToolError(f"Error executing tool {self.name}") from exc
+mcp.server.mcpserver.exceptions.UnexpectedToolError: Error executing tool get_investigation_summary
+2026-09-19 21:59:12,510 [MainThread] ERROR mcp.server.mcpserver.server: Tool 'get_findings' raised an unexpected exception
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 176, in run
+    result = await self.fn_metadata.call_fn(self.fn, self.is_async, validated, pass_directly)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/utilities/func_metadata.py", line 163, in call_fn
+    return await fn(**kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 70, in wrapper
+    return await anyio.to_thread.run_sync(call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/to_thread.py", line 65, in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 2706, in run_sync_in_worker_thread
+    return await future
+           ^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 1100, in run
+    result = context.run(func, *args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/tools/findings.py", line 593, in get_findings
+    ctx = get_ctx()
+          ^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 254, in get_ctx
+    raise RuntimeError("No case loaded. Call scan_evidence or open_case first.")
+RuntimeError: No case loaded. Call scan_evidence or open_case first.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 433, in _handle_call_tool
+    return await self.call_tool(params.name, params.arguments or {}, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 539, in call_tool
+    return await self._tool_manager.call_tool(name, arguments, context, convert_result=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/tool_manager.py", line 87, in call_tool
+    return await tool.run(arguments, context, convert_result=convert_result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 210, in run
+    raise UnexpectedToolError(f"Error executing tool {self.name}") from exc
+mcp.server.mcpserver.exceptions.UnexpectedToolError: Error executing tool get_findings
+2026-09-19 21:59:13,986 [MainThread] ERROR mcp.server.mcpserver.server: Tool 'list_sources' raised an unexpected exception
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 176, in run
+    result = await self.fn_metadata.call_fn(self.fn, self.is_async, validated, pass_directly)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/utilities/func_metadata.py", line 163, in call_fn
+    return await fn(**kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 70, in wrapper
+    return await anyio.to_thread.run_sync(call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/to_thread.py", line 65, in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 2706, in run_sync_in_worker_thread
+    return await future
+           ^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 1100, in run
+    result = context.run(func, *args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/helpers.py", line 190, in wrapper
+    ctx = get_ctx()
+          ^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 254, in get_ctx
+    raise RuntimeError("No case loaded. Call scan_evidence or open_case first.")
+RuntimeError: No case loaded. Call scan_evidence or open_case first.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 433, in _handle_call_tool
+    return await self.call_tool(params.name, params.arguments or {}, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 539, in call_tool
+    return await self._tool_manager.call_tool(name, arguments, context, convert_result=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/tool_manager.py", line 87, in call_tool
+    return await tool.run(arguments, context, convert_result=convert_result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 210, in run
+    raise UnexpectedToolError(f"Error executing tool {self.name}") from exc
+mcp.server.mcpserver.exceptions.UnexpectedToolError: Error executing tool list_sources
+2026-09-19 21:59:16,755 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 21:59:16,786 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 22:03:39,556 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 22:03:40,407 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 22:03:40,439 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 22:05:07,434 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 22:05:28,709 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 22:05:29,813 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 22:05:29,845 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 22:05:52,449 [MainThread] INFO mulder.server.app: Resource throttle: get_raw_output waiting (cpu=100%>=90.0%, waited 0s)
+2026-09-19 22:06:34,053 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 22:06:35,092 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 22:06:35,124 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 22:09:32,622 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 22:09:38,522 [MainThread] ERROR mcp.server.mcpserver.server: Tool 'get_investigation_summary' raised an unexpected exception
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 176, in run
+    result = await self.fn_metadata.call_fn(self.fn, self.is_async, validated, pass_directly)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/utilities/func_metadata.py", line 163, in call_fn
+    return await fn(**kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 70, in wrapper
+    return await anyio.to_thread.run_sync(call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/to_thread.py", line 65, in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 2706, in run_sync_in_worker_thread
+    return await future
+           ^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 1100, in run
+    result = context.run(func, *args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/tools/review.py", line 373, in get_investigation_summary
+    ctx = get_ctx()
+          ^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 254, in get_ctx
+    raise RuntimeError("No case loaded. Call scan_evidence or open_case first.")
+RuntimeError: No case loaded. Call scan_evidence or open_case first.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 433, in _handle_call_tool
+    return await self.call_tool(params.name, params.arguments or {}, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 539, in call_tool
+    return await self._tool_manager.call_tool(name, arguments, context, convert_result=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/tool_manager.py", line 87, in call_tool
+    return await tool.run(arguments, context, convert_result=convert_result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 210, in run
+    raise UnexpectedToolError(f"Error executing tool {self.name}") from exc
+mcp.server.mcpserver.exceptions.UnexpectedToolError: Error executing tool get_investigation_summary
+2026-09-19 22:09:40,950 [MainThread] ERROR mcp.server.mcpserver.server: Tool 'get_investigation_summary' raised an unexpected exception
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 176, in run
+    result = await self.fn_metadata.call_fn(self.fn, self.is_async, validated, pass_directly)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/utilities/func_metadata.py", line 163, in call_fn
+    return await fn(**kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 70, in wrapper
+    return await anyio.to_thread.run_sync(call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/to_thread.py", line 65, in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 2706, in run_sync_in_worker_thread
+    return await future
+           ^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 1100, in run
+    result = context.run(func, *args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/tools/review.py", line 373, in get_investigation_summary
+    ctx = get_ctx()
+          ^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 254, in get_ctx
+    raise RuntimeError("No case loaded. Call scan_evidence or open_case first.")
+RuntimeError: No case loaded. Call scan_evidence or open_case first.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 433, in _handle_call_tool
+    return await self.call_tool(params.name, params.arguments or {}, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 539, in call_tool
+    return await self._tool_manager.call_tool(name, arguments, context, convert_result=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/tool_manager.py", line 87, in call_tool
+    return await tool.run(arguments, context, convert_result=convert_result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 210, in run
+    raise UnexpectedToolError(f"Error executing tool {self.name}") from exc
+mcp.server.mcpserver.exceptions.UnexpectedToolError: Error executing tool get_investigation_summary
+2026-09-19 22:09:41,249 [MainThread] ERROR mcp.server.mcpserver.server: Tool 'get_findings' raised an unexpected exception
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 176, in run
+    result = await self.fn_metadata.call_fn(self.fn, self.is_async, validated, pass_directly)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/utilities/func_metadata.py", line 163, in call_fn
+    return await fn(**kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 70, in wrapper
+    return await anyio.to_thread.run_sync(call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/to_thread.py", line 65, in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 2706, in run_sync_in_worker_thread
+    return await future
+           ^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 1100, in run
+    result = context.run(func, *args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/tools/findings.py", line 593, in get_findings
+    ctx = get_ctx()
+          ^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 254, in get_ctx
+    raise RuntimeError("No case loaded. Call scan_evidence or open_case first.")
+RuntimeError: No case loaded. Call scan_evidence or open_case first.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 433, in _handle_call_tool
+    return await self.call_tool(params.name, params.arguments or {}, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 539, in call_tool
+    return await self._tool_manager.call_tool(name, arguments, context, convert_result=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/tool_manager.py", line 87, in call_tool
+    return await tool.run(arguments, context, convert_result=convert_result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 210, in run
+    raise UnexpectedToolError(f"Error executing tool {self.name}") from exc
+mcp.server.mcpserver.exceptions.UnexpectedToolError: Error executing tool get_findings
+2026-09-19 22:09:44,818 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 22:09:44,851 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 22:13:59,057 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 22:14:00,439 [MainThread] ERROR mcp.server.mcpserver.server: Tool 'get_investigation_summary' raised an unexpected exception
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 176, in run
+    result = await self.fn_metadata.call_fn(self.fn, self.is_async, validated, pass_directly)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/utilities/func_metadata.py", line 163, in call_fn
+    return await fn(**kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 70, in wrapper
+    return await anyio.to_thread.run_sync(call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/to_thread.py", line 65, in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 2706, in run_sync_in_worker_thread
+    return await future
+           ^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 1100, in run
+    result = context.run(func, *args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/tools/review.py", line 373, in get_investigation_summary
+    ctx = get_ctx()
+          ^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 254, in get_ctx
+    raise RuntimeError("No case loaded. Call scan_evidence or open_case first.")
+RuntimeError: No case loaded. Call scan_evidence or open_case first.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 433, in _handle_call_tool
+    return await self.call_tool(params.name, params.arguments or {}, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 539, in call_tool
+    return await self._tool_manager.call_tool(name, arguments, context, convert_result=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/tool_manager.py", line 87, in call_tool
+    return await tool.run(arguments, context, convert_result=convert_result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 210, in run
+    raise UnexpectedToolError(f"Error executing tool {self.name}") from exc
+mcp.server.mcpserver.exceptions.UnexpectedToolError: Error executing tool get_investigation_summary
+2026-09-19 22:14:01,568 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 22:14:01,579 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'

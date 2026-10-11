@@ -61,6 +61,25 @@ def _truncated_window(w: Any, cap: int = _RAW_TEXT_SEARCH_CAP) -> dict[str, obje
     return d
 
 
+def _matching_sources(source_name: str | None, evidence_path: str | None) -> list[Any]:
+    """Sources named *source_name* (exact or prefix), from *evidence_path* if given.
+
+    Extractors register one source per image under the same name
+    (``tsk.masquerade`` for RM1 and for RM2), told apart only by
+    ``source_path``; *evidence_path* matches it exactly or by basename.
+    """
+    return [
+        s
+        for s in get_ctx().db.get_sources()
+        if (
+            source_name is None
+            or s.source_name == source_name
+            or s.source_name.startswith(source_name + ".")
+        )
+        and (evidence_path is None or evidence_path in (s.source_path, Path(s.source_path).name))
+    ]
+
+
 @mcp.tool()
 @tool_access(
     Role.CATALOG
@@ -145,13 +164,16 @@ def get_source_stats() -> dict[str, object]:
         )
 
     cited_count = sum(1 for s in stats if s["cited_by_finding"])
-    return {
+    result: dict[str, object] = {
         "status": "success",
         "total_sources": len(stats),
         "cited_sources": cited_count,
         "uncited_sources": len(stats) - cited_count,
         "sources": stats,
     }
+    if invalid := ctx.db.get_invalid_findings():
+        result["invalid_findings"] = invalid
+    return result
 
 
 def _search_regex(
@@ -162,6 +184,7 @@ def _search_regex(
     t_start: str | None,
     t_end: str | None,
     max_results: int,
+    source_ids: list[int] | None = None,
 ) -> tuple[list[dict[str, object]], int] | dict[str, object]:
     """Regex search path across ingested evidence windows.
 
@@ -191,12 +214,13 @@ def _search_regex(
     matches: list[dict[str, object]] = []
     total_regex_matches = 0
     cursor = 0
-    src_prefix = source or ""
     source_map: dict[int, str] = {s.source_id: s.source_name for s in db.get_sources()}
     exclude_set = exclude_sources or []
 
     while True:
-        chunk, _total = db.get_windows_page(src_prefix, after_id=cursor, limit=_CHUNK)
+        chunk, _total = db.get_windows_page(
+            source, after_id=cursor, limit=_CHUNK, source_ids=source_ids
+        )
         if not chunk:
             break
         for w in chunk:
@@ -231,6 +255,7 @@ def _search_fts(
     t_start: str | None,
     t_end: str | None,
     max_results: int,
+    source_ids: list[int] | None = None,
 ) -> tuple[list[dict[str, object]], int]:
     """Full-text search path using the database FTS index.
 
@@ -243,6 +268,7 @@ def _search_fts(
         time_start=t_start,
         time_end=t_end,
         exclude_source_names=exclude_sources,
+        source_ids=source_ids,
     )
     raw_matches = db.search_windows(
         combined_fts,
@@ -251,6 +277,7 @@ def _search_fts(
         time_start=t_start,
         time_end=t_end,
         exclude_source_names=exclude_sources,
+        source_ids=source_ids,
     )
     results = [{"window": _truncated_window(w), "source_name": sname} for w, sname in raw_matches]
     return results, total_matches
@@ -274,13 +301,16 @@ def search(
     t_end: str | None = None,
     queries: list[str] | None = None,
     exclude_sources: list[str] | None = None,
+    evidence_path: str | None = None,
 ) -> dict[str, object]:
     """Search all ingested evidence for keywords or regex patterns.
 
     Call after extraction tools have indexed evidence. Use the source
     parameter to scope to a specific source (e.g.
     ``source='volatility.netscan'``). For large sources, prefer this
-    over paginating get_raw_output.
+    over paginating get_raw_output. On a multi-image case the same
+    source name exists once per image; pass ``evidence_path`` to keep
+    hits to one image. Every hit carries its ``source_path``.
 
     IMPORTANT: Before asserting any factual claim in a finding, search
     for the specific artifact you are citing. Zero results means the
@@ -307,10 +337,16 @@ def search(
             ANY of the terms. Combines with query if both provided.
         exclude_sources: Optional list of source name prefixes to exclude
             from results (e.g. ["tsk.filelist"] to skip file listings).
+        evidence_path: Optional evidence file path or basename; only
+            sources extracted from that image are searched.
     """
     ctx = get_ctx()
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
+
+    source_ids: list[int] | None = None
+    if evidence_path is not None:
+        source_ids = [s.source_id for s in _matching_sources(source, evidence_path)]
 
     all_terms: list[str] = list(queries) if queries else []
     if query:
@@ -326,7 +362,7 @@ def search(
 
     if regex:
         outcome = _search_regex(
-            ctx.db, all_terms, source, exclude_sources, t_start, t_end, max_results
+            ctx.db, all_terms, source, exclude_sources, t_start, t_end, max_results, source_ids
         )
         if isinstance(outcome, dict):
             outcome["tool_call_id"] = tc_id
@@ -334,8 +370,12 @@ def search(
         results, total_matches = outcome
     else:
         results, total_matches = _search_fts(
-            ctx.db, all_terms, source, exclude_sources, t_start, t_end, max_results
+            ctx.db, all_terms, source, exclude_sources, t_start, t_end, max_results, source_ids
         )
+
+    path_by_id = {s.source_id: s.source_path for s in ctx.db.get_sources()}
+    for r in results:
+        r["source_path"] = path_by_id.get(r["window"]["source_id"])  # type: ignore[index]
 
     sources_matched = sorted({str(r["source_name"]) for r in results})
 
@@ -352,6 +392,7 @@ def search(
             "t_end": t_end,
             "queries": queries,
             "exclude_sources": exclude_sources,
+            "evidence_path": evidence_path,
         },
         output_hash=hash_output(results),
         duration_ms=elapsed,
@@ -875,12 +916,18 @@ def get_raw_output(
     source_name: str,
     after_id: int = 0,
     limit: int = _DEFAULT_SEARCH_LIMIT,
+    evidence_path: str | None = None,
 ) -> dict[str, object]:
     """Retrieve full raw text from a specific evidence source with cursor pagination.
 
     Call when you need to read the complete output from an extraction
     tool (e.g. volatility.pslist, tsk.filelist). For finding specific
     content in large sources, prefer search(query, source=source_name).
+
+    On a multi-image case the same source name exists once per image
+    (``tsk.masquerade`` for RM1 and for RM2). Pass ``evidence_path`` to
+    read one image's rows; without it, an ambiguous name returns an
+    error listing the candidate paths rather than mixing images.
 
     Returns raw_text with keyset pagination. Pass ``next_after_id`` from
     the response to get subsequent pages. Every page is equally fast
@@ -893,9 +940,33 @@ def get_raw_output(
             Use 0 for the first page, then pass ``next_after_id`` from
             the response to get subsequent pages.
         limit: Maximum number of windows to return.
+        evidence_path: Optional evidence file path or basename; only the
+            source extracted from that image is read.
     """
     ctx = get_ctx()
-    page, total = ctx.db.get_windows_page(source_name, after_id=after_id, limit=limit)
+    matches = _matching_sources(source_name, evidence_path)
+    source_paths = sorted({s.source_path for s in matches})
+    if evidence_path is None and len(source_paths) > 1:
+        return {
+            "status": "error",
+            "error_message": (
+                f"Source '{source_name}' exists for {len(source_paths)} evidence images: "
+                f"{source_paths}. Pass evidence_path to select one."
+            ),
+            "source_paths": source_paths,
+        }
+    if evidence_path is not None and not matches:
+        return {
+            "status": "error",
+            "error_message": (
+                f"No source '{source_name}' from evidence_path '{evidence_path}'. "
+                "Call list_sources to see registered source_paths."
+            ),
+        }
+    source_ids = [s.source_id for s in matches] if evidence_path is not None else None
+    page, total = ctx.db.get_windows_page(
+        source_name, after_id=after_id, limit=limit, source_ids=source_ids
+    )
     raw_text = "\n".join(w.raw_text for w in page)
 
     next_after = page[-1].window_id if page else after_id
@@ -903,6 +974,7 @@ def get_raw_output(
     result: dict[str, object] = {
         "status": "success",
         "source_name": source_name,
+        "source_paths": source_paths,
         "total_windows": total,
         "returned_windows": len(page),
         "next_after_id": next_after,

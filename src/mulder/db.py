@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, TypedDict, TypeVar, cast
 
+from pydantic import ValidationError
 from sqlalchemy import (
     Column,
     ForeignKey,
@@ -420,6 +421,24 @@ class _WriteQueue:
             )
 
 
+def _finding_fields(row: Any) -> dict[str, Any]:
+    """Map a ``findings`` row to ``Finding`` constructor fields."""
+    return {
+        "finding_id": row.finding_id,
+        "case_id": row.case_id,
+        "title": row.title,
+        "description": row.description,
+        "severity": row.severity,
+        "confidence": row.confidence,
+        "evidence_refs": json.loads(row.evidence_refs),
+        "sources": json.loads(row.sources),
+        "mitre_attack_ids": json.loads(row.mitre_attack_ids) if row.mitre_attack_ids else [],
+        "event_time_start": row.event_time_start,
+        "event_time_end": row.event_time_end,
+        "submitted_at": row.submitted_at,
+    }
+
+
 class CaseDB:
     """Manages a per-case SQLite database file."""
 
@@ -590,6 +609,7 @@ class CaseDB:
         time_end: str | None = None,
         exclude_source_names: list[str] | None = None,
         match: Literal["all", "any"] = "all",
+        source_ids: list[int] | None = None,
     ) -> list[tuple[WindowRow, str]]:
         """Full-text keyword search over raw_text using FTS5.
 
@@ -610,6 +630,8 @@ class CaseDB:
                 only sane order. Taking the *first 20 by time* out of every
                 window containing the word "event" is a different wrong
                 answer, not a fix.
+            source_ids: Optional source_id allowlist, for sources that share
+                a name across evidence images.
         """
         fts = (
             select(
@@ -632,6 +654,8 @@ class CaseDB:
                     sources_t.c.source_name.like(source_name + ".%"),
                 )
             )
+        if source_ids is not None:
+            stmt = stmt.where(windows_t.c.source_id.in_(source_ids))
 
         if time_start is not None:
             stmt = stmt.where(windows_t.c.event_time >= time_start)
@@ -694,6 +718,7 @@ class CaseDB:
         time_start: str | None = None,
         time_end: str | None = None,
         exclude_source_names: list[str] | None = None,
+        source_ids: list[int] | None = None,
     ) -> int:
         """Return the total number of FTS5 matches without fetching rows.
 
@@ -707,6 +732,7 @@ class CaseDB:
             time_start: Optional ISO 8601 lower bound for event_time.
             time_end: Optional ISO 8601 upper bound for event_time.
             exclude_source_names: Optional source name prefixes to exclude.
+            source_ids: Optional source_id allowlist.
         """
         j = windows_t.join(sources_t, windows_t.c.source_id == sources_t.c.source_id)
         stmt = (
@@ -728,6 +754,8 @@ class CaseDB:
                     sources_t.c.source_name.like(source_name + ".%"),
                 )
             )
+        if source_ids is not None:
+            stmt = stmt.where(windows_t.c.source_id.in_(source_ids))
 
         if time_start is not None:
             stmt = stmt.where(windows_t.c.event_time >= time_start)
@@ -900,11 +928,15 @@ class CaseDB:
 
     def get_windows_page(
         self,
-        source_prefix: str,
+        source_prefix: str | None,
         after_id: int = 0,
         limit: int = 500,
+        source_ids: list[int] | None = None,
     ) -> tuple[list[WindowRow], int]:
         """Fetch a page of windows using keyset pagination.
+
+        A falsy *source_prefix* (``None`` or ``""``) means no source
+        filter: the page spans every window in the case.
 
         Uses ``window_id > after_id`` instead of SQL OFFSET, so seeking
         to any position is O(log n) via the primary key index regardless
@@ -913,24 +945,33 @@ class CaseDB:
         Pass ``after_id=0`` for the first page, then pass the last
         ``window_id`` from the previous page to get the next one.
 
+        *source_ids* further restricts to those sources, for names that
+        several evidence images share (``tsk.masquerade`` per image).
+
         Returns ``(windows, total_count)``.
         """
-        source_where = or_(
-            sources_t.c.source_name == source_prefix,
-            sources_t.c.source_name.like(source_prefix + ".%"),
-        )
+        conds = []
+        if source_prefix:
+            conds.append(
+                or_(
+                    sources_t.c.source_name == source_prefix,
+                    sources_t.c.source_name.like(source_prefix + ".%"),
+                )
+            )
+        if source_ids is not None:
+            conds.append(windows_t.c.source_id.in_(source_ids))
 
         count_stmt = (
             select(func.count())
             .select_from(windows_t.join(sources_t, windows_t.c.source_id == sources_t.c.source_id))
-            .where(source_where)
+            .where(*conds)
         )
 
         j = windows_t.join(sources_t, windows_t.c.source_id == sources_t.c.source_id)
         page_stmt = (
             select(windows_t)
             .select_from(j)
-            .where(source_where)
+            .where(*conds)
             .where(windows_t.c.window_id > after_id)
             .order_by(windows_t.c.window_id)
             .limit(limit)
@@ -1061,8 +1102,20 @@ class CaseDB:
             else:
                 values[key] = val
 
+        # Validate the merged row the way submit_finding validates a new one,
+        # so no write path can persist a row the readers refuse to load
+        # (e.g. evidence_refs=[]). Raises pydantic.ValidationError.
+        stmt = select(findings_t).where(findings_t.c.finding_id == finding_id)
+        with self._engine.connect() as conn:
+            row = conn.execute(stmt).fetchone()
+        if row is None:
+            return False
+        Finding.model_validate(
+            {**_finding_fields(row), **{k: v for k, v in kwargs.items() if v is not None}}
+        )
+
         if not values:
-            return self._finding_exists(finding_id)
+            return True
 
         def _do_update() -> bool:
             """Execute the UPDATE and return whether a row was matched."""
@@ -1103,49 +1156,46 @@ class CaseDB:
             return conn.execute(stmt).fetchone() is not None
 
     def get_finding(self, finding_id: str) -> Finding | None:
-        """Return a single finding by ID, or None if not found."""
+        """Return a single finding by ID, or None if not found or invalid."""
         stmt = select(findings_t).where(findings_t.c.finding_id == finding_id)
         with self._engine.connect() as conn:
             row = conn.execute(stmt).fetchone()
         if row is None:
             return None
-        return Finding(
-            finding_id=row.finding_id,
-            case_id=row.case_id,
-            title=row.title,
-            description=row.description,
-            severity=row.severity,
-            confidence=row.confidence,
-            evidence_refs=json.loads(row.evidence_refs),
-            sources=json.loads(row.sources),
-            mitre_attack_ids=json.loads(row.mitre_attack_ids) if row.mitre_attack_ids else [],
-            event_time_start=row.event_time_start,
-            event_time_end=row.event_time_end,
-            submitted_at=row.submitted_at,
-        )
+        try:
+            return Finding.model_validate(_finding_fields(row))
+        except ValidationError as exc:
+            logger.warning("Skipping invalid finding row %s: %s", finding_id, exc)
+            return None
 
-    def get_findings(self) -> list[Finding]:
-        """Return all findings ordered by submission time."""
+    def _load_findings(self) -> tuple[list[Finding], list[dict[str, str]]]:
+        """Return (valid findings, invalid rows) ordered by submission time.
+
+        A row that fails ``Finding`` validation is skipped and reported as
+        ``{"finding_id", "title", "error"}`` instead of raising, so one bad
+        row cannot block every tool that loads findings (issue #239).
+        """
         stmt = select(findings_t).order_by(findings_t.c.submitted_at)
         with self._engine.connect() as conn:
             rows = conn.execute(stmt).fetchall()
-        return [
-            Finding(
-                finding_id=row.finding_id,
-                case_id=row.case_id,
-                title=row.title,
-                description=row.description,
-                severity=row.severity,
-                confidence=row.confidence,
-                evidence_refs=json.loads(row.evidence_refs),
-                sources=json.loads(row.sources),
-                mitre_attack_ids=json.loads(row.mitre_attack_ids) if row.mitre_attack_ids else [],
-                event_time_start=row.event_time_start,
-                event_time_end=row.event_time_end,
-                submitted_at=row.submitted_at,
-            )
-            for row in rows
-        ]
+        valid: list[Finding] = []
+        invalid: list[dict[str, str]] = []
+        for row in rows:
+            try:
+                valid.append(Finding.model_validate(_finding_fields(row)))
+            except ValidationError as exc:
+                error = "; ".join(str(e["msg"]) for e in exc.errors())
+                logger.warning("Skipping invalid finding row %s: %s", row.finding_id, error)
+                invalid.append({"finding_id": row.finding_id, "title": row.title, "error": error})
+        return valid, invalid
+
+    def get_findings(self) -> list[Finding]:
+        """Return all valid findings ordered by submission time."""
+        return self._load_findings()[0]
+
+    def get_invalid_findings(self) -> list[dict[str, str]]:
+        """Return stored finding rows that fail ``Finding`` validation."""
+        return self._load_findings()[1]
 
     def update_extractor_versions(self, versions: dict[str, str]) -> None:
         """Update the stored extractor version map."""

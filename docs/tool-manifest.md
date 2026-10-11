@@ -1003,8 +1003,9 @@ Search all ingested evidence for keywords or regex patterns.
 | t_end | str \| None | no | ISO 8601 end time filter |
 | queries | list[str] \| None | no | Multiple search terms (OR logic) |
 | exclude_sources | list[str] \| None | no | Source prefixes to exclude |
+| evidence_path | str \| None | no | Evidence file path or basename; restrict to sources extracted from that image |
 
-**Returns:** `results[]`, `total_matches`, `has_more`, `sources_matched[]`
+**Returns:** `results[]` (each hit carries `source_path`), `total_matches`, `has_more`, `sources_matched[]`
 
 **Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR` `CROSS_ANALYST` `NARRATIVE_EXECUTOR` `NARRATIVE_ANALYST` `REPORT`
 
@@ -1017,8 +1018,9 @@ Retrieve full raw text from a specific evidence source with cursor pagination.
 | source_name | str | yes | Exact source name or prefix |
 | after_id | int | no | Cursor for keyset pagination (default 0) |
 | limit | int | no | Maximum windows to return (default 50) |
+| evidence_path | str \| None | no | Evidence file path or basename; required when the name exists for more than one image (otherwise an error lists the candidate `source_paths`) |
 
-**Returns:** `raw_text`, `total_windows`, `next_after_id`, `has_more`
+**Returns:** `raw_text`, `source_paths[]`, `total_windows`, `next_after_id`, `has_more`
 
 **Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR` `CROSS_ANALYST` `NARRATIVE_EXECUTOR` `NARRATIVE_ANALYST` `REPORT`
 

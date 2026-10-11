@@ -8,16 +8,23 @@ Mulder takes a directory of forensic evidence (disk images, memory dumps, PCAPs,
 
 ## Results
 
-Four autonomous investigations against real forensic datasets, unmodified from tool output. Each case has an interactive HTML report on [GitHub Pages](https://calebevans.github.io/mulder/examples/srl-2018/SRL-2018.report.html) (sidebar navigation, dark/light theme, audit trail). See the [examples index](https://github.com/calebevans/mulder/blob/main/examples/README.md) for all report links.
+Three models on the [NIST CFReDS Data Leakage Case](https://cfreds-archive.nist.gov/data_leakage_case/data-leakage-case.html) on the v1.5.2 release image, with the same evidence, prompts and tools. Each is scored item by item against the [published NIST answer key](https://cfreds-archive.nist.gov/data_leakage_case/leakage-answers.pdf) (20 ground-truth items; **full match** = the exact fact stated, **detection** = at least related evidence found, **false positives** = claims the answer key contradicts). Every report, log and scorecard is in the repo, unmodified from tool output.
 
-| Case | Systems | Evidence | Sources | Tool Calls | Findings | Runtime | Tokens | Report |
-|------|---------|----------|---------|------------|----------|---------|--------|--------|
-| [Rocba](https://github.com/calebevans/mulder/tree/main/examples/rocba/) | 1 | ~8 GB | 67 | 292 | 7 (1 high) | 66 min | 313K | [HTML](https://calebevans.github.io/mulder/examples/rocba/Rocba.report.html) |
-| [SRL-2015](https://github.com/calebevans/mulder/tree/main/examples/srl-2015/) | 4 | ~30 GB | 159 | 610 | 29 (4 crit, 9 high) | 126 min | 300K | [HTML](https://calebevans.github.io/mulder/examples/srl-2015/SRL-2015.report.html) |
-| [SRL-2018](https://github.com/calebevans/mulder/tree/main/examples/srl-2018/) | 11 | ~120 GB | 457 | 1,508 | 55 (11 crit, 19 high) | 336 min | 698K | [HTML](https://calebevans.github.io/mulder/examples/srl-2018/SRL-2018.report.html) |
-| [NIST Data Leakage](https://github.com/calebevans/mulder/tree/main/examples/ndlc/) | 4 | ~8 GB | 88 | 723 | 33 (15 high) | 102 min | 330K | [HTML](https://calebevans.github.io/mulder/examples/ndlc/ndlc.report.html) |
+| Model | Full match | Detection | False positives | Runtime per run |
+|-------|-----------:|----------:|----------------:|----------------:|
+| Claude Opus 4.6 (Anthropic) | 45% (45–50) | 95% (90–95) | 10% (5–10) | 68–79 min |
+| Kimi K3 (Bedrock, open weight) | 35% (35–50) | 90% (80–95) | 20% (20–25) | 52–70 min |
+| GLM-5 (Bedrock, open weight) | 20% (20–25) | 75% (75–90) | 20% (10–25) | 60–63 min |
 
-The NIST Data Leakage case has a [detailed accuracy report](https://github.com/calebevans/mulder/blob/main/examples/ndlc/ACCURACY-REPORT.md) validated against [published NIST ground truth](https://cfreds-archive.nist.gov/data_leakage_case/leakage-answers.pdf): 60% full match, 90% detection rate, 5% false positive rate. The single false positive involved incorrect causal attribution (blaming CCleaner for artifact destruction when the answer key confirms it was launched and closed without action).
+Reports and scorecards for every run:
+
+| Model | Runs |
+|-------|------|
+| Claude Opus 4.6 | [run 1](https://calebevans.github.io/mulder/examples/ndlc-v1.5.2/opus-4.6-run1/ndlc.report.html) ([scorecard](https://github.com/calebevans/mulder/blob/main/examples/ndlc-v1.5.2/opus-4.6-run1/ACCURACY-REPORT.md)) · [run 2](https://calebevans.github.io/mulder/examples/ndlc-v1.5.2/opus-4.6-run2/ndlc.report.html) ([scorecard](https://github.com/calebevans/mulder/blob/main/examples/ndlc-v1.5.2/opus-4.6-run2/ACCURACY-REPORT.md)) · [run 3](https://calebevans.github.io/mulder/examples/ndlc-v1.5.2/opus-4.6-run3/ndlc.report.html) ([scorecard](https://github.com/calebevans/mulder/blob/main/examples/ndlc-v1.5.2/opus-4.6-run3/ACCURACY-REPORT.md)) |
+| Kimi K3 | [run 1](https://calebevans.github.io/mulder/examples/ndlc-v1.5.2/kimi-k3-run1/ndlc.report.html) ([scorecard](https://github.com/calebevans/mulder/blob/main/examples/ndlc-v1.5.2/kimi-k3-run1/ACCURACY-REPORT.md)) · [run 2](https://calebevans.github.io/mulder/examples/ndlc-v1.5.2/kimi-k3-run2/ndlc.report.html) ([scorecard](https://github.com/calebevans/mulder/blob/main/examples/ndlc-v1.5.2/kimi-k3-run2/ACCURACY-REPORT.md)) · [run 3](https://calebevans.github.io/mulder/examples/ndlc-v1.5.2/kimi-k3-run3/ndlc.report.html) ([scorecard](https://github.com/calebevans/mulder/blob/main/examples/ndlc-v1.5.2/kimi-k3-run3/ACCURACY-REPORT.md)) |
+| GLM-5 | [run 1](https://calebevans.github.io/mulder/examples/ndlc-v1.5.2/glm-5-run1/ndlc.report.html) ([scorecard](https://github.com/calebevans/mulder/blob/main/examples/ndlc-v1.5.2/glm-5-run1/ACCURACY-REPORT.md)) · [run 2](https://calebevans.github.io/mulder/examples/ndlc-v1.5.2/glm-5-run2/ndlc.report.html) ([scorecard](https://github.com/calebevans/mulder/blob/main/examples/ndlc-v1.5.2/glm-5-run2/ACCURACY-REPORT.md)) · [run 3](https://calebevans.github.io/mulder/examples/ndlc-v1.5.2/glm-5-run3/ndlc.report.html) ([scorecard](https://github.com/calebevans/mulder/blob/main/examples/ndlc-v1.5.2/glm-5-run3/ACCURACY-REPORT.md)) |
+
+Claude Opus 4.6 ran with extended thinking; the open-weight models ran on Amazon Bedrock through Mulder's LiteLLM proxy (both with native reasoning; GLM-5 needs no per-model overrides). Each model was run three times and is shown as the median with the range in parentheses; every run is published. Models that were tried and are not recommended are left out of the table: MiniMax M2.5, DeepSeek V3.2 and Qwen3 235B (three runs each, at most 5% full match), and Mistral Large 3, Qwen3 Coder 480B, gpt-oss-120b, GLM-4.7, Kimi K2.5 and Kimi K2 Thinking (one or two runs each: no usable report, a collapsed catalog, or at or below 40% detection). Detection means the model surfaced the evidence; full match means it stated the exact serial, label, filename, timestamp or count the answer key lists. Older investigations of other datasets are still in the [examples directory](https://github.com/calebevans/mulder/blob/main/examples/README.md).
 
 ## How It Works
 
@@ -142,7 +149,7 @@ Full API reference: [Tool Manifest](https://github.com/calebevans/mulder/blob/ma
 
 Each investigation produces:
 
-- **Markdown and HTML reports** - executive summary, attack timeline, findings with MITRE ATT&CK mappings, IOC tables, and audit trail ([example HTML reports](https://calebevans.github.io/mulder/examples/srl-2018/SRL-2018.report.html))
+- **Markdown and HTML reports** - executive summary, attack timeline, findings with MITRE ATT&CK mappings, IOC tables, and audit trail ([example HTML reports](https://calebevans.github.io/mulder/examples/ndlc-v1.5.2/opus-4.6-run1/ndlc.report.html))
 - **Per-case SQLite database** - FTS5 full-text search across all indexed evidence
 - **Append-only audit log** - JSONL recording every tool invocation with BLAKE2b output hashes
 - **Optional exports** - STIX 2.1 IOC bundle, CSV IOC list, and MITRE ATT&CK Navigator layer via `mulder export-iocs` and `mulder export-navigator`

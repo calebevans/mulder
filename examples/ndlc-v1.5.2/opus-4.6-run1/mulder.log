@@ -1,0 +1,246 @@
+2026-09-19 19:54:56,419 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 19:54:59,841 [AnyIO worker thread] INFO mulder.server.app: Creating empty case database for 'ndlc' ...
+2026-09-19 19:54:59,955 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 19:55:39,933 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 19:55:39,933 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 19:55:39,933 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 19:55:42,315 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 19:55:42,342 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 19:55:42,991 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 19:55:43,018 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 19:55:43,184 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 19:55:43,211 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 19:56:24,084 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 19:56:25,386 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 19:56:32,412 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 19:56:32,438 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 19:56:45,388 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 19:56:45,416 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 19:56:48,172 [AnyIO worker thread] INFO mulder.server.jobs: Submitted batch bg_18feeeec with 2 jobs: ['run_fls', 'run_bulk_extractor']
+2026-09-19 19:56:48,236 [mulder-job_0] INFO mulder.server.tools.extract.tsk: run_fls: offset 0 failed, retrying with mmls-detected offset 32
+2026-09-19 19:56:51,102 [MainThread] INFO mulder.server.app: Resource throttle: run_fsstat waiting (cpu=100%>=90.0%, waited 0s)
+2026-09-19 19:56:51,812 [mulder-job_0] INFO mulder.server.jobs: Job job_2e6de7ef (run_fls) completed
+2026-09-19 19:56:51,814 [mulder-job_0] INFO mulder.server.jobs: [JOB_COMPLETE] run_fls|completed|
+2026-09-19 19:56:55,082 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 19:56:56,203 [AnyIO worker thread] INFO mulder.server.jobs: Submitted batch bg_50d7d552 with 3 jobs: ['run_fls', 'run_bulk_extractor', 'run_photorec']
+2026-09-19 19:56:56,213 [mulder-job_2] WARNING mulder.server.jobs: Job job_1646d8fc (run_photorec) returned error: photorec exited 1 and carved nothing: PhotoRec 7.1, Data Recovery Utility, July 2019
+Christophe GRENIER <grenier@cgsecurity.org>
+https://www.cgsecurity.org
+
+Unable to open file or device /evidence/cfreds_2015_data_leakage_rm2.E01: Success
+2026-09-19 19:56:56,216 [mulder-job_2] INFO mulder.server.jobs: [JOB_COMPLETE] run_photorec|failed|photorec exited 1 and carved nothing: PhotoRec 7.1, Data Recovery Utility, July 2019
+Christophe GRENIER <grenier@cgsecurity.org>
+https://www.cgsecurity.org
+
+Unable to open file or device /evidence/cfreds_2015_data_leakage_rm2.E01: Success
+2026-09-19 19:56:56,269 [mulder-job_0] INFO mulder.server.tools.extract.tsk: run_fls: offset 0 failed, retrying with mmls-detected offset 128
+2026-09-19 19:56:57,306 [mulder-job_0] INFO mulder.server.jobs: Job job_3cf0a222 (run_fls) completed
+2026-09-19 19:56:57,307 [mulder-job_0] INFO mulder.server.jobs: [JOB_COMPLETE] run_fls|completed|
+2026-09-19 20:00:44,402 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 20:00:44,433 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 20:00:55,057 [AnyIO worker thread] INFO mulder.server.tools.jobs: Skipping run_fls in batch: sources already indexed ['tsk.filelist']
+2026-09-19 20:00:55,059 [AnyIO worker thread] INFO mulder.server.tools.jobs: Skipping run_fls in batch: sources already indexed ['tsk.filelist']
+2026-09-19 20:00:55,069 [AnyIO worker thread] INFO mulder.server.jobs: Submitted batch bg_664c16dd with 7 jobs: ['run_fls', 'run_mft_parser', 'run_bulk_extractor', 'run_bulk_extractor', 'run_bulk_extractor', 'run_bulk_extractor', 'run_optical_listing']
+2026-09-19 20:00:55,172 [mulder-job_6] INFO mulder.server.jobs: Job job_f39b68c1 (run_optical_listing) completed
+2026-09-19 20:00:55,173 [mulder-job_6] INFO mulder.server.jobs: [JOB_COMPLETE] run_optical_listing|completed|
+2026-09-19 20:00:55,187 [mulder-job_0] INFO mulder.server.tools.extract.tsk: run_fls: offset 0 failed, retrying with mmls-detected offset 206848
+2026-09-19 20:01:03,418 [mulder-job_1] INFO mulder.server.jobs: Job job_01fc622b (run_mft_parser) completed
+2026-09-19 20:01:03,424 [mulder-job_1] INFO mulder.server.jobs: [JOB_COMPLETE] run_mft_parser|completed|
+2026-09-19 20:01:04,463 [mulder-job_5] INFO mulder.server.jobs: Job job_3ff63e3b (run_bulk_extractor) completed
+2026-09-19 20:01:04,464 [mulder-job_5] INFO mulder.server.jobs: [JOB_COMPLETE] run_bulk_extractor|completed|
+2026-09-19 20:01:12,926 [mulder-job_0] INFO mulder.server.tools.extract.tsk: Indexed secondary partition tsk.filelist.p1: offset=2048, desc=ntfs / exfat (0x07)
+2026-09-19 20:01:12,933 [mulder-job_0] INFO mulder.server.jobs: Job job_328a964c (run_fls) completed
+2026-09-19 20:01:12,936 [mulder-job_0] INFO mulder.server.jobs: [JOB_COMPLETE] run_fls|completed|
+2026-09-19 20:02:42,124 [mulder-job_4] INFO mulder.server.jobs: Job job_00e502e5 (run_bulk_extractor) completed
+2026-09-19 20:02:42,125 [mulder-job_4] INFO mulder.server.jobs: [JOB_COMPLETE] run_bulk_extractor|completed|
+2026-09-19 20:02:44,477 [mulder-job_3] INFO mulder.server.jobs: Job job_b7af6769 (run_bulk_extractor) completed
+2026-09-19 20:02:44,478 [mulder-job_3] INFO mulder.server.jobs: [JOB_COMPLETE] run_bulk_extractor|completed|
+2026-09-19 20:06:38,190 [mulder-job_2] INFO mulder.server.jobs: Job job_33e2c38c (run_bulk_extractor) completed
+2026-09-19 20:06:38,191 [mulder-job_2] INFO mulder.server.jobs: [JOB_COMPLETE] run_bulk_extractor|completed|
+2026-09-19 20:06:48,827 [AnyIO worker thread] INFO mulder.server.jobs: Submitted batch bg_4c418cb1 with 11 jobs: ['run_registry_parser', 'run_evtx_parser', 'run_hayabusa', 'run_prefetch_parser', 'run_amcache_parser', 'run_shimcache_parser', 'run_mactime', 'detect_masquerading', 'detect_masquerading', 'detect_masquerading', 'detect_masquerading']
+2026-09-19 20:06:48,832 [mulder-job_1] INFO mulder.server.app: Resource throttle: run_hayabusa waiting (cpu=90%>=90.0%, waited 0s)
+2026-09-19 20:06:48,834 [mulder-job_4] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=90%>=90.0%, waited 0s)
+2026-09-19 20:06:48,835 [mulder-job_5] INFO mulder.server.app: Resource throttle: run_prefetch_parser waiting (cpu=90%>=90.0%, waited 0s)
+2026-09-19 20:06:48,836 [mulder-job_3] INFO mulder.server.app: Resource throttle: run_mactime waiting (cpu=90%>=90.0%, waited 0s)
+2026-09-19 20:06:48,837 [mulder-job_2] INFO mulder.server.app: Resource throttle: detect_masquerading waiting (cpu=90%>=90.0%, waited 0s)
+2026-09-19 20:06:48,838 [mulder-job_6] INFO mulder.server.app: Resource throttle: run_evtx_parser waiting (cpu=90%>=90.0%, waited 0s)
+2026-09-19 20:06:48,841 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_amcache_parser waiting (cpu=90%>=90.0%, waited 0s)
+2026-09-19 20:06:53,839 [mulder-job_1] INFO mulder.server.tools.hayabusa: Hayabusa: no prior EVTX extraction found; extracting inline from /evidence/cfreds_2015_data_leakage_pc.E01
+2026-09-19 20:07:01,906 [mulder-job_0] INFO mulder.extractors.disk: Detected partition at sector 2048 (byte offset 1048576) in /evidence/cfreds_2015_data_leakage_pc.E01: ntfs / exfat (0x07)
+2026-09-19 20:07:02,027 [mulder-job_0] WARNING mulder.server.jobs: Job job_856bcf31 (run_amcache_parser) returned error: Amcache.hve not found
+2026-09-19 20:07:02,030 [mulder-job_0] INFO mulder.server.jobs: [JOB_COMPLETE] run_amcache_parser|failed|Amcache.hve not found
+2026-09-19 20:07:07,388 [mulder-job_1] INFO mulder.server.tools.hayabusa: Hayabusa: extracted 54 EVTX files from /evidence/cfreds_2015_data_leakage_pc.E01
+2026-09-19 20:07:08,138 [mulder-job_0] INFO mulder.server.jobs: Job job_dd7359f7 (detect_masquerading) completed
+2026-09-19 20:07:08,140 [mulder-job_0] INFO mulder.server.jobs: [JOB_COMPLETE] detect_masquerading|completed|
+2026-09-19 20:07:13,049 [mulder-job_6] INFO mulder.server.jobs: Job job_2a217acf (run_evtx_parser) completed
+2026-09-19 20:07:13,051 [mulder-job_6] INFO mulder.server.jobs: [JOB_COMPLETE] run_evtx_parser|completed|
+2026-09-19 20:07:13,063 [mulder-job_0] INFO mulder.server.jobs: Job job_2fcc5a10 (detect_masquerading) completed
+2026-09-19 20:07:13,065 [mulder-job_0] INFO mulder.server.jobs: [JOB_COMPLETE] detect_masquerading|completed|
+2026-09-19 20:07:13,198 [mulder-job_6] WARNING mulder.server.jobs: Job job_7f4e8477 (detect_masquerading) returned error: fls could not open any partition: offset 0 (fls exited 1: Possible encryption detected (High entropy (7.65)))
+2026-09-19 20:07:13,215 [mulder-job_6] INFO mulder.server.jobs: [JOB_COMPLETE] detect_masquerading|failed|fls could not open any partition: offset 0 (fls exited 1: Possible encryption detected (High entropy (7.65)))
+2026-09-19 20:07:15,276 [mulder-job_4] INFO mulder.server.jobs: Job job_90a444d2 (run_shimcache_parser) completed
+2026-09-19 20:07:15,278 [mulder-job_4] INFO mulder.server.jobs: [JOB_COMPLETE] run_shimcache_parser|completed|
+2026-09-19 20:07:22,578 [mulder-job_1] INFO mulder.server.jobs: Job job_8b991562 (run_hayabusa) completed
+2026-09-19 20:07:22,595 [mulder-job_1] INFO mulder.server.jobs: [JOB_COMPLETE] run_hayabusa|completed|
+2026-09-19 20:07:28,129 [mulder-job_5] WARNING mulder.server.jobs: Job job_db210942 (run_prefetch_parser) returned error: PECmd.dll produced no CSV output
+2026-09-19 20:07:28,130 [mulder-job_5] INFO mulder.server.jobs: [JOB_COMPLETE] run_prefetch_parser|failed|PECmd.dll produced no CSV output
+2026-09-19 20:07:32,921 [mulder-job_3] INFO mulder.server.jobs: Job job_94e1f0ae (run_mactime) completed
+2026-09-19 20:07:32,922 [mulder-job_3] INFO mulder.server.jobs: [JOB_COMPLETE] run_mactime|completed|
+2026-09-19 20:07:41,734 [mulder-job_7] INFO mulder.server.jobs: Job job_00ccec33 (run_registry_parser) completed
+2026-09-19 20:07:41,735 [mulder-job_7] INFO mulder.server.jobs: [JOB_COMPLETE] run_registry_parser|completed|
+2026-09-19 20:08:39,764 [mulder-job_1] INFO mulder.server.jobs: Job job_2753cdef (run_bulk_extractor) completed
+2026-09-19 20:08:39,765 [mulder-job_1] INFO mulder.server.jobs: [JOB_COMPLETE] run_bulk_extractor|completed|
+2026-09-19 20:09:06,708 [AnyIO worker thread] INFO mulder.server.jobs: Submitted batch bg_64b9cf68 with 3 jobs: ['run_mactime', 'run_mft_parser', 'run_photorec']
+2026-09-19 20:09:06,718 [mulder-job_1] WARNING mulder.server.jobs: Job job_9fdb25db (run_photorec) returned error: photorec exited 1 and carved nothing: PhotoRec 7.1, Data Recovery Utility, July 2019
+Christophe GRENIER <grenier@cgsecurity.org>
+https://www.cgsecurity.org
+
+Unable to open file or device /evidence/cfreds_2015_data_leakage_rm1.E01: Success
+2026-09-19 20:09:06,720 [mulder-job_1] INFO mulder.server.jobs: [JOB_COMPLETE] run_photorec|failed|photorec exited 1 and carved nothing: PhotoRec 7.1, Data Recovery Utility, July 2019
+Christophe GRENIER <grenier@cgsecurity.org>
+https://www.cgsecurity.org
+
+Unable to open file or device /evidence/cfreds_2015_data_leakage_rm1.E01: Success
+2026-09-19 20:09:06,743 [mulder-job_0] INFO mulder.server.jobs: Job job_6fcc1674 (run_mft_parser) completed
+2026-09-19 20:09:06,744 [mulder-job_0] INFO mulder.server.jobs: [JOB_COMPLETE] run_mft_parser|completed|
+2026-09-19 20:09:08,386 [MainThread] INFO mulder.server.app: Resource throttle: run_strings waiting (cpu=100%>=90.0%, waited 0s)
+2026-09-19 20:09:08,391 [AnyIO worker thread] INFO mulder.server.tools.yara: YARA rules: /opt/signature-base is not writable by this user; using the installed checkout as-is
+2026-09-19 20:09:10,324 [mulder-job_2] INFO mulder.server.jobs: Job job_60b323b6 (run_mactime) completed
+2026-09-19 20:09:10,325 [mulder-job_2] INFO mulder.server.jobs: [JOB_COMPLETE] run_mactime|completed|
+2026-09-19 20:09:13,560 [AnyIO worker thread] INFO mulder.server.tools.yara: YARA rule validation: 733/746 files valid (individual)
+2026-09-19 20:09:34,773 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 20:09:38,328 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 20:09:38,356 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 20:11:10,643 [mulder-job_1] INFO mulder.server.jobs: Job job_5610b51f (run_bulk_extractor) completed
+2026-09-19 20:11:10,644 [mulder-job_1] INFO mulder.server.jobs: [JOB_COMPLETE] run_bulk_extractor|completed|
+2026-09-19 20:11:40,225 [AnyIO worker thread] INFO mulder.server.jobs: Submitted batch bg_20847dea with 4 jobs: ['detect_masquerading', 'run_foremost', 'run_mft_parser', 'run_mactime']
+2026-09-19 20:11:40,240 [mulder-job_2] INFO mulder.server.jobs: Job job_b6ee66c2 (detect_masquerading) completed
+2026-09-19 20:11:40,240 [mulder-job_2] INFO mulder.server.jobs: [JOB_COMPLETE] detect_masquerading|completed|
+2026-09-19 20:11:40,271 [mulder-job_0] INFO mulder.server.jobs: Job job_fe69a43a (run_mft_parser) completed
+2026-09-19 20:11:40,272 [mulder-job_0] INFO mulder.server.jobs: [JOB_COMPLETE] run_mft_parser|completed|
+2026-09-19 20:11:41,237 [mulder-job_1] INFO mulder.server.jobs: Job job_da23dae3 (run_mactime) completed
+2026-09-19 20:11:41,239 [mulder-job_1] INFO mulder.server.jobs: [JOB_COMPLETE] run_mactime|completed|
+2026-09-19 20:11:41,425 [AnyIO worker thread] INFO mulder.server.tools.yara: YARA rules: /opt/signature-base is not writable by this user; using the installed checkout as-is
+2026-09-19 20:11:41,657 [mulder-job_3] ERROR mulder.server.jobs: Job job_0101e5bf (run_foremost) failed
+Traceback (most recent call last):
+  File "/app/src/mulder/server/jobs.py", line 217, in _run_job
+    result = fn(**job.args)
+             ^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/tools/extract/carving.py", line 538, in run_foremost
+    subprocess.run(
+  File "/usr/lib/python3.12/subprocess.py", line 550, in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 1209, in communicate
+    stdout, stderr = self._communicate(input, endtime, timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 2153, in _communicate
+    stdout = self._translate_newlines(stdout,
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 1086, in _translate_newlines
+    data = data.decode(encoding, errors)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeDecodeError: 'utf-8' codec can't decode byte 0xec in position 30: invalid continuation byte
+2026-09-19 20:11:42,059 [mulder-job_3] INFO mulder.server.jobs: [JOB_COMPLETE] run_foremost|failed|run_foremost failed: 'utf-8' codec can't decode byte 0xec in position 30: invalid continuation byte
+2026-09-19 20:11:47,000 [AnyIO worker thread] INFO mulder.server.tools.yara: YARA rule validation: 733/746 files valid (individual)
+2026-09-19 20:11:53,870 [mulder-job_2] INFO mulder.server.jobs: Job job_8b4bff7d (detect_masquerading) completed
+2026-09-19 20:11:53,871 [mulder-job_2] INFO mulder.server.jobs: [JOB_COMPLETE] detect_masquerading|completed|
+2026-09-19 20:11:59,960 [MainThread] ERROR mcp.server.mcpserver.server: Tool 'run_foremost' raised an unexpected exception
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 176, in run
+    result = await self.fn_metadata.call_fn(self.fn, self.is_async, validated, pass_directly)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/utilities/func_metadata.py", line 163, in call_fn
+    return await fn(**kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/app.py", line 72, in wrapper
+    return await anyio.to_thread.run_sync(call, limiter=_get_tool_limiter())
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/to_thread.py", line 65, in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 2706, in run_sync_in_worker_thread
+    return await future
+           ^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/anyio/_backends/_asyncio.py", line 1100, in run
+    result = context.run(func, *args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/src/mulder/server/tools/extract/carving.py", line 538, in run_foremost
+    subprocess.run(
+  File "/usr/lib/python3.12/subprocess.py", line 550, in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 1209, in communicate
+    stdout, stderr = self._communicate(input, endtime, timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 2153, in _communicate
+    stdout = self._translate_newlines(stdout,
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 1086, in _translate_newlines
+    data = data.decode(encoding, errors)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeDecodeError: 'utf-8' codec can't decode byte 0xec in position 30: invalid continuation byte
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 433, in _handle_call_tool
+    return await self.call_tool(params.name, params.arguments or {}, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/server.py", line 539, in call_tool
+    return await self._tool_manager.call_tool(name, arguments, context, convert_result=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/tool_manager.py", line 87, in call_tool
+    return await tool.run(arguments, context, convert_result=convert_result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/mcp/server/mcpserver/tools/base.py", line 210, in run
+    raise UnexpectedToolError(f"Error executing tool {self.name}") from exc
+mcp.server.mcpserver.exceptions.UnexpectedToolError: Error executing tool run_foremost
+2026-09-19 20:12:05,919 [AnyIO worker thread] INFO mulder.server.tools.yara: YARA rules: /opt/signature-base is not writable by this user; using the installed checkout as-is
+2026-09-19 20:12:11,234 [AnyIO worker thread] INFO mulder.server.tools.yara: YARA rule validation: 733/746 files valid (individual)
+2026-09-19 20:12:22,632 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 20:12:26,030 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 20:12:26,058 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 20:12:57,797 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 20:13:01,175 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 20:13:01,202 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 20:13:10,386 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 20:13:14,202 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 20:13:14,230 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 20:16:07,238 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 20:16:10,198 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 20:16:10,226 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 20:19:08,917 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 20:19:15,709 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 20:19:15,739 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 20:19:21,678 [AnyIO worker thread] INFO mulder.server.tools.yara: YARA rules: /opt/signature-base is not writable by this user; using the installed checkout as-is
+2026-09-19 20:19:26,767 [AnyIO worker thread] INFO mulder.server.tools.yara: YARA rule validation: 733/746 files valid (individual)
+2026-09-19 20:20:05,119 [MainThread] INFO mulder.server.app: Resource throttle: extract_optical_file waiting (cpu=100%>=90.0%, waited 0s)
+2026-09-19 20:20:51,940 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 20:20:55,667 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 20:20:55,695 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 20:28:17,282 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 20:28:20,371 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 20:28:20,399 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 20:29:43,917 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 20:29:48,397 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 20:29:48,427 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 20:31:16,919 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 20:31:20,043 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 20:31:20,073 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 20:33:00,927 [AnyIO worker thread] INFO mulder.server.tools.attack: Loaded 97 ICS ATT&CK techniques from /opt/attack/ics-attack.json
+2026-09-19 20:33:00,929 [AnyIO worker thread] INFO mulder.server.tools.attack: Loaded 794 total ATT&CK techniques
+2026-09-19 20:43:03,234 [MainThread] INFO httpx: HTTP Request: GET http://ip-api.com/json/10.11.11.128?fields=status%2Cmessage%2Ccountry%2CregionName%2Ccity%2Cisp%2Cas%2Cquery "HTTP/1.1 200 OK"
+2026-09-19 20:45:03,578 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 20:45:06,859 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 20:45:06,890 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 20:47:09,057 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 20:47:13,177 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 20:47:13,208 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 20:49:02,332 [MainThread] INFO mulder.server.app: Resource throttle: search waiting (cpu=100%>=90.0%, waited 0s)
+2026-09-19 20:50:59,014 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 20:51:02,011 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 20:51:02,042 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-19 20:57:41,661 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-19 20:57:49,749 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-19 20:57:49,757 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'

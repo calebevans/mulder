@@ -36,11 +36,23 @@ RUN curl -fsSL https://github.com/libyal/libewf/releases/download/20240506/libew
 # setuid would parse hostile evidence with root privileges instead.
 # --disable-library links libntfs-3g statically so nothing shadows the distro
 # copy that libguestfs-tools depends on.
+# Source is the GitHub tag archive: tuxera.com answers CI runners with 403. The
+# archive carries no generated configure, hence autogen.sh and the autotools;
+# libgcrypt20-dev only supplies the AM_PATH_LIBGCRYPT macro autoreconf needs.
 FROM libewf-builder AS ntfs-3g-builder
-RUN curl -fsSL https://tuxera.com/opensource/ntfs-3g_ntfsprogs-2022.10.3.tgz \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        autoconf \
+        automake \
+        libtool \
+        libgcrypt20-dev \
+    && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL https://github.com/tuxera/ntfs-3g/archive/refs/tags/2022.10.3.tar.gz \
         -o /tmp/ntfs-3g.tgz \
+    && echo "8bd7749ea9d8534c9f0664d48b576e90b96d45ec8803c9427f6ffaa2f0dde299  /tmp/ntfs-3g.tgz" \
+        | sha256sum -c - \
     && tar xzf /tmp/ntfs-3g.tgz -C /tmp \
-    && cd /tmp/ntfs-3g_ntfsprogs-2022.10.3 \
+    && cd /tmp/ntfs-3g-2022.10.3 \
+    && ./autogen.sh \
     && ./configure --with-fuse=external \
         --disable-library --disable-ntfsprogs \
     && make -j"$(nproc)" \

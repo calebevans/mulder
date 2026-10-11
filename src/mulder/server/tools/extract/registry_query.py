@@ -11,7 +11,7 @@ import logging
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from Registry import Registry
 
@@ -163,7 +163,7 @@ def _extract_hive(
 def query_registry_value(
     case_id: str,
     image_path: str,
-    hive: Literal["system", "software", "sam", "security", "ntuser", "usrclass"],
+    hive: str,
     key_path: str,
     value_name: str | None = None,
     username: str | None = None,
@@ -200,7 +200,9 @@ def query_registry_value(
     Args:
         case_id: Active case identifier.
         image_path: Path to the disk image containing the registry hive.
-        hive: Target hive name.
+        hive: Target hive name: one of "system", "software", "sam",
+            "security", "ntuser", "usrclass" (case-insensitive, so
+            "SYSTEM" and "System" are accepted).
         key_path: Registry key path relative to the hive root
             (e.g., "ControlSet001\\Control\\TimeZoneInformation").
         value_name: Specific value to retrieve. If omitted, returns
@@ -222,6 +224,16 @@ def query_registry_value(
         "value_name": value_name,
         "username": username,
     }
+
+    hive = str(hive).lower()
+    if hive not in _HIVE_PATHS:
+        return error_response(
+            tc_id,
+            "query_registry_value",
+            params,
+            f"Unknown hive {params['hive']!r}; accepted names: " + ", ".join(_HIVE_PATHS),
+            error_type="invalid_params",
+        )
 
     if hive in ("ntuser", "usrclass") and not username:
         return error_response(

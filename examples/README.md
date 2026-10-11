@@ -1,18 +1,53 @@
 # Example Investigation Reports
 
 These are real investigation outputs produced by Mulder running autonomously
-against forensic evidence datasets.
+against forensic evidence datasets, unmodified from tool output.
 
-**Interactive HTML reports** (sidebar navigation, themes, audit trail) are published on GitHub Pages:
+## NIST Data Leakage Case on Mulder v1.5.2
 
-| Report | URL |
-|--------|-----|
-| Rocba | [Rocba.report.html](https://calebevans.github.io/mulder/examples/rocba/Rocba.report.html) |
-| SRL-2015 | [SRL-2015.report.html](https://calebevans.github.io/mulder/examples/srl-2015/SRL-2015.report.html) |
-| SRL-2018 | [SRL-2018.report.html](https://calebevans.github.io/mulder/examples/srl-2018/SRL-2018.report.html) |
-| NIST Data Leakage | [ndlc.report.html](https://calebevans.github.io/mulder/examples/ndlc/ndlc.report.html) |
+The same case, evidence, prompts and tools on the v1.5.2 release image, three
+times per model and scored item by item against the
+[published NIST answer key](https://cfreds-archive.nist.gov/data_leakage_case/leakage-answers.pdf)
+(20 ground-truth items). Each directory holds the full report (Markdown and
+HTML), the audit log, both execution logs, the scorecard and a README with the
+run's settings.
 
-## Investigations
+| Model | Provider | Full match | Detection | False positives | Findings | Tool calls | Runtime | Tokens | Report | Scorecard |
+|-------|----------|-----------:|----------:|----------------:|---------:|-----------:|--------:|-------:|--------|-----------|
+| Claude Opus 4.6, 3 runs: [1](ndlc-v1.5.2/opus-4.6-run1/), [2](ndlc-v1.5.2/opus-4.6-run2/), [3](ndlc-v1.5.2/opus-4.6-run3/) | Anthropic | 45% (45 to 50) | 95% (90 to 95) | 10% (5 to 10) | 23 / 24 / 24 | 596 / 500 / 630 | 68 / 69 / 79 min | 37K / 27K / 56K uncached in, 239K / 189K / 240K out | [1](https://calebevans.github.io/mulder/examples/ndlc-v1.5.2/opus-4.6-run1/ndlc.report.html), [2](https://calebevans.github.io/mulder/examples/ndlc-v1.5.2/opus-4.6-run2/ndlc.report.html), [3](https://calebevans.github.io/mulder/examples/ndlc-v1.5.2/opus-4.6-run3/ndlc.report.html) | [1](ndlc-v1.5.2/opus-4.6-run1/ACCURACY-REPORT.md), [2](ndlc-v1.5.2/opus-4.6-run2/ACCURACY-REPORT.md), [3](ndlc-v1.5.2/opus-4.6-run3/ACCURACY-REPORT.md) |
+| Kimi K3, 3 runs: [1](ndlc-v1.5.2/kimi-k3-run1/), [2](ndlc-v1.5.2/kimi-k3-run2/), [3](ndlc-v1.5.2/kimi-k3-run3/) | Bedrock | 35% (35 to 50) | 90% (80 to 95) | 20% (20 to 25) | 12 / 31 / 21 | 827 / 1,271 / 1,063 | 52 / 70 / 60 min | 200K / 180K / 170K out | [1](https://calebevans.github.io/mulder/examples/ndlc-v1.5.2/kimi-k3-run1/ndlc.report.html), [2](https://calebevans.github.io/mulder/examples/ndlc-v1.5.2/kimi-k3-run2/ndlc.report.html), [3](https://calebevans.github.io/mulder/examples/ndlc-v1.5.2/kimi-k3-run3/ndlc.report.html) | [1](ndlc-v1.5.2/kimi-k3-run1/ACCURACY-REPORT.md), [2](ndlc-v1.5.2/kimi-k3-run2/ACCURACY-REPORT.md), [3](ndlc-v1.5.2/kimi-k3-run3/ACCURACY-REPORT.md) |
+| GLM-5, 3 runs: [1](ndlc-v1.5.2/glm-5-run1/), [2](ndlc-v1.5.2/glm-5-run2/), [3](ndlc-v1.5.2/glm-5-run3/) | Bedrock | 20% (20 to 25) | 75% (75 to 90) | 20% (10 to 25) | 20 / 22 / 20 | 513 / 454 / 362 | 60 / 63 / 61 min | 9.3M / 9.1M / 8.4M in, 157K / 135K / 143K out | [1](https://calebevans.github.io/mulder/examples/ndlc-v1.5.2/glm-5-run1/ndlc.report.html), [2](https://calebevans.github.io/mulder/examples/ndlc-v1.5.2/glm-5-run2/ndlc.report.html), [3](https://calebevans.github.io/mulder/examples/ndlc-v1.5.2/glm-5-run3/ndlc.report.html) | [1](ndlc-v1.5.2/glm-5-run1/ACCURACY-REPORT.md), [2](ndlc-v1.5.2/glm-5-run2/ACCURACY-REPORT.md), [3](ndlc-v1.5.2/glm-5-run3/ACCURACY-REPORT.md) |
+
+Each model is listed as the median of three runs with the range in parentheses, and per-run counts in run order. Anthropic token counts exclude prompt-cache reads; the proxy models have no
+prompt caching, so their input counts are the full replayed context. LiteLLM
+does not report input tokens for Kimi K3.
+
+### Also tried on v1.5.2, not recommended
+
+Run three times each on the same image and scored the same way, but not
+published: MiniMax M2.5 (5% full match, 55% detection, 10% false positives),
+DeepSeek V3.2 (0% / 60% / 20%) and Qwen3 235B (0% / 35% / 10%). MiniMax stops
+after one device and leaves what it saw out of the report; DeepSeek and Qwen
+narrate document timestamps as events and read sample-document metadata as
+targets.
+
+Tried and dropped: GLM-4.7 (two runs, both collapsed the four images into one
+system at the catalog phase; 10% / 40% / 20%), Kimi K2 Thinking (cannot complete
+the catalog phase in either thinking mode), Devstral 2 123B (ran the case but a
+harness bug, fixed after v1.5.2, blocked its report), Mistral Large 3 (cannot
+complete the catalog phase: it emits a tool call with an empty name that
+Bedrock then rejects on every replay), Qwen3 Coder 480B (0% / 45% / 15%,
+concluded there was no incident), gpt-oss-120b (0% / 20% / 40%, an intrusion
+narrative with a host that does not exist in the evidence), Kimi K2.5 (cannot
+complete the catalog phase).
+
+## Earlier investigations (Mulder v1.5.1 and before)
+
+Older runs against other datasets, kept for reference. They predate the
+optical-media reader, the masquerade detector and the per-image partition
+fixes in v1.5.2 and were all run on Claude Opus 4.6.
+
+### Reports
 
 | Case | Systems | Evidence Sources | Tool Calls | Findings | Runtime | Tokens | Model | Report |
 |------|---------|-----------------|------------|----------|---------|--------|-------|--------|

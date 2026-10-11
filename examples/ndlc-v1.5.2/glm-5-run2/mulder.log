@@ -1,0 +1,405 @@
+2026-09-20 05:41:37,714 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-20 05:41:39,359 [AnyIO worker thread] INFO mulder.server.app: Creating empty case database for 'ndlc' ...
+2026-09-20 05:41:39,472 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-20 05:42:14,948 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-20 05:42:14,954 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-20 05:42:14,954 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-20 05:42:17,748 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-20 05:42:17,774 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-20 05:42:27,463 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-20 05:42:27,487 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-20 05:42:32,386 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-20 05:42:32,410 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-20 05:42:46,310 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-20 05:42:59,400 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-20 05:42:59,424 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-20 05:43:00,691 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-20 05:43:08,748 [AnyIO worker thread] INFO mulder.server.jobs: Submitted batch bg_db6402b3 with 4 jobs: ['run_mmls', 'run_fls', 'detect_masquerading', 'run_bulk_extractor']
+2026-09-20 05:43:08,803 [mulder-job_0] INFO mulder.server.jobs: Job job_7f99c95f (run_mmls) completed
+2026-09-20 05:43:08,804 [mulder-job_0] INFO mulder.server.jobs: [JOB_COMPLETE] run_mmls|completed|
+2026-09-20 05:43:08,816 [mulder-job_1] INFO mulder.server.tools.extract.tsk: run_fls: offset 0 failed, retrying with mmls-detected offset 128
+2026-09-20 05:43:09,756 [mulder-job_1] INFO mulder.server.jobs: Job job_d54d569c (run_fls) completed
+2026-09-20 05:43:09,757 [mulder-job_1] INFO mulder.server.jobs: [JOB_COMPLETE] run_fls|completed|
+2026-09-20 05:43:10,422 [mulder-job_2] INFO mulder.server.jobs: Job job_d9cb3564 (detect_masquerading) completed
+2026-09-20 05:43:10,423 [mulder-job_2] INFO mulder.server.jobs: [JOB_COMPLETE] detect_masquerading|completed|
+2026-09-20 05:43:10,450 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-20 05:43:10,475 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-20 05:43:12,067 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-20 05:43:24,814 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-20 05:43:24,839 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-20 05:43:46,447 [AnyIO worker thread] INFO mulder.server.jobs: Submitted batch bg_b8ab5c93 with 4 jobs: ['run_fls', 'run_bulk_extractor', 'detect_masquerading', 'run_mft_parser']
+2026-09-20 05:43:46,541 [mulder-job_0] INFO mulder.server.tools.extract.tsk: run_fls: offset 0 failed, retrying with mmls-detected offset 206848
+2026-09-20 05:43:50,290 [mulder-job_3] INFO mulder.server.jobs: Job job_0cd765a2 (run_bulk_extractor) completed
+2026-09-20 05:43:50,291 [mulder-job_3] INFO mulder.server.jobs: [JOB_COMPLETE] run_bulk_extractor|completed|
+2026-09-20 05:43:51,976 [mulder-job_3] INFO mulder.server.jobs: Job job_771c0629 (run_mft_parser) completed
+2026-09-20 05:43:51,977 [mulder-job_3] INFO mulder.server.jobs: [JOB_COMPLETE] run_mft_parser|completed|
+2026-09-20 05:43:56,822 [mulder-job_0] INFO mulder.server.tools.extract.tsk: Indexed secondary partition tsk.filelist.p1: offset=2048, desc=ntfs / exfat (0x07)
+2026-09-20 05:43:56,826 [mulder-job_0] INFO mulder.server.jobs: Job job_a7268514 (run_fls) completed
+2026-09-20 05:43:56,827 [mulder-job_0] INFO mulder.server.jobs: [JOB_COMPLETE] run_fls|completed|
+2026-09-20 05:44:03,234 [AnyIO worker thread] INFO mulder.server.jobs: Submitted batch bg_01ff5127 with 3 jobs: ['run_fls', 'run_bulk_extractor', 'detect_masquerading']
+2026-09-20 05:44:03,372 [mulder-job_0] INFO mulder.server.tools.extract.tsk: run_fls: offset 0 failed, retrying with mmls-detected offset 32
+2026-09-20 05:44:08,312 [mulder-job_0] INFO mulder.server.jobs: Job job_3652c52c (run_fls) completed
+2026-09-20 05:44:08,317 [mulder-job_0] INFO mulder.server.jobs: [JOB_COMPLETE] run_fls|completed|
+2026-09-20 05:44:09,134 [mulder-job_2] INFO mulder.server.jobs: Job job_004ca444 (detect_masquerading) completed
+2026-09-20 05:44:09,136 [mulder-job_2] INFO mulder.server.jobs: [JOB_COMPLETE] detect_masquerading|completed|
+2026-09-20 05:44:32,458 [AnyIO worker thread] WARNING mulder.server.tools.jobs: Rejecting run_evtx_parser in batch: unexpected parameter(s) 'image_path'; missing required parameter(s) 'evtx_path'; accepted: evtx_path, force
+2026-09-20 05:44:32,474 [AnyIO worker thread] WARNING mulder.server.tools.jobs: Rejecting yara_scan_files in batch: unexpected parameter(s) 'image_path'; missing required parameter(s) 'target_path'; accepted: target_path, rules, ruleset
+2026-09-20 05:44:32,489 [mulder-job_0] INFO mulder.server.tools.hayabusa: Hayabusa: no prior EVTX extraction found; extracting inline from /evidence/cfreds_2015_data_leakage_rm2.E01
+2026-09-20 05:44:32,510 [AnyIO worker thread] INFO mulder.server.jobs: Submitted batch bg_54a29dbd with 9 jobs: ['run_hayabusa', 'run_registry_parser', 'run_prefetch_parser', 'run_amcache_parser', 'run_shimcache_parser', 'run_mft_parser', 'query_registry_value', 'query_registry_value', 'query_registry_value']
+2026-09-20 05:44:32,671 [mulder-job_5] INFO mulder.server.jobs: Job job_de278fda (run_mft_parser) completed
+2026-09-20 05:44:32,676 [mulder-job_5] INFO mulder.server.jobs: [JOB_COMPLETE] run_mft_parser|completed|
+2026-09-20 05:44:32,679 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 0s)
+2026-09-20 05:44:37,700 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 5s)
+2026-09-20 05:44:42,739 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 10s)
+2026-09-20 05:44:43,922 [mulder-job_2] INFO mulder.extractors.disk: Detected partition at sector 128 (byte offset 65536) in /evidence/cfreds_2015_data_leakage_rm2.E01: win95 fat32 (0x0b)
+2026-09-20 05:44:44,190 [mulder-job_2] WARNING mulder.extractors.disk: ntfs-3g exited 12: NTFS signature is missing. Failed to mount '/tmp/mulder_mount_0wrpzlij.raw/cfreds_2015_data_leakage_rm2.dd': Invalid argument The device '/tmp/mulder_mount_0wrpzlij.raw/cfreds_2015_data_leakage_rm2.dd' doesn't seem to have a valid NTFS. Maybe the wrong device is used? Or the whole disk instead of a partition (e.g. /dev/sda, not /dev/sda1)? Or the other way around? (argv: ntfs-3g -o ro,noexec,no_def_opts /tmp/mulder_mount_0wrpzlij.raw/cfreds_2015_data_leakage_rm2.dd /tmp/mulder_mount_0wrpzlij)
+2026-09-20 05:44:44,211 [mulder-job_2] WARNING mulder.extractors.disk: fuse2fs exited 2: Mounting read-only. /tmp/mulder_mount_0wrpzlij.raw/cfreds_2015_data_leakage_rm2.dd: Bad magic number in super-block. Please run e2fsck -fy /tmp/mulder_mount_0wrpzlij.raw/cfreds_2015_data_leakage_rm2.dd. (argv: fuse2fs -o ro,noexec /tmp/mulder_mount_0wrpzlij.raw/cfreds_2015_data_leakage_rm2.dd /tmp/mulder_mount_0wrpzlij)
+2026-09-20 05:44:44,215 [mulder-job_2] ERROR mulder.extractors.disk: No FUSE filesystem driver could mount /evidence/cfreds_2015_data_leakage_rm2.E01 (offset 65536)
+2026-09-20 05:44:44,270 [mulder-job_2] WARNING mulder.server.jobs: Job job_9ec3cc47 (run_amcache_parser) returned error: Amcache.hve not found via TSK extraction or mount
+2026-09-20 05:44:44,345 [mulder-job_2] INFO mulder.server.jobs: [JOB_COMPLETE] run_amcache_parser|failed|Amcache.hve not found via TSK extraction or mount
+2026-09-20 05:44:44,737 [mulder-job_7] WARNING mulder.server.jobs: Job job_52bbaa1f (query_registry_value) returned error: Could not locate software hive in image /evidence/cfreds_2015_data_leakage_rm2.E01. Ensure run_fls has been executed on this image.
+2026-09-20 05:44:44,739 [mulder-job_7] INFO mulder.server.jobs: [JOB_COMPLETE] query_registry_value|failed|Could not locate software hive in image /evidence/cfreds_2015_data_leakage_rm2.E01. Ensure run_fls has been executed on this image.
+2026-09-20 05:44:47,827 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 15s)
+2026-09-20 05:44:51,221 [mulder-job_0] WARNING mulder.server.jobs: Job job_6b7319ea (run_hayabusa) returned error: No EVTX directory found. Run run_evtx_parser on a disk image first, or provide an explicit evtx_dir path.
+2026-09-20 05:44:51,222 [mulder-job_0] INFO mulder.server.jobs: [JOB_COMPLETE] run_hayabusa|failed|No EVTX directory found. Run run_evtx_parser on a disk image first, or provide an explicit evtx_dir path.
+2026-09-20 05:44:51,230 [mulder-job_3] INFO mulder.extractors.disk: Detected partition at sector 128 (byte offset 65536) in /evidence/cfreds_2015_data_leakage_rm2.E01: win95 fat32 (0x0b)
+2026-09-20 05:44:51,450 [mulder-job_3] WARNING mulder.extractors.disk: ntfs-3g exited 12: NTFS signature is missing. Failed to mount '/tmp/mulder_mount_zhoao6o6.raw/cfreds_2015_data_leakage_rm2.dd': Invalid argument The device '/tmp/mulder_mount_zhoao6o6.raw/cfreds_2015_data_leakage_rm2.dd' doesn't seem to have a valid NTFS. Maybe the wrong device is used? Or the whole disk instead of a partition (e.g. /dev/sda, not /dev/sda1)? Or the other way around? (argv: ntfs-3g -o ro,noexec,no_def_opts /tmp/mulder_mount_zhoao6o6.raw/cfreds_2015_data_leakage_rm2.dd /tmp/mulder_mount_zhoao6o6)
+2026-09-20 05:44:51,528 [mulder-job_3] WARNING mulder.extractors.disk: fuse2fs exited 2: Mounting read-only. /tmp/mulder_mount_zhoao6o6.raw/cfreds_2015_data_leakage_rm2.dd: Bad magic number in super-block. Please run e2fsck -fy /tmp/mulder_mount_zhoao6o6.raw/cfreds_2015_data_leakage_rm2.dd. (argv: fuse2fs -o ro,noexec /tmp/mulder_mount_zhoao6o6.raw/cfreds_2015_data_leakage_rm2.dd /tmp/mulder_mount_zhoao6o6)
+2026-09-20 05:44:51,530 [mulder-job_3] ERROR mulder.extractors.disk: No FUSE filesystem driver could mount /evidence/cfreds_2015_data_leakage_rm2.E01 (offset 65536)
+2026-09-20 05:44:51,538 [mulder-job_6] WARNING mulder.server.jobs: Job job_76d8f497 (query_registry_value) returned error: Could not locate system hive in image /evidence/cfreds_2015_data_leakage_rm2.E01. Ensure run_fls has been executed on this image.
+2026-09-20 05:44:51,539 [mulder-job_6] INFO mulder.server.jobs: [JOB_COMPLETE] query_registry_value|failed|Could not locate system hive in image /evidence/cfreds_2015_data_leakage_rm2.E01. Ensure run_fls has been executed on this image.
+2026-09-20 05:44:51,547 [mulder-job_3] WARNING mulder.server.jobs: Job job_bf4e6979 (run_shimcache_parser) returned error: SYSTEM hive not found via TSK extraction or mount
+2026-09-20 05:44:51,548 [mulder-job_3] INFO mulder.server.jobs: [JOB_COMPLETE] run_shimcache_parser|failed|SYSTEM hive not found via TSK extraction or mount
+2026-09-20 05:44:52,699 [mulder-job_1] INFO mulder.extractors.disk: Detected partition at sector 128 (byte offset 65536) in /evidence/cfreds_2015_data_leakage_rm2.E01: win95 fat32 (0x0b)
+2026-09-20 05:44:52,833 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 20s)
+2026-09-20 05:44:52,841 [mulder-job_1] WARNING mulder.extractors.disk: ntfs-3g exited 12: NTFS signature is missing. Failed to mount '/tmp/mulder_mount__hlcpv1o.raw/cfreds_2015_data_leakage_rm2.dd': Invalid argument The device '/tmp/mulder_mount__hlcpv1o.raw/cfreds_2015_data_leakage_rm2.dd' doesn't seem to have a valid NTFS. Maybe the wrong device is used? Or the whole disk instead of a partition (e.g. /dev/sda, not /dev/sda1)? Or the other way around? (argv: ntfs-3g -o ro,noexec,no_def_opts /tmp/mulder_mount__hlcpv1o.raw/cfreds_2015_data_leakage_rm2.dd /tmp/mulder_mount__hlcpv1o)
+2026-09-20 05:44:52,862 [mulder-job_1] WARNING mulder.extractors.disk: fuse2fs exited 2: Mounting read-only. /tmp/mulder_mount__hlcpv1o.raw/cfreds_2015_data_leakage_rm2.dd: Bad magic number in super-block. Please run e2fsck -fy /tmp/mulder_mount__hlcpv1o.raw/cfreds_2015_data_leakage_rm2.dd. (argv: fuse2fs -o ro,noexec /tmp/mulder_mount__hlcpv1o.raw/cfreds_2015_data_leakage_rm2.dd /tmp/mulder_mount__hlcpv1o)
+2026-09-20 05:44:52,864 [mulder-job_1] ERROR mulder.extractors.disk: No FUSE filesystem driver could mount /evidence/cfreds_2015_data_leakage_rm2.E01 (offset 65536)
+2026-09-20 05:44:52,887 [mulder-job_1] WARNING mulder.server.jobs: Job job_6a2729f6 (run_registry_parser) returned error: No registry hives found via TSK extraction or mount
+2026-09-20 05:44:52,888 [mulder-job_1] INFO mulder.server.jobs: [JOB_COMPLETE] run_registry_parser|failed|No registry hives found via TSK extraction or mount
+2026-09-20 05:44:53,764 [mulder-job_4] INFO mulder.extractors.disk: Detected partition at sector 128 (byte offset 65536) in /evidence/cfreds_2015_data_leakage_rm2.E01: win95 fat32 (0x0b)
+2026-09-20 05:44:53,890 [mulder-job_4] WARNING mulder.extractors.disk: ntfs-3g exited 12: NTFS signature is missing. Failed to mount '/tmp/mulder_mount_b2_vtwls.raw/cfreds_2015_data_leakage_rm2.dd': Invalid argument The device '/tmp/mulder_mount_b2_vtwls.raw/cfreds_2015_data_leakage_rm2.dd' doesn't seem to have a valid NTFS. Maybe the wrong device is used? Or the whole disk instead of a partition (e.g. /dev/sda, not /dev/sda1)? Or the other way around? (argv: ntfs-3g -o ro,noexec,no_def_opts /tmp/mulder_mount_b2_vtwls.raw/cfreds_2015_data_leakage_rm2.dd /tmp/mulder_mount_b2_vtwls)
+2026-09-20 05:44:53,905 [mulder-job_4] WARNING mulder.extractors.disk: fuse2fs exited 2: Mounting read-only. /tmp/mulder_mount_b2_vtwls.raw/cfreds_2015_data_leakage_rm2.dd: Bad magic number in super-block. Please run e2fsck -fy /tmp/mulder_mount_b2_vtwls.raw/cfreds_2015_data_leakage_rm2.dd. (argv: fuse2fs -o ro,noexec /tmp/mulder_mount_b2_vtwls.raw/cfreds_2015_data_leakage_rm2.dd /tmp/mulder_mount_b2_vtwls)
+2026-09-20 05:44:53,907 [mulder-job_4] ERROR mulder.extractors.disk: No FUSE filesystem driver could mount /evidence/cfreds_2015_data_leakage_rm2.E01 (offset 65536)
+2026-09-20 05:44:53,920 [mulder-job_4] WARNING mulder.server.jobs: Job job_fc5dedd7 (run_prefetch_parser) returned error: No Prefetch files found via TSK extraction or mount
+2026-09-20 05:44:53,925 [mulder-job_4] INFO mulder.server.jobs: [JOB_COMPLETE] run_prefetch_parser|failed|No Prefetch files found via TSK extraction or mount
+2026-09-20 05:44:57,835 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 25s)
+2026-09-20 05:45:02,838 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 30s)
+2026-09-20 05:45:07,840 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 35s)
+2026-09-20 05:45:12,842 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 40s)
+2026-09-20 05:45:17,844 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 45s)
+2026-09-20 05:45:22,847 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 50s)
+2026-09-20 05:45:24,547 [mulder-job_1] INFO mulder.server.jobs: Job job_c65100cc (run_bulk_extractor) completed
+2026-09-20 05:45:24,548 [mulder-job_1] INFO mulder.server.jobs: [JOB_COMPLETE] run_bulk_extractor|completed|
+2026-09-20 05:45:27,849 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 55s)
+2026-09-20 05:45:32,851 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 60s)
+2026-09-20 05:45:37,853 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 65s)
+2026-09-20 05:45:42,855 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 70s)
+2026-09-20 05:45:47,857 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 75s)
+2026-09-20 05:45:52,862 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 80s)
+2026-09-20 05:45:57,864 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 85s)
+2026-09-20 05:46:02,866 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 90s)
+2026-09-20 05:46:07,868 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 95s)
+2026-09-20 05:46:12,870 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 100s)
+2026-09-20 05:46:17,872 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 105s)
+2026-09-20 05:46:22,874 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 110s)
+2026-09-20 05:46:23,598 [AnyIO worker thread] WARNING mulder.server.tools.jobs: Rejecting run_evtx_parser in batch: unexpected parameter(s) 'image_path'; missing required parameter(s) 'evtx_path'; accepted: evtx_path, force
+2026-09-20 05:46:23,616 [AnyIO worker thread] INFO mulder.server.jobs: Submitted batch bg_c0b36430 with 4 jobs: ['run_registry_parser', 'run_prefetch_parser', 'run_shimcache_parser', 'run_mft_parser']
+2026-09-20 05:46:23,618 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 0s)
+2026-09-20 05:46:23,621 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_prefetch_parser waiting (cpu=100%>=90.0%, waited 0s)
+2026-09-20 05:46:23,623 [mulder-job_1] INFO mulder.server.app: Resource throttle: run_mft_parser waiting (cpu=100%>=90.0%, waited 0s)
+2026-09-20 05:46:27,882 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 115s)
+2026-09-20 05:46:28,630 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 5s)
+2026-09-20 05:46:28,632 [mulder-job_1] INFO mulder.server.app: Resource throttle: run_mft_parser waiting (cpu=100%>=90.0%, waited 5s)
+2026-09-20 05:46:28,645 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_prefetch_parser waiting (cpu=100%>=90.0%, waited 5s)
+2026-09-20 05:46:29,325 [mulder-job_3] INFO mulder.extractors.disk: Detected partition at sector 32 (byte offset 16384) in /evidence/cfreds_2015_data_leakage_rm1.E01: ntfs / exfat (0x07)
+2026-09-20 05:46:29,429 [mulder-job_3] WARNING mulder.extractors.disk: ntfs-3g exited 12: NTFS signature is missing. Failed to mount '/tmp/mulder_mount_gfajw99x.raw/cfreds_2015_data_leakage_rm1.dd': Invalid argument The device '/tmp/mulder_mount_gfajw99x.raw/cfreds_2015_data_leakage_rm1.dd' doesn't seem to have a valid NTFS. Maybe the wrong device is used? Or the whole disk instead of a partition (e.g. /dev/sda, not /dev/sda1)? Or the other way around? (argv: ntfs-3g -o ro,noexec,no_def_opts /tmp/mulder_mount_gfajw99x.raw/cfreds_2015_data_leakage_rm1.dd /tmp/mulder_mount_gfajw99x)
+2026-09-20 05:46:29,438 [mulder-job_3] WARNING mulder.extractors.disk: fuse2fs exited 2: Mounting read-only. /tmp/mulder_mount_gfajw99x.raw/cfreds_2015_data_leakage_rm1.dd: Bad magic number in super-block. Please run e2fsck -fy /tmp/mulder_mount_gfajw99x.raw/cfreds_2015_data_leakage_rm1.dd. (argv: fuse2fs -o ro,noexec /tmp/mulder_mount_gfajw99x.raw/cfreds_2015_data_leakage_rm1.dd /tmp/mulder_mount_gfajw99x)
+2026-09-20 05:46:29,440 [mulder-job_3] ERROR mulder.extractors.disk: No FUSE filesystem driver could mount /evidence/cfreds_2015_data_leakage_rm1.E01 (offset 16384)
+2026-09-20 05:46:29,454 [mulder-job_3] WARNING mulder.server.jobs: Job job_34e01161 (run_registry_parser) returned error: No registry hives found via TSK extraction or mount
+2026-09-20 05:46:29,455 [mulder-job_3] INFO mulder.server.jobs: [JOB_COMPLETE] run_registry_parser|failed|No registry hives found via TSK extraction or mount
+2026-09-20 05:46:32,620 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=95%>=90.0%, waited 0s)
+2026-09-20 05:46:32,622 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 0s)
+2026-09-20 05:46:32,885 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 120s)
+2026-09-20 05:46:33,633 [mulder-job_1] INFO mulder.server.app: Resource throttle: run_mft_parser waiting (cpu=100%>=90.0%, waited 10s)
+2026-09-20 05:46:33,635 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 10s)
+2026-09-20 05:46:33,647 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_prefetch_parser waiting (cpu=100%>=90.0%, waited 10s)
+2026-09-20 05:46:37,627 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 5s)
+2026-09-20 05:46:37,629 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 5s)
+2026-09-20 05:46:37,887 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 125s)
+2026-09-20 05:46:38,635 [mulder-job_1] INFO mulder.server.app: Resource throttle: run_mft_parser waiting (cpu=100%>=90.0%, waited 15s)
+2026-09-20 05:46:38,638 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 15s)
+2026-09-20 05:46:38,648 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_prefetch_parser waiting (cpu=100%>=90.0%, waited 15s)
+2026-09-20 05:46:42,634 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 10s)
+2026-09-20 05:46:42,636 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 10s)
+2026-09-20 05:46:42,889 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 130s)
+2026-09-20 05:46:43,637 [mulder-job_1] INFO mulder.server.app: Resource throttle: run_mft_parser waiting (cpu=100%>=90.0%, waited 20s)
+2026-09-20 05:46:43,640 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 20s)
+2026-09-20 05:46:43,650 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_prefetch_parser waiting (cpu=100%>=90.0%, waited 20s)
+2026-09-20 05:46:47,641 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 15s)
+2026-09-20 05:46:47,643 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 15s)
+2026-09-20 05:46:47,891 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 135s)
+2026-09-20 05:46:48,639 [mulder-job_1] INFO mulder.server.app: Resource throttle: run_mft_parser waiting (cpu=100%>=90.0%, waited 25s)
+2026-09-20 05:46:48,642 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 25s)
+2026-09-20 05:46:48,652 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_prefetch_parser waiting (cpu=100%>=90.0%, waited 25s)
+2026-09-20 05:46:52,648 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 20s)
+2026-09-20 05:46:52,654 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 20s)
+2026-09-20 05:46:52,893 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 140s)
+2026-09-20 05:46:53,641 [mulder-job_1] INFO mulder.server.app: Resource throttle: run_mft_parser waiting (cpu=100%>=90.0%, waited 30s)
+2026-09-20 05:46:53,646 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 30s)
+2026-09-20 05:46:53,654 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_prefetch_parser waiting (cpu=100%>=90.0%, waited 30s)
+2026-09-20 05:46:57,660 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 25s)
+2026-09-20 05:46:57,666 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 25s)
+2026-09-20 05:46:57,895 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 145s)
+2026-09-20 05:46:58,643 [mulder-job_1] INFO mulder.server.app: Resource throttle: run_mft_parser waiting (cpu=100%>=90.0%, waited 35s)
+2026-09-20 05:46:58,648 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 35s)
+2026-09-20 05:46:58,656 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_prefetch_parser waiting (cpu=100%>=90.0%, waited 35s)
+2026-09-20 05:47:02,671 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 30s)
+2026-09-20 05:47:02,673 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 30s)
+2026-09-20 05:47:02,897 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 150s)
+2026-09-20 05:47:03,645 [mulder-job_1] INFO mulder.server.app: Resource throttle: run_mft_parser waiting (cpu=100%>=90.0%, waited 40s)
+2026-09-20 05:47:03,650 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 40s)
+2026-09-20 05:47:03,658 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_prefetch_parser waiting (cpu=100%>=90.0%, waited 40s)
+2026-09-20 05:47:07,678 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=99%>=90.0%, waited 35s)
+2026-09-20 05:47:07,680 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 35s)
+2026-09-20 05:47:07,899 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=99%>=90.0%, waited 155s)
+2026-09-20 05:47:08,647 [mulder-job_1] INFO mulder.server.app: Resource throttle: run_mft_parser waiting (cpu=98%>=90.0%, waited 45s)
+2026-09-20 05:47:08,652 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=98%>=90.0%, waited 45s)
+2026-09-20 05:47:08,660 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_prefetch_parser waiting (cpu=98%>=90.0%, waited 45s)
+2026-09-20 05:47:12,685 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=94%>=90.0%, waited 40s)
+2026-09-20 05:47:12,687 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 40s)
+2026-09-20 05:47:12,901 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=94%>=90.0%, waited 160s)
+2026-09-20 05:47:13,649 [mulder-job_1] INFO mulder.server.app: Resource throttle: run_mft_parser waiting (cpu=94%>=90.0%, waited 50s)
+2026-09-20 05:47:13,653 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=94%>=90.0%, waited 50s)
+2026-09-20 05:47:13,662 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_prefetch_parser waiting (cpu=94%>=90.0%, waited 50s)
+2026-09-20 05:47:17,692 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=98%>=90.0%, waited 45s)
+2026-09-20 05:47:17,694 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 45s)
+2026-09-20 05:47:17,903 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=98%>=90.0%, waited 165s)
+2026-09-20 05:47:18,651 [mulder-job_1] INFO mulder.server.app: Resource throttle: run_mft_parser waiting (cpu=99%>=90.0%, waited 55s)
+2026-09-20 05:47:18,659 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=99%>=90.0%, waited 55s)
+2026-09-20 05:47:18,667 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_prefetch_parser waiting (cpu=99%>=90.0%, waited 55s)
+2026-09-20 05:47:22,699 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 50s)
+2026-09-20 05:47:22,701 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 50s)
+2026-09-20 05:47:22,908 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 170s)
+2026-09-20 05:47:23,653 [mulder-job_1] INFO mulder.server.app: Resource throttle: run_mft_parser waiting (cpu=100%>=90.0%, waited 60s)
+2026-09-20 05:47:23,661 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 60s)
+2026-09-20 05:47:23,668 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_prefetch_parser waiting (cpu=100%>=90.0%, waited 60s)
+2026-09-20 05:47:27,706 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 55s)
+2026-09-20 05:47:27,708 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 55s)
+2026-09-20 05:47:27,912 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 175s)
+2026-09-20 05:47:28,655 [mulder-job_1] INFO mulder.server.app: Resource throttle: run_mft_parser waiting (cpu=100%>=90.0%, waited 65s)
+2026-09-20 05:47:28,663 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 65s)
+2026-09-20 05:47:28,670 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_prefetch_parser waiting (cpu=100%>=90.0%, waited 65s)
+2026-09-20 05:47:32,718 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 60s)
+2026-09-20 05:47:32,720 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 60s)
+2026-09-20 05:47:32,914 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 180s)
+2026-09-20 05:47:33,659 [mulder-job_1] INFO mulder.server.app: Resource throttle: run_mft_parser waiting (cpu=100%>=90.0%, waited 70s)
+2026-09-20 05:47:33,665 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 70s)
+2026-09-20 05:47:33,672 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_prefetch_parser waiting (cpu=100%>=90.0%, waited 70s)
+2026-09-20 05:47:37,725 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 65s)
+2026-09-20 05:47:37,728 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 65s)
+2026-09-20 05:47:37,916 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 185s)
+2026-09-20 05:47:38,661 [mulder-job_1] INFO mulder.server.app: Resource throttle: run_mft_parser waiting (cpu=100%>=90.0%, waited 75s)
+2026-09-20 05:47:38,667 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 75s)
+2026-09-20 05:47:38,676 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_prefetch_parser waiting (cpu=100%>=90.0%, waited 75s)
+2026-09-20 05:47:42,733 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 70s)
+2026-09-20 05:47:42,735 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 70s)
+2026-09-20 05:47:42,920 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 190s)
+2026-09-20 05:47:43,662 [mulder-job_1] INFO mulder.server.app: Resource throttle: run_mft_parser waiting (cpu=100%>=90.0%, waited 80s)
+2026-09-20 05:47:43,668 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 80s)
+2026-09-20 05:47:43,677 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_prefetch_parser waiting (cpu=100%>=90.0%, waited 80s)
+2026-09-20 05:47:47,740 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 75s)
+2026-09-20 05:47:47,742 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 75s)
+2026-09-20 05:47:47,922 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 195s)
+2026-09-20 05:47:48,667 [mulder-job_1] INFO mulder.server.app: Resource throttle: run_mft_parser waiting (cpu=100%>=90.0%, waited 85s)
+2026-09-20 05:47:48,671 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 85s)
+2026-09-20 05:47:48,681 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_prefetch_parser waiting (cpu=100%>=90.0%, waited 85s)
+2026-09-20 05:47:52,747 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 80s)
+2026-09-20 05:47:52,749 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 80s)
+2026-09-20 05:47:52,926 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 200s)
+2026-09-20 05:47:53,669 [mulder-job_1] INFO mulder.server.app: Resource throttle: run_mft_parser waiting (cpu=100%>=90.0%, waited 90s)
+2026-09-20 05:47:53,673 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 90s)
+2026-09-20 05:47:53,683 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_prefetch_parser waiting (cpu=100%>=90.0%, waited 90s)
+2026-09-20 05:47:57,754 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 85s)
+2026-09-20 05:47:57,756 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 85s)
+2026-09-20 05:47:57,928 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 205s)
+2026-09-20 05:47:58,672 [mulder-job_1] INFO mulder.server.app: Resource throttle: run_mft_parser waiting (cpu=100%>=90.0%, waited 95s)
+2026-09-20 05:47:58,674 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 95s)
+2026-09-20 05:47:58,685 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_prefetch_parser waiting (cpu=100%>=90.0%, waited 95s)
+2026-09-20 05:48:02,761 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 90s)
+2026-09-20 05:48:02,763 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 90s)
+2026-09-20 05:48:02,930 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 210s)
+2026-09-20 05:48:03,674 [mulder-job_1] INFO mulder.server.app: Resource throttle: run_mft_parser waiting (cpu=100%>=90.0%, waited 100s)
+2026-09-20 05:48:03,678 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 100s)
+2026-09-20 05:48:03,687 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_prefetch_parser waiting (cpu=100%>=90.0%, waited 100s)
+2026-09-20 05:48:07,768 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 95s)
+2026-09-20 05:48:07,770 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 95s)
+2026-09-20 05:48:07,932 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 215s)
+2026-09-20 05:48:08,676 [mulder-job_1] INFO mulder.server.app: Resource throttle: run_mft_parser waiting (cpu=100%>=90.0%, waited 105s)
+2026-09-20 05:48:08,680 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 105s)
+2026-09-20 05:48:08,689 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_prefetch_parser waiting (cpu=100%>=90.0%, waited 105s)
+2026-09-20 05:48:12,775 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 100s)
+2026-09-20 05:48:12,777 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 100s)
+2026-09-20 05:48:12,934 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 220s)
+2026-09-20 05:48:13,678 [mulder-job_1] INFO mulder.server.app: Resource throttle: run_mft_parser waiting (cpu=100%>=90.0%, waited 110s)
+2026-09-20 05:48:13,681 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 110s)
+2026-09-20 05:48:13,691 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_prefetch_parser waiting (cpu=100%>=90.0%, waited 110s)
+2026-09-20 05:48:17,782 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 105s)
+2026-09-20 05:48:17,784 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 105s)
+2026-09-20 05:48:17,936 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 225s)
+2026-09-20 05:48:18,680 [mulder-job_1] INFO mulder.server.app: Resource throttle: run_mft_parser waiting (cpu=100%>=90.0%, waited 115s)
+2026-09-20 05:48:18,683 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 115s)
+2026-09-20 05:48:18,693 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_prefetch_parser waiting (cpu=100%>=90.0%, waited 115s)
+2026-09-20 05:48:22,789 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 110s)
+2026-09-20 05:48:22,791 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 110s)
+2026-09-20 05:48:22,938 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 230s)
+2026-09-20 05:48:23,682 [mulder-job_1] INFO mulder.server.app: Resource throttle: run_mft_parser waiting (cpu=100%>=90.0%, waited 120s)
+2026-09-20 05:48:23,687 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 120s)
+2026-09-20 05:48:23,695 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_prefetch_parser waiting (cpu=100%>=90.0%, waited 120s)
+2026-09-20 05:48:27,796 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 115s)
+2026-09-20 05:48:27,798 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 115s)
+2026-09-20 05:48:27,940 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 235s)
+2026-09-20 05:48:28,684 [mulder-job_1] INFO mulder.server.app: Resource throttle: run_mft_parser waiting (cpu=100%>=90.0%, waited 125s)
+2026-09-20 05:48:28,688 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 125s)
+2026-09-20 05:48:28,699 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_prefetch_parser waiting (cpu=100%>=90.0%, waited 125s)
+2026-09-20 05:48:32,803 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 120s)
+2026-09-20 05:48:32,805 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 120s)
+2026-09-20 05:48:32,942 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 240s)
+2026-09-20 05:48:33,686 [mulder-job_1] INFO mulder.server.app: Resource throttle: run_mft_parser waiting (cpu=100%>=90.0%, waited 130s)
+2026-09-20 05:48:33,692 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 130s)
+2026-09-20 05:48:33,701 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_prefetch_parser waiting (cpu=100%>=90.0%, waited 130s)
+2026-09-20 05:48:37,810 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 125s)
+2026-09-20 05:48:37,812 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 125s)
+2026-09-20 05:48:37,944 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 245s)
+2026-09-20 05:48:38,688 [mulder-job_1] INFO mulder.server.app: Resource throttle: run_mft_parser waiting (cpu=100%>=90.0%, waited 135s)
+2026-09-20 05:48:38,694 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 135s)
+2026-09-20 05:48:38,703 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_prefetch_parser waiting (cpu=100%>=90.0%, waited 135s)
+2026-09-20 05:48:42,817 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 130s)
+2026-09-20 05:48:42,819 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 130s)
+2026-09-20 05:48:42,946 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 250s)
+2026-09-20 05:48:43,690 [mulder-job_1] INFO mulder.server.app: Resource throttle: run_mft_parser waiting (cpu=100%>=90.0%, waited 140s)
+2026-09-20 05:48:43,696 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=100%>=90.0%, waited 140s)
+2026-09-20 05:48:43,704 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_prefetch_parser waiting (cpu=100%>=90.0%, waited 140s)
+2026-09-20 05:48:46,517 [mulder-job_2] INFO mulder.server.jobs: Job job_831b8b2c (detect_masquerading) completed
+2026-09-20 05:48:46,518 [mulder-job_2] INFO mulder.server.jobs: [JOB_COMPLETE] detect_masquerading|completed|
+2026-09-20 05:48:47,824 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=95%>=90.0%, waited 135s)
+2026-09-20 05:48:47,826 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 135s)
+2026-09-20 05:48:47,948 [mulder-job_5] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=95%>=90.0%, waited 255s)
+2026-09-20 05:48:48,692 [mulder-job_1] INFO mulder.server.app: Resource throttle: run_mft_parser waiting (cpu=93%>=90.0%, waited 145s)
+2026-09-20 05:48:48,697 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_shimcache_parser waiting (cpu=93%>=90.0%, waited 145s)
+2026-09-20 05:48:48,706 [mulder-job_0] INFO mulder.server.app: Resource throttle: run_prefetch_parser waiting (cpu=93%>=90.0%, waited 145s)
+2026-09-20 05:48:52,827 [MainThread] INFO mulder.server.app: Resource throttle: query_registry_value waiting (cpu=100%>=90.0%, waited 140s)
+2026-09-20 05:48:53,725 [mulder-job_1] INFO mulder.server.jobs: Job job_2fc6912b (run_mft_parser) completed
+2026-09-20 05:48:53,727 [mulder-job_1] INFO mulder.server.jobs: [JOB_COMPLETE] run_mft_parser|completed|
+2026-09-20 05:48:55,923 [mulder-job_5] WARNING mulder.server.jobs: Job job_f5852fb7 (query_registry_value) returned error: Could not locate system hive in image /evidence/cfreds_2015_data_leakage_rm2.E01. Ensure run_fls has been executed on this image.
+2026-09-20 05:48:55,924 [mulder-job_5] INFO mulder.server.jobs: [JOB_COMPLETE] query_registry_value|failed|Could not locate system hive in image /evidence/cfreds_2015_data_leakage_rm2.E01. Ensure run_fls has been executed on this image.
+2026-09-20 05:48:55,970 [AnyIO worker thread] INFO mulder.server.jobs: Submitted batch bg_660ad02e with 2 jobs: ['run_evtx_parser', 'yara_scan_files']
+2026-09-20 05:48:55,971 [mulder-job_2] INFO mulder.server.app: Resource throttle: run_evtx_parser waiting (cpu=99%>=90.0%, waited 0s)
+2026-09-20 05:48:55,972 [mulder-job_7] INFO mulder.server.app: Resource throttle: yara_scan_files waiting (cpu=99%>=90.0%, waited 0s)
+2026-09-20 05:48:57,742 [mulder-job_2] INFO mulder.extractors.disk: Detected partition at sector 32 (byte offset 16384) in /evidence/cfreds_2015_data_leakage_rm1.E01: ntfs / exfat (0x07)
+2026-09-20 05:48:57,825 [mulder-job_2] WARNING mulder.extractors.disk: ntfs-3g exited 12: NTFS signature is missing. Failed to mount '/tmp/mulder_mount_zpo45z3_.raw/cfreds_2015_data_leakage_rm1.dd': Invalid argument The device '/tmp/mulder_mount_zpo45z3_.raw/cfreds_2015_data_leakage_rm1.dd' doesn't seem to have a valid NTFS. Maybe the wrong device is used? Or the whole disk instead of a partition (e.g. /dev/sda, not /dev/sda1)? Or the other way around? (argv: ntfs-3g -o ro,noexec,no_def_opts /tmp/mulder_mount_zpo45z3_.raw/cfreds_2015_data_leakage_rm1.dd /tmp/mulder_mount_zpo45z3_)
+2026-09-20 05:48:57,829 [mulder-job_2] WARNING mulder.extractors.disk: fuse2fs exited 2: Mounting read-only. /tmp/mulder_mount_zpo45z3_.raw/cfreds_2015_data_leakage_rm1.dd: Bad magic number in super-block. Please run e2fsck -fy /tmp/mulder_mount_zpo45z3_.raw/cfreds_2015_data_leakage_rm1.dd. (argv: fuse2fs -o ro,noexec /tmp/mulder_mount_zpo45z3_.raw/cfreds_2015_data_leakage_rm1.dd /tmp/mulder_mount_zpo45z3_)
+2026-09-20 05:48:57,830 [mulder-job_2] ERROR mulder.extractors.disk: No FUSE filesystem driver could mount /evidence/cfreds_2015_data_leakage_rm1.E01 (offset 16384)
+2026-09-20 05:48:57,845 [mulder-job_2] WARNING mulder.server.jobs: Job job_d4a4e325 (run_shimcache_parser) returned error: SYSTEM hive not found via TSK extraction or mount
+2026-09-20 05:48:57,847 [mulder-job_2] INFO mulder.server.jobs: [JOB_COMPLETE] run_shimcache_parser|failed|SYSTEM hive not found via TSK extraction or mount
+2026-09-20 05:49:00,977 [mulder-job_7] INFO mulder.server.tools.yara: YARA rules: /opt/signature-base is not writable by this user; using the installed checkout as-is
+2026-09-20 05:49:02,305 [mulder-job_0] INFO mulder.extractors.disk: Detected partition at sector 32 (byte offset 16384) in /evidence/cfreds_2015_data_leakage_rm1.E01: ntfs / exfat (0x07)
+2026-09-20 05:49:02,387 [mulder-job_0] WARNING mulder.extractors.disk: ntfs-3g exited 12: NTFS signature is missing. Failed to mount '/tmp/mulder_mount_r2bu0zkl.raw/cfreds_2015_data_leakage_rm1.dd': Invalid argument The device '/tmp/mulder_mount_r2bu0zkl.raw/cfreds_2015_data_leakage_rm1.dd' doesn't seem to have a valid NTFS. Maybe the wrong device is used? Or the whole disk instead of a partition (e.g. /dev/sda, not /dev/sda1)? Or the other way around? (argv: ntfs-3g -o ro,noexec,no_def_opts /tmp/mulder_mount_r2bu0zkl.raw/cfreds_2015_data_leakage_rm1.dd /tmp/mulder_mount_r2bu0zkl)
+2026-09-20 05:49:02,392 [mulder-job_0] WARNING mulder.extractors.disk: fuse2fs exited 2: Mounting read-only. /tmp/mulder_mount_r2bu0zkl.raw/cfreds_2015_data_leakage_rm1.dd: Bad magic number in super-block. Please run e2fsck -fy /tmp/mulder_mount_r2bu0zkl.raw/cfreds_2015_data_leakage_rm1.dd. (argv: fuse2fs -o ro,noexec /tmp/mulder_mount_r2bu0zkl.raw/cfreds_2015_data_leakage_rm1.dd /tmp/mulder_mount_r2bu0zkl)
+2026-09-20 05:49:02,393 [mulder-job_0] ERROR mulder.extractors.disk: No FUSE filesystem driver could mount /evidence/cfreds_2015_data_leakage_rm1.E01 (offset 16384)
+2026-09-20 05:49:02,405 [mulder-job_0] WARNING mulder.server.jobs: Job job_aa44ef2e (run_prefetch_parser) returned error: No Prefetch files found via TSK extraction or mount
+2026-09-20 05:49:02,406 [mulder-job_0] INFO mulder.server.jobs: [JOB_COMPLETE] run_prefetch_parser|failed|No Prefetch files found via TSK extraction or mount
+2026-09-20 05:49:03,603 [mulder-job_2] WARNING mulder.server.jobs: Job job_dedac18a (run_evtx_parser) returned error: No EVTX files found in disk image. Ensure run_fls has been called first, or run run_bulk_extractor which can carve EVTX fragments even when fls fails.
+2026-09-20 05:49:03,605 [mulder-job_2] INFO mulder.server.jobs: [JOB_COMPLETE] run_evtx_parser|failed|No EVTX files found in disk image. Ensure run_fls has been called first, or run run_bulk_extractor which can carve EVTX fragments even when fls fails.
+2026-09-20 05:49:06,341 [mulder-job_7] INFO mulder.server.tools.yara: YARA rule validation: 733/746 files valid (individual)
+2026-09-20 05:49:09,896 [mulder-job_7] INFO mulder.server.jobs: Job job_9d2708ca (yara_scan_files) completed
+2026-09-20 05:49:09,897 [mulder-job_7] INFO mulder.server.jobs: [JOB_COMPLETE] yara_scan_files|completed|
+2026-09-20 05:49:18,920 [AnyIO worker thread] INFO mulder.server.jobs: Submitted batch bg_16badfd3 with 1 jobs: ['run_evtx_parser']
+2026-09-20 05:49:18,921 [mulder-job_3] INFO mulder.server.app: Resource throttle: run_evtx_parser waiting (cpu=96%>=90.0%, waited 0s)
+2026-09-20 05:49:25,938 [mulder-job_3] WARNING mulder.server.jobs: Job job_c5af193a (run_evtx_parser) returned error: No EVTX files found in disk image. Ensure run_fls has been called first, or run run_bulk_extractor which can carve EVTX fragments even when fls fails.
+2026-09-20 05:49:25,939 [mulder-job_3] INFO mulder.server.jobs: [JOB_COMPLETE] run_evtx_parser|failed|No EVTX files found in disk image. Ensure run_fls has been called first, or run run_bulk_extractor which can carve EVTX fragments even when fls fails.
+2026-09-20 05:49:34,556 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-20 05:49:35,551 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-20 05:49:35,576 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-20 05:49:47,047 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-20 05:49:53,969 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-20 05:49:53,996 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-20 05:50:39,941 [AnyIO worker thread] INFO mulder.server.tools.hayabusa: Hayabusa: no prior EVTX extraction found; extracting inline from /evidence/cfreds_2015_data_leakage_rm1.E01
+2026-09-20 05:50:49,205 [AnyIO worker thread] INFO mulder.server.tools.yara: YARA rules: /opt/signature-base is not writable by this user; using the installed checkout as-is
+2026-09-20 05:50:53,700 [AnyIO worker thread] INFO mulder.server.tools.yara: YARA rule validation: 733/746 files valid (individual)
+2026-09-20 05:51:06,980 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-20 05:51:07,940 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-20 05:51:07,965 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-20 05:51:19,214 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-20 05:51:26,066 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-20 05:51:26,091 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-20 05:55:22,292 [mulder-job_1] INFO mulder.server.jobs: Job job_db97e3e2 (run_bulk_extractor) completed
+2026-09-20 05:55:22,293 [mulder-job_1] INFO mulder.server.jobs: [JOB_COMPLETE] run_bulk_extractor|completed|
+2026-09-20 05:55:47,498 [AnyIO worker thread] INFO mulder.server.jobs: Submitted batch bg_d0b0ce87 with 7 jobs: ['run_evtx_parser', 'run_hayabusa', 'run_registry_parser', 'run_prefetch_parser', 'run_amcache_parser', 'run_shimcache_parser', 'query_registry_value']
+2026-09-20 05:55:47,537 [mulder-job_5] INFO mulder.server.tools.hayabusa: Hayabusa: no prior EVTX extraction found; extracting inline from /evidence/cfreds_2015_data_leakage_pc.E01
+2026-09-20 05:55:51,807 [mulder-job_6] INFO mulder.extractors.disk: Detected partition at sector 2048 (byte offset 1048576) in /evidence/cfreds_2015_data_leakage_pc.E01: ntfs / exfat (0x07)
+2026-09-20 05:55:51,910 [mulder-job_6] WARNING mulder.server.jobs: Job job_93b1b2f0 (run_amcache_parser) returned error: Amcache.hve not found
+2026-09-20 05:55:51,911 [mulder-job_6] INFO mulder.server.jobs: [JOB_COMPLETE] run_amcache_parser|failed|Amcache.hve not found
+2026-09-20 05:55:57,741 [mulder-job_1] INFO mulder.server.jobs: Job job_5595a18e (query_registry_value) completed
+2026-09-20 05:55:57,748 [mulder-job_1] INFO mulder.server.jobs: [JOB_COMPLETE] query_registry_value|completed|
+2026-09-20 05:55:57,854 [mulder-job_4] INFO mulder.server.jobs: Job job_2141d35c (run_evtx_parser) completed
+2026-09-20 05:55:57,897 [mulder-job_4] INFO mulder.server.jobs: [JOB_COMPLETE] run_evtx_parser|completed|
+2026-09-20 05:55:58,253 [mulder-job_5] INFO mulder.server.tools.hayabusa: Hayabusa: extracted 54 EVTX files from /evidence/cfreds_2015_data_leakage_pc.E01
+2026-09-20 05:55:59,894 [mulder-job_2] INFO mulder.server.jobs: Job job_5557e75b (run_shimcache_parser) completed
+2026-09-20 05:55:59,895 [mulder-job_2] INFO mulder.server.jobs: [JOB_COMPLETE] run_shimcache_parser|completed|
+2026-09-20 05:56:03,552 [mulder-job_0] WARNING mulder.server.jobs: Job job_879f76e3 (run_prefetch_parser) returned error: PECmd.dll produced no CSV output
+2026-09-20 05:56:03,553 [mulder-job_0] INFO mulder.server.jobs: [JOB_COMPLETE] run_prefetch_parser|failed|PECmd.dll produced no CSV output
+2026-09-20 05:56:09,195 [mulder-job_5] INFO mulder.server.jobs: Job job_63d8e091 (run_hayabusa) completed
+2026-09-20 05:56:09,196 [mulder-job_5] INFO mulder.server.jobs: [JOB_COMPLETE] run_hayabusa|completed|
+2026-09-20 05:56:22,106 [mulder-job_3] INFO mulder.server.jobs: Job job_9066a540 (run_registry_parser) completed
+2026-09-20 05:56:22,107 [mulder-job_3] INFO mulder.server.jobs: [JOB_COMPLETE] run_registry_parser|completed|
+2026-09-20 05:57:02,525 [MainThread] INFO mcp.server.mcpserver.server: Tool 'submit_finding' rejected arguments: ['confidence']
+2026-09-20 05:57:03,700 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-20 05:57:05,628 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-20 05:57:05,653 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-20 05:57:19,682 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-20 05:57:22,021 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-20 05:57:22,046 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-20 06:00:53,197 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-20 06:01:09,420 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-20 06:01:09,445 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-20 06:01:39,971 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-20 06:01:50,670 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-20 06:01:50,696 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-20 06:01:54,743 [AnyIO worker thread] INFO mulder.server.jobs: Submitted batch bg_58f6abd9 with 2 jobs: ['run_optical_listing', 'run_bulk_extractor']
+2026-09-20 06:01:54,826 [mulder-job_0] INFO mulder.server.jobs: Job job_0c47d431 (run_optical_listing) completed
+2026-09-20 06:01:54,827 [mulder-job_0] INFO mulder.server.jobs: [JOB_COMPLETE] run_optical_listing|completed|
+2026-09-20 06:03:07,393 [mulder-job_1] INFO mulder.server.jobs: Job job_36e0411f (run_bulk_extractor) completed
+2026-09-20 06:03:07,394 [mulder-job_1] INFO mulder.server.jobs: [JOB_COMPLETE] run_bulk_extractor|completed|
+2026-09-20 06:03:32,150 [AnyIO worker thread] INFO mulder.server.jobs: Submitted batch bg_c88f6bcb with 2 jobs: ['yara_scan_files', 'detect_masquerading']
+2026-09-20 06:03:32,152 [mulder-job_0] INFO mulder.server.tools.yara: YARA rules: /opt/signature-base is not writable by this user; using the installed checkout as-is
+2026-09-20 06:03:32,194 [mulder-job_1] WARNING mulder.server.jobs: Job job_bb5162ca (detect_masquerading) returned error: fls could not open any partition: offset 0 (fls exited 1: Possible encryption detected (High entropy (7.65)))
+2026-09-20 06:03:32,195 [mulder-job_1] INFO mulder.server.jobs: [JOB_COMPLETE] detect_masquerading|failed|fls could not open any partition: offset 0 (fls exited 1: Possible encryption detected (High entropy (7.65)))
+2026-09-20 06:03:36,586 [mulder-job_0] INFO mulder.server.tools.yara: YARA rule validation: 733/746 files valid (individual)
+2026-09-20 06:03:37,961 [mulder-job_0] INFO mulder.server.jobs: Job job_d1e6ae5b (yara_scan_files) completed
+2026-09-20 06:03:37,962 [mulder-job_0] INFO mulder.server.jobs: [JOB_COMPLETE] yara_scan_files|completed|
+2026-09-20 06:04:00,488 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-20 06:04:07,564 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-20 06:04:07,590 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-20 06:10:56,387 [MainThread] INFO mcp.server.mcpserver.server: Tool 'submit_finding' rejected arguments: ['confidence']
+2026-09-20 06:12:31,463 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-20 06:12:39,145 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-20 06:12:39,172 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-20 06:14:00,041 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-20 06:14:30,889 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-20 06:14:30,915 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-20 06:16:03,522 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-20 06:16:05,064 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-20 06:16:05,091 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-20 06:24:51,961 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-20 06:24:54,070 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-20 06:24:54,097 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-20 06:27:45,092 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-20 06:27:57,922 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-20 06:27:57,948 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-20 06:29:23,245 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-20 06:29:31,352 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-20 06:29:31,379 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
+2026-09-20 06:38:30,052 [MainThread] INFO mulder.server.app: Mulder MCP server ready (db_dir=/home/mulder/.mulder/cases)
+2026-09-20 06:38:39,992 [AnyIO worker thread] INFO mulder.server.app: Opening case database for 'ndlc' ...
+2026-09-20 06:38:39,998 [AnyIO worker thread] INFO mulder.server.app: Server context ready for case 'ndlc'
