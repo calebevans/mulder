@@ -60,6 +60,16 @@ tar archives are unpacked. Only completed extractions are reused. A failed or
 partial extraction returns an error and is retried on the next call. Reused
 extractions return `status="already_extracted"`, `extracted_to`, and `files[]`.
 
+The expanded size is checked against the free space on the destination
+filesystem (less a 1 GiB reserve) before anything is written, for every format:
+zip and tar use the declared member sizes, `.7z` (and `.rar`, and a zip that
+falls back to `7z`) uses the `7z l -slt` totals, and a bare `.gz`/`.bz2` is
+copied in counted chunks. The member count is checked against the free inodes
+where the filesystem reports them. An archive that does not fit returns
+`error_type="disk_space"` and nothing is extracted (a bare stream's partial
+output is removed). The check re-reads free space on every call, so nested
+archives, extracted one level per call, each see what the previous ones used.
+
 **Roles:** `CATALOG` `EXTRACT_EXECUTOR`
 
 ### verify_evidence_integrity
