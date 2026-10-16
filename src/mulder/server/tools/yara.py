@@ -444,6 +444,7 @@ def _yara_error(
         params=params,
         output_hash=hash_output({"error": error_msg}),
         duration_ms=elapsed,
+        status="error",
     )
     return {
         "tool_call_id": tc_id,

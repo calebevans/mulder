@@ -23,6 +23,7 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
+from mulder.audit import AuditLog
 from mulder.models import AuditSummary, CaseMetadataRow, Finding, SourceRow
 from mulder.patterns import SEVERITY_ORDER, source_is_cited
 from mulder.report.renderer import ReportRenderer
@@ -50,6 +51,21 @@ _AUXILIARY_SOURCES = frozenset(
 )
 _AUXILIARY_PREFIXES = ("registry.query.",)
 _AUXILIARY_SUFFIXES = (".stats", ".manifest", ".manifest.json")
+
+# This module's own tools: their output is the investigation's bookkeeping, not
+# evidence, and citing one (even a rejected submission) would let a finding
+# vouch for itself.
+_FINDING_TOOLS = frozenset(
+    {
+        "submit_finding",
+        "update_finding",
+        "delete_finding",
+        "get_findings",
+        "submit_narrative",
+        "finalize_report",
+        "deduplicate_findings",
+    }
+)
 
 
 def is_evidence_source(source: SourceRow) -> bool:
@@ -224,6 +240,20 @@ def _evaluate_finalize_gates(
     return gates
 
 
+def _uncitable_refs(audit: AuditLog, evidence_refs: list[str]) -> list[str]:
+    """Refs that are not a logged, successful call to an evidence tool."""
+    uncitable = []
+    for ref in evidence_refs:
+        entry = audit.get_tool_call(ref)
+        if (
+            entry is None
+            or entry.get("status") == "error"
+            or entry.get("tool_name") in _FINDING_TOOLS
+        ):
+            uncitable.append(ref)
+    return uncitable
+
+
 def _sanitize_event_time(ts: str | None) -> tuple[str | None, str | None]:
     """Validate an event timestamp and nullify day-precision placeholders.
 
@@ -262,8 +292,10 @@ def submit_finding(
     """Record a forensic finding with validated evidence references and metadata.
 
     Call after discovering evidence worth reporting. Every evidence_ref
-    must be a tool_call_id from a prior tool invocation (validated against
-    the audit log). The evidence_ref must be from a tool call whose output
+    must be the tool_call_id of a prior call that succeeded (validated
+    against the audit log). The id of a failed call, or of a call to a
+    findings, narrative or report tool, is refused. The evidence_ref must
+    be from a tool call whose output
     you directly examined and that specifically supports this finding's
     claims. Citing a tool_call_id from a search you did not review is
     insufficient.
@@ -282,14 +314,17 @@ def submit_finding(
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
 
-    invalid_refs = [ref for ref in evidence_refs if not ctx.audit.has_tool_call(ref)]
+    invalid_refs = _uncitable_refs(ctx.audit, evidence_refs)
     if invalid_refs:
-        recent_ids = sorted(ctx.audit.tool_call_ids)[-10:]
+        recent_ids = sorted(
+            ref for ref in ctx.audit.tool_call_ids if not _uncitable_refs(ctx.audit, [ref])
+        )[-10:]
         resp = error_response(
             tc_id,
             "submit_finding",
             {"title": title, "evidence_refs": evidence_refs},
-            f"Invalid evidence_ref(s): {', '.join(invalid_refs)} not found in the audit log",
+            f"Invalid evidence_ref(s): {', '.join(invalid_refs)} not found in the audit log "
+            "as a successful call to an evidence tool",
             (time.monotonic() - t0) * 1000,
         )
         resp["valid_refs"] = recent_ids
@@ -409,7 +444,8 @@ def update_finding(
         description: New/appended description (optional).
         severity: New severity level (optional).
         confidence: New confidence level (optional).
-        evidence_refs: New evidence refs list (optional).
+        evidence_refs: New evidence refs list (optional). Each must be the
+            tool_call_id of a prior successful call, as for submit_finding.
         sources: New sources list (optional).
         mitre_attack_ids: New ATT&CK IDs (optional).
         event_time_start: New start time (optional).
@@ -432,14 +468,17 @@ def update_finding(
     if evidence_refs == []:
         evidence_refs = None  # a finding must keep >=1 ref; treat [] as "unchanged" (#239)
     if evidence_refs is not None:
-        invalid_refs = [ref for ref in evidence_refs if not ctx.audit.has_tool_call(ref)]
+        invalid_refs = _uncitable_refs(ctx.audit, evidence_refs)
         if invalid_refs:
-            recent_ids = sorted(ctx.audit.tool_call_ids)[-10:]
+            recent_ids = sorted(
+                ref for ref in ctx.audit.tool_call_ids if not _uncitable_refs(ctx.audit, [ref])
+            )[-10:]
             resp = error_response(
                 tc_id,
                 "update_finding",
                 {"finding_id": finding_id, "evidence_refs": evidence_refs},
-                f"Invalid evidence_ref(s): {', '.join(invalid_refs)} not found in the audit log",
+                f"Invalid evidence_ref(s): {', '.join(invalid_refs)} not found in the audit log "
+                "as a successful call to an evidence tool",
                 (time.monotonic() - t0) * 1000,
             )
             resp["valid_refs"] = recent_ids

@@ -105,6 +105,7 @@ def start_extraction_batch(tasks: list[dict[str, Any]]) -> dict[str, Any]:
                 params={"tasks": [t["tool"] for t in tasks]},
                 output_hash=hash_output({"error": "unknown_tools", "tools": invalid}),
                 duration_ms=elapsed,
+                status="error",
             )
         except RuntimeError:
             logger.warning("Audit skipped: no active case context for start_extraction_batch")
@@ -187,6 +188,7 @@ def start_extraction_batch(tasks: list[dict[str, Any]]) -> dict[str, Any]:
                     }
                 ),
                 duration_ms=elapsed,
+                status="error" if rejected or not_available else None,
             )
         except RuntimeError:
             logger.warning("Audit skipped: no active case context for start_extraction_batch")
@@ -289,6 +291,7 @@ def check_extraction_status(batch_id: str) -> dict[str, Any]:
             params={"batch_id": batch_id},
             output_hash=hash_output(status or {}),
             duration_ms=elapsed,
+            status="error" if status is None else None,
         )
     except RuntimeError:
         logger.warning("Audit skipped: no active case context for check_extraction_status")
@@ -368,6 +371,7 @@ def get_completed_results(
                 params={"batch_id": batch_id, "tool_names": tool_names},
                 output_hash=hash_output({"error": "unknown_batch"}),
                 duration_ms=elapsed,
+                status="error",
             )
         except RuntimeError:
             logger.warning("Audit skipped: no active case context for get_completed_results")
@@ -477,6 +481,7 @@ def wait_all(
                 params={"batch_ids": batch_ids},
                 output_hash=hash_output({"error": "all_invalid"}),
                 duration_ms=elapsed,
+                status="error",
             )
         except RuntimeError:
             logger.warning("Audit skipped: no active case context for wait_all")

@@ -666,6 +666,11 @@ _SEQUENTIAL_ONLY: set[str] = {
 }
 
 
+def _is_error_result(result: Any) -> bool:
+    """True for a run_parallel task result that records a failure."""
+    return isinstance(result, dict) and ("error" in result or result.get("status") == "error")
+
+
 @mcp.tool()
 @tool_access(EXECUTORS)
 async def run_parallel(tasks: list[dict[str, Any]]) -> dict[str, Any]:
@@ -761,6 +766,8 @@ async def run_parallel(tasks: list[dict[str, Any]]) -> dict[str, Any]:
             duration_ms=elapsed_ms,
             sub_calls=sub_call_ids,
             batch_id=None,
+            # Nothing ran (every task refused, rejected or failed): not evidence.
+            status="error" if tasks and all(_is_error_result(r) for r in results) else None,
         )
 
     return {

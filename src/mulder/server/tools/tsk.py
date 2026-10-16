@@ -424,6 +424,7 @@ def extract_file_by_inode(
             params={"inode": inode},
             output_hash=hash_output({"error": error_msg}),
             duration_ms=elapsed,
+            status="error",
         )
         return {
             "tool_call_id": tc_id,
@@ -455,6 +456,7 @@ def extract_file_by_inode(
             params={"inode": inode},
             output_hash=hash_output({"error": error_msg}),
             duration_ms=elapsed,
+            status="error",
         )
         return {
             "tool_call_id": tc_id,
@@ -476,6 +478,7 @@ def extract_file_by_inode(
             params={"inode": inode},
             output_hash=hash_output({"error": error_msg}),
             duration_ms=elapsed,
+            status="error",
         )
         return {
             "tool_call_id": tc_id,
@@ -560,6 +563,7 @@ def get_file_metadata(
             params={"inode": inode},
             output_hash=hash_output({"error": error_msg}),
             duration_ms=elapsed,
+            status="error",
         )
         return {
             "tool_call_id": tc_id,
@@ -592,6 +596,7 @@ def get_file_metadata(
             params={"inode": inode},
             output_hash=hash_output({"error": error_msg}),
             duration_ms=elapsed,
+            status="error",
         )
         return {
             "tool_call_id": tc_id,
@@ -612,6 +617,7 @@ def get_file_metadata(
             params={"inode": inode},
             output_hash=hash_output({"error": error_msg}),
             duration_ms=elapsed,
+            status="error",
         )
         return {
             "tool_call_id": tc_id,
