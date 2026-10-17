@@ -40,11 +40,15 @@ def _submit(
         patch("mulder.server.app._tool_dispatch_sync", dispatch),
         patch("mulder.server.app.get_job_store", return_value=store),
         patch("mulder.server.tools.jobs.tool_already_indexed", return_value=None),
+        # Permission tests must not wait on the host's CPU/memory pressure.
+        patch("mulder.server.app.wait_for_resources", return_value=None),
     ):
-        result = start_extraction_batch(tasks)
-    if result["status"] == "submitted":
-        assert store.wait_for_batch(result["batch_id"], timeout=5.0)
-    store.shutdown(wait=True)
+        try:
+            result = start_extraction_batch(tasks)
+            if result["status"] == "submitted":
+                assert store.wait_for_batch(result["batch_id"], timeout=5.0)
+        finally:
+            store.shutdown(wait=True)
     return result
 
 
