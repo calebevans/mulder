@@ -65,6 +65,11 @@ _SYSTEM_COLORS: list[str] = [
 
 _SYSTEM_PREFIX_RE: re.Pattern[str] = re.compile(r"\[([^\]]+)\]\s*")
 
+# C0 controls except \t and \n, DEL, and C1 controls. Rich only strips a few
+# of these, so ESC/CSI/OSC sequences in model or tool text would otherwise
+# reach the operator's terminal verbatim.
+_CONTROL_CHARS_RE: re.Pattern[str] = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
 _SPINNER_FRAMES: str = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 _HEADER_SIZE: int = 8
@@ -87,6 +92,19 @@ class TaskItem:
     status: Literal["pending", "running", "done", "failed"] = "pending"
     elapsed_seconds: float | None = None
     error: str | None = None
+
+
+def _neutralize_controls(text: str) -> str:
+    """Replace terminal control characters with visible ``\\xNN`` escapes.
+
+    Args:
+        text: Untrusted text (model output, tool errors, finding titles).
+
+    Returns:
+        The text with C0/C1 control characters (other than newline and
+        tab) rendered as literal escapes.
+    """
+    return _CONTROL_CHARS_RE.sub(lambda m: f"\\x{ord(m.group()):02x}", text)
 
 
 def _format_elapsed(start: float) -> str:
@@ -189,7 +207,7 @@ class InvestigationDashboard:
             style: Rich style string applied to the entire line.
         """
         logger.info("[dashboard] %s", text.strip())
-        styled = Text(text, style=style)
+        styled = Text(_neutralize_controls(text), style=style)
         self._log_lines.append(styled)
 
     def start(self) -> None:
@@ -302,7 +320,7 @@ class InvestigationDashboard:
             text: Raw text from an assistant TextBlock.
         """
         for line in text.strip().splitlines():
-            stripped = line.strip()
+            stripped = _neutralize_controls(line.strip())
             if stripped:
                 logger.info("[dashboard] %s", stripped)
                 match = _SYSTEM_PREFIX_RE.match(stripped)
@@ -341,7 +359,7 @@ class InvestigationDashboard:
         label = severity.upper()
         line = Text()
         line.append(f"  {dot} [{label}] ", style=style)
-        line.append(title)
+        line.append(_neutralize_controls(title))
         self._log_lines.append(line)
 
     def log_phase_done(self, tool_count: int, turns: int, tokens: int) -> None:
@@ -702,7 +720,7 @@ class InvestigationDashboard:
         if content.plain:
             content.append("\n")
         system_color = self._get_system_color(system)
-        content.append(f"  {system}\n", style=f"bold {system_color}")
+        content.append(f"  {_neutralize_controls(system)}\n", style=f"bold {system_color}")
 
         active_tasks = [t for t in tasks if t.status in ("running", "pending")]
         done_tasks = [t for t in tasks if t.status in ("done", "failed")]
@@ -731,9 +749,9 @@ class InvestigationDashboard:
             else:
                 icon = "✗"
                 style = "red"
-                suffix = task.error or "failed"
+                suffix = _neutralize_controls(task.error or "failed")
 
-            line = f"    {icon} {task.tool:<28} {suffix}\n"
+            line = f"    {icon} {_neutralize_controls(task.tool):<28} {suffix}\n"
             content.append(line, style=style)
 
         if hidden_count > 0:
