@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
@@ -62,6 +63,16 @@ _NETSCAN_FALLBACKS: list[str] = [
     "windows.connscan.ConnScan",
     "windows.sockscan.SockScan",
 ]
+
+# Dotted Python identifiers, e.g. "windows.pslist.PsList" or "linux.bash".
+# Anything else (notably values starting with "-") would be parsed by the
+# vol CLI as an option rather than a plugin name.
+_PLUGIN_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*$")
+
+
+def _is_valid_plugin_name(plugin: str) -> bool:
+    """Return True if *plugin* is a well-formed Volatility 3 plugin path."""
+    return _PLUGIN_NAME_RE.fullmatch(plugin) is not None
 
 
 def _resolve_plugin_name(plugin: str) -> str:
@@ -226,6 +237,16 @@ def run_volatility(plugin: str, memory_path: str) -> dict[str, object]:
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
     params = {"plugin": plugin, "memory_path": memory_path}
+
+    if not _is_valid_plugin_name(_resolve_plugin_name(plugin)):
+        return error_response(
+            tc_id,
+            "run_volatility",
+            params,
+            f"Invalid Volatility plugin name: {plugin!r}",
+            error_type="invalid_plugin",
+            suggestion='Use a name like "windows.pslist.PsList" or short form "pslist"',
+        )
 
     if not Path(memory_path).exists():
         return error_response(
@@ -606,6 +627,14 @@ def _run_batch_subprocess_fallback(
     results: dict[str, dict[str, object]] = {}
     for plugin_name in plugins:
         full_name = _resolve_plugin_name(plugin_name)
+        if not _is_valid_plugin_name(full_name):
+            results[plugin_name] = {
+                "plugin": full_name,
+                "status": "error",
+                "error_type": "invalid_plugin",
+                "error_message": f"Invalid Volatility plugin name: {plugin_name!r}",
+            }
+            continue
         results[plugin_name] = _run_single_vol_plugin(vol_cmd, memory_path, full_name, timeout)
 
     return _aggregate_batch_results(results, plugins, tc_id, params, t0, fallback_used=True)
