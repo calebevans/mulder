@@ -28,6 +28,9 @@ if TYPE_CHECKING:  # heavy imports stay inside the command bodies
 #: workspace on first run so a ``pipx``/``uv tool`` install works out of the box.
 DEFAULT_MCP_CONFIG = Path(__file__).resolve().parent / "data" / "mcp.json"
 
+#: Bind addresses the MCP SDK treats as loopback (and guards against DNS rebinding).
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
 
 def _is_interactive() -> bool:
     """Check if stderr is connected to an interactive terminal.
@@ -61,6 +64,13 @@ def cli() -> None:
     help="MCP transport to use.",
 )
 @click.option(
+    "--host",
+    default="127.0.0.1",
+    show_default=True,
+    help="Bind address for --transport streamable-http (ignored for stdio). "
+    "The HTTP transport has no authentication; keep it on loopback.",
+)
+@click.option(
     "--workers",
     default=8,
     show_default=True,
@@ -82,6 +92,7 @@ def serve(
     case_id: str | None,
     db_dir: str,
     transport: str,
+    host: str,
     workers: int,
     mem_limit: float,
     cpu_limit: float,
@@ -128,7 +139,15 @@ def serve(
     # ``MCPServer.run`` is overloaded per transport, so the literal has to
     # reach it directly rather than through the click-supplied ``str``.
     if transport == "streamable-http":
-        mcp_server.run(transport="streamable-http")
+        if host not in _LOOPBACK_HOSTS:
+            warning = (
+                f"WARNING: binding the MCP HTTP transport to {host}. It has no "
+                "authentication and DNS-rebinding protection is off: any client "
+                "that can reach this address can call every Mulder tool."
+            )
+            click.echo(warning, err=True)
+            logging.getLogger(__name__).warning(warning)
+        mcp_server.run(transport="streamable-http", host=host)
     else:
         mcp_server.run(transport="stdio")
 
