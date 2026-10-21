@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -20,6 +22,7 @@ from mulder.patterns import (
 
 if TYPE_CHECKING:  # heavy imports stay inside the command bodies
     from rich.console import Console
+    from starlette.types import ASGIApp, Receive, Scope, Send
 
     from mulder.assets.fetch import Fetcher
     from mulder.assets.install import Plan, Result, SetupOptions
@@ -30,6 +33,51 @@ DEFAULT_MCP_CONFIG = Path(__file__).resolve().parent / "data" / "mcp.json"
 
 #: Bind addresses the MCP SDK treats as loopback (and guards against DNS rebinding).
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+#: Env var holding the bearer token the streamable-http transport requires.
+HTTP_TOKEN_ENV_VAR = "MULDER_HTTP_TOKEN"
+
+#: ``MCPServer.run``'s default port for the streamable-http transport.
+_HTTP_PORT = 8000
+
+_UNAUTHORIZED_BODY = b'{"error": "unauthorized"}'
+
+
+def _require_bearer(app: ASGIApp, token: str) -> ASGIApp:
+    """Wrap an ASGI app so HTTP requests need ``Authorization: Bearer <token>``.
+
+    Args:
+        app: The ASGI application to protect.
+        token: The expected bearer token.
+
+    Returns:
+        An ASGI application that answers 401 to requests without the token
+        and passes everything else (including lifespan events) to ``app``.
+    """
+    expected = f"Bearer {token}".encode()
+
+    async def guarded(scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] in ("http", "websocket"):
+            supplied = dict(scope["headers"]).get(b"authorization", b"")
+            if not hmac.compare_digest(supplied, expected):
+                if scope["type"] == "websocket":
+                    await send({"type": "websocket.close", "code": 1008})
+                    return
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 401,
+                        "headers": [
+                            (b"content-type", b"application/json"),
+                            (b"content-length", str(len(_UNAUTHORIZED_BODY)).encode()),
+                        ],
+                    }
+                )
+                await send({"type": "http.response.body", "body": _UNAUTHORIZED_BODY})
+                return
+        await app(scope, receive, send)
+
+    return guarded
 
 
 def _is_interactive() -> bool:
@@ -68,7 +116,7 @@ def cli() -> None:
     default="127.0.0.1",
     show_default=True,
     help="Bind address for --transport streamable-http (ignored for stdio). "
-    "The HTTP transport has no authentication; keep it on loopback.",
+    f"Set {HTTP_TOKEN_ENV_VAR} to require a bearer token on that transport.",
 )
 @click.option(
     "--workers",
@@ -139,14 +187,29 @@ def serve(
     # ``MCPServer.run`` is overloaded per transport, so the literal has to
     # reach it directly rather than through the click-supplied ``str``.
     if transport == "streamable-http":
-        if host not in _LOOPBACK_HOSTS:
-            warning = (
-                f"WARNING: binding the MCP HTTP transport to {host}. It has no "
-                "authentication and DNS-rebinding protection is off: any client "
-                "that can reach this address can call every Mulder tool."
+        token = os.environ.get(HTTP_TOKEN_ENV_VAR)
+        if token:
+            import uvicorn
+
+            # Same app, bind and DNS-rebinding defaults as ``MCPServer.run``,
+            # with a bearer-token check in front of every request.
+            app = mcp_server.streamable_http_app(host=host)
+            uvicorn.run(
+                _require_bearer(app, token),
+                host=host,
+                port=_HTTP_PORT,
+                log_level=mcp_server.settings.log_level.lower(),
             )
-            click.echo(warning, err=True)
-            logging.getLogger(__name__).warning(warning)
+            return
+        warning = (
+            f"WARNING: the MCP HTTP transport on {host} has no authentication: "
+            "any client that can reach it can call every Mulder tool. "
+            f"Set {HTTP_TOKEN_ENV_VAR} to require a bearer token."
+        )
+        if host not in _LOOPBACK_HOSTS:
+            warning += " DNS-rebinding protection is also off for non-loopback hosts."
+        click.echo(warning, err=True)
+        logging.getLogger(__name__).warning(warning)
         mcp_server.run(transport="streamable-http", host=host)
     else:
         mcp_server.run(transport="stdio")
