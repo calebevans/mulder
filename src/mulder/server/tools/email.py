@@ -60,9 +60,11 @@ _SUSPICIOUS_EXTENSIONS: set[str] = {
 
 _VALID_PST_SUFFIXES: set[str] = {".pst", ".ost"}
 
-_HTML_TAG_RE = re.compile(r"<[^>]+>")
-_HTML_WS_RE = re.compile(r"[ \t]*\n[ \t]*")
-_SCRIPT_STYLE_RE = re.compile(r"(?is)<(script|style).*?</\1>")
+_SCRIPT_STYLE_OPEN_RE = re.compile(r"(?i)<(?:(script)|style)")
+_SCRIPT_STYLE_CLOSE_RE = {
+    "script": re.compile(r"(?i)</script>"),
+    "style": re.compile(r"(?i)</style>"),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -152,10 +154,88 @@ def _get_body(
     return None
 
 
+def _strip_script_style(html: str) -> str:
+    """Replace each ``<script>``/``<style>`` block with a single space.
+
+    Same result as ``re.sub(r"(?is)<(script|style).*?</\\1>", " ", html)``
+    in linear time. That expression rescanned to the end of the body for
+    every opener with no closer, so a body of repeated unterminated
+    ``<script`` openers -- attacker-controlled HTML -- took quadratic time.
+    Once a closer is known to be absent past some point it is never
+    searched for again.
+    """
+    out: list[str] = []
+    pos = 0
+    unclosed: set[str] = set()
+    while True:
+        opener = _SCRIPT_STYLE_OPEN_RE.search(html, pos)
+        if opener is None:
+            break
+        name = "script" if opener.group(1) is not None else "style"
+        closer = None
+        if name not in unclosed:
+            closer = _SCRIPT_STYLE_CLOSE_RE[name].search(html, opener.end())
+        if closer is None:
+            unclosed.add(name)
+            # Not a block: leave it in place and look for the next opener.
+            out.append(html[pos : opener.end()])
+            pos = opener.end()
+            continue
+        out.append(html[pos : opener.start()])
+        out.append(" ")
+        pos = closer.end()
+    out.append(html[pos:])
+    return "".join(out)
+
+
+def _strip_tags(text: str) -> str:
+    """Replace each ``<...>`` tag with a space, as ``re.sub(r"<[^>]+>", " ", text)``.
+
+    The expression scanned to the end of the body from every ``<`` with no
+    ``>`` after it -- quadratic on a body of repeated ``<``.
+    """
+    out: list[str] = []
+    pos = 0
+    while True:
+        start = text.find("<", pos)
+        if start == -1:
+            break
+        end = text.find(">", start + 1)
+        if end == -1:
+            # No later ``<`` can be closed either.
+            break
+        if end == start + 1:
+            # ``<>`` is not a tag; keep scanning after the ``<``.
+            out.append(text[pos : start + 1])
+            pos = start + 1
+            continue
+        out.append(text[pos:start])
+        out.append(" ")
+        pos = end + 1
+    out.append(text[pos:])
+    return "".join(out)
+
+
+def _collapse_line_whitespace(text: str) -> str:
+    r"""Drop spaces and tabs around each newline, as ``re.sub(r"[ \t]*\n[ \t]*", "\n", text)``.
+
+    The expression rescanned every run of spaces with no newline after it --
+    quadratic on a body of repeated spaces.
+    """
+    lines = text.split("\n")
+    if len(lines) == 1:
+        return text
+    last = len(lines) - 1
+    return "\n".join(
+        line.rstrip(" \t") if i == 0 else line.lstrip(" \t") if i == last else line.strip(" \t")
+        for i, line in enumerate(lines)
+    )
+
+
 def _html_to_text(html: str) -> str:
     """Strip markup from an HTML body so its words are searchable."""
-    text = _SCRIPT_STYLE_RE.sub(" ", html)
-    text = _HTML_TAG_RE.sub(" ", text)
+    text = _strip_script_style(html)
+    text = _strip_tags(text)
     for entity, char in (
         ("&nbsp;", " "),
         ("&amp;", "&"),
@@ -165,7 +245,7 @@ def _html_to_text(html: str) -> str:
         ("&#39;", "'"),
     ):
         text = text.replace(entity, char)
-    return _HTML_WS_RE.sub("\n", text).strip()
+    return _collapse_line_whitespace(text).strip()
 
 
 def _get_searchable_body(msg: email_lib.message.Message) -> str | None:
