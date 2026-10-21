@@ -37,7 +37,35 @@ _ENRICHMENT_SOURCES: dict[str, str] = {
     "virustotal": "VIRUSTOTAL_API_KEY",
     "abuseipdb": "ABUSEIPDB_API_KEY",
     "otx": "OTX_API_KEY",
+    "ip-api": "IP_API_KEY",
 }
+
+_IP_API_ALLOW_HTTP_ENV = "MULDER_IP_API_ALLOW_HTTP"
+_MAX_IP_API_FIELD_LEN = 128
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+_URL_KEY_PARAM_RE = re.compile(r"([?&]key=)[^&\s\"']*")
+
+
+def _redact_url_key(text: str, secret: str | None = None) -> str:
+    """Mask any ``key=`` query parameter value, and *secret* itself, in *text*."""
+    if secret:
+        text = text.replace(secret, "[REDACTED]")
+    return _URL_KEY_PARAM_RE.sub(r"\1[REDACTED]", text)
+
+
+class _RedactUrlKeyFilter(logging.Filter):
+    """Keep the ip-api pro key out of httpx's INFO request-line logs."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        redacted = _redact_url_key(message)
+        if redacted != message:
+            record.msg = redacted
+            record.args = None
+        return True
+
+
+logging.getLogger("httpx").addFilter(_RedactUrlKeyFilter())
 
 _REQUEST_TIMEOUT = 10.0
 _MAX_REQUESTS_PER_SECOND = 4
@@ -129,15 +157,31 @@ class _SessionCache:
 _session_cache = _SessionCache()
 
 
+def _ip_api_field(data: dict[str, Any], name: str) -> str | None:
+    """Return a reply field only if it is a string, stripped of control chars."""
+    value = data.get(name)
+    if not isinstance(value, str):
+        return None
+    cleaned = _CONTROL_CHARS_RE.sub("", value).strip()[:_MAX_IP_API_FIELD_LEN]
+    return cleaned or None
+
+
 async def _query_ip_api(
-    client: httpx.AsyncClient, ioc: str, ioc_type: IOCType
+    client: httpx.AsyncClient, ioc: str, ioc_type: IOCType, api_key: str | None = None
 ) -> EnrichmentResult:
-    """Query ip-api.com for geolocation data (free, no key required).
+    """Query ip-api.com for geolocation data.
+
+    The free ip-api.com endpoint is HTTP-only, so the queried IP would
+    travel in cleartext and the reply could be forged on path. With an
+    ``IP_API_KEY`` the HTTPS ``pro.ip-api.com`` endpoint is used; without
+    one the lookup is skipped unless ``MULDER_IP_API_ALLOW_HTTP=1`` opts in,
+    in which case results are tagged ``unauthenticated-transport``.
 
     Args:
         client: Async HTTP client instance.
         ioc: The IOC value to query.
         ioc_type: Classified type of the IOC.
+        api_key: Optional ip-api pro key, enabling the HTTPS endpoint.
 
     Returns:
         Enrichment result with geolocation data.
@@ -150,22 +194,40 @@ async def _query_ip_api(
             found=False,
             error="ip-api only supports IPv4 addresses",
         )
+    params = {"fields": "status,message,country,regionName,city,isp,as,query"}
+    if api_key:
+        url = f"https://pro.ip-api.com/json/{ioc}"
+        params["key"] = api_key
+    elif os.environ.get(_IP_API_ALLOW_HTTP_ENV) == "1":
+        url = f"http://ip-api.com/json/{ioc}"
+    else:
+        return EnrichmentResult(
+            source="ip-api",
+            ioc=ioc,
+            ioc_type=ioc_type,
+            found=False,
+            error=(
+                "ip-api skipped: the free endpoint is plaintext HTTP only; set "
+                f"IP_API_KEY for HTTPS or {_IP_API_ALLOW_HTTP_ENV}=1 to allow cleartext"
+            ),
+        )
     try:
         await _global_limiter.acquire()
-        resp = await client.get(
-            f"http://ip-api.com/json/{ioc}",
-            params={"fields": "status,message,country,regionName,city,isp,as,query"},
-            timeout=_REQUEST_TIMEOUT,
-        )
+        resp = await client.get(url, params=params, timeout=_REQUEST_TIMEOUT)
         data = resp.json()
+        if not isinstance(data, dict):
+            raise ValueError("unexpected ip-api response shape")
         if data.get("status") == "success":
+            if data.get("query") != ioc:
+                raise ValueError("ip-api response does not match the queried IP")
             return EnrichmentResult(
                 source="ip-api",
                 ioc=ioc,
                 ioc_type=ioc_type,
                 found=True,
-                country=data.get("country"),
-                asn=data.get("as"),
+                country=_ip_api_field(data, "country"),
+                asn=_ip_api_field(data, "as"),
+                tags=None if api_key else ["unauthenticated-transport"],
                 raw=data,
             )
         return EnrichmentResult(
@@ -173,7 +235,7 @@ async def _query_ip_api(
             ioc=ioc,
             ioc_type=ioc_type,
             found=False,
-            error=data.get("message", "unknown error"),
+            error=_redact_url_key(_ip_api_field(data, "message") or "unknown error", api_key),
         )
     except Exception as exc:
         return EnrichmentResult(
@@ -181,7 +243,7 @@ async def _query_ip_api(
             ioc=ioc,
             ioc_type=ioc_type,
             found=False,
-            error=str(exc),
+            error=_redact_url_key(str(exc), api_key),
         )
 
 
@@ -472,7 +534,7 @@ async def _enrich_single_ioc(
     results: list[EnrichmentResult] = []
 
     if "ip-api" not in skip_sources and ioc_type == "ipv4":
-        results.append(await _query_ip_api(client, ioc, ioc_type))
+        results.append(await _query_ip_api(client, ioc, ioc_type, api_keys.get("ip-api")))
 
     if "abuseipdb" not in skip_sources and "abuseipdb" in api_keys:
         results.append(await _query_abuseipdb(client, ioc, ioc_type, api_keys["abuseipdb"]))
