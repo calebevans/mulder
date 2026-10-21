@@ -503,6 +503,9 @@ def _safe_tar_filter(member: tarfile.TarInfo, path: str) -> tarfile.TarInfo | No
     """Allow extraction but neutralize absolute symlinks and path traversal."""
     if member.name.startswith("/") or ".." in member.name:
         return None
+    # FIFOs and device nodes: opening one later can block or touch hardware.
+    if not (member.isreg() or member.isdir() or member.issym() or member.islnk()):
+        return None
     if member.issym() or member.islnk():
         if ".." in member.linkname:
             return None
