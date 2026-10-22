@@ -6,6 +6,7 @@ Tier 1 tools: help the agent orient before running any extractions.
 from __future__ import annotations
 
 import bz2
+import contextlib
 import gzip
 import hashlib
 import json
@@ -15,8 +16,10 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import threading
 import time
 import zipfile
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -36,6 +39,11 @@ from mulder.server.app import (
 from mulder.server.helpers import error_response, hash_output, make_tool_call_id
 from mulder.server.tool_access import ALL_ROLES, Role, tool_access
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows; mulder is Linux-first
+    fcntl = None  # type: ignore[assignment]
+
 logger = logging.getLogger(__name__)
 
 _EXTRACT_TIMEOUT = 600
@@ -52,7 +60,24 @@ _STREAM_CHUNK = 1024**2
 
 
 class InsufficientSpaceError(Exception):
-    """An archive would not fit on the destination filesystem; nothing was extracted."""
+    """An archive would not fit on the destination filesystem."""
+
+    advice = "free disk space or extract to a larger filesystem."
+
+
+class UnknownExpandedSizeError(InsufficientSpaceError):
+    """An archive's expanded size cannot be established, so it cannot be bounded.
+
+    A failed ``7z l`` does not mean ``7z x`` fails before writing: a zip with
+    a falsified central directory lists as an error yet extracts its whole
+    stream.  Without a size there is nothing to check against free space.
+    """
+
+    advice = "the archive is probably damaged; repair it or extract it by hand."
+
+
+_EXTRACTION_LOCK = threading.Lock()
+"""Fallback for :func:`_extraction_slot` where ``fcntl`` is unavailable."""
 
 
 _COMPLETION_MARKER = ".mulder-extraction-complete.json"
@@ -542,6 +567,80 @@ def _require_space(
         )
 
 
+@contextlib.contextmanager
+def _extraction_slot(lock_dir: Path, dest: Path) -> Iterator[None]:
+    """Serialize extractions onto *dest*'s filesystem, from size check to last write.
+
+    The free-space bound only holds if nothing else extracts onto the same
+    disk between the check and the end of the extraction: two archives that
+    each fit the free space can both pass the check and then fill the disk
+    together.  The catalog extracts archives concurrently, both in tool
+    threads and in separate per-session server processes, so the lock is a
+    ``flock`` on a file per filesystem, which excludes both.  The lock file
+    sits in *lock_dir* (the cases directory), outside every extraction.
+    """
+    if fcntl is None:  # pragma: no cover - Windows
+        with _EXTRACTION_LOCK:
+            yield
+        return
+    lock_path = lock_dir / f".mulder-extract-{dest.stat().st_dev}.lock"
+    with open(lock_path, "a") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def _snapshot(dest: Path) -> dict[str, tuple[int, int] | None]:
+    """Map each entry under *dest* to its file ``(size, mtime_ns)``, or None for a directory."""
+    entries: dict[str, tuple[int, int] | None] = {}
+    for root, dirs, names in os.walk(dest):
+        for name in dirs:
+            entries[os.path.join(root, name)] = None
+        for name in names:
+            path = os.path.join(root, name)
+            with contextlib.suppress(OSError):
+                st = os.lstat(path)
+                entries[path] = (st.st_size, st.st_mtime_ns)
+    return entries
+
+
+def _discard_new_output(dest: Path, before: dict[str, tuple[int, int] | None]) -> bool:
+    """Remove what an aborted extraction added under *dest*.
+
+    Entries absent from *before* are deleted; entries that were already there
+    are kept.  Returns True when *dest* is back to its earlier contents, False
+    when something could not be removed or an existing file was overwritten.
+    """
+    restored = True
+    for root, dirs, names in os.walk(dest, topdown=False):
+        for name in names:
+            path = os.path.join(root, name)
+            if path in before:
+                with contextlib.suppress(OSError):
+                    st = os.lstat(path)
+                    if (st.st_size, st.st_mtime_ns) != before[path]:
+                        restored = False
+                continue
+            try:
+                os.unlink(path)
+            except OSError:
+                restored = False
+        for name in dirs:
+            path = os.path.join(root, name)
+            if path in before:
+                continue
+            try:
+                if os.path.islink(path):
+                    os.unlink(path)
+                else:
+                    os.rmdir(path)
+            except OSError:
+                restored = False
+    return restored
+
+
 def _extract_zip(archive: Path, dest: Path) -> list[str]:
     """Extract a zip archive to *dest* and return paths relative to *dest*.
 
@@ -665,14 +764,16 @@ def _extract_7z(archive: Path, dest: Path) -> list[str]:
     """Extract via the ``7z`` CLI to *dest*; return paths relative to *dest*.
 
     Also reached from the zip fallback and for ``.rar``, so the size check
-    lives here.  If the listing itself fails, extraction is attempted anyway:
-    7z parses the same headers and will fail the same way.
+    lives here.  If the listing fails, the archive is refused: ``7z x`` may
+    still write the whole stream before it reports the same damage.
     """
     totals = _7z_listing_totals(archive)
     if totals is None:
-        logger.warning("Could not list %s with 7z; extracting without a size check", archive)
-    else:
-        _require_space(archive, dest, totals[1], totals[0])
+        raise UnknownExpandedSizeError(
+            f"7z could not list {archive.name}, so its expanded size is unknown "
+            "and it cannot be checked against the free space on the destination filesystem"
+        )
+    _require_space(archive, dest, totals[1], totals[0])
     cmd = ["7z", "x", f"-o{dest}", "-y", str(archive)]
     subprocess.run(cmd, capture_output=True, timeout=_EXTRACT_TIMEOUT, check=True)
     return [str(f.relative_to(dest)) for f in dest.rglob("*") if f.is_file()]
@@ -820,59 +921,67 @@ def extract_archive(
     name_lower = archive.name.lower()
     ext = archive.suffix.lower()
 
-    try:
-        if ext == ".zip":
-            files = _extract_zip(archive, dest)
-        elif ext in (".tar", ".tgz") or name_lower.endswith((".tar.gz", ".tar.bz2")):
-            files = _extract_tar(archive, dest)
-        elif ext in (".gz", ".bz2"):
-            # A bare .gz/.bz2 is usually one compressed file (evidence.dd.gz),
-            # but it may also be a tar that was not named .tar.gz.  Ask the
-            # archive which it is instead of guessing from the name.
-            if _tar_member_count(archive):
+    with _extraction_slot(Path(cfg.db_dir), dest):
+        before = _snapshot(dest)
+        try:
+            if ext == ".zip":
+                files = _extract_zip(archive, dest)
+            elif ext in (".tar", ".tgz") or name_lower.endswith((".tar.gz", ".tar.bz2")):
                 files = _extract_tar(archive, dest)
+            elif ext in (".gz", ".bz2"):
+                # A bare .gz/.bz2 is usually one compressed file (evidence.dd.gz),
+                # but it may also be a tar that was not named .tar.gz.  Ask the
+                # archive which it is instead of guessing from the name.
+                if _tar_member_count(archive):
+                    files = _extract_tar(archive, dest)
+                else:
+                    files = _extract_single_stream(archive, dest)
+            elif ext in (".7z", ".rar") or ".7z." in name_lower:
+                if not shutil.which("7z"):
+                    return error_response(
+                        tc_id,
+                        "extract_archive",
+                        params,
+                        "7z not found on PATH. Install p7zip-full.",
+                        (time.monotonic() - t0) * 1000,
+                        error_type="binary_missing",
+                    )
+                files = _extract_7z(archive, dest)
             else:
-                files = _extract_single_stream(archive, dest)
-        elif ext in (".7z", ".rar") or ".7z." in name_lower:
-            if not shutil.which("7z"):
                 return error_response(
                     tc_id,
                     "extract_archive",
                     params,
-                    "7z not found on PATH. Install p7zip-full.",
+                    f"Unsupported archive format: {ext}",
                     (time.monotonic() - t0) * 1000,
-                    error_type="binary_missing",
+                    error_type="unsupported_format",
                 )
-            files = _extract_7z(archive, dest)
-        else:
+        except InsufficientSpaceError as exc:
+            logger.warning("Refusing to extract %s: %s", archive, exc)
+            # A refusal can come after something was written: zipfile may
+            # extract members before a damaged one sends it to the 7z
+            # fallback.  Remove only this attempt's output, then say so.
+            if _discard_new_output(dest, before):
+                outcome = "Nothing was extracted from this archive"
+            else:
+                outcome = f"Extraction stopped partway, so {dest} may hold partial output"
             return error_response(
                 tc_id,
                 "extract_archive",
                 params,
-                f"Unsupported archive format: {ext}",
+                f"{exc}. {outcome}; {exc.advice}",
                 (time.monotonic() - t0) * 1000,
-                error_type="unsupported_format",
+                error_type="disk_space",
             )
-    except InsufficientSpaceError as exc:
-        logger.warning("Refusing to extract %s: %s", archive, exc)
-        return error_response(
-            tc_id,
-            "extract_archive",
-            params,
-            f"{exc}. Nothing was extracted from this archive; free disk space "
-            "or extract to a larger filesystem.",
-            (time.monotonic() - t0) * 1000,
-            error_type="disk_space",
-        )
-    except Exception as exc:
-        logger.error("Archive extraction failed for %r: %s", archive, exc)
-        return error_response(
-            tc_id,
-            "extract_archive",
-            params,
-            f"Extraction failed: {exc}",
-            (time.monotonic() - t0) * 1000,
-        )
+        except Exception as exc:
+            logger.error("Archive extraction failed for %r: %s", archive, exc)
+            return error_response(
+                tc_id,
+                "extract_archive",
+                params,
+                f"Extraction failed: {exc}",
+                (time.monotonic() - t0) * 1000,
+            )
 
     from mulder.extractors.classifier import ClassifierConfig, EvidenceClassifier
 
