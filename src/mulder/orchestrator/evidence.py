@@ -15,6 +15,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from mulder.extractors.classifier import RAW_CONTAINER_EXTS, has_disk_signature
 from mulder.extractors.optical import probe_optical
 from mulder.orchestrator.types import PhaseResult, extract_catalog_result
 from mulder.patterns import DISK_IMAGE_EXTS, extract_iocs_from_text, resolve_db_dir
@@ -30,6 +31,11 @@ _MEMORY_EXTENSIONS: frozenset[str] = frozenset(
 _ARCHIVE_EXTENSIONS: frozenset[str] = frozenset(
     (".7z", ".zip", ".gz", ".tar", ".xz", ".bz2", ".rar", ".zst")
 )
+
+
+def _is_raw_disk(path: Path) -> bool:
+    """A ``.raw``/``.001`` file whose first bytes show a disk, not a memory dump."""
+    return path.suffix.lower() in RAW_CONTAINER_EXTS and has_disk_signature(path)
 
 
 class EvidenceContext:
@@ -117,7 +123,8 @@ class EvidenceContext:
                     continue
                 ext = f.suffix.lower()
                 if ext in _MEMORY_EXTENSIONS:
-                    memory_dumps.append(str(f))
+                    if not _is_raw_disk(f):
+                        memory_dumps.append(str(f))
                 elif ext in _ARCHIVE_EXTENSIONS:
                     nested_archives.append(str(f))
 
@@ -130,6 +137,9 @@ class EvidenceContext:
                         ext = f.suffix.lower()
                         if ext in _ARCHIVE_EXTENSIONS:
                             nested_archives.append(str(f))
+                        elif _is_raw_disk(f):
+                            # A disk unpacked from an archive, not a memory dump.
+                            disk_images.append(str(f))
                         elif (
                             ext in _MEMORY_EXTENSIONS or f.stat().st_size > 100 * 1024 * 1024
                         ) and str(f) not in memory_dumps:

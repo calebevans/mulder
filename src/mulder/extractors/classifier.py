@@ -7,11 +7,20 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from mulder.extractors.optical import SECTOR, signature_from_vrs
 from mulder.patterns import DISK_IMAGE_EXTS
 
 logger = logging.getLogger(__name__)
 
 _MEMORY_DUMP_EXTS = {".mem", ".vmem", ".dmp", ".001"}
+
+#: Written by disk imagers (dd, FTK Imager) and memory acquirers (DumpIt,
+#: winpmem) alike, so their first bytes are checked for a disk signature.
+RAW_CONTAINER_EXTS = frozenset({".raw", ".001"})
+
+# Sectors 0-31 of 2048 bytes: boot sector, superblocks and the optical
+# volume recognition sequence (sectors 16-31).
+_HEAD_BYTES = 32 * SECTOR
 _NETWORK_CAPTURE_EXTS = {".pcap", ".pcapng", ".cap"}
 _ARCHIVE_EXTS = {".zip", ".gz", ".tar", ".bz2", ".7z", ".rar", ".tgz"}
 _EVTX_EXTS = {".evtx"}
@@ -120,6 +129,52 @@ _SKIP_EXTENSIONS: set[str] = {
 _ALL_EVIDENCE_EXTS = _MEMORY_DUMP_EXTS | DISK_IMAGE_EXTS | {".raw"}
 
 
+def _looks_like_mbr(head: bytes) -> bool:
+    """Return True for a boot sector carrying a plausible MBR partition table."""
+    if head[510:512] != b"\x55\xaa":
+        return False
+    entries = [head[446 + 16 * i : 462 + 16 * i] for i in range(4)]
+    if any(e[0] not in (0x00, 0x80) for e in entries):
+        return False
+    return any(e[4] != 0 and int.from_bytes(e[12:16], "little") > 0 for e in entries)
+
+
+def _looks_like_ext(head: bytes) -> bool:
+    """Return True for an ext2/3/4 superblock at byte 1024."""
+    sb = head[1024:1124]
+    if len(sb) < 100 or sb[56:58] != b"\x53\xef":
+        return False
+    inodes = int.from_bytes(sb[0:4], "little")
+    log_block_size = int.from_bytes(sb[24:28], "little")
+    return inodes > 0 and log_block_size <= 6
+
+
+def has_disk_signature(path: Path) -> bool:
+    """Return True when *path* starts like a disk, partition or optical image.
+
+    A plain physical-memory dump has no header, so a raw container without
+    one of these signatures is still taken for a memory dump.
+    """
+    if not path.is_file():  # never open a FIFO or device: the read could block
+        return False
+    try:
+        with path.open("rb") as fh:
+            head = fh.read(_HEAD_BYTES)
+    except OSError:
+        return False
+    return (
+        b"EFI PART" in (head[512:520], head[4096:4104])  # GPT
+        or head[3:11] in (b"NTFS    ", b"EXFAT   ", b"-FVE-FS-")  # NTFS, exFAT, BitLocker
+        or (
+            head[510:512] == b"\x55\xaa"
+            and (head[54:59] in (b"FAT12", b"FAT16") or head[82:87] == b"FAT32")
+        )
+        or _looks_like_mbr(head)
+        or _looks_like_ext(head)
+        or signature_from_vrs(head[16 * SECTOR :]) is not None  # ISO 9660, UDF
+    )
+
+
 def _is_evidence_sidecar(path: Path) -> bool:
     """Return True for metadata files that accompany evidence images.
 
@@ -154,8 +209,9 @@ class EvidenceClassifier:
     """Walks an evidence directory and classifies files by type.
 
     Classification is a first-pass heuristic based on extensions and directory
-    names.  The actual decision of whether an extractor can handle a file is
-    made by ``Extractor.can_handle`` at extraction time.
+    names; ``.raw`` and ``.001`` files are also checked for a disk signature.
+    The actual decision of whether an extractor can handle a file is made by
+    ``Extractor.can_handle`` at extraction time.
     """
 
     def __init__(self, config: ClassifierConfig | None = None) -> None:
@@ -245,6 +301,9 @@ class EvidenceClassifier:
 
         if name in _SKIP_FILENAMES or ext in _SKIP_EXTENSIONS:
             return None
+
+        if ext in RAW_CONTAINER_EXTS and has_disk_signature(path):
+            return ClassifiedEvidence(path=path, artifact_type="disk_image")
 
         if ext in _MEMORY_DUMP_EXTS:
             return ClassifiedEvidence(path=path, artifact_type="memory_dump")

@@ -14,8 +14,9 @@ YOUR JOB:
    the user message; the guidance below says when to use which.
 
 IMPORTANT:
-- Top-level archives are ALREADY extracted. Memory .img/.raw/.vmem
-  files are listed in the evidence context above.
+- Top-level archives are ALREADY extracted. Memory dumps are listed
+  in the evidence context above. A .raw/.001 file listed only under
+  Disk images is a disk image: do not run Volatility on it.
 - Do NOT call get_tool_guide.
 - If the evidence context lists file paths, use them directly. Do NOT
   call list_directory.

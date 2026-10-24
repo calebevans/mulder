@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from mulder.assets.paths import asset_path, register_cache_clear
+from mulder.extractors.classifier import RAW_CONTAINER_EXTS, has_disk_signature
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
@@ -335,6 +336,14 @@ def _build_rules_args(
 _MEMORY_DUMP_EXTS = frozenset({".raw", ".mem", ".vmem", ".dmp", ".lime", ".001"})
 
 
+def _is_memory_candidate(path: Path) -> bool:
+    """A file with a memory-dump extension, unless its first bytes show a disk."""
+    ext = path.suffix.lower()
+    if ext not in _MEMORY_DUMP_EXTS:
+        return False
+    return not (ext in RAW_CONTAINER_EXTS and has_disk_signature(path))
+
+
 def _find_memory_image() -> str:
     """Look up the memory dump path from DB sources or the extracted directory.
 
@@ -366,6 +375,7 @@ def _find_memory_image() -> str:
                 mem_file.is_file()
                 and mem_file.suffix.lower() in _MEMORY_DUMP_EXTS
                 and ("memory" in mem_file.name.lower() or "mem" in mem_file.parent.name.lower())
+                and _is_memory_candidate(mem_file)
             ):
                 logger.info("Found memory dump in evidence root: %s", mem_file)
                 return str(mem_file)
@@ -374,7 +384,7 @@ def _find_memory_image() -> str:
     extracted_dir = cfg.db_dir / "extracted"
     if extracted_dir.is_dir():
         for mem_file in extracted_dir.rglob("*"):
-            if mem_file.is_file() and mem_file.suffix.lower() in _MEMORY_DUMP_EXTS:
+            if mem_file.is_file() and _is_memory_candidate(mem_file):
                 logger.info(
                     "No Volatility sources indexed yet; found memory dump via filesystem scan: %s",
                     mem_file,

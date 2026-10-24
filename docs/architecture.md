@@ -426,8 +426,8 @@ The `EvidenceClassifier` scans evidence directories and categorizes files by typ
 
 | Evidence Type | Extensions / Indicators | Primary Tools |
 |---------------|------------------------|---------------|
-| Memory dump | `.mem`, `.vmem`, `.dmp`, `.raw` (large) | Volatility 3, YARA |
-| Disk image | `.e01`, `.dd`, `.vmdk`, `.vhd`, `.img` | Sleuthkit, Plaso, bulk_extractor |
+| Memory dump | `.mem`, `.vmem`, `.dmp`; `.raw`, `.001` without a disk signature | Volatility 3, YARA |
+| Disk image | `.e01`, `.dd`, `.vmdk`, `.vhd`, `.img`; `.raw`, `.001` with a disk signature | Sleuthkit, Plaso, bulk_extractor |
 | Windows event log | `.evtx` | python-evtx, Hayabusa, Chainsaw |
 | Network capture | `.pcap`, `.pcapng` | tshark, tcpflow, Zeek, Suricata |
 | Binary / executable | `.exe`, `.dll`, `.elf`, `.so` | CAPA, FLOSS, radare2, Detect-It-Easy (optional, not bundled) |
@@ -438,6 +438,11 @@ The `EvidenceClassifier` scans evidence directories and categorizes files by typ
 | Phone dump (iOS) | iOS directory structures | MVT, iLEAPP |
 | Linux logs | `/var/log/*`, journal files | Zircolite, native parsing |
 | Archive | `.zip`, `.7z`, `.tar`, `.gz` | Internal extraction |
+
+`.raw` and `.001` are written by disk imagers and memory acquisition tools
+alike, so their first bytes decide: a partition table, filesystem, BitLocker
+or optical volume signature makes a disk image. A plain physical-memory
+dump has no header, so without such a signature they are memory dumps.
 
 Each extractor normalizes output into `WindowRow` objects (source_id, line_start, line_end, event_time, raw_text) for uniform database storage and FTS indexing.
 
