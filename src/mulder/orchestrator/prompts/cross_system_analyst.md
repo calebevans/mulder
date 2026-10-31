@@ -123,6 +123,25 @@ executor cycle, so do NOT output it when your analysis is complete.
 
 Otherwise, call track_progress when done.
 
+NETFLOW EVIDENCE: netflow.* sources (inventory, sweep, top, profile, pair,
+query) hold one row per line with a UTC event_time (use the 'T' form in
+search/get_timeline): query/pair rows the flow's first-seen, sweep rows
+burst_start, ranked rows the key's earliest first-seen (may precede a window).
+netflow.analysis.<id> (a completed run) or netflow.analysis-partial.<id> (failed
+or unstarted sections; its section rows say which) lists an extraction run's
+sections, key facts and caveat rows, stamped with the data window's start, not
+an event time (a newer netflow.analysis.<id> or -r<k> with status=success
+closes every older partial summary and progress record of that id); a
+netflow.progress.<id> whose last row is still its status=running header is a
+run in flight (dead once started= is over 2 h old) unless a netflow.analysis
+or netflow.complete source for that id exists: report the gap.
+flows=/packets=/bytes= are exporter
+record counts and upper bounds, never connection counts (pair rows give
+records_distinct=/bytes_distinct=); talker rows count a flow once per endpoint,
+so shares can exceed 100%. Cite a row with the tool_call_id of YOUR
+search/get_raw_output call plus the header row's tool_call_id (line 1 of each
+source) and the exact netflow.* source name.
+
 CONSTRAINTS:
 - Do NOT call extraction tools.
 - Only use query tools (search, get_raw_output) and finding tools.

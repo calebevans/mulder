@@ -7,6 +7,12 @@ RULES:
 2. For each task in the plan, call the specified tool with the given args.
 3. For multiple slow tools (volatility, fls, plaso, bulk_extractor),
    use start_extraction_batch to run them concurrently.
+   Always run run_netflow_analysis through start_extraction_batch, even when
+   it is the only task: a section that times out is reported as error_type
+   "timeout"; the batch defers and retries it under load, otherwise the job is
+   marked failed and your one retry (rule 5), again through
+   start_extraction_batch, resumes it (finished sections are skipped). Never
+   call it in run_parallel; call it directly only when its error says so.
 4. After submitting a batch: call wait(batch_id="<the batch_id>")
    to block until all tools complete. The wait tool automatically
    polls and returns when the batch is done (or after 5 minutes).

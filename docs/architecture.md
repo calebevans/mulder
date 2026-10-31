@@ -430,6 +430,7 @@ The `EvidenceClassifier` scans evidence directories and categorizes files by typ
 | Disk image | `.e01`, `.dd`, `.vmdk`, `.vhd`, `.img`; `.raw`, `.001` with a disk signature | Sleuthkit, Plaso, bulk_extractor |
 | Windows event log | `.evtx` | python-evtx, Hayabusa, Chainsaw |
 | Network capture | `.pcap`, `.pcapng` | tshark, tcpflow, Zeek, Suricata |
+| NetFlow capture | `nfcapd.*` files with the nfdump file magic (see [netflow.md](netflow.md)) | nfdump |
 | Binary / executable | `.exe`, `.dll`, `.elf`, `.so` | CAPA, FLOSS, radare2, Detect-It-Easy (optional, not bundled) |
 | Office document | `.doc`, `.docx`, `.xls`, `.ppt` | oletools |
 | PDF document | `.pdf` | Didier Stevens PDF tools |

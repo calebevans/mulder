@@ -360,6 +360,51 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
         && rm -f /opt/suricata/lib/libhtp.a /opt/suricata/lib/libhtp.la; \
     fi
 
+# nfdump: build the release from its tag archive. Ubuntu 22.04 packages nfdump
+# 1.6, which cannot read the layout-2 files nfdump 1.7 collectors write. The
+# NetFlow tools run /opt/nfdump/bin/nfdump; nfcapd stays for the container
+# smoke test, which collects a synthetic NetFlow v5 export with it. libbsd
+# supplies arc4random(), which glibc 2.35 lacks.
+FROM ubuntu:22.04 AS nfdump-builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        curl \
+        autoconf \
+        automake \
+        libtool \
+        pkg-config \
+        bison \
+        flex \
+        libbsd-dev \
+        libbz2-dev \
+        liblz4-dev \
+        libzstd-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG NFDUMP_VERSION=1.7.10
+ARG NFDUMP_SHA256=9a1bc84eb484c7383eea3b48ad2abe5b9ffe7e90aab3fda7055aa3f64be0cc29
+RUN curl -fsSL "https://github.com/phaag/nfdump/archive/refs/tags/v${NFDUMP_VERSION}.tar.gz" \
+        -o /tmp/nfdump.tgz \
+    && echo "${NFDUMP_SHA256}  /tmp/nfdump.tgz" | sha256sum -c - \
+    && tar xzf /tmp/nfdump.tgz -C /tmp \
+    && cd /tmp/nfdump-${NFDUMP_VERSION} \
+    && ./autogen.sh \
+    && ./configure --prefix=/opt/nfdump \
+    && make -j"$(nproc)" \
+    && make install \
+    && find /opt/nfdump/bin -type f ! -name nfdump ! -name nfcapd -delete \
+    && rm -rf /opt/nfdump/etc /opt/nfdump/include /opt/nfdump/share \
+        /opt/nfdump/lib/pkgconfig \
+    && rm -f /opt/nfdump/lib/*.a /opt/nfdump/lib/*.la \
+    && strip --strip-debug /opt/nfdump/bin/nfdump /opt/nfdump/bin/nfcapd \
+        /opt/nfdump/lib/lib*.so \
+    && /opt/nfdump/bin/nfdump -V \
+    && rm -rf /tmp/nfdump*
+
 # Runtime image
 FROM ubuntu:22.04 AS runtime
 
@@ -388,6 +433,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         sleuthkit \
         yara \
         libssl3 \
+        libbsd0 \
         libre2-9 \
         fuse3 \
         libfuse2 \
@@ -462,6 +508,9 @@ RUN ln -sf /opt/chainsaw/chainsaw /usr/local/bin/chainsaw
 COPY --from=chainsaw-fetch /opt/sigma-rules/ /opt/sigma-rules/
 COPY --from=suricata-builder /opt/suricata/ /opt/suricata/
 COPY --from=suricata-builder /etc/suricata/ /etc/suricata/
+COPY --from=nfdump-builder /opt/nfdump/ /opt/nfdump/
+RUN ln -sf /opt/nfdump/bin/nfdump /usr/local/bin/nfdump \
+    && ln -sf /opt/nfdump/bin/nfcapd /usr/local/bin/nfcapd
 
 RUN --mount=type=bind,from=radare2-fetch,source=/tmp/radare2.deb,target=/tmp/radare2.deb \
     dpkg -i /tmp/radare2.deb || apt-get install -yf --no-install-recommends

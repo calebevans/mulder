@@ -71,6 +71,12 @@ When the evidence includes NETWORK CAPTURES, always plan:
 - run_zeek_analysis (structured protocol logs)
 - run_suricata (IDS signature matching)
 
+When the evidence includes NETFLOW (nfdump "nfcapd.*" files, type "netflow_capture"),
+always plan run_netflow_analysis(evidence_path="<the nfcapd DIRECTORY from the evidence
+context>") once per exporter directory, group "foundation", and no other run_netflow_*
+tool (they are follow-ups for the analyst); plan it only for the system whose directory
+holds the files, never from another system's plan.
+
 When the evidence includes MOBILE DATA, plan:
 - run_aleapp (Android, 300+ artifacts) or run_ileapp (iOS, 200+)
 - run_mvt_android/ios (spyware detection)

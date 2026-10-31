@@ -671,6 +671,141 @@ Extract files from TCP streams in a PCAP using tcpxtract.
 
 **Roles:** `EXTRACT_EXECUTOR`
 
+### NetFlow (nfdump)
+
+The six NetFlow tools read nfdump `nfcapd.*` files. `evidence_path` is an nfcapd directory (or
+one file) inside the case evidence root. Times are UTC `YYYY-MM-DDTHH:MM:SS`, and a flow matches a
+`t_start`/`t_end` window when it was active in it. Every result row is indexed under a
+deterministic `netflow.<kind>.<id>` source whose line 1 is a header carrying the originating
+`tool_call_id`; an identical repeat call returns `status: "skipped"` with `existing_sources`
+unless `force=True`. They need nfdump >= 1.7; without it they return
+`error_type: "binary_missing"`. See [netflow.md](netflow.md).
+
+### run_netflow_analysis
+
+Run the standard NetFlow sections over one exporter directory in one call: inventory, lateral-movement sweep, top egress destinations, direct-to-web hosts, top ingress sources and profiles of the busiest internal hosts. Plan it once per exporter directory, through `start_extraction_batch`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| evidence_path | str | yes | nfcapd directory (or file) inside the case evidence root |
+| internal_nets | list[str] \| None | no | Up to 8 CIDRs considered internal (default RFC 1918) |
+| n | int | no | Rows per ranked table (default 50, clamped 5..100) |
+| profile_hosts | int | no | Busiest internal hosts to profile (default 10, 0..25) |
+| force | bool | no | Re-run every section even if already indexed (default False) |
+
+**Returns:** `source_name` (netflow.analysis.&lt;id&gt;, or netflow.analysis-partial.&lt;id&gt; when a section failed), `sections[]`, `caveats`, `summary`, `files_scanned`, `files_excluded[]`, `file_range`, `warnings[]`
+
+**Roles:** `EXTRACT_EXECUTOR`
+
+### run_netflow_query
+
+Bounded nfdump query: raw flow records, or rows aggregated by up to five keys.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| evidence_path | str | yes | nfcapd directory (or file) inside the case evidence root |
+| filter | str | no | nfdump filter expression, whitelisted tokens (default "any") |
+| aggregate | list[str] \| None | no | None for raw records, or 1..5 of proto, srcip, dstip, srcport, dstport, flags, srcip4/N, dstip4/N |
+| order | str | no | Raw: tstart, tend, duration, bytes, packets, bps, bpp, pps. Aggregated: flows, bytes, packets, bps, bpp, pps (default "tstart") |
+| limit | int | no | Rows to return and index (default 100, 1..500) |
+| direction | str | no | "any", "egress", "ingress" or "internal", relative to internal_nets (default "any") |
+| internal_nets | list[str] \| None | no | Up to 8 CIDRs (default RFC 1918) |
+| t_start | str \| None | no | UTC window start |
+| t_end | str \| None | no | UTC window end |
+| max_inline_rows | int | no | Rows returned inline (default 20, 0..100) |
+| force | bool | no | Re-run even if this exact query is indexed (default False) |
+
+**Returns:** `source_name`, `row_count`, `rows[]` (at most `max_inline_rows`), `rows_dropped`, `truncated`, `files_scanned`, `files_excluded[]`, `file_range`, `window`, `filter_applied`, `nfdump_argv`, `warnings[]` (source netflow.query.&lt;id&gt;)
+
+**Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR`
+
+### run_netflow_host_profile
+
+Profile one host: outbound and inbound peers and services, exact totals per direction, first and last seen.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| evidence_path | str | yes | nfcapd directory (or file) inside the case evidence root |
+| host | str | yes | IP address to profile |
+| n | int | no | Rows per ranked table (default 20, clamped 5..100) |
+| internal_nets | list[str] \| None | no | Up to 8 CIDRs (default RFC 1918) |
+| t_start | str \| None | no | UTC window start |
+| t_end | str \| None | no | UTC window end |
+| max_inline_rows | int | no | Rows returned inline (default 20, 0..100) |
+| force | bool | no | Re-run even if this exact profile is indexed (default False) |
+
+**Returns:** `source_name`, `row_count`, `rows[]` (at most `max_inline_rows`), `rows_dropped`, `truncated`, `files_scanned`, `files_excluded[]`, `file_range`, `window`, `filter_applied`, `nfdump_argv`, `warnings[]` (source netflow.profile.&lt;id&gt;)
+
+**Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR`
+
+### run_netflow_pair_timeline
+
+Characterise every record between two hosts: sessions, flag mix, SYN-only retries, inter-arrival and flow-size statistics, beaconing hints.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| evidence_path | str | yes | nfcapd directory (or file) inside the case evidence root |
+| src | str | yes | Source IP address |
+| dst | str | yes | Destination IP address |
+| dport | int \| None | no | Destination port (1..65535), or None for all ports |
+| proto | str | no | "any", "tcp", "udp" or "icmp" (default "any") |
+| both_directions | bool | no | Also match dst->src records (default False) |
+| max_records | int | no | Records read before truncation (default 20000, 100..50000) |
+| index_records | int | no | Flow rows indexed after the summary row (default 200, 0..500) |
+| t_start | str \| None | no | UTC window start |
+| t_end | str \| None | no | UTC window end |
+| max_inline_rows | int | no | Rows returned inline (default 20, 0..100) |
+| force | bool | no | Re-run even if this exact pair query is indexed (default False) |
+
+**Returns:** `source_name`, `row_count`, `rows[]` (at most `max_inline_rows`), `rows_dropped`, `truncated`, `files_scanned`, `files_excluded[]`, `file_range`, `window`, `filter_applied`, `nfdump_argv`, `warnings[]`, `records`, `records_raw`, `hints[]`, `hints_partial` (source netflow.pair.&lt;id&gt;)
+
+**Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR`
+
+### run_netflow_top
+
+Rank the top-N values of one field by flows, packets, bytes or rate.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| evidence_path | str | yes | nfcapd directory (or file) inside the case evidence root |
+| stat | str | no | srcip, dstip, ip, srcport, dstport or port (default "dstip"); ip and port count a flow once per endpoint |
+| order | str | no | flows, packets, bytes, pps, bps or bpp (default "flows") |
+| n | int | no | Rows to keep (default 25, clamped 1..200) |
+| filter | str | no | nfdump filter expression, whitelisted tokens (default "any") |
+| direction | str | no | "any", "egress", "ingress" or "internal" (default "any") |
+| internal_nets | list[str] \| None | no | Up to 8 CIDRs (default RFC 1918) |
+| protocol_split | bool | no | Split each value by transport protocol (default False) |
+| t_start | str \| None | no | UTC window start |
+| t_end | str \| None | no | UTC window end |
+| max_inline_rows | int | no | Rows returned inline (default 20, 0..100) |
+| force | bool | no | Re-run even if this exact query is indexed (default False) |
+
+**Returns:** `source_name`, `row_count`, `rows[]` (at most `max_inline_rows`), `rows_dropped`, `truncated`, `files_scanned`, `files_excluded[]`, `file_range`, `window`, `filter_applied`, `nfdump_argv`, `warnings[]` (source netflow.top.&lt;id&gt;)
+
+**Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR`
+
+### run_netflow_sweep
+
+Detect internal fan-out (lateral movement, scans): distinct internal targets, flows, SYN-only flows and the largest burst of new targets per source and destination port.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| evidence_path | str | yes | nfcapd directory (or file) inside the case evidence root |
+| ports | list[int] \| None | no | Up to 16 destination ports (default 22, 135, 139, 445, 3389, 5985, 5986) |
+| min_targets | int | no | Minimum distinct targets to report a (source, port) (default 3, 2..1000) |
+| n | int | no | Rows to keep (default 25, clamped 1..100) |
+| syn_only | bool | no | Keep only flows with SYN set and ACK clear (default False) |
+| burst_window_s | int | no | Sliding window for the burst statistic (default 60, 1..3600 s) |
+| internal_nets | list[str] \| None | no | Up to 8 CIDRs (default RFC 1918) |
+| t_start | str \| None | no | UTC window start |
+| t_end | str \| None | no | UTC window end |
+| max_inline_rows | int | no | Rows returned inline (default 20, 0..100) |
+| force | bool | no | Re-run even if this exact sweep is indexed (default False) |
+
+**Returns:** `source_name`, `row_count`, `rows[]` (at most `max_inline_rows`), `rows_dropped`, `truncated`, `files_scanned`, `files_excluded[]`, `file_range`, `window`, `filter_applied`, `nfdump_argv`, `warnings[]` (source netflow.sweep.&lt;id&gt;)
+
+**Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR`
+
 ---
 
 ## 6. Extraction: Mobile
