@@ -59,27 +59,16 @@ extraction.
 
 _STREAM_CHUNK = 1024**2
 
-_SINGLE_STREAM_7Z_TYPES = frozenset(
-    {
-        "gzip",
-        "bzip2",
-        "xz",
-        "lzma",
-        "lzma86",
-        "z",
-        "zstd",
-        "lz4",
-        "lz5",
-        "lzip",
-        "brotli",
-        "lizard",
-    }
-)
-"""7-Zip format names for a single compressed stream rather than an archive.
+_SIZED_7Z_TYPES = frozenset({"7z", "zip", "rar", "rar5", "tar", "split"})
+"""7-Zip format names whose listing is trusted to give each member's size.
 
-The uncompressed size such a stream records is a hint at best (gzip keeps it
-mod 2**32 in a trailer anyone can rewrite, bzip2 records none), so a ``7z l``
-listing of one cannot establish how much ``7z x`` will write.
+These are the formats ``extract_archive`` sends to ``7z`` (``.7z``, ``.rar``,
+split ``.7z.001`` volumes, and zips the zipfile module cannot read).  Anything
+else ``7z`` recognizes under those names is refused rather than trusted: a
+single compressed stream records its uncompressed size as a hint at best
+(gzip keeps it mod 2**32 in a trailer anyone can rewrite, bzip2 records none),
+so its listing cannot establish how much ``7z x`` will write.  An allowlist
+fails closed for formats nobody thought about.
 """
 
 
@@ -769,9 +758,9 @@ def _7z_listing_totals(archive: Path) -> tuple[int, int] | None:
     """Return ``(members, uncompressed bytes)`` from ``7z l -slt``, or None.
 
     None means the expanded size cannot be established: the listing failed,
-    an entry's ``Size`` is blank or missing, or the input is a single
-    compressed stream (``Type = gzip``, ``bzip2``, ...) whose recorded size
-    the data does not bind.
+    an entry's ``Size`` is blank or missing, or ``7z`` reads the input as a
+    format outside :data:`_SIZED_7Z_TYPES` (a gzip or bzip2 stream renamed
+    ``.7z``, say), whose recorded size the data does not bind.
     """
     try:
         proc = subprocess.run(
@@ -791,11 +780,13 @@ def _7z_listing_totals(archive: Path) -> tuple[int, int] | None:
     if split is None:
         return None
     body = "\n".join(lines[split + 1 :])
-    for line in lines[:split]:
-        if line.startswith("Type = ") and (
-            line.removeprefix("Type = ").strip().lower() in _SINGLE_STREAM_7Z_TYPES
-        ):
-            return None
+    types = [
+        line.removeprefix("Type = ").strip().lower()
+        for line in lines[:split]
+        if line.startswith("Type = ")
+    ]
+    if not types or any(kind not in _SIZED_7Z_TYPES for kind in types):
+        return None
     members = 0
     total = 0
     # Entries are blank-line separated.  An entry is a block carrying a Path
@@ -829,9 +820,9 @@ def _extract_7z(archive: Path, dest: Path) -> list[str]:
     if totals is None:
         raise UnknownExpandedSizeError(
             f"7z could not establish how large {archive.name} expands (the listing failed, "
-            "left a size blank, or describes a single compressed stream whose recorded size "
-            "cannot be trusted), so its expanded size is unknown and it cannot be checked "
-            "against the free space on the destination filesystem"
+            "left a size blank, or read it as a format such as a single gzip or bzip2 stream "
+            "whose recorded size cannot be trusted), so its expanded size is unknown and it "
+            "cannot be checked against the free space on the destination filesystem"
         )
     _require_space(archive, dest, totals[1], totals[0])
     cmd = ["7z", "x", f"-o{dest}", "-y", str(archive)]

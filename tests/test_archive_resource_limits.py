@@ -215,14 +215,28 @@ def test_a_7z_listing_with_a_blank_size_yields_no_totals() -> None:
         assert case._7z_listing_totals(Path("bomb.7z")) is None
 
 
-@pytest.mark.parametrize("kind", ["gzip", "bzip2", "xz"])
-def test_a_single_stream_7z_listing_yields_no_totals(kind: str) -> None:
-    """A single compressed stream's recorded size is not trusted (a forged gzip ISIZE says 1)."""
+@pytest.mark.parametrize("kind", ["gzip", "bzip2", "xz", "zstd", "Cab", "Iso"])
+def test_a_7z_listing_of_an_unsized_format_yields_no_totals(kind: str) -> None:
+    """Only formats known to bind member sizes are trusted (a forged gzip ISIZE says 1)."""
     listing = (
         f"Path = bomb.7z\nType = {kind}\n\n----------\nPath = bomb\nSize = 1\nPacked Size = 4892\n"
     )
     with _listing(listing):
         assert case._7z_listing_totals(Path("bomb.7z")) is None
+
+
+def test_a_7z_listing_without_a_type_yields_no_totals() -> None:
+    with _listing("Path = a.7z\n\n----------\nPath = one\nSize = 10\n"):
+        assert case._7z_listing_totals(Path("a.7z")) is None
+
+
+def test_a_split_7z_listing_is_trusted() -> None:
+    listing = (
+        "Path = ev.7z.001\nType = Split\nVolumes = 3\n\nPath = ev.7z\nType = 7z\n\n"
+        "----------\nPath = big.bin\nSize = 300000\n"
+    )
+    with _listing(listing):
+        assert case._7z_listing_totals(Path("ev.7z.001")) == (1, 300000)
 
 
 def test_a_7z_listing_still_counts_folders_without_a_size() -> None:
