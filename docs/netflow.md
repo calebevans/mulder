@@ -215,3 +215,6 @@ which name it supersedes). A call that matches nothing registers an empty source
 - IPv6 records are parsed (nfdump runs with `-6` so addresses are never abbreviated), but IPv6
   has not been exercised end to end.
 - Every distinct parameter set is its own source, so exploratory calls add sources to the case.
+- Flow timestamps are evidence data: a record whose first or last seen lies outside
+  1970-01-01 .. 2100-01-01 UTC is dropped, counted in `rows_dropped` and named in `warnings`, as
+  is a statistics row whose time is not a valid UTC time in that range.

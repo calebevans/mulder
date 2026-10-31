@@ -212,13 +212,31 @@ def window_clause(ts: datetime | None, te: datetime | None) -> str:
     return " and ".join(parts)
 
 
+# Flow timestamps come from evidence, so they are hostile input: the parsers drop a record whose
+# first/last seen lies outside [EPOCH_MIN, EPOCH_MAX] (1970-01-01 .. 2100-01-01 UTC) before any
+# datetime conversion, and the converters clamp to the same range so they can never raise.
+EPOCH_MIN = 0.0
+EPOCH_MAX = 4102444800.0
+
+
+def epoch_ok(epoch: float) -> bool:
+    """A finite epoch inside [EPOCH_MIN, EPOCH_MAX]."""
+    return EPOCH_MIN <= epoch <= EPOCH_MAX  # False for NaN
+
+
+def _clamp_epoch(epoch: float) -> float:
+    return min(max(epoch, EPOCH_MIN), EPOCH_MAX) if epoch == epoch else EPOCH_MIN
+
+
 def iso_s(epoch: float) -> str:
     """Epoch seconds -> naive UTC ``YYYY-MM-DDTHH:MM:SS`` (the ``event_time`` form)."""
+    epoch = _clamp_epoch(epoch)
     return datetime.fromtimestamp(int(epoch), timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
 
 def iso_ms(epoch: float) -> str:
     """Epoch seconds with fraction -> ``YYYY-MM-DDTHH:MM:SS.mmm`` (UTC)."""
+    epoch = _clamp_epoch(epoch)
     whole = int(epoch)
     ms = int(round((epoch - whole) * 1000))
     if ms >= 1000:
@@ -227,9 +245,22 @@ def iso_ms(epoch: float) -> str:
     return datetime.fromtimestamp(whole, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S") + f".{ms:03d}"
 
 
+_STAT_TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}$", re.ASCII)
+
+
 def stat_ts_to_iso(value: str) -> str:
-    """``2001-02-03 04:05:06`` (STAT ``ts``/``te`` under TZ=UTC) -> ISO ``T`` form."""
-    return value.strip().replace(" ", "T")
+    """``2001-02-03 04:05:06`` (STAT ``ts``/``te`` under TZ=UTC) -> ISO ``T`` form.
+
+    Raises ``ValueError`` (the parser drops the row) unless the value is a real UTC time
+    inside [EPOCH_MIN, EPOCH_MAX].
+    """
+    v = value.strip()
+    if not _STAT_TS_RE.match(v):
+        raise ValueError(f"not a timestamp: {v!r}")
+    dt = datetime.strptime(v.replace(" ", "T"), "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+    if not epoch_ok(dt.timestamp()):
+        raise ValueError(f"timestamp out of range: {v!r}")
+    return v.replace(" ", "T")
 
 
 def window_label(ts: datetime | None, te: datetime | None) -> str:
@@ -744,6 +775,7 @@ def parse_flow_csv(stdout: str) -> ParsedFlows:
     cols: list[str] | None = None
     bad_addr = 0
     bad_line = 0
+    bad_time = 0
     for line in stdout.splitlines():
         line = line.strip()
         if not line or line == NO_MATCH:
@@ -780,6 +812,9 @@ def parse_flow_csv(stdout: str) -> ParsedFlows:
         except (KeyError, ValueError):
             bad_line += 1
             continue
+        if not (epoch_ok(fr.first) and epoch_ok(fr.last)):
+            bad_time += 1
+            continue
         if "sa" in rec:
             fr.sa = _ip_or_none(rec["sa"])
             if fr.sa is None:
@@ -791,11 +826,13 @@ def parse_flow_csv(stdout: str) -> ParsedFlows:
                 bad_addr += 1
                 continue
         out.rows.append(fr)
-    out.dropped = bad_addr + bad_line
+    out.dropped = bad_addr + bad_line + bad_time
     if bad_addr:
         out.warnings.append(f"{bad_addr} rows with unparseable addresses dropped")
     if bad_line:
         out.warnings.append(f"{bad_line} malformed csv lines dropped")
+    if bad_time:
+        out.warnings.append(f"{bad_time} rows with out-of-range timestamps dropped")
     return out
 
 
@@ -927,6 +964,10 @@ def parse_dash_i(stdout: str) -> dict[str, int | str]:
             out[k] = int(v)
         except ValueError:
             out[k] = v
+    for key in ("First", "Last"):
+        epoch = out.get(key)
+        if isinstance(epoch, int) and not epoch_ok(epoch):
+            out[key] = 0  # read as "unknown" by the inventory
     return out
 
 
@@ -1375,16 +1416,22 @@ def _periodic(st: IntervalStats | None) -> bool:
 
 def _active_days(rows: Sequence[FlowRec]) -> int:
     """Distinct UTC calendar days on which any record was active (first .. last inclusive)."""
-    days: set[date] = set()
-    for r in rows:
-        d = datetime.fromtimestamp(int(r.first), timezone.utc).date()
-        d_last = datetime.fromtimestamp(int(r.last), timezone.utc).date()
-        while d <= d_last:
-            days.add(d)
-            d = _shift_day(d, 1)
-            if d == date.max:
-                break
-    return len(days)
+    spans = sorted(
+        (int(_clamp_epoch(r.first)) // 86400, int(_clamp_epoch(r.last)) // 86400) for r in rows
+    )
+    total = 0
+    cur_start = cur_end = -1
+    for start, end in spans:
+        if end < start:  # last seen before first seen: no active day, as before
+            continue
+        if start > cur_end:
+            total += cur_end - cur_start + 1 if cur_end >= 0 else 0
+            cur_start, cur_end = start, end
+        else:
+            cur_end = max(cur_end, end)
+    if cur_end >= 0:
+        total += cur_end - cur_start + 1
+    return total
 
 
 def pair_stats(raw: Sequence[FlowRec], truncated: bool, src: str | None = None) -> PairStats:
