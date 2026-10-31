@@ -268,24 +268,45 @@ _ANDROID_ARTIFACTS: dict[str, dict[str, object]] = {
 }
 
 
-def _query_sqlite_safe(db_path: Path, query: str) -> list[str]:
-    """Run a read-only query, returning formatted rows or empty list on error."""
+def _query_sqlite_safe(db_path: Path, query: str) -> tuple[list[str], str | None]:
+    """Run a read-only query, returning ``(rows, None)`` or ``([], error)``."""
     try:
         conn = sqlite3.connect(readonly_sqlite_uri(db_path), uri=True)
         conn.row_factory = sqlite3.Row
         rows = conn.execute(query).fetchall()
         conn.close()
-    except sqlite3.Error:
-        return []
+    except sqlite3.Error as exc:
+        return [], str(exc) or type(exc).__name__
 
     if not rows:
-        return []
+        return [], None
 
     columns = rows[0].keys()
     lines = ["\t".join(columns)]
     for r in rows:
         lines.append("\t".join(str(r[c]) for c in columns))
-    return lines
+    return lines, None
+
+
+def _unreadable_error(
+    tc_id: str,
+    tool_name: str,
+    params: Mapping[str, object],
+    unreadable: list[dict[str, str]],
+    elapsed_ms: float,
+) -> dict[str, object]:
+    """Error for a run in which no database it found could be queried."""
+    response = error_response(
+        tc_id,
+        tool_name,
+        params,
+        f"Found {len(unreadable)} database(s) but could not query any; see unreadable_databases",
+        elapsed_ms,
+        error_type="database_unreadable",
+        suggestion="Check the database schema and encryption.",
+    )
+    response["unreadable_databases"] = unreadable
+    return response
 
 
 def _find_databases(search_dir: Path, db_names: list[str]) -> list[Path]:
@@ -364,6 +385,8 @@ def parse_android_artifacts(
     try:
         all_results: list[str] = []
         parsed_types: list[str] = []
+        unreadable: list[dict[str, str]] = []
+        queried = False
 
         for atype in types_to_parse:
             spec = _ANDROID_ARTIFACTS[atype]
@@ -381,7 +404,13 @@ def parse_android_artifacts(
                 db_files = _find_databases(search_dir, db_names)
 
             for db_path in db_files:
-                lines = _query_sqlite_safe(db_path, str(query))
+                lines, error = _query_sqlite_safe(db_path, str(query))
+                if error is not None:
+                    unreadable.append(
+                        {"artifact_type": atype, "database": db_path.name, "error": error}
+                    )
+                    continue
+                queried = True
                 if lines:
                     header = f"=== {spec['label']} ({db_path.name}) ==="
                     all_results.append(header + "\n" + "\n".join(lines))
@@ -397,12 +426,23 @@ def parse_android_artifacts(
                 "android_parser",
             )
             index_result["parsed_types"] = parsed_types
+        elif unreadable and not queried:
+            return _unreadable_error(
+                tc_id,
+                "parse_android_artifacts",
+                params,
+                unreadable,
+                (time.monotonic() - t0) * 1000,
+            )
         else:
             index_result = {
                 "status": "no_results",
                 "message": "No Android artifacts found",
                 "searched_types": types_to_parse,
             }
+        if unreadable:
+            index_result["unreadable_count"] = len(unreadable)
+            index_result["unreadable_databases"] = unreadable
 
     finally:
         if cleanup_tmpdir:
@@ -491,23 +531,24 @@ _IOS_MANIFEST_ARTIFACTS: dict[str, dict[str, object]] = {
 }
 
 
-def _resolve_ios_manifest(backup_dir: Path) -> dict[str, Path]:
+def _resolve_ios_manifest(backup_dir: Path) -> tuple[dict[str, Path], str | None]:
     """Parse Manifest.db to map file IDs to actual paths on disk.
 
     iTunes/Finder backups store files named by their SHA1 hash in
     two-character subdirectories (e.g. ``3d/3d0d7e5f...``).
+    Returns ``(mapping, None)`` or ``({}, error)``.
     """
     manifest = backup_dir / "Manifest.db"
     if not manifest.exists():
-        return {}
+        return {}, None
 
     mapping: dict[str, Path] = {}
     try:
         conn = sqlite3.connect(readonly_sqlite_uri(manifest), uri=True)
         rows = conn.execute("SELECT fileID, relativePath, domain FROM Files").fetchall()
         conn.close()
-    except sqlite3.Error:
-        return {}
+    except sqlite3.Error as exc:
+        return {}, str(exc) or type(exc).__name__
 
     for file_id, _rel_path, _domain in rows:
         candidate = backup_dir / file_id[:2] / file_id
@@ -517,7 +558,7 @@ def _resolve_ios_manifest(backup_dir: Path) -> dict[str, Path]:
         if flat_candidate.exists():
             mapping[file_id] = flat_candidate
 
-    return mapping
+    return mapping, None
 
 
 @mcp.tool()
@@ -566,11 +607,17 @@ def parse_ios_artifacts(
             error_type="invalid_argument",
         )
 
-    manifest_map = _resolve_ios_manifest(target)
+    manifest_map, manifest_error = _resolve_ios_manifest(target)
     has_manifest = bool(manifest_map)
 
     all_results: list[str] = []
     parsed_types: list[str] = []
+    unreadable: list[dict[str, str]] = []
+    if manifest_error is not None:
+        unreadable.append(
+            {"artifact_type": "manifest", "database": "Manifest.db", "error": manifest_error}
+        )
+    queried = False
 
     with tempfile.TemporaryDirectory(prefix="mulder_ios_") as tmpdir:
         for atype in types_to_parse:
@@ -591,7 +638,11 @@ def parse_ios_artifacts(
             if db_path is None or not db_path.exists():
                 continue
 
-            lines = _query_sqlite_safe(db_path, str(spec["query"]))
+            lines, error = _query_sqlite_safe(db_path, str(spec["query"]))
+            if error is not None:
+                unreadable.append({"artifact_type": atype, "database": db_name, "error": error})
+                continue
+            queried = True
             if lines:
                 header = f"=== {spec['label']} ({spec['db_name']}) ==="
                 all_results.append(header + "\n" + "\n".join(lines))
@@ -607,6 +658,10 @@ def parse_ios_artifacts(
         )
         index_result["parsed_types"] = parsed_types
         index_result["manifest_found"] = has_manifest
+    elif unreadable and not queried:
+        return _unreadable_error(
+            tc_id, "parse_ios_artifacts", params, unreadable, (time.monotonic() - t0) * 1000
+        )
     else:
         index_result = {
             "status": "no_results",
@@ -614,6 +669,9 @@ def parse_ios_artifacts(
             "searched_types": types_to_parse,
             "manifest_found": has_manifest,
         }
+    if unreadable:
+        index_result["unreadable_count"] = len(unreadable)
+        index_result["unreadable_databases"] = unreadable
 
     elapsed = (time.monotonic() - t0) * 1000
     return tool_response(

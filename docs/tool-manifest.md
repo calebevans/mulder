@@ -715,7 +715,7 @@ Parse Android artifacts from a logical extraction or carved databases.
 | evidence_path | str | yes | Directory with extracted Android data, or raw .bin dump |
 | artifact_types | list[str] \| None | no | Types to parse (e.g. ["sms", "contacts", "whatsapp"]) |
 
-**Returns:** `source_name` (phone.android), `parsed_types[]`, `windows_indexed`
+**Returns:** `source_name` (phone.android), `parsed_types[]`, `windows_indexed`, `unreadable_count`, `unreadable_databases[]`
 
 **Roles:** `EXTRACT_EXECUTOR`
 
@@ -728,7 +728,7 @@ Parse iOS artifacts from an iTunes/Finder backup or extracted files.
 | evidence_path | str | yes | Path to the iOS backup directory |
 | artifact_types | list[str] \| None | no | Types to parse (e.g. ["sms", "calls", "safari"]) |
 
-**Returns:** `source_name` (phone.ios), `parsed_types[]`, `manifest_found`
+**Returns:** `source_name` (phone.ios), `parsed_types[]`, `manifest_found`, `unreadable_count`, `unreadable_databases[]`
 
 **Roles:** `EXTRACT_EXECUTOR`
 
