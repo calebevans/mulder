@@ -220,7 +220,7 @@ To expose mulder's tools to Claude Desktop or any other MCP client, add:
 The pre-built container image includes all forensic tools, dependencies, and the Mulder server:
 
 ```bash
-docker pull ghcr.io/calebevans/mulder:1.5.8
+docker pull ghcr.io/calebevans/mulder:1.5.9
 ```
 
 ## Running a Container
@@ -266,7 +266,7 @@ docker run -it --privileged \
   -v /path/to/evidence:/evidence:ro \
   -v ~/mulder-cases:/home/mulder/.mulder/cases \
   -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
-  ghcr.io/calebevans/mulder:1.5.8
+  ghcr.io/calebevans/mulder:1.5.9
 ```
 
 ### Using Google Cloud Vertex AI
@@ -282,7 +282,7 @@ docker run -it --privileged \
   -e ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project-id \
   -e GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcloud-creds.json \
   -v ~/.config/gcloud/application_default_credentials.json:/tmp/gcloud-creds.json:ro \
-  ghcr.io/calebevans/mulder:1.5.8
+  ghcr.io/calebevans/mulder:1.5.9
 ```
 
 Model IDs are passed through to the SDK exactly as specified, with no automatic translation or mapping. When using Vertex, you must provide the full Vertex model ID including the `@version` suffix (e.g. `--model claude-opus-4-6@20250514`). If you omit `--model`, the built-in defaults (`claude-opus-4-6` for planner/analyst, `claude-haiku-4-5` for executor) are used.
@@ -309,7 +309,7 @@ docker run -it --privileged \
   -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
   -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
   -v ~/.aws:/home/mulder/.aws \
-  ghcr.io/calebevans/mulder:1.5.8
+  ghcr.io/calebevans/mulder:1.5.9
 ```
 
 Model IDs are passed through to the SDK exactly as specified, with no automatic translation or mapping. When using Bedrock, you must provide the full Bedrock model ID with the `us.anthropic.` prefix (e.g. `--model us.anthropic.claude-opus-4-6`). If you omit `--model`, the built-in defaults (`claude-opus-4-6` for planner/analyst, `claude-haiku-4-5` for executor) are used.

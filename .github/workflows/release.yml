@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing published release tag to rebuild (for example v1.5.8)
+        description: Existing published release tag to rebuild (for example v1.5.9)
         required: true
         type: string
 
@@ -43,7 +43,7 @@ jobs:
 
           tag = os.environ["RELEASE_TAG"]
           if not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
-              raise SystemExit("Expected a stable release tag such as v1.5.8")
+              raise SystemExit("Expected a stable release tag such as v1.5.9")
           release = json.loads(subprocess.check_output([
               "gh", "release", "view", tag, "--repo", os.environ["GITHUB_REPOSITORY"],
               "--json", "isDraft,isPrerelease,tagName",
