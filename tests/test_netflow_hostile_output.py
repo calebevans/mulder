@@ -1,7 +1,8 @@
-"""Hostile nfdump output: flow timestamps out of range.
+"""Hostile or unexpected nfdump output: out-of-range timestamps, unrecognised stdout, versions.
 
 Flow timestamps come from evidence, so a crafted capture can carry any value; the parsers drop
-such records (with a warning) before any datetime conversion.
+such records (with a warning) before any datetime conversion. An rc-0 run whose stdout carries
+neither a table header nor the no-match sentinel fails instead of indexing nothing as a success.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from mulder.server.tools.netflow import core
+from mulder.server.tools.netflow import core, tools
 from tests.conftest import Env, fixture_text
 
 _RAW_HEADER = "firstSeen,lastSeen,proto,srcAddr,srcPort,dstAddr,dstPort,flags,packets,bytes"
@@ -91,3 +92,86 @@ def test_query_drops_a_hostile_row_and_reports_it(nf_env: Env) -> None:
     assert resp["status"] == "success"
     assert resp["rows_dropped"] == 1
     assert "1 rows with out-of-range timestamps dropped" in resp["warnings"]
+
+
+# ---------------------------------------------------------------------------
+# unrecognised output
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("stdout", "fmt", "ok"),
+    [
+        (f"{_RAW_HEADER}\n{_RAW_GOOD}\n", core.RAW_FMT, True),
+        (f"{_RAW_HEADER}\n{core.NO_MATCH}\n", core.RAW_FMT, True),
+        (f"{core.NO_MATCH}\n", core.RAW_FMT, True),
+        (f"{core.NO_MATCH}\n", core.STAT_FMT, True),
+        (f"{_STAT_HEADER}\n{_STAT_GOOD}\n", core.STAT_FMT, True),
+        ("", core.RAW_FMT, False),
+        ("", core.STAT_FMT, False),
+        (f"{_STAT_HEADER}\n{_STAT_GOOD}\n", core.RAW_FMT, False),  # wrong table for the mode
+        ("Date first seen,Duration,Proto\n2001-02-03,0.0,TCP\n", core.RAW_FMT, False),
+        (fixture_text("dash_I.txt"), None, True),
+        ("", None, False),
+    ],
+)
+def test_recognised_output(stdout: str, fmt: str | None, ok: bool) -> None:
+    assert core.recognised_output(stdout, fmt) is ok
+
+
+@pytest.mark.parametrize("stdout", ["", "Date first seen,Duration,Proto\n"])
+@pytest.mark.parametrize("tool", ["run_netflow_top", "run_netflow_query"])
+def test_unrecognised_stdout_at_rc0_fails_and_indexes_nothing(
+    nf_env: Env, tool: str, stdout: str
+) -> None:
+    day_dir = _single(nf_env)
+    nf_env.fake.responder = lambda argv: None if "-I" in argv else stdout
+    resp = nf_env.call(tool, evidence_path=str(day_dir))
+    assert resp["status"] == "error" and resp["error_type"] == "tool_failed"
+    assert "without a recognised table header" in resp["error_message"]
+    assert core.NFDUMP_VERIFIED_VERSION in resp["suggestion"]
+    assert [
+        s for s in nf_env.db.get_sources() if not s.source_name.startswith("netflow.progress.")
+    ] == []
+
+
+def test_analysis_with_unrecognised_stdout_writes_no_completion_marker(nf_env: Env) -> None:
+    day_dir = _single(nf_env)
+    nf_env.fake.responder = lambda argv: None if "-I" in argv else ""
+    resp = nf_env.call("run_netflow_analysis", evidence_path=str(day_dir))
+    assert resp["status"] != "success"
+    names = [s.source_name for s in nf_env.db.get_sources()]
+    assert not any(n.startswith("netflow.complete.") for n in names)
+    assert not any(n.startswith("netflow.analysis.") for n in names)
+
+
+# ---------------------------------------------------------------------------
+# nfdump version
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("banner", "error"),
+    [
+        ("nfdump: Version: 1.6.23\n", "nfdump 1.6.23 at /opt/nfdump/bin/nfdump is too old"),
+        ("nfdump 1.7\n", "could not read the nfdump version"),
+    ],
+)
+def test_old_or_unreadable_version_is_refused(nf_env: Env, banner: str, error: str) -> None:
+    day_dir = _single(nf_env)
+    nf_env.monkeypatch.setattr(tools, "_NFDUMP_VERSIONS", {})
+    nf_env.fake.responder = lambda argv: banner if argv[1:] == ["-V"] else None
+    resp = nf_env.call("run_netflow_top", evidence_path=str(day_dir))
+    assert resp["status"] == "error" and resp["error_type"] == "binary_missing"
+    assert error in resp["error_message"]
+    assert all(c.cmd[1:] == ["-V"] for c in nf_env.fake.calls)
+
+
+def test_version_is_probed_once_per_binary(nf_env: Env) -> None:
+    day_dir = _single(nf_env)
+    nf_env.monkeypatch.setattr(tools, "_NFDUMP_VERSIONS", {})
+    nf_env.call("run_netflow_top", evidence_path=str(day_dir))
+    nf_env.call("run_netflow_top", evidence_path=str(day_dir), n=5)
+    probes = [c for c in nf_env.fake.calls if c.cmd[1:] == ["-V"]]
+    assert len(probes) == 1
+    assert tools._NFDUMP_VERSIONS[core.NFDUMP_BINARY] == (1, 7, 10)

@@ -251,6 +251,8 @@ def make_tree(root: Path, days: range = range(48, 76), strays: bool = True) -> P
 
 def default_stdout(cmd: list[str]) -> str:
     """Pick the captured stdout that matches the argv shape nfdump was given."""
+    if cmd[1:] == ["-V"]:
+        return fixture_text("dash_V.txt")
     if "-I" in cmd:
         return fixture_text("dash_I.txt")
     stats = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-s"]
@@ -445,6 +447,7 @@ def nf_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Env]:
     monkeypatch.setattr(app, "_ctx", ctx)
     monkeypatch.setattr(app, "_cfg", cfg)
     monkeypatch.setattr(tools, "require_binary", fake_which)
+    monkeypatch.setattr(tools, "_NFDUMP_VERSIONS", {core.NFDUMP_BINARY: (1, 7, 10)})
     monkeypatch.setattr(RUN_TARGET, fake)
     monkeypatch.setattr(tools, "_NFDUMP_SLOTS", threading.BoundedSemaphore(core.NFDUMP_SLOT_COUNT))
     env = Env(

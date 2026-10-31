@@ -76,6 +76,9 @@ TOOL_SOURCE_PREFIXES.update({"run_netflow_analysis": [_COMPLETE_PREFIX]})
 _PARTIAL_PREFIX = "netflow.analysis-partial."
 
 _NFDUMP_SLOTS = threading.BoundedSemaphore(core.NFDUMP_SLOT_COUNT)
+# binary path -> parsed ``nfdump -V`` version, or None when it could not be read
+_NFDUMP_VERSIONS: dict[str, tuple[int, ...] | None] = {}
+_VERSION_RE = re.compile(r"Version:\s*(\d+)\.(\d+)(?:\.(\d+))?", re.ASCII)
 _STDERR_PREVIEW = 500
 # The pivots are follow-up tools: extraction plans only run_netflow_analysis (which runs the same
 # section code); the extraction analyst and the cross-system executor ask about specific hosts,
@@ -206,6 +209,16 @@ def _run_nfdump(
             0.0,
             0.0,
         )
+    version_error = _nfdump_version_error(binary)
+    if version_error is not None:
+        return NfFailure(
+            "binary_missing",
+            version_error,
+            "install nfdump >= 1.7 (/opt/nfdump/bin/nfdump or on PATH)",
+            [binary, "-V"],
+            0.0,
+            0.0,
+        )
     prlimit = require_binary(core.PRLIMIT_BINARY) or require_binary("prlimit")
     if not prlimit:
         return NfFailure(
@@ -330,7 +343,48 @@ def _run_nfdump(
         return NfFailure(
             "tool_failed", "output too large; narrow the query", None, cmd, elapsed, slot_wait_s
         )
+    if not core.recognised_output(stdout, fmt):
+        return NfFailure(
+            "tool_failed",
+            "nfdump exited 0 without a recognised table header or the no-match sentinel"
+            + (f": {stdout.strip()[:_STDERR_PREVIEW]}" if stdout.strip() else " (empty stdout)"),
+            f"this nfdump build's output is not in a format mulder parses (verified against "
+            f"nfdump {core.NFDUMP_VERIFIED_VERSION})",
+            cmd,
+            elapsed,
+            slot_wait_s,
+        )
     return NfRun(stdout, stderr, rc, cmd, elapsed, slot_wait_s, [])
+
+
+def _nfdump_version_error(binary: str) -> str | None:
+    """``None`` when ``binary -V`` reports nfdump >= 1.7, else why it is refused (cached per path).
+
+    nfdump 1.6 cannot read the layout-2 files 1.7 writes and prints different csv columns.
+    """
+    if binary not in _NFDUMP_VERSIONS:
+        try:
+            proc = subprocess.run(
+                [binary, "-V"],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=10,
+                check=False,
+            )
+            m = _VERSION_RE.search((proc.stdout or "") + (proc.stderr or ""))
+            _NFDUMP_VERSIONS[binary] = (
+                tuple(int(g) for g in m.groups() if g is not None) if m else None
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            _NFDUMP_VERSIONS[binary] = None
+    version = _NFDUMP_VERSIONS[binary]
+    if version is None:
+        return f"could not read the nfdump version from `{binary} -V`"
+    if version < core.NFDUMP_MIN_VERSION:
+        found = ".".join(map(str, version))
+        return f"nfdump {found} at {binary} is too old; mulder needs nfdump >= 1.7"
+    return None
 
 
 # ---------------------------------------------------------------------------

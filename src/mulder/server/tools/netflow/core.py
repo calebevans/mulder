@@ -93,6 +93,8 @@ NFCAPD_NAME_RE = re.compile(r"^nfcapd\.\d{12}(?:\d{2})?$")
 
 # Output formats.  Header names verified on nfdump 1.7.10; the header is printed
 # even with -q, and epoch %tsr/%ter carry milliseconds and ignore TZ.
+NFDUMP_MIN_VERSION = (1, 7)
+NFDUMP_VERIFIED_VERSION = "1.7.10"  # the output formats below were captured from this release
 RAW_FMT = "csv:%tsr,%ter,%pr,%sa,%sp,%da,%dp,%flg,%pkt,%byt"
 SEG_FMT = "csv:%tsr,%ter,%sa,%da,%pkt,%byt,%fl"
 STAT_FMT = "csv"
@@ -756,6 +758,7 @@ class ParsedFlows:
     dropped: int = 0
     warnings: list[str] = field(default_factory=list)
     saw_header: bool = False
+    saw_no_match: bool = False
 
 
 def _int(v: str) -> int:
@@ -778,7 +781,10 @@ def parse_flow_csv(stdout: str) -> ParsedFlows:
     bad_time = 0
     for line in stdout.splitlines():
         line = line.strip()
-        if not line or line == NO_MATCH:
+        if line == NO_MATCH:
+            out.saw_no_match = True
+            continue
+        if not line:
             continue
         if line.startswith("firstSeen,"):
             cols = [_FLOW_COL_MAP.get(c, c) for c in line.split(",")]
@@ -871,6 +877,7 @@ class ParsedStats:
     tables: list[StatTable] = field(default_factory=list)
     dropped: int = 0
     warnings: list[str] = field(default_factory=list)
+    saw_no_match: bool = False
 
 
 def proto_name(raw: str) -> str:
@@ -894,7 +901,10 @@ def parse_stat_csv(stdout: str, ip_valued: Sequence[bool] | None = None) -> Pars
     bad_line = 0
     for line in stdout.splitlines():
         line = line.strip()
-        if not line or line == NO_MATCH:
+        if line == NO_MATCH:
+            out.saw_no_match = True
+            continue
+        if not line:
             continue
         if line.startswith("ts,te,"):
             cols = [_STAT_COL_NORMALISE.get(c, c) for c in line.split(",")]
@@ -969,6 +979,23 @@ def parse_dash_i(stdout: str) -> dict[str, int | str]:
         if isinstance(epoch, int) and not epoch_ok(epoch):
             out[key] = 0  # read as "unknown" by the inventory
     return out
+
+
+def recognised_output(stdout: str, fmt: str | None) -> bool:
+    """Does an rc-0 nfdump stdout carry what this output mode must print?
+
+    A csv run prints a table header (``firstSeen,`` for ``-o csv:...``, ``ts,te,`` for ``-s``
+    statistics) or the "No matching flows" sentinel; ``-I`` prints its ``Ident:``/``Flows:``
+    lines.  Anything else (an empty stdout, or a format this parser does not know) means the
+    run's rows cannot be read, which must fail rather than index nothing as a success.
+    """
+    lines = {ln.strip() for ln in stdout.splitlines() if ln.strip()}
+    if fmt is None:
+        return any(ln.startswith("Flows:") for ln in lines)
+    if NO_MATCH in lines:
+        return True
+    header = "ts,te," if fmt == STAT_FMT else "firstSeen,"
+    return any(ln.startswith(header) for ln in lines)
 
 
 # ---------------------------------------------------------------------------
