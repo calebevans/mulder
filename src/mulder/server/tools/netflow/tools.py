@@ -27,7 +27,7 @@ import signal
 import subprocess
 import threading
 import time
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from mulder.db import WINDOWS_HASH_PENDING
 from mulder.models import WindowRow
 from mulder.path_policy import PathPolicyError, resolve_allowed_path
 from mulder.server.app import get_cfg, get_ctx, has_ctx, mcp
@@ -747,18 +748,34 @@ def _name_or_skip(
 def _index_rows(
     source_name: str, source_path: str, rows: Sequence[tuple[str | None, str]]
 ) -> tuple[int, int]:
-    """Register ``source_name`` and insert one ``WindowRow`` per line (own ``event_time``)."""
+    """Register ``source_name`` and insert one ``WindowRow`` per line (own ``event_time``).
+
+    The windows hash is recorded the way ``extract_and_index`` records it: ``pending`` until
+    the last batch is stored, so a call cut short verifies as ``incomplete``, then the BLAKE2b
+    of the stored rows in order, which ``verify_evidence_integrity`` recomputes.
+    """
     ctx = get_ctx()
     text = "\n".join(t for _, t in rows)
     h = "blake2b:" + hashlib.blake2b(text.encode(), digest_size=32).hexdigest()
-    sid = ctx.db.register_source(source_name, source_path, h, core.EXTRACTOR, len(rows))
+    sid = ctx.db.register_source(
+        source_name, source_path, h, core.EXTRACTOR, len(rows), windows_hash=WINDOWS_HASH_PENDING
+    )
     batch = [
         WindowRow(source_id=sid, line_start=i, line_end=i, event_time=et, raw_text=t)
         for i, (et, t) in enumerate(rows, 1)
     ]
     for k in range(0, len(batch), core.INSERT_BATCH):
         ctx.db.insert_windows(sid, batch[k : k + core.INSERT_BATCH])
+    ctx.db.set_windows_hash(sid, _windows_hash(t for _, t in rows))
     return sid, len(rows)
+
+
+def _windows_hash(texts: Iterable[str]) -> str:
+    """BLAKE2b over the rows' text in storage order, as ``verify_evidence_integrity`` computes."""
+    h = hashlib.blake2b(digest_size=32)
+    for t in texts:
+        h.update(t.encode())
+    return "blake2b:" + h.hexdigest()
 
 
 def _header_text(
@@ -1632,7 +1649,7 @@ def _analysis_name(
     return _Named(named.name, _previous_record(prep, base)), None
 
 
-def _progress_start(prep: _Prep, summary_name: str, planned: int) -> int:
+def _progress_start(prep: _Prep, summary_name: str, planned: int) -> tuple[int, str]:
     """Register the run's progress record before any section runs, so list_sources shows a run
     in flight (``status=running``) while the sections take their time; ``_progress_end``
     appends the outcome.  It is never the batch-skip prefix (that is the completion marker of a
@@ -1655,7 +1672,7 @@ def _progress_start(prep: _Prep, summary_name: str, planned: int) -> int:
         f"started={datetime.now(timezone.utc):%Y-%m-%dT%H:%M:%S}"
     )
     sid, _ = _index_rows(name, str(prep.resolved), [(None, header)])
-    return sid
+    return sid, header
 
 
 def _hid_of(name: str) -> str:
@@ -1731,21 +1748,28 @@ def _previous_record(prep: _Prep, base: str) -> str | None:
     return None
 
 
-def _progress_end(sid: int | None, status: str, fields: Mapping[str, object]) -> None:
+def _progress_end(
+    progress: tuple[int, str] | None, status: str, fields: Mapping[str, object]
+) -> None:
     """Append the outcome row to the progress record (the source's registered line count stays
-    1: the database has no update API, and the row is bookkeeping without an event time).  A
-    failure here is logged, never raised: the envelope and its audit entry come first."""
-    if sid is None:
+    1: the database has no update API, and the row is bookkeeping without an event time), then
+    record the windows hash over header and footer so the record still verifies.  A failure
+    here is logged, never raised: the envelope and its audit entry come first."""
+    if progress is None:
         return
+    sid, header = progress
     body = " ".join(
         f"{k}={core.num(v) if isinstance(v, (int, float)) else v}" for k, v in fields.items()
     )
     text = f"- netflow footer status={status} {body}".rstrip()
     try:
-        get_ctx().db.insert_windows(
+        db = get_ctx().db
+        db.set_windows_hash(sid, WINDOWS_HASH_PENDING)
+        db.insert_windows(
             sid,
             [WindowRow(source_id=sid, line_start=2, line_end=2, event_time=None, raw_text=text)],
         )
+        db.set_windows_hash(sid, _windows_hash((header, text)))
     except Exception:  # noqa: BLE001 - bookkeeping only
         logger.exception("could not append the progress footer (status=%s)", status)
 
@@ -1906,23 +1930,23 @@ def run_netflow_analysis(
     state = _Analysis()
     with _name_lock(base):
         named: _Named | None = None
-        progress_sid: int | None = None
+        progress: tuple[int, str] | None = None
         try:
             named_or_skip, resumed = _analysis_name(prep, base, force)
             if isinstance(named_or_skip, dict):
                 _heal_marker(prep, named_or_skip)  # a marker lost between summary and marker
                 return named_or_skip
             named = named_or_skip
-            progress_sid = _progress_start(prep, named.name, 5 + profile_e)
+            progress = _progress_start(prep, named.name, 5 + profile_e)
             resp = _analysis_body(prep, named, state, resumed, nets, n_e, profile_e, force)
         except Exception as exc:  # noqa: BLE001 - the envelope must always reach the audit log
             logger.exception("%s failed after %d section(s)", tool, len(state.sections))
             params["sources"] = state.sources()
             outcome = {
-                "summary": _registered_summary(prep, progress_sid, hid),
+                "summary": _registered_summary(prep, progress[0] if progress else None, hid),
                 "sections": len(state.sections),
             }
-            _progress_end(progress_sid, "error", outcome)  # logs, never raises
+            _progress_end(progress, "error", outcome)  # logs, never raises
             # the recovery is in the MESSAGE: a batch exposes only error_message to the executor
             recovery = (
                 "; retry run_netflow_analysis (through start_extraction_batch, directly, or with "
@@ -1945,7 +1969,7 @@ def run_netflow_analysis(
         if resp.get("status") == "success":
             _mark_complete(prep, str(resp.get("source")))
         _progress_end(
-            progress_sid, str(resp.get("status")),
+            progress, str(resp.get("status")),
             {"summary": resp.get("source") or "none", "sections": len(state.sections),
              "sections_error": state.errors, "sections_not_run": state.not_run},
         )  # fmt: skip
