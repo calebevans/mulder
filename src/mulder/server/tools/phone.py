@@ -660,6 +660,15 @@ def _parse_shared_prefs(app_dir: Path) -> list[str]:
     return results
 
 
+def _quote_ident(name: str) -> str:
+    """Quote an SQLite identifier taken from an evidence database's schema.
+
+    ``[name]`` ends at the first ``]``, so a crafted table name could append
+    SQL. A double-quoted identifier with embedded ``"`` doubled cannot.
+    """
+    return '"' + name.replace('"', '""') + '"'
+
+
 def _try_sqlcipher(db_path: Path, passwords: list[str]) -> list[str] | None:
     """Attempt to open an encrypted SQLite DB with SQLCipher.
 
@@ -689,9 +698,9 @@ def _try_sqlcipher(db_path: Path, passwords: list[str]) -> list[str] | None:
 
             for table in tables[:5]:
                 try:
-                    rows = conn.execute(f"SELECT * FROM [{table}] LIMIT 10").fetchall()
+                    rows = conn.execute(f"SELECT * FROM {_quote_ident(table)} LIMIT 10").fetchall()
                     if rows:
-                        desc = conn.execute(f"SELECT * FROM [{table}] LIMIT 0")
+                        desc = conn.execute(f"SELECT * FROM {_quote_ident(table)} LIMIT 0")
                         cols = [d[0] for d in desc.description]
                         lines.append(f"\n--- {table} ({len(cols)} columns) ---")
                         lines.append("\t".join(cols))
@@ -808,7 +817,9 @@ def decrypt_app_data(
                     try:
                         c2 = sqlite3.connect(readonly_sqlite_uri(db_path), uri=True)
                         c2.row_factory = sqlite3.Row
-                        rows = c2.execute(f"SELECT * FROM [{table}] LIMIT 10").fetchall()
+                        rows = c2.execute(
+                            f"SELECT * FROM {_quote_ident(table)} LIMIT 10"
+                        ).fetchall()
                         c2.close()
                         if rows:
                             cols = rows[0].keys()
