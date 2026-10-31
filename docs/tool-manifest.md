@@ -2125,7 +2125,7 @@ Run multiple tool calls in parallel and return all results.
 
 ### enrich_iocs
 
-Enrich IOCs against public threat intelligence APIs (VirusTotal, AbuseIPDB, OTX, ip-api).
+Enrich IOCs against public threat intelligence APIs (VirusTotal, AbuseIPDB, OTX, ip-api). ip-api uses HTTPS with `IP_API_KEY`; without a key it is skipped unless `MULDER_IP_API_ALLOW_HTTP=1` allows the plaintext free endpoint.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|

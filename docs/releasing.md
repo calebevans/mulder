@@ -13,7 +13,7 @@ does not replace ARM64's cache.
 ## Publish a new release
 
 1. Merge the version-preparation PR and wait for CI to pass.
-2. Create and push the matching tag, such as `v1.5.8`. This starts the separate
+2. Create and push the matching tag, such as `v1.5.9`. This starts the separate
    PyPI workflow, including its configured environment approval.
 3. Publish the GitHub release for that tag. This starts the container workflow.
 
@@ -31,7 +31,7 @@ If recovery needs a workflow fix, first merge that fix into `main`, then use
 the updated workflow to rebuild the existing release:
 
 ```bash
-gh workflow run release.yml --repo calebevans/mulder --ref main -f tag=v1.5.8
+gh workflow run release.yml --repo calebevans/mulder --ref main -f tag=v1.5.9
 ```
 
 The dispatch uses the workflow from `main` and the application/Dockerfile from
