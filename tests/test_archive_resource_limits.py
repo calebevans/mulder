@@ -196,6 +196,98 @@ def test_a_failed_7z_listing_yields_no_totals(tmp_path: Path) -> None:
         assert case._7z_listing_totals(Path("a.7z")) is None
 
 
+def _listing(stdout: str) -> Any:
+    proc = subprocess.CompletedProcess([], 0, stdout=stdout, stderr="")
+    return patch("mulder.server.tools.case.subprocess.run", return_value=proc)
+
+
+# What 7-Zip 26.00 prints, exit 0, for a bzip2 stream renamed bomb.7z: the
+# entry has no Path and a blank Size.
+_BLANK_SIZE_LISTING = (
+    "Path = bomb.7z\nOpen WARNING: Cannot open the file as [7z] archive\nType = 7z\n\n"
+    "----------\nSize = \nPacked Size = \n\n\nWarnings: 1\n"
+)
+
+
+def test_a_7z_listing_with_a_blank_size_yields_no_totals() -> None:
+    """Exit 0 does not establish a size: a blank one used to count as 0 bytes."""
+    with _listing(_BLANK_SIZE_LISTING):
+        assert case._7z_listing_totals(Path("bomb.7z")) is None
+
+
+@pytest.mark.parametrize("kind", ["gzip", "bzip2", "xz"])
+def test_a_single_stream_7z_listing_yields_no_totals(kind: str) -> None:
+    """A single compressed stream's recorded size is not trusted (a forged gzip ISIZE says 1)."""
+    listing = (
+        f"Path = bomb.7z\nType = {kind}\n\n----------\nPath = bomb\nSize = 1\nPacked Size = 4892\n"
+    )
+    with _listing(listing):
+        assert case._7z_listing_totals(Path("bomb.7z")) is None
+
+
+def test_a_7z_listing_still_counts_folders_without_a_size() -> None:
+    listing = (
+        "Path = a.7z\nType = 7z\n\n----------\n"
+        "Path = dir\nSize = \nFolder = +\n\nPath = dir/one\nSize = 10\nFolder = -\n"
+    )
+    with _listing(listing):
+        assert case._7z_listing_totals(Path("a.7z")) == (2, 10)
+
+
+def test_a_blank_size_listing_never_reaches_7z_extraction(
+    cases_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _free(monkeypatch, 1024)
+    archive = tmp_path / "bomb.rar"
+    archive.write_bytes(bz2.compress(b"\x00" * 5_000_000))
+
+    def listing_only(cmd: list[str], *args: Any, **kwargs: Any) -> Any:
+        if cmd[1] == "l":
+            return subprocess.CompletedProcess(cmd, 0, stdout=_BLANK_SIZE_LISTING, stderr="")
+        raise AssertionError(f"7z ran without a size bound: {cmd}")
+
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(subprocess, "run", listing_only)
+
+    result = _invoke(cases_dir, archive)
+
+    _assert_refused_for_space(result, cases_dir, "bomb.rar")
+    assert "expanded size is unknown" in str(result["error_message"])
+
+
+@needs_7z
+@pytest.mark.parametrize("name", ["bomb.rar", "bomb.7z", "bomb.zip"])
+def test_a_bzip2_stream_renamed_as_an_archive_is_refused(
+    cases_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    """End to end: ``7z l`` exits 0 with a blank Size, yet ``7z x`` writes all 5 MB."""
+    _free(monkeypatch, 1024)
+    archive = tmp_path / name
+    archive.write_bytes(bz2.compress(b"\x00" * 5_000_000))
+
+    result = _invoke(cases_dir, archive)
+
+    _assert_refused_for_space(result, cases_dir, name)
+    assert "expanded size is unknown" in str(result["error_message"])
+
+
+@needs_7z
+def test_a_gzip_with_a_forged_size_renamed_7z_is_refused(
+    cases_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End to end: the ISIZE trailer is rewritten to 1, so ``7z l`` lists ``Size = 1``."""
+    _free(monkeypatch, 1024)
+    data = bytearray(gzip.compress(b"\x00" * 5_000_000))
+    data[-4:] = (1).to_bytes(4, "little")
+    archive = tmp_path / "bomb.7z"
+    archive.write_bytes(bytes(data))
+
+    result = _invoke(cases_dir, archive)
+
+    _assert_refused_for_space(result, cases_dir, "bomb.7z")
+    assert "expanded size is unknown" in str(result["error_message"])
+
+
 def _falsify_declared_size(archive: Path, size: int) -> None:
     """Rewrite the uncompressed size the central directory records for the last member."""
     data = bytearray(archive.read_bytes())
@@ -401,6 +493,63 @@ def test_the_refusal_does_not_claim_files_were_written(
     assert "Nothing was extracted" in message
     assert "were written" not in message
     assert "3 file" not in message
+
+
+def _extract_into(cases_dir: Path, archive: Path, dest: Path) -> Any:
+    cfg = MagicMock()
+    cfg.db_dir = cases_dir
+    with (
+        patch("mulder.server.tools.case.get_cfg", return_value=cfg),
+        patch("mulder.server.tools.case.has_ctx", return_value=False),
+        patch("mulder.server.tools.case.EvidenceClassifier", create=True),
+    ):
+        return extract_archive.__wrapped__(str(archive), str(dest))  # type: ignore[attr-defined]
+
+
+def test_a_refused_bare_stream_keeps_an_existing_file_of_the_same_name(
+    cases_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With ``extract_to``, evidence.dd may already be there; a refusal must not destroy it."""
+    _free(monkeypatch, 1024)
+    archive = tmp_path / "evidence.dd.bz2"
+    archive.write_bytes(bz2.compress(b"\x00" * 5_000_000))
+    dest = cases_dir / "extracted" / "mine"
+    dest.mkdir(parents=True)
+    (dest / "evidence.dd").write_text("earlier evidence")
+
+    result = _extract_into(cases_dir, archive, dest)
+
+    assert result["error_type"] == "disk_space"
+    assert "Nothing was extracted" in str(result["error_message"])
+    assert (dest / "evidence.dd").read_text() == "earlier evidence"
+    assert [p.name for p in dest.iterdir()] == ["evidence.dd"]
+
+
+def test_a_bare_stream_that_fits_replaces_the_file_of_the_same_name(
+    cases_dir: Path, tmp_path: Path
+) -> None:
+    archive = tmp_path / "evidence.dd.gz"
+    archive.write_bytes(gzip.compress(b"NEW" * 100))
+    dest = cases_dir / "extracted" / "mine"
+    dest.mkdir(parents=True)
+    (dest / "evidence.dd").write_text("older")
+
+    result = _extract_into(cases_dir, archive, dest)
+
+    assert result["status"] == "success"
+    assert (dest / "evidence.dd").read_bytes() == b"NEW" * 100
+    assert not [p for p in dest.iterdir() if p.name.endswith(".partial")]
+
+
+def test_a_missing_entry_is_not_reported_as_restored(tmp_path: Path) -> None:
+    """``_discard_new_output`` walks what survives, so it must also look for what vanished."""
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    (dest / "evidence.dd").write_text("earlier evidence")
+    before = case._snapshot(dest)
+    (dest / "evidence.dd").unlink()
+
+    assert case._discard_new_output(dest, before) is False
 
 
 def test_free_space_is_what_decides_not_a_fixed_size(

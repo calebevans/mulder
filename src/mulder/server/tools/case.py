@@ -18,6 +18,7 @@ import sys
 import tarfile
 import threading
 import time
+import uuid
 import zipfile
 from collections.abc import Iterator
 from datetime import datetime, timezone
@@ -58,6 +59,29 @@ extraction.
 
 _STREAM_CHUNK = 1024**2
 
+_SINGLE_STREAM_7Z_TYPES = frozenset(
+    {
+        "gzip",
+        "bzip2",
+        "xz",
+        "lzma",
+        "lzma86",
+        "z",
+        "zstd",
+        "lz4",
+        "lz5",
+        "lzip",
+        "brotli",
+        "lizard",
+    }
+)
+"""7-Zip format names for a single compressed stream rather than an archive.
+
+The uncompressed size such a stream records is a hint at best (gzip keeps it
+mod 2**32 in a trailer anyone can rewrite, bzip2 records none), so a ``7z l``
+listing of one cannot establish how much ``7z x`` will write.
+"""
+
 
 class InsufficientSpaceError(Exception):
     """An archive would not fit on the destination filesystem."""
@@ -70,10 +94,15 @@ class UnknownExpandedSizeError(InsufficientSpaceError):
 
     A failed ``7z l`` does not mean ``7z x`` fails before writing: a zip with
     a falsified central directory lists as an error yet extracts its whole
-    stream.  Without a size there is nothing to check against free space.
+    stream.  A listing that succeeds can still leave a size blank (a bzip2
+    stream renamed ``.7z``) or report one from a single compressed stream that
+    the stream itself does not bind (a gzip with a rewritten ISIZE trailer).
+    Without a trustworthy size there is nothing to check against free space.
     """
 
-    advice = "the archive is probably damaged; repair it or extract it by hand."
+    advice = (
+        "the archive is probably damaged or misnamed; repair or rename it, or extract it by hand."
+    )
 
 
 _EXTRACTION_LOCK = threading.Lock()
@@ -611,9 +640,10 @@ def _discard_new_output(dest: Path, before: dict[str, tuple[int, int] | None]) -
 
     Entries absent from *before* are deleted; entries that were already there
     are kept.  Returns True when *dest* is back to its earlier contents, False
-    when something could not be removed or an existing file was overwritten.
+    when something could not be removed, or an existing entry was overwritten
+    or is gone.
     """
-    restored = True
+    restored = all(os.path.lexists(path) for path in before)
     for root, dirs, names in os.walk(dest, topdown=False):
         for name in names:
             path = os.path.join(root, name)
@@ -702,16 +732,21 @@ def _extract_single_stream(archive: Path, dest: Path) -> list[str]:
     """
     opener = gzip.open if archive.suffix.lower() == ".gz" else bz2.open
     out = dest / archive.stem
+    # Write beside the target and move into place only once the whole stream
+    # fits: with ``extract_to`` a file of the same name may already be there,
+    # and a refusal must not truncate or delete it.
+    partial = dest / f".{out.name}.{uuid.uuid4().hex[:8]}.partial"
     free = _free_bytes(dest)
     written = 0
     try:
-        with opener(archive, "rb") as src, open(out, "wb") as dst:
+        with open(partial, "wb") as dst, opener(archive, "rb") as src:
             while chunk := src.read(_STREAM_CHUNK):
                 written += len(chunk)
                 _require_space(archive, dest, written, free=free)
                 dst.write(chunk)
-    except InsufficientSpaceError:
-        out.unlink(missing_ok=True)
+        os.replace(partial, out)
+    except BaseException:
+        partial.unlink(missing_ok=True)
         raise
     return [str(out.relative_to(dest))]
 
@@ -731,7 +766,13 @@ def _tar_member_count(archive: Path) -> int:
 
 
 def _7z_listing_totals(archive: Path) -> tuple[int, int] | None:
-    """Return ``(members, uncompressed bytes)`` from ``7z l -slt``, or None."""
+    """Return ``(members, uncompressed bytes)`` from ``7z l -slt``, or None.
+
+    None means the expanded size cannot be established: the listing failed,
+    an entry's ``Size`` is blank or missing, or the input is a single
+    compressed stream (``Type = gzip``, ``bzip2``, ...) whose recorded size
+    the data does not bind.
+    """
     try:
         proc = subprocess.run(
             ["7z", "l", "-slt", "-y", str(archive)],
@@ -745,18 +786,34 @@ def _7z_listing_totals(archive: Path) -> tuple[int, int] | None:
         return None
     if proc.returncode != 0:
         return None
+    lines = proc.stdout.splitlines()
+    split = next((i for i, line in enumerate(lines) if line.startswith("----------")), None)
+    if split is None:
+        return None
+    body = "\n".join(lines[split + 1 :])
+    for line in lines[:split]:
+        if line.startswith("Type = ") and (
+            line.removeprefix("Type = ").strip().lower() in _SINGLE_STREAM_7Z_TYPES
+        ):
+            return None
     members = 0
     total = 0
-    in_entries = False
-    for line in proc.stdout.splitlines():
-        if line.startswith("----------"):
-            in_entries = True
-        elif in_entries and line.startswith("Path = "):
-            members += 1
-        elif in_entries and line.startswith("Size = "):
-            value = line.removeprefix("Size = ").strip()
-            if value.isdigit():
-                total += int(value)
+    # Entries are blank-line separated.  An entry is a block carrying a Path
+    # or a Size; a bzip2 stream lists one with no Path and a blank Size.
+    for block in body.split("\n\n"):
+        fields: dict[str, str] = {}
+        for line in block.splitlines():
+            key, eq, value = line.partition(" = ")
+            if eq:
+                fields[key.strip()] = value.strip()
+        if "Path" not in fields and "Size" not in fields:
+            continue
+        members += 1
+        size = fields.get("Size", "")
+        if size.isdigit():
+            total += int(size)
+        elif fields.get("Folder") != "+":
+            return None
     return members, total
 
 
@@ -764,14 +821,17 @@ def _extract_7z(archive: Path, dest: Path) -> list[str]:
     """Extract via the ``7z`` CLI to *dest*; return paths relative to *dest*.
 
     Also reached from the zip fallback and for ``.rar``, so the size check
-    lives here.  If the listing fails, the archive is refused: ``7z x`` may
-    still write the whole stream before it reports the same damage.
+    lives here.  If the listing does not establish a size, the archive is
+    refused: ``7z x`` may still write the whole stream before it reports any
+    damage.
     """
     totals = _7z_listing_totals(archive)
     if totals is None:
         raise UnknownExpandedSizeError(
-            f"7z could not list {archive.name}, so its expanded size is unknown "
-            "and it cannot be checked against the free space on the destination filesystem"
+            f"7z could not establish how large {archive.name} expands (the listing failed, "
+            "left a size blank, or describes a single compressed stream whose recorded size "
+            "cannot be trusted), so its expanded size is unknown and it cannot be checked "
+            "against the free space on the destination filesystem"
         )
     _require_space(archive, dest, totals[1], totals[0])
     cmd = ["7z", "x", f"-o{dest}", "-y", str(archive)]
