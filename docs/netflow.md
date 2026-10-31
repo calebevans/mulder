@@ -39,12 +39,18 @@ evidence/
 
 ## Requirements
 
-- **nfdump >= 1.7** at `/opt/nfdump/bin/nfdump` or on the server's `PATH`. The project's container
-  image does not include it. nfdump 1.7 writes file layout 2 by default; nfdump 1.6 (the version Ubuntu
-  22.04 packages) cannot read layout-2 files at all, so native installs must provide 1.7 or later.
+- **nfdump >= 1.7** at `/opt/nfdump/bin/nfdump` or on the server's `PATH`. The container image
+  builds nfdump 1.7.10 from its checksum-pinned release archive into `/opt/nfdump`. nfdump 1.7
+  writes file layout 2 by default; nfdump 1.6 (the version Ubuntu 22.04 packages) cannot read
+  layout-2 files at all, so native installs must provide 1.7 or later.
 - `prlimit` (util-linux): every nfdump child runs under a 4 GiB address-space limit.
 
-Without nfdump the tools return `error_type: binary_missing`; nothing else in mulder changes.
+Without nfdump the tools return `error_type: binary_missing`; nothing else in mulder changes. The
+tools read `nfdump -V` once per binary and refuse a version below 1.7 the same way. The csv
+layouts the parsers read were captured from nfdump 1.7.10 and are checked against the bundled
+binary by the container smoke test; a run that exits 0 without a recognised table header or the
+"No matching flows" sentinel fails with `tool_failed` instead of indexing nothing, so a format
+change in a later nfdump is reported, not read as an empty result.
 
 ## The tools
 
