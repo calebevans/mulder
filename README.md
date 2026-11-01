@@ -135,7 +135,7 @@ Mulder integrates 35+ open-source forensic tools exposed as 140+ typed MCP opera
 | Disk | Sleuthkit, Plaso, foremost, PhotoRec, Scalpel |
 | Windows artifacts | EZ Tools (Prefetch, Amcache, ShimCache, MFT, USN Journal, Jump Lists, Shellbags, SRUM), RegRipper, Hayabusa (3,700+ Sigma rules), Chainsaw |
 | Event logs | python-evtx, Zircolite |
-| Network | tshark, Zeek, Suricata, tcpflow, tcpxtract |
+| Network | tshark, Zeek, Suricata, tcpflow, tcpxtract, nfdump (NetFlow) |
 | Malware | YARA, CAPA, FLOSS, ClamAV, radare2, Detect-It-Easy&nbsp;\* |
 | Documents | oletools, PDF tools, pst-utils |
 | Mobile | ALEAPP, iLEAPP, MVT |

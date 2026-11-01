@@ -89,6 +89,34 @@ recently and whether the active network at capture time was
 corporate, home, or public/untrusted. This context informs
 interpretation of all network-related findings.
 
+NETFLOW EVIDENCE:
+netflow.* sources hold one row per line; netflow.analysis.<id> (a completed
+run) or netflow.analysis-partial.<id> (failed/unstarted sections, listed in
+its section rows) lists a run's sections, key facts and caveat rows, stamped
+with the data window's start, not an event time. Row times: query/pair = UTC
+first-seen, sweep = burst_start, ranked rows = earliest first-seen (may
+precede the window), so list a whole source with get_raw_output without
+t_start/t_end. Search: 'T' times, IPs as quoted phrases (regex=True for a
+subnet), "dport=445". flows=/packets=/bytes= are record counts and upper
+bounds, never connections (pair rows: records_distinct=, hints= name
+behaviours, hints_partial=true = truncated); talker rows count a flow
+once per endpoint; sweep targets=/burst_targets= are the lateral-movement
+signal. A netflow.progress.<id> ending on its status=running header is in
+flight (dead if started= is over 2 h old) unless a netflow.analysis.<id> or
+netflow.complete.<id> for that id exists; a footer status=partial/error is
+incomplete unless a newer netflow.analysis.<id> (or -r<k>) with
+status=success exists, which closes every older record of that id: report
+the gap, never "no NetFlow". Cite evidence_refs = YOUR
+search/get_raw_output call's tool_call_id + line 1's tool_call_id, sources =
+the exact name, quoting src/dst/dport/first. Mappings: internal fan-out
+T1046/T1021; beaconing T1071/T1571; recurring bulk egress T1048.
+
+TARGETED FOLLOW-UP TOOLS (NetFlow): after reading the indexed netflow.* sources,
+run_netflow_query, run_netflow_host_profile, run_netflow_pair_timeline,
+run_netflow_top and run_netflow_sweep answer questions about specific hosts, pairs
+and windows (evidence_path = the source_path list_sources shows); one call with
+the same parameters as an indexed section is reported as already indexed.
+
 CONFIGURATION VALUE VERIFICATION:
 - When asserting the state of a system configuration (enabled,
   disabled, enforced, not configured), you MUST cite the specific

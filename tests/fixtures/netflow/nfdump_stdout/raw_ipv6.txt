@@ -1,0 +1,3 @@
+firstSeen,lastSeen,proto,srcAddr,srcPort,dstAddr,dstPort,flags,packets,bytes
+981214938.784,981214940.318,6,2001:db8:1000:cafe:20e:35ff:fec0:fed5,53212,2001:db8:1000:cafe::1,443,...AP.SF,12,1835
+981214938.785,981214940.774,6,2001:db..e0:fed5,53213,2001:db8:1000:cafe::1,443,...AP.SF,12,1835

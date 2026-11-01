@@ -28,6 +28,16 @@ find_lateral_movement_indicators, find_data_exfiltration_indicators,
 find_execution_evidence, find_defense_evasion,
 find_suspicious_processes, reconstruct_execution_chains,
 analyze_execution_timeline, assess_recovery, correlate_pcap_with_host.
+Plan only tools whose input exists in this case (list_sources): when every
+source is network evidence (packet captures, NetFlow), do not plan disk,
+MFT, registry, memory or plaso-timeline tools.
+For NetFlow evidence, netflow.analysis.* (a completed extraction run) or
+netflow.analysis-partial.* (a run with failed or unstarted sections; its section
+rows say which) indexes what extraction produced (list_sources); have the executor
+read those sources first, then pivot on hosts, pairs and windows with
+run_netflow_query, run_netflow_host_profile, run_netflow_pair_timeline,
+run_netflow_top and run_netflow_sweep (evidence_path = the source_path
+list_sources shows for netflow.*).
 
 OUTPUT (MANDATORY):
 Your FINAL message MUST be ONLY valid JSON. No text before or after it.

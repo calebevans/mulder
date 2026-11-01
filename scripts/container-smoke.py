@@ -14,9 +14,11 @@ import json
 import os
 import plistlib
 import shlex
+import socket
 import struct
 import subprocess
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 
@@ -29,6 +31,110 @@ def run(*args: str | Path, cwd: Path | None = None, timeout: int = 180) -> str:
     if result.returncode:
         raise RuntimeError(f"exit {result.returncode}:\n{result.stdout}\n{result.stderr}")
     return result.stdout
+
+
+def netflow_v5(flows: list[tuple[str, int, str, int, int, int, int, int, float, float]]) -> bytes:
+    """One NetFlow v5 export packet.
+
+    Each flow is (src, sport, dst, dport, proto, flags, packets, bytes, first, last).
+    """
+    boot = min(f[8] for f in flows) - 100
+    export = max(f[9] for f in flows) + 1
+    header = struct.pack(
+        "!HHIIIIBBH", 5, len(flows), int((export - boot) * 1000), int(export), 0, 0, 0, 0, 0
+    )
+    records = b"".join(
+        struct.pack(
+            "!4s4s4sHHIIIIHHBBBBHHBBH",
+            socket.inet_aton(src),
+            socket.inet_aton(dst),
+            bytes(4),
+            1,
+            2,
+            packets,
+            octets,
+            int((first - boot) * 1000),
+            int((last - boot) * 1000),
+            sport,
+            dport,
+            0,
+            flags,
+            proto,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        )
+        for src, sport, dst, dport, proto, flags, packets, octets, first, last in flows
+    )
+    return header + records
+
+
+def netflow_smoke(work: Path) -> None:
+    """Collect a synthetic NetFlow v5 export with the bundled nfcapd, then read it back
+    through the NetFlow tools' own nfdump runner and parsers, so the csv layouts they
+    expect are checked against the bundled nfdump rather than the unit tests' fake."""
+    from mulder.extractors.classifier import is_nfcapd
+    from mulder.server.tools.netflow import core, tools
+
+    t0 = 1700000000.0
+    flows = [
+        ("192.0.2.10", 40000, "198.51.100.20", 443, 6, 0x1B, 10, 5000, t0, t0 + 5),
+        ("192.0.2.10", 40001, "198.51.100.21", 53, 17, 0, 1, 80, t0 + 1, t0 + 1),
+    ]
+    collect = work / "nfcapd"
+    collect.mkdir()
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    collector = subprocess.Popen(
+        ["nfcapd", "-w", collect, "-b", "127.0.0.1", "-p", str(port), "-I", "smoke"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    try:
+        time.sleep(2)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
+            sender.sendto(netflow_v5(flows), ("127.0.0.1", port))
+        time.sleep(2)
+    finally:
+        collector.terminate()  # nfcapd flushes and closes its file on SIGTERM
+        output, _ = collector.communicate(timeout=30)
+    captures = sorted(collect.glob("nfcapd.2*"))
+    assert len(captures) == 1, (captures, output)
+    capture = captures[0]
+    assert is_nfcapd(capture), f"classifier rejects {capture.name}"
+
+    def nfdump(read: list[str], mode: list[str], fmt: str | None, filter_expr: str | None) -> str:
+        result = tools._run_nfdump(read, mode, fmt, filter_expr, 60)
+        assert isinstance(result, tools.NfRun), result
+        return result.stdout
+
+    info = core.parse_dash_i(nfdump(["-I", "-r", str(capture)], [], None, None))
+    assert info["Flows"] == 2 and info["First"] == int(t0), info
+
+    read = ["-r", str(capture)]
+    raw = core.parse_flow_csv(nfdump(read, ["-c", "10"], core.RAW_FMT, "any"))
+    got = {(r.sa, r.sp, r.da, r.dp, r.proto, r.pkt, r.byt, r.first, r.last) for r in raw.rows}
+    want = {(f[0], f[1], f[2], f[3], f[4], f[6], f[7], f[8], f[9]) for f in flows}
+    assert raw.dropped == 0 and got == want, (got, want)
+
+    stats = core.parse_stat_csv(
+        nfdump(read, ["-s", "srcip/flows", "-n", "5"], core.STAT_FMT, "any"), [True]
+    )
+    (row,) = stats.tables[0].rows
+    assert (row.val, row.fl, row.byt) == ("192.0.2.10", 2, 5080), row
+
+    seg_mode = ["-A", core.SEG_AGG_KEYS, "-s", "record/flows", "-n", "5"]
+    segments = core.parse_flow_csv(nfdump(read, seg_mode, core.SEG_FMT, "any"))
+    assert {(r.sa, r.da, r.fl) for r in segments.rows} == {("192.0.2.0", "198.51.100.0", 2)}
+
+    empty = nfdump(read, ["-c", "10"], core.RAW_FMT, "src ip 203.0.113.99")
+    assert core.parse_flow_csv(empty).saw_no_match, empty
+    print("PASS NetFlow collection and nfdump csv layouts", flush=True)
 
 
 def main() -> None:
@@ -81,6 +187,7 @@ def main() -> None:
         ("ntfs-3g", "--version"),
         ("fuse2fs", "-V"),
         ("clamscan", "--version"),
+        ("nfdump", "-V"),
     ):
         run(*command)
     # The unprivileged mulder user can only mount NTFS through the source-built
@@ -185,6 +292,8 @@ def main() -> None:
         )
         events = [json.loads(line) for line in (suricata / "eve.json").read_text().splitlines()]
         assert any(event.get("alert", {}).get("signature_id") == 1000001 for event in events)
+
+        netflow_smoke(work)
 
         evidence = work / "email.raw"
         original = (b"Contact smoke@example.org for the smoke test.\n" * 100).ljust(8192, b"\0")

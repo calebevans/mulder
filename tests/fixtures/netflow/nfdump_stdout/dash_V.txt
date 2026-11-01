@@ -1,0 +1,1 @@
+/opt/nfdump/bin/nfdump: Version: 1.7.10-release options: LZ4 ZSTD BZIP2 date: Mon Sep 7 17:39:23 CEST 2026

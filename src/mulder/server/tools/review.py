@@ -49,6 +49,9 @@ _EVIDENCE_TOOL_MAP: dict[str, list[str]] = {
     "network_capture": [
         "run_pcap_analysis",
     ],
+    "netflow_capture": [
+        "run_netflow_analysis",
+    ],
     "evtx": [
         "run_evtx_parser",
         "run_hayabusa",
@@ -77,6 +80,7 @@ _EVIDENCE_TOOL_MAP: dict[str, list[str]] = {
 # such as extract_to and auxiliary inputs such as ssl_keylog_path are left
 # out, so a call is credited only to the evidence it was run on.
 _EVIDENCE_INPUT_PARAMS: dict[str, tuple[str, ...]] = {
+    "run_netflow_analysis": ("evidence_path",),
     "run_volatility": ("memory_path",),
     "run_volatility_batch": ("memory_path",),
     "run_fls": ("image_path",),
@@ -302,32 +306,66 @@ def audit_tool_coverage() -> dict[str, object]:
     items: list[dict[str, object]] = []
     total_gaps = 0
 
+    # nfcapd files are classified one by one; report their exporter directory once, and count
+    # run_netflow_analysis as run for a directory only when a COMPLETED summary source exists
+    # for that directory (or a parent the extractor was pointed at): its header row stored with
+    # status=success, so neither a partial run nor a summary whose rows were never written counts
+    analysis_paths = {
+        s.source_path
+        for s in ctx.db.get_sources()
+        if s.source_name.startswith("netflow.analysis.")
+        and any(
+            " status=success" in str(w.raw_text)
+            for w in ctx.db.get_windows_by_source(s.source_name)[:1]
+        )
+    }
+    netflow_dirs: dict[str, int] = {}
+    for ev in classified:
+        if ev.artifact_type == "netflow_capture":
+            parent = str(ev.path.parent)
+            netflow_dirs[parent] = netflow_dirs.get(parent, 0) + 1
+
+    seen_netflow_dirs: set[str] = set()
     for ev in classified:
         applicable = _EVIDENCE_TOOL_MAP.get(ev.artifact_type, [])
         if not applicable:
             continue
 
-        forms = _path_forms(ev.path)
-        run = [
-            t
-            for t in applicable
-            if t in targets
-            and (
-                (t in _IMPLICIT_INPUT_TOOLS and t not in tools_with_explicit_targets)
-                or any(f.is_relative_to(p) for f in forms for p in targets[t])
+        item_path = str(ev.path)
+        files: int | None = None
+        if ev.artifact_type == "netflow_capture":
+            item_path = str(ev.path.parent)
+            if item_path in seen_netflow_dirs:
+                continue
+            seen_netflow_dirs.add(item_path)
+            files = netflow_dirs[item_path]
+            covered = any(
+                item_path == p or item_path.startswith(p.rstrip("/") + "/") for p in analysis_paths
             )
-        ]
+            run = list(applicable) if covered else []
+        else:
+            forms = _path_forms(ev.path)
+            run = [
+                t
+                for t in applicable
+                if t in targets
+                and (
+                    (t in _IMPLICIT_INPUT_TOOLS and t not in tools_with_explicit_targets)
+                    or any(f.is_relative_to(p) for f in forms for p in targets[t])
+                )
+            ]
         not_run = [t for t in applicable if t not in run]
         total_gaps += len(not_run)
 
-        items.append(
-            {
-                "path": str(ev.path),
-                "artifact_type": ev.artifact_type,
-                "tools_run": run,
-                "tools_not_run": not_run,
-            }
-        )
+        item: dict[str, object] = {
+            "path": item_path,
+            "artifact_type": ev.artifact_type,
+            "tools_run": run,
+            "tools_not_run": not_run,
+        }
+        if files is not None:
+            item["files"] = files
+        items.append(item)
 
     result = {
         "tool_call_id": tc_id,
