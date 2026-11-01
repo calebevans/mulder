@@ -72,7 +72,7 @@ On first run mulder creates a working directory at `~/.mulder/workspace` (overri
 ### Run with Docker (everything preinstalled)
 
 ```bash
-docker pull ghcr.io/calebevans/mulder:1.5.9
+docker pull ghcr.io/calebevans/mulder:1.5.10
 ```
 
 ```bash
@@ -82,7 +82,7 @@ docker run -it --privileged \
   -v /path/to/evidence:/evidence:ro \
   -v ~/mulder-cases:/home/mulder/.mulder/cases \
   -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
-  ghcr.io/calebevans/mulder:1.5.9
+  ghcr.io/calebevans/mulder:1.5.10
 ```
 
 ```bash
