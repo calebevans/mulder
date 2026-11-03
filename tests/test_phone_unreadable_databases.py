@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import sys
+import types
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -257,3 +259,183 @@ class TestIos:
 
         assert result["status"] == "success"
         assert "No iOS artifacts found" in str(result["preview"])
+
+
+class _FakeSqlcipherError(Exception):
+    pass
+
+
+class _FakeCursor:
+    def __init__(self, rows: list[tuple[Any, ...]]) -> None:
+        self._rows = rows
+        self.description = [("body",)]
+
+    def fetchall(self) -> list[tuple[Any, ...]]:
+        return self._rows
+
+
+class _FakeSqlcipherConnection:
+    def __init__(self, tables: bool) -> None:
+        self._tables = tables
+
+    def execute(self, sql: str) -> _FakeCursor:
+        if "sqlite_master" in sql:
+            return _FakeCursor([("message",)] if self._tables else [])
+        return _FakeCursor([("secret plan",)])
+
+    def close(self) -> None:
+        pass
+
+
+def _sqlcipher(monkeypatch: pytest.MonkeyPatch, **by_name: str) -> None:
+    """Stand in for pysqlcipher3; each database stem maps to "data", "empty" or "fails"."""
+
+    def connect(path: str) -> _FakeSqlcipherConnection:
+        behaviour = by_name[Path(path).stem]
+        if behaviour == "fails":
+            raise _FakeSqlcipherError("file is not a database")
+        return _FakeSqlcipherConnection(tables=behaviour == "data")
+
+    dbapi2 = types.SimpleNamespace(connect=connect, Error=_FakeSqlcipherError)
+    monkeypatch.setitem(sys.modules, "pysqlcipher3", types.SimpleNamespace(dbapi2=dbapi2))
+
+
+def _no_sqlcipher(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "pysqlcipher3", None)
+
+
+def _encrypted_db(root: Path, name: str = "messages.db") -> None:
+    (root / "databases").mkdir(parents=True, exist_ok=True)
+    (root / "databases" / name).write_bytes(os.urandom(8192))
+
+
+MESSAGES_WITHOUT_SQLCIPHER = {
+    "database": "messages.db",
+    "error": "file is not a database; pysqlcipher3 is not installed",
+}
+
+
+def _decrypt(root: Path, **kwargs: Any) -> dict[str, Any]:
+    result: dict[str, Any] = _tool_dispatch_sync["decrypt_app_data"](
+        app_data_path=str(root), **kwargs
+    )
+    return result
+
+
+class TestDecryptAppData:
+    def test_a_database_that_needs_the_missing_sqlcipher_module_is_an_error(
+        self, ctx: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _no_sqlcipher(monkeypatch)
+        _encrypted_db(tmp_path / "app")
+
+        result = _decrypt(tmp_path / "app")
+
+        assert result["status"] == "error"
+        assert result["error_type"] == "database_unreadable"
+        assert result["unreadable_databases"] == [MESSAGES_WITHOUT_SQLCIPHER]
+        assert _audit_status(ctx, result) == "error"
+
+    def test_a_database_no_password_opens_is_an_error(
+        self, ctx: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _sqlcipher(monkeypatch, messages="fails")
+        _encrypted_db(tmp_path / "app")
+
+        result = _decrypt(tmp_path / "app", known_passwords=["hunter2"])
+
+        assert result["status"] == "error"
+        assert result["unreadable_databases"] == [
+            {
+                "database": "messages.db",
+                "error": "file is not a database; SQLCipher could not open it with 2 password(s)",
+            }
+        ]
+
+    def test_a_decrypted_database_is_parsed(
+        self, ctx: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _sqlcipher(monkeypatch, messages="data")
+        _encrypted_db(tmp_path / "app")
+
+        result = _decrypt(tmp_path / "app")
+
+        assert result["status"] == "success"
+        assert '"encrypted_dbs_decrypted": 1' in str(result["preview"])
+        assert "unreadable" not in str(result["preview"])
+
+    def test_unreadable_databases_are_listed_next_to_a_readable_one(
+        self, ctx: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _no_sqlcipher(monkeypatch)
+        _encrypted_db(tmp_path / "app")
+        _db(
+            tmp_path / "app" / "databases" / "settings.db",
+            "CREATE TABLE prefs(key TEXT, value TEXT);",
+            [("theme", "dark")],
+            "INSERT INTO prefs VALUES (?,?)",
+        )
+
+        result = _decrypt(tmp_path / "app")
+
+        assert result["status"] == "success"
+        assert '"plaintext_dbs_found": 1' in str(result["preview"])
+        assert '"unreadable_count": 1' in str(result["preview"])
+        assert _in_preview(result, MESSAGES_WITHOUT_SQLCIPHER)
+
+    def test_an_empty_database_next_to_an_unreadable_one_is_no_results(
+        self, ctx: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _no_sqlcipher(monkeypatch)
+        _encrypted_db(tmp_path / "app")
+        _db(tmp_path / "app" / "databases" / "empty.db", "CREATE TABLE t(x TEXT); DROP TABLE t;")
+
+        result = _decrypt(tmp_path / "app")
+
+        assert result["status"] == "success"
+        assert "No parseable data found" in str(result["preview"])
+        assert '"unreadable_count": 1' in str(result["preview"])
+        assert _audit_status(ctx, result) is None
+
+    def test_an_empty_decrypted_database_is_no_results(
+        self, ctx: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _sqlcipher(monkeypatch, vault="empty")
+        _encrypted_db(tmp_path / "app", "vault.db")
+
+        result = _decrypt(tmp_path / "app")
+
+        assert result["status"] == "success"
+        assert "No parseable data found" in str(result["preview"])
+        assert "unreadable" not in str(result["preview"])
+        assert _audit_status(ctx, result) is None
+
+    def test_an_empty_decrypted_database_next_to_an_unreadable_one_is_no_results(
+        self, ctx: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _sqlcipher(monkeypatch, vault="empty", messages="fails")
+        _encrypted_db(tmp_path / "app", "vault.db")
+        _encrypted_db(tmp_path / "app")
+
+        result = _decrypt(tmp_path / "app")
+
+        assert result["status"] == "success"
+        assert "No parseable data found" in str(result["preview"])
+        assert _in_preview(
+            result,
+            {
+                "database": "messages.db",
+                "error": "file is not a database; SQLCipher could not open it with 1 password(s)",
+            },
+        )
+
+    def test_a_folder_without_databases_is_still_no_results(
+        self, ctx: MagicMock, tmp_path: Path
+    ) -> None:
+        (tmp_path / "app").mkdir()
+
+        result = _decrypt(tmp_path / "app")
+
+        assert result["status"] == "success"
+        assert "No parseable data found" in str(result["preview"])
+        assert "unreadable" not in str(result["preview"])

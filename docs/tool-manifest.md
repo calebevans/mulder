@@ -906,7 +906,7 @@ Attempt to decrypt and parse application data from a mobile device.
 | app_data_path | str | yes | Path to the app's data directory |
 | known_passwords | list[str] \| None | no | Passwords to try for SQLCipher decryption |
 
-**Returns:** `source_name` (phone.app_data), `plaintext_dbs_found`, `encrypted_dbs_decrypted`
+**Returns:** `source_name` (phone.app_data), `plaintext_dbs_found`, `encrypted_dbs_decrypted`, `unreadable_count`, `unreadable_databases[]`
 
 **Roles:** `EXTRACT_EXECUTOR`
 
