@@ -122,7 +122,8 @@ def scan_evidence(
     so subsequent extraction tools can populate it incrementally.
 
     Does NOT run any extractors or perform any analysis.  The agent
-    decides which tools to run based on the manifest.
+    decides which tools to run based on the manifest.  Fails while other
+    tool calls or batch jobs are still running on the open case.
 
     Args:
         evidence_path: Directory (or file) containing forensic evidence.
@@ -408,7 +409,8 @@ def list_cases() -> dict[str, object]:
 def open_case(case_id: str) -> dict[str, object]:
     """Switch the active case to an already-existing case.
 
-    All subsequent tool calls will operate on this case.
+    All subsequent tool calls will operate on this case.  Refused with
+    ``case_in_use`` while other tool calls or batch jobs are still running.
 
     Args:
         case_id: The case identifier to load (must already exist).
@@ -457,7 +459,17 @@ def open_case(case_id: str) -> dict[str, object]:
             error_type="not_found",
         )
 
-    ctx = load_case(case_id)
+    try:
+        ctx = load_case(case_id)
+    except RuntimeError as exc:
+        return error_response(
+            tc_id,
+            "open_case",
+            params,
+            str(exc),
+            (time.monotonic() - t0) * 1000,
+            error_type="case_in_use",
+        )
     source_count = ctx.db.get_source_count()
 
     result: dict[str, object] = {
