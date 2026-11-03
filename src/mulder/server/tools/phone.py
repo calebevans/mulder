@@ -727,16 +727,18 @@ def _quote_ident(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
-def _try_sqlcipher(db_path: Path, passwords: list[str]) -> list[str] | None:
+def _try_sqlcipher(db_path: Path, passwords: list[str]) -> tuple[list[str], str | None]:
     """Attempt to open an encrypted SQLite DB with SQLCipher.
 
-    Returns table listing + sample data if successful, None otherwise.
+    Returns ``(lines, None)`` with a table listing and sample data, ``([], None)`` when
+    it opens but holds no tables, or ``([], error)``.
     """
     try:
         from pysqlcipher3 import dbapi2 as sqlcipher
     except ImportError:
-        return None
+        return [], "pysqlcipher3 is not installed"
 
+    opened_empty = False
     for password in passwords:
         try:
             conn = sqlcipher.connect(str(db_path))
@@ -749,6 +751,7 @@ def _try_sqlcipher(db_path: Path, passwords: list[str]) -> list[str] | None:
             ]
             if not tables:
                 conn.close()
+                opened_empty = True
                 continue
 
             lines = [f"Decrypted with password: {'(empty)' if not password else '***'}"]
@@ -768,13 +771,15 @@ def _try_sqlcipher(db_path: Path, passwords: list[str]) -> list[str] | None:
                     continue
 
             conn.close()
-            return lines
+            return lines, None
         except sqlcipher.Error:
             with contextlib.suppress(Exception):
                 conn.close()
             continue
 
-    return None
+    if opened_empty:
+        return [], None
+    return [], f"SQLCipher could not open it with {len(passwords)} password(s)"
 
 
 def _extract_strings_from_file(file_path: Path, min_length: int = 8) -> list[str]:
@@ -857,6 +862,8 @@ def decrypt_app_data(
 
     plaintext_dbs: list[str] = []
     encrypted_dbs: list[str] = []
+    unreadable: list[dict[str, str]] = []
+    opened = False
 
     for db_path in sqlite_files:
         try:
@@ -868,6 +875,7 @@ def decrypt_app_data(
                 ).fetchall()
             ]
             conn.close()
+            opened = True
             if tables:
                 lines = [f"=== Plaintext DB: {db_path.name} ==="]
                 lines.append(f"Tables: {', '.join(tables)}")
@@ -889,10 +897,16 @@ def decrypt_app_data(
                         continue
                 plaintext_dbs.append("\n".join(lines))
             continue
-        except sqlite3.Error:
-            pass
+        except sqlite3.Error as exc:
+            sqlite_error = str(exc) or type(exc).__name__
 
-        cipher_result = _try_sqlcipher(db_path, passwords)
+        cipher_result, cipher_error = _try_sqlcipher(db_path, passwords)
+        if cipher_error is not None:
+            unreadable.append(
+                {"database": db_path.name, "error": f"{sqlite_error}; {cipher_error}"}
+            )
+            continue
+        opened = True
         if cipher_result:
             encrypted_dbs.append(
                 f"=== Decrypted DB: {db_path.name} ===\n" + "\n".join(cipher_result)
@@ -928,11 +942,18 @@ def decrypt_app_data(
         index_result["plaintext_dbs_found"] = len(plaintext_dbs)
         index_result["encrypted_dbs_decrypted"] = len(encrypted_dbs)
         index_result["shared_prefs_found"] = len(prefs_data)
+    elif unreadable and not opened:
+        return _unreadable_error(
+            tc_id, "decrypt_app_data", params, unreadable, (time.monotonic() - t0) * 1000
+        )
     else:
         index_result = {
             "status": "no_results",
             "message": "No parseable data found in app directory",
         }
+    if unreadable:
+        index_result["unreadable_count"] = len(unreadable)
+        index_result["unreadable_databases"] = unreadable
 
     elapsed = (time.monotonic() - t0) * 1000
     return tool_response(
