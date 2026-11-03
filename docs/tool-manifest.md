@@ -10,7 +10,7 @@ Every tool is exposed as `mcp__mulder__{name}`. All tools return a dict containi
 
 ### scan_evidence
 
-Scan an evidence directory and create a new case for investigation.
+Scan an evidence directory and create a new case for investigation. Fails while other tool calls or batch jobs are still running on the open case.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -24,7 +24,7 @@ Scan an evidence directory and create a new case for investigation.
 
 ### open_case
 
-Switch the active case to an already-existing case.
+Switch the active case to an already-existing case. Refused with `case_in_use` while other tool calls or batch jobs are still running.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -2126,7 +2126,7 @@ Wait for multiple extraction batches to complete simultaneously.
 
 ### run_parallel
 
-Run multiple tool calls in parallel and return all results.
+Run multiple tool calls in parallel and return all results. `open_case` and `scan_evidence` cannot run inside it.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import functools
 import inspect
 import logging
@@ -9,7 +11,7 @@ import os
 import re
 import threading
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ParamSpec, TypeVar
@@ -36,6 +38,37 @@ _P = ParamSpec("_P")
 _R = TypeVar("_R")
 
 _tool_limiter: anyio.CapacityLimiter | None = None
+
+# Tool calls still running on the open case. They read the open case when they
+# record their results, so, as for a job-store batch, a case switch waits for
+# them. Resource-throttle exemptions do not exempt a call from case protection.
+_case_tool_calls: set[object] = set()
+_case_switch_owner: int | None = None  # thread running a case switch
+# The running call, so a switch made by that call does not count itself.
+_current_call: contextvars.ContextVar[object | None] = contextvars.ContextVar(
+    "_current_call", default=None
+)
+# Tools that switch cases, refused inside run_parallel.
+_CASE_SWITCH_TOOLS: frozenset[str] = frozenset({"scan_evidence", "open_case"})
+
+
+@contextlib.asynccontextmanager
+async def _case_in_use() -> AsyncIterator[None]:
+    """Count the running tool call as using the open case until it returns."""
+    call = object()
+    while True:
+        with _ctx_lock:
+            if _case_switch_owner is None:
+                _case_tool_calls.add(call)
+                break
+        await anyio.sleep(0.01)
+    token = _current_call.set(call)
+    try:
+        yield
+    finally:
+        _current_call.reset(token)
+        with _ctx_lock:
+            _case_tool_calls.discard(call)
 
 
 def _get_tool_limiter() -> anyio.CapacityLimiter:
@@ -66,10 +99,23 @@ def _wrap_sync_tool(fn: Callable[_P, _R]) -> Callable[_P, Awaitable[_R]]:
     async def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
         """Async bridge that throttles then dispatches *fn* in a thread."""
         call = functools.partial(fn, *args, **kwargs)
-        if tool_name in UNTHROTTLED:
-            return await anyio.to_thread.run_sync(call)
-        await async_wait_for_resources(tool_name)
-        return await anyio.to_thread.run_sync(call, limiter=_get_tool_limiter())
+        async with _case_in_use():
+            if tool_name in UNTHROTTLED:
+                return await anyio.to_thread.run_sync(call)
+            await async_wait_for_resources(tool_name)
+            return await anyio.to_thread.run_sync(call, limiter=_get_tool_limiter())
+
+    return wrapper
+
+
+def _track_async_tool(fn: Callable[_P, Awaitable[_R]]) -> Callable[_P, Awaitable[_R]]:
+    """Return *fn* counted as using the open case while it runs."""
+
+    @functools.wraps(fn)
+    async def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        """Run the async tool while the open case is marked as in use."""
+        async with _case_in_use():
+            return await fn(*args, **kwargs)
 
     return wrapper
 
@@ -87,8 +133,7 @@ def _concurrent_tool(**kwargs: Any) -> Callable[..., Any]:
         """Register *fn* with the MCP server, wrapping sync handlers for threading."""
         tool_name = kwargs.get("name") or fn.__name__
         _tool_dispatch_sync[tool_name] = fn
-        if not inspect.iscoroutinefunction(fn):
-            fn = _wrap_sync_tool(fn)
+        fn = _track_async_tool(fn) if inspect.iscoroutinefunction(fn) else _wrap_sync_tool(fn)
         _tool_dispatch[tool_name] = fn
         return original_decorator(fn)
 
@@ -390,20 +435,54 @@ def _seed_psutil() -> None:
         pass
 
 
+def _refuse_case_switch() -> None:
+    """Reject a switch with active calls or jobs. Requires ``_ctx_lock``."""
+    if _job_store is not None:
+        for batch_id in _job_store.batch_ids():
+            status = _job_store.get_batch_status(batch_id)
+            if status and not status.get("all_done"):
+                raise RuntimeError(
+                    f"Cannot switch cases: batch {batch_id} still has "
+                    f"active jobs. Wait for completion or call wait(batch_id)."
+                )
+    others = len(_case_tool_calls - {_current_call.get()})
+    if others:
+        where = " on the open case" if _ctx is not None else ""
+        raise RuntimeError(
+            f"Cannot switch cases: {others} other tool call(s){where} "
+            f"are still running. Wait for them to finish."
+        )
+
+
+@contextlib.contextmanager
+def _case_switch() -> Iterator[None]:
+    """Protect a whole transition; creation may nest a close or load on this thread."""
+    global _case_switch_owner  # noqa: PLW0603
+    me = threading.get_ident()
+    with _ctx_lock:
+        if _case_switch_owner == me:
+            nested = True
+        elif _case_switch_owner is not None:
+            raise RuntimeError("Cannot switch cases: another case switch is in progress.")
+        else:
+            nested = False
+            _refuse_case_switch()
+            _case_switch_owner = me
+    try:
+        yield
+    finally:
+        if not nested:
+            with _ctx_lock:
+                _case_switch_owner = None
+
+
+@_case_switch()
 def _close_current_ctx() -> None:
     """Close the current case context if one is active."""
     global _ctx  # noqa: PLW0603
     with _ctx_lock:
         if _ctx is None:
             return
-        if _job_store is not None:
-            for batch_id in _job_store.batch_ids():
-                status = _job_store.get_batch_status(batch_id)
-                if status and not status.get("all_done"):
-                    raise RuntimeError(
-                        f"Cannot switch cases: batch {batch_id} still has "
-                        f"active jobs. Wait for completion or call wait(batch_id)."
-                    )
         if _ctx.db is not None:
             try:
                 _ctx.db.close()
@@ -431,6 +510,7 @@ def _build_context(case_id: str, db: CaseDB) -> ServerContext:
     return _ctx
 
 
+@_case_switch()
 def load_case(case_id: str) -> ServerContext:
     """Open (or re-open) a case and set it as the active context.
 
@@ -455,14 +535,6 @@ def load_case(case_id: str) -> ServerContext:
     logger.info("Opening case database for '%s' ...", case_id)
 
     with _ctx_lock:
-        if _ctx is not None and _job_store is not None:
-            for batch_id in _job_store.batch_ids():
-                status = _job_store.get_batch_status(batch_id)
-                if status and not status.get("all_done"):
-                    raise RuntimeError(
-                        f"Cannot switch cases: batch {batch_id} still has "
-                        f"active jobs. Wait for completion or call wait(batch_id)."
-                    )
         old_ctx = _ctx
 
     new_db = CaseDB.open(case_id, cfg.db_dir)
@@ -559,6 +631,7 @@ def _try_open_existing(
     return None
 
 
+@_case_switch()
 def create_case(
     case_id: str, evidence_root: str, replace: bool = False
 ) -> ServerContext | dict[str, object]:
@@ -686,6 +759,7 @@ async def run_parallel(tasks: list[dict[str, Any]]) -> dict[str, Any]:
     in parallel worker threads bounded by ``max_workers``.  Tools that
     spawn heavy child processes (e.g. ``run_bulk_extractor``) are
     automatically run sequentially to avoid resource exhaustion.
+    ``open_case`` and ``scan_evidence`` switch cases and cannot run here.
 
     Args:
         tasks: List of objects, each with ``tool`` (tool name string) and
@@ -706,6 +780,13 @@ async def run_parallel(tasks: list[dict[str, Any]]) -> dict[str, Any]:
             fn = _tool_dispatch.get(tool_name)
             if fn is None:
                 results[idx] = {"error": f"Unknown tool: {tool_name}"}
+                return
+            # The other tasks run on the case open when the batch started.
+            if tool_name in _CASE_SWITCH_TOOLS:
+                results[idx] = {
+                    "error": f"{tool_name} switches cases and cannot run inside "
+                    "run_parallel; call it directly."
+                }
                 return
             # Only tools the calling session itself may call can be dispatched
             # from here; a nested dispatcher is held to the same rule.
