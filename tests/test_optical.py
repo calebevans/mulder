@@ -357,6 +357,8 @@ class TestOpticalTools:
         with (
             patch(f"{_OPT}.raw_image", side_effect=lambda p: _raw(rm3_image)),
             patch(f"{_OPT}.get_cfg", return_value=cfg),
+            patch(f"{_OPT}.has_ctx", return_value=True),
+            patch(f"{_OPT}.get_ctx", return_value=MagicMock(case_id="case-1")),
         ):
             result = extract_optical_file.__wrapped__(  # type: ignore[attr-defined]
                 "/evidence/rm3.E01", "design/winter_storm.amr"
@@ -368,10 +370,8 @@ class TestOpticalTools:
         assert result["status"] == "success"
         out = result["results"]
         dest = Path(out["extracted_to"])
-        assert (
-            dest
-            == tmp_path / "cases" / "extracted" / "rm3_optical" / "design" / "winter_storm.amr"
-        )
+        case_dir = tmp_path / "cases" / "extracted" / "case-1"
+        assert dest == case_dir / "rm3_optical" / "design" / "winter_storm.amr"
         assert dest.stat().st_size == 14547968 == out["size_bytes"]
         assert out["deleted_on_disc"] is True
         assert len(out["sha256"]) == 64

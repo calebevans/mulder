@@ -21,6 +21,7 @@ from typing import Any
 
 from mulder.assets.paths import asset_path, register_cache_clear
 from mulder.extractors.classifier import RAW_CONTAINER_EXTS, has_disk_signature
+from mulder.patterns import case_extract_dir
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
@@ -380,8 +381,8 @@ def _find_memory_image() -> str:
                 logger.info("Found memory dump in evidence root: %s", mem_file)
                 return str(mem_file)
 
-    # Fallback: search extracted directory
-    extracted_dir = cfg.db_dir / "extracted"
+    # Fallback: search this case's extracted directory
+    extracted_dir = case_extract_dir(cfg.db_dir, ctx.case_id)
     if extracted_dir.is_dir():
         for mem_file in extracted_dir.rglob("*"):
             if mem_file.is_file() and _is_memory_candidate(mem_file):
