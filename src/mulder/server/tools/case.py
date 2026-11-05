@@ -27,6 +27,7 @@ from pathlib import Path
 from mulder.extractors.classifier import ClassifiedEvidence
 from mulder.extractors.optical import probe_optical
 from mulder.path_policy import PathPolicyError, resolve_allowed_path
+from mulder.patterns import case_extract_dir
 from mulder.server.app import (
     create_case,
     get_cfg,
@@ -918,8 +919,9 @@ def extract_archive(
 
     Args:
         archive_path: Path to the compressed archive.
-        extract_to: Optional destination directory.  If omitted, creates
-            a directory under the mulder cases dir.
+        extract_to: Optional destination directory under the open case's
+            extraction directory.  If omitted, creates a directory for the
+            open case under the mulder cases dir.
     """
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
@@ -938,22 +940,22 @@ def extract_archive(
         )
 
     cfg = get_cfg()
-    extract_root = Path(cfg.db_dir) / "extracted"
+    case_root = case_extract_dir(cfg.db_dir, get_ctx().case_id if has_ctx() else None)
 
     if extract_to:
         try:
-            dest = resolve_allowed_path(Path(extract_to).expanduser(), [extract_root])
+            dest = resolve_allowed_path(Path(extract_to).expanduser(), [case_root])
         except PathPolicyError as exc:
             return error_response(
                 tc_id,
                 "extract_archive",
                 params,
-                f"{exc}: extract_to must stay under {extract_root}",
+                f"{exc}: extract_to must stay under {case_root}",
                 (time.monotonic() - t0) * 1000,
                 error_type="invalid_input",
             )
     else:
-        dest = extract_root / _archive_slot(archive)
+        dest = case_root / _archive_slot(archive)
 
     # Idempotent, but only for an extraction that actually finished.  A
     # non-empty directory may be the debris of a run that died partway.

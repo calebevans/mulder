@@ -568,24 +568,17 @@ class TestBuildEvidenceContext:
         assert "unrelated.txt" not in ctx
 
     def test_finds_extracted_memory(self, tmp_path: Path) -> None:
-        """Extracted memory dumps in ~/.mulder/cases/extracted/ are listed."""
+        """Extracted memory dumps in <db_dir>/extracted/<case_id>/ are listed."""
         evidence = tmp_path / "evidence"
         evidence.mkdir()
+        db_dir = tmp_path / "cases"
 
-        extracted = tmp_path / "extracted" / "host-a-memory"
-        extracted.mkdir(parents=True)
-        (extracted / "host-a-memory.img").write_text("memory")
+        mem_dir = db_dir / "extracted" / "case-1" / "host-a-memory"
+        mem_dir.mkdir(parents=True)
+        (mem_dir / "host-a-memory.img").write_text("memory")
 
-        orch = _make_orchestrator(evidence_path=str(evidence))
-        with patch("pathlib.Path.home", return_value=tmp_path / "fakehome"):
-            # Set up the expected path structure
-            mulder_extracted = tmp_path / "fakehome" / ".mulder" / "cases" / "extracted"
-            mulder_extracted.mkdir(parents=True)
-            mem_dir = mulder_extracted / "host-a-memory"
-            mem_dir.mkdir()
-            (mem_dir / "host-a-memory.img").write_text("memory")
-
-            ctx = orch._evidence.build_evidence_context("host-a")
+        orch = _make_orchestrator(evidence_path=str(evidence), case_id="case-1", db_dir=db_dir)
+        ctx = orch._evidence.build_evidence_context("host-a")
 
         assert "Extracted memory dumps (ready for Volatility):" in ctx
         assert "host-a-memory.img" in ctx

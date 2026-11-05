@@ -23,7 +23,12 @@ from mulder.extractors.classifier import (
 )
 from mulder.extractors.optical import probe_optical
 from mulder.orchestrator.types import PhaseResult, extract_catalog_result
-from mulder.patterns import DISK_IMAGE_EXTS, extract_iocs_from_text, resolve_db_dir
+from mulder.patterns import (
+    DISK_IMAGE_EXTS,
+    case_extract_dir,
+    extract_iocs_from_text,
+    resolve_db_dir,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,14 +56,22 @@ class EvidenceContext:
     groups them into extraction sessions based on evidence complexity.
     """
 
-    def __init__(self, evidence_path: str) -> None:
+    def __init__(self, evidence_path: str, extracted_dir: str | Path | None = None) -> None:
         """Initialize the evidence context.
 
         Args:
             evidence_path: Filesystem path to the evidence directory.
+            extracted_dir: Where this investigation's extractions are,
+                normally ``case_extract_dir(db_dir, case_id)``.  Defaults to
+                the shared ``extracted/`` root of the resolved cases dir.
         """
         self.evidence_path = evidence_path
         self._catalog_systems: dict[str, dict[str, Any]] = {}
+        self.extracted_dir = (
+            Path(extracted_dir)
+            if extracted_dir is not None
+            else case_extract_dir(resolve_db_dir(), None)
+        )
 
     def load_case_briefing(self) -> str:
         """Load optional MULDER.md case briefing from the evidence directory.
@@ -98,7 +111,7 @@ class EvidenceContext:
             fallback instruction when no files are found.
         """
         evidence_path = Path(self.evidence_path)
-        extracted_dir = Path.home() / ".mulder" / "cases" / "extracted"
+        extracted_dir = self.extracted_dir
 
         sys_lower = system_name.lower()
 

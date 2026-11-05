@@ -559,7 +559,8 @@ When the agent calls `submit_finding`, every entry in `evidence_refs` is validat
 
 Case IDs are validated as a single path segment without separators or control
 characters before opening a case database. Explicit archive destinations must
-resolve under `<db-dir>/extracted`, including when symlinks are present.
+resolve under the open case's `<db-dir>/extracted/<case_id>` (or `<db-dir>/extracted`
+when no case is open), including when symlinks are present.
 
 ### FTS5 Query Sanitization
 
