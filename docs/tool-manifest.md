@@ -51,7 +51,7 @@ Extract a compressed evidence archive to make its contents accessible.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | archive_path | str | yes | Path to the compressed archive |
-| extract_to | str \| None | no | Destination under `<db-dir>/extracted`; defaults to a per-archive directory there |
+| extract_to | str \| None | no | Destination under `<db-dir>/extracted/<case_id>` for the open case (`<db-dir>/extracted` when no case is open); defaults to a per-archive directory there |
 
 **Returns:** `extracted_to`, `total_files_extracted`, `type_summary`, `total_evidence_items`
 

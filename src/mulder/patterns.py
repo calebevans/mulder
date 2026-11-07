@@ -79,6 +79,23 @@ def resolve_db_dir(db_dir: str | Path | None = None) -> Path:
     return Path(chosen).expanduser()
 
 
+def case_extract_dir(db_dir: str | Path, case_id: str | None) -> Path:
+    """Return the directory that holds one case's extractions.
+
+    Without a case, this is the shared ``extracted/`` root of *db_dir*.
+
+    Raises:
+        ValueError: If *case_id* is ``.`` or ``..``, which would not name a
+            directory of its own.
+    """
+    root = Path(db_dir) / "extracted"
+    if not case_id:
+        return root
+    if case_id in (".", ".."):
+        raise ValueError(f"Invalid case_id {case_id!r}: it cannot name an extraction directory.")
+    return root / case_id
+
+
 DEFAULT_WORKSPACE_DIR: str = "~/.mulder/workspace"
 """Default working directory for agent sessions on a native install.
 

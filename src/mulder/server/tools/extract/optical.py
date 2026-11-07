@@ -20,8 +20,9 @@ from mulder.extractors.optical import (
     raw_image,
 )
 from mulder.path_policy import PathPolicyError, resolve_allowed_path
+from mulder.patterns import case_extract_dir
 from mulder.server import source_names as _sn
-from mulder.server.app import get_cfg, mcp
+from mulder.server.app import get_cfg, get_ctx, has_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
     error_response,
@@ -130,7 +131,8 @@ def extract_optical_file(image_path: str, file_path: str) -> dict[str, object]:
     t0 = time.monotonic()
     params = {"image_path": image_path, "file_path": file_path}
 
-    dest_dir = Path(get_cfg().db_dir) / "extracted" / f"{Path(image_path).stem}_optical"
+    case_root = case_extract_dir(get_cfg().db_dir, get_ctx().case_id if has_ctx() else None)
+    dest_dir = case_root / f"{Path(image_path).stem}_optical"
     try:
         with raw_image(image_path) as raw:
             listing = list_optical(raw)

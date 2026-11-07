@@ -23,6 +23,7 @@ import pytest
 from mulder.extractors.classifier import EvidenceClassifier
 from mulder.orchestrator.evidence import EvidenceContext
 from mulder.orchestrator.gates import reset_gate_failure_counters, validate_catalog
+from mulder.patterns import DB_DIR_ENV_VAR
 from mulder.server.tools import yara
 
 SIZE = 65536
@@ -102,7 +103,7 @@ def test_scan_evidence_marks_a_raw_iso_as_optical_media(tmp_path: Path) -> None:
 
 
 def _context(evidence: Path, home: Path) -> str:
-    with patch("pathlib.Path.home", return_value=home):
+    with patch.dict(os.environ, {DB_DIR_ENV_VAR: str(home / ".mulder" / "cases")}):
         return EvidenceContext(str(evidence)).build_evidence_context("host-a")
 
 
@@ -153,7 +154,7 @@ def test_catalog_gate_counts_raw_disk_images(tmp_path: Path) -> None:
 
 
 def _find_memory(cases_dir: Path) -> str:
-    ctx = MagicMock()
+    ctx = MagicMock(case_id="case-1")
     ctx.db.get_sources.return_value = []
     ctx.db.get_case_metadata.return_value = MagicMock(evidence_root="")
     with (
@@ -164,7 +165,7 @@ def _find_memory(cases_dir: Path) -> str:
 
 
 def test_yara_fallback_skips_a_raw_disk_image(tmp_path: Path) -> None:
-    slot = tmp_path / "extracted" / "host-a"
+    slot = tmp_path / "extracted" / "case-1" / "host-a"
     slot.mkdir(parents=True)
     (slot / "host-a-disk.raw").write_bytes(MBR_DISK)
     with pytest.raises(RuntimeError, match="No memory sources"):

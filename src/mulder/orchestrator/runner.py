@@ -53,6 +53,7 @@ from mulder.patterns import (
     DB_DIR_ENV_VAR,
     DEFAULT_MAX_COMPACTIONS,
     DEFAULT_WORKSPACE_DIR,
+    case_extract_dir,
     resolve_db_dir,
 )
 
@@ -152,7 +153,10 @@ class Orchestrator:
             cwd=self.cwd,
             max_compactions=max_compactions,
         )
-        self._evidence = EvidenceContext(evidence_path=evidence_path)
+        self._evidence = EvidenceContext(
+            evidence_path=evidence_path,
+            extracted_dir=case_extract_dir(self._db_dir, self._case_id),
+        )
         self._server = ServerBridge(case_id=self._case_id, db_dir=self._db_dir)
         self._log_tailer = LogTailer(
             dashboard=self.dashboard,

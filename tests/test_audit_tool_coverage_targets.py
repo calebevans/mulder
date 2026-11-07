@@ -70,7 +70,7 @@ def _extract_then_audit(
     """Run a real extraction and audit its sole tool-call entry."""
     db = CaseDB.create(case_id="cov", evidence_root=str(root), db_dir=tmp_path)
     audit = AuditLog(tmp_path / "cov.audit.jsonl")
-    ctx = MagicMock(db=db, audit=audit)
+    ctx = MagicMock(db=db, audit=audit, case_id="cov")
     try:
         with (
             patch("mulder.server.tools.case.get_cfg", return_value=MagicMock(db_dir=tmp_path)),
@@ -148,20 +148,20 @@ def test_symlinked_item_matches_a_call_on_its_target(tmp_path: Path) -> None:
 
 
 def test_home_relative_input_is_expanded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    root = tmp_path / "extracted" / "evidence"
+    root = tmp_path / "extracted" / "cov" / "evidence"
     root.mkdir(parents=True)
     _zip(root / "a.zip")
     _zip(root / "b.zip")
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    cov = _extract_then_audit(tmp_path, root, "~/extracted/evidence/a.zip", root / "expanded")
+    cov = _extract_then_audit(tmp_path, root, "~/extracted/cov/evidence/a.zip", root / "expanded")
     assert (root / "expanded" / "note.txt").read_text() == "x"
     assert "extract_archive" in cov["a.zip"]["tools_run"]
     assert "extract_archive" in cov["b.zip"]["tools_not_run"]
 
 
 def test_output_directory_is_not_an_evidence_input(tmp_path: Path) -> None:
-    root = tmp_path / "extracted" / "evidence"
+    root = tmp_path / "extracted" / "cov" / "evidence"
     root.mkdir(parents=True)
     nested = tmp_path / "nested.zip"
     _zip(nested)
