@@ -623,6 +623,7 @@ Starts the MCP server standalone. Normally invoked automatically by the orchestr
 | `--case-id` | None | Pre-load an existing case on startup |
 | `--db-dir` | `~/.mulder/cases` | Directory for case databases and audit logs |
 | `--transport` | `stdio` | MCP transport (`stdio` or `streamable-http`) |
+| `--host` | `127.0.0.1` | Bind address for `streamable-http`. Set `MULDER_HTTP_TOKEN` to require `Authorization: Bearer <token>` on every request; without it the HTTP transport is unauthenticated and a warning is logged |
 | `--workers` | `8` | Concurrent tool execution threads |
 | `--mem-limit` | `90` | Memory usage % threshold (0 to disable) |
 | `--cpu-limit` | `90` | CPU usage % threshold (0 to disable) |
