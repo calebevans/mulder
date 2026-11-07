@@ -274,10 +274,35 @@ def _build_stix_bundle_manual(
     }
 
 
+_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_cell(text: str) -> str:
+    """Neutralise a cell that a spreadsheet would evaluate as a formula.
+
+    Prefixes a single quote when the text starts with ``=``, ``+``,
+    ``-``, ``@``, tab or carriage return (OWASP CSV injection guidance).
+
+    Args:
+        text: Cell text.
+
+    Returns:
+        The text, quote-prefixed if it starts with a formula character.
+    """
+    if text.startswith(_FORMULA_PREFIXES):
+        return "'" + text
+    return text
+
+
 def build_csv(
     iocs: dict[str, list[dict[str, str]]],
 ) -> str:
     """Build a CSV string of all IOCs grouped by type.
+
+    The free-text ``context`` column (finding titles) and the ``value``
+    column are passed through ``_csv_cell``. Extracted IP, port, path
+    and hash values never start with a formula character; an email
+    local part can, and nothing else legitimate does.
 
     Args:
         iocs: Classified IOCs from ``extract_classified_iocs``.
@@ -296,8 +321,8 @@ def build_csv(
             writer.writerow(
                 {
                     "type": item.get("type", category),
-                    "value": item["value"],
-                    "context": item.get("context", ""),
+                    "value": _csv_cell(item["value"]),
+                    "context": _csv_cell(item.get("context", "")),
                     "severity": item.get("severity", ""),
                 }
             )
