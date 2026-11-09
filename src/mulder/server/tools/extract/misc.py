@@ -751,6 +751,21 @@ def run_exiftool(target_path: str = "", file_path: str = "") -> dict[str, object
     )
 
 
+# RegRipper plugin names are plain identifiers with no separators or
+# traversal characters.  rip.pl joins the plugindir, the ``-p`` value and
+# ``".pl"`` with File::Spec->catfile, checks only that the joined file
+# exists, and then ``require``s it -- executing it.  A value containing
+# ``..`` or ``/`` therefore escapes the plugin directory and runs an
+# arbitrary file, so anything that is not a bare identifier is rejected
+# before a subprocess is built.
+_REGRIPPER_PROFILE_RE = re.compile(r"^[A-Za-z0-9_]+$")
+
+
+def _is_valid_regripper_profile(profile: str) -> bool:
+    """Return True if *profile* is a well-formed RegRipper plugin name."""
+    return _REGRIPPER_PROFILE_RE.fullmatch(profile) is not None
+
+
 @mcp.tool()
 @tool_access(Role.EXTRACT_EXECUTOR)
 def run_regripper(hive_path: str, profile: str | None = None) -> dict[str, object]:
@@ -765,6 +780,19 @@ def run_regripper(hive_path: str, profile: str | None = None) -> dict[str, objec
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
     params = {"hive_path": hive_path, "profile": profile}
+
+    if profile is not None and not _is_valid_regripper_profile(profile):
+        return error_response(
+            tc_id,
+            "run_regripper",
+            params,
+            f"Invalid RegRipper plugin name: {profile!r}",
+            error_type="invalid_plugin",
+            suggestion=(
+                'Plugin names are plain identifiers, e.g. "compname" or '
+                '"software"; omit profile to run all plugins.'
+            ),
+        )
 
     rip = require_binary("rip.pl") or require_binary("regripper")
     if not rip:
