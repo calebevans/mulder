@@ -115,7 +115,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         unzip \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
+# SSL read failures (curl 56) need --retry-all-errors, not just --retry.
+RUN curl -fsSL --retry 3 --retry-all-errors --connect-timeout 30 --max-time 120 \
+        https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
     && chmod +x /tmp/dotnet-install.sh \
     && /tmp/dotnet-install.sh --channel 10.0 --runtime dotnet \
         --install-dir /opt/dotnet \
