@@ -569,6 +569,7 @@ TOOL_SOURCE_PREFIXES: dict[str, list[str]] = {
     "run_mft_parser": ["mft.", "ez.mft"],
     "run_zircolite": ["zircolite."],
     "parse_autoruns": ["autoruns."],
+    "run_secret_scan": ["secrets."],
 }
 """Maps extraction tool names to the source prefixes they produce.
 

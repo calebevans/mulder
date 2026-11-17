@@ -1137,6 +1137,30 @@ Scan files for malware signatures using ClamAV.
 
 **Roles:** `EXTRACT_EXECUTOR`
 
+### run_secret_scan
+
+Find leaked credentials in CI run logs, build artifacts, repository checkouts or any other files, using gitleaks.
+
+Scans files as they are on disk (no git history) and looks inside archives up
+to two levels deep. Secrets are 80% redacted before they are indexed or
+returned: the leading characters that remain identify the key without
+disclosing it. Suppression planted in the evidence is not honoured: inline
+`gitleaks:allow` comments, a `.gitleaks.toml` and a `.gitleaksignore` in the
+scanned tree all have no effect.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| target_path | str | yes | File or directory to scan |
+| force | bool | no | Re-run even if this path was already scanned |
+
+**Returns:** `total_findings`, `by_rule{}`, `files_with_findings`, `by_file{}` (50 files with the most findings), `source` (secrets.findings)
+
+Each finding is one line in `secrets.findings`: time, rule, file:line, redacted
+secret, description. The time is the timestamp on the line the secret sits on,
+which in a CI run log is when it was printed; `-` when the line has none.
+
+**Roles:** `EXTRACT_EXECUTOR`
+
 ---
 
 ## 10. Query Tools

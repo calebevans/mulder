@@ -23,6 +23,7 @@ from mulder.server.tools import (  # noqa: F401  # noqa: F401
     phone,
     plaso,
     review,
+    secretscan,
     tsk,
     yara,
     zircolite,

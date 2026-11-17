@@ -77,6 +77,11 @@ context>") once per exporter directory, group "foundation", and no other run_net
 tool (they are follow-ups for the analyst); plan it only for the system whose directory
 holds the files, never from another system's plan.
 
+When the evidence includes CI RUN LOGS, BUILD ARTIFACTS or a REPOSITORY
+CHECKOUT (downloaded workflow run logs, artifact directories, a source tree),
+plan run_secret_scan(target_path="<that directory>"), group "foundation". It
+finds credentials that were printed or committed.
+
 When the evidence includes MOBILE DATA, plan:
 - run_aleapp (Android, 300+ artifacts) or run_ileapp (iOS, 200+)
 - run_mvt_android/ios (spyware detection)

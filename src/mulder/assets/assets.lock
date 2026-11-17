@@ -37,6 +37,18 @@
       "bytes": 40896816,
       "generated_at": "2026-08-16T17:15:28Z"
     },
+    "gitleaks:amd64": {
+      "url": "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz",
+      "sha256": "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb",
+      "bytes": 8230402,
+      "generated_at": "2026-11-17T19:02:06Z"
+    },
+    "gitleaks:arm64": {
+      "url": "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_arm64.tar.gz",
+      "sha256": "e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080",
+      "bytes": 7601421,
+      "generated_at": "2026-11-17T19:02:06Z"
+    },
     "hayabusa:amd64": {
       "url": "https://github.com/Yamato-Security/hayabusa/releases/download/v3.8.1/hayabusa-3.8.1-lin-x64-musl.zip",
       "sha256": "93c7fc5820151d1b8308987a47f0231a7f286d726478bea226adf2bc6d05bcee",
