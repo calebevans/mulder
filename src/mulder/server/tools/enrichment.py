@@ -15,6 +15,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -38,6 +39,75 @@ _ENRICHMENT_SOURCES: dict[str, str] = {
     "abuseipdb": "ABUSEIPDB_API_KEY",
     "otx": "OTX_API_KEY",
     "ip-api": "IP_API_KEY",
+    "greynoise": "GREYNOISE_API_KEY",
+    "urlscan": "URLSCAN_API_KEY",
+}
+
+# Services that take data from anyone and hand it to whoever set the endpoint
+# up. None is malicious in itself; seeing one as a destination in CI logs,
+# proxy logs or a payload is what matters. Matched offline, on the domain and
+# its subdomains.
+# ponytail: a hand-kept list; load a maintained feed if it starts going stale.
+_EXFIL_SERVICES: dict[str, str] = {
+    **dict.fromkeys(
+        (
+            "webhook.site",
+            "requestbin.com",
+            "pipedream.net",
+            "requestcatcher.com",
+            "beeceptor.com",
+            "hookbin.com",
+        ),
+        "request-catcher",
+    ),
+    **dict.fromkeys(
+        (
+            "interact.sh",
+            "oast.fun",
+            "oast.pro",
+            "oast.live",
+            "oast.site",
+            "oast.online",
+            "oast.me",
+            "oastify.com",
+            "burpcollaborator.net",
+            "dnslog.cn",
+            "canarytokens.com",
+        ),
+        "oob-interaction",
+    ),
+    **dict.fromkeys(
+        (
+            "ngrok.io",
+            "ngrok.app",
+            "ngrok-free.app",
+            "trycloudflare.com",
+            "serveo.net",
+            "localhost.run",
+            "loca.lt",
+        ),
+        "tunnel",
+    ),
+    **dict.fromkeys(
+        ("pastebin.com", "paste.ee", "rentry.co", "hastebin.com", "dpaste.com"),
+        "paste-site",
+    ),
+    **dict.fromkeys(
+        (
+            "transfer.sh",
+            "file.io",
+            "0x0.st",
+            "gofile.io",
+            "temp.sh",
+            "bashupload.com",
+            "catbox.moe",
+        ),
+        "file-drop",
+    ),
+    **dict.fromkeys(
+        ("discord.com", "discordapp.com", "api.telegram.org", "hooks.slack.com"),
+        "messaging-webhook",
+    ),
 }
 
 _IP_API_ALLOW_HTTP_ENV = "MULDER_IP_API_ALLOW_HTTP"
@@ -244,6 +314,147 @@ async def _query_ip_api(
             ioc_type=ioc_type,
             found=False,
             error=_redact_url_key(str(exc), api_key),
+        )
+
+
+def _query_exfil_list(ioc: str, ioc_type: IOCType) -> EnrichmentResult | None:
+    """Tag a domain that belongs to a known exfiltration-capable service.
+
+    Offline. Returns None for anything not on the list, so an ordinary domain
+    gains no extra source entry.
+    """
+    if ioc_type != "domain":
+        return None
+    host = ioc.lower().rstrip(".")
+    for domain, category in _EXFIL_SERVICES.items():
+        if host == domain or host.endswith("." + domain):
+            return EnrichmentResult(
+                source="exfil-list",
+                ioc=ioc,
+                ioc_type=ioc_type,
+                found=True,
+                tags=["exfil-service", category],
+                raw={"service": domain},
+            )
+    return None
+
+
+async def _query_greynoise(
+    client: httpx.AsyncClient, ioc: str, ioc_type: IOCType, api_key: str
+) -> EnrichmentResult:
+    """Query the GreyNoise Community API: is this IP a known internet scanner?
+
+    Separates an address that probes everyone (``noise``) or belongs to a
+    common business service (``riot``) from one that singled this target out.
+    """
+    if ioc_type != "ipv4":
+        return EnrichmentResult(
+            source="greynoise",
+            ioc=ioc,
+            ioc_type=ioc_type,
+            found=False,
+            error="GreyNoise only supports IPv4 addresses",
+        )
+    try:
+        await _global_limiter.acquire()
+        resp = await client.get(
+            f"https://api.greynoise.io/v3/community/{ioc}",
+            headers={"key": api_key, "Accept": "application/json"},
+            timeout=_REQUEST_TIMEOUT,
+        )
+        # 404 is GreyNoise's answer for an IP it has never seen, not a failure.
+        if resp.status_code == 404:
+            return EnrichmentResult(source="greynoise", ioc=ioc, ioc_type=ioc_type, found=False)
+        if resp.status_code != 200:
+            return EnrichmentResult(
+                source="greynoise",
+                ioc=ioc,
+                ioc_type=ioc_type,
+                found=False,
+                error=f"HTTP {resp.status_code}",
+            )
+        data = resp.json()
+        classification = data.get("classification")
+        tags = [name for name in ("noise", "riot") if data.get(name) is True]
+        if isinstance(data.get("name"), str) and data["name"] not in ("", "unknown"):
+            tags.append(data["name"][:_MAX_IP_API_FIELD_LEN])
+        return EnrichmentResult(
+            source="greynoise",
+            ioc=ioc,
+            ioc_type=ioc_type,
+            found=True,
+            reputation_score={"malicious": 100, "benign": 0}.get(classification),
+            malicious=classification == "malicious",
+            tags=tags or None,
+            last_seen=data.get("last_seen") if isinstance(data.get("last_seen"), str) else None,
+            raw=data,
+        )
+    except Exception as exc:
+        return EnrichmentResult(
+            source="greynoise", ioc=ioc, ioc_type=ioc_type, found=False, error=str(exc)
+        )
+
+
+async def _query_urlscan(
+    client: httpx.AsyncClient, ioc: str, ioc_type: IOCType, api_key: str
+) -> EnrichmentResult:
+    """Search urlscan.io for existing scans of a domain or IP.
+
+    Search only. Nothing is submitted for scanning: a submission would fetch
+    the indicator from urlscan's network and publish the result.
+    ``first_seen`` is the oldest of the 100 most recent scans, and the free
+    plan searches a limited window, so it is a lower bound on age.
+    """
+    queries: dict[str, str] = {"domain": f"domain:{ioc}", "ipv4": f'ip:"{ioc}"'}
+    query = queries.get(ioc_type)
+    if not query:
+        return EnrichmentResult(
+            source="urlscan",
+            ioc=ioc,
+            ioc_type=ioc_type,
+            found=False,
+            error=f"Unsupported IOC type for urlscan: {ioc_type}",
+        )
+    try:
+        await _global_limiter.acquire()
+        resp = await client.get(
+            "https://urlscan.io/api/v1/search/",
+            params={"q": query, "size": "100"},
+            headers={"api-key": api_key},
+            timeout=_REQUEST_TIMEOUT,
+        )
+        if resp.status_code != 200:
+            return EnrichmentResult(
+                source="urlscan",
+                ioc=ioc,
+                ioc_type=ioc_type,
+                found=False,
+                error=f"HTTP {resp.status_code}",
+            )
+        data = resp.json()
+        results = [r for r in data.get("results", []) if isinstance(r, dict)]
+        # Verdicts are returned only on paid plans; without them urlscan tells
+        # us the scan history and nothing about maliciousness, so no score.
+        judged = [r["verdicts"] for r in results if isinstance(r.get("verdicts"), dict)]
+        flagged = sum(1 for v in judged if v.get("malicious") is True)
+        # Results come newest first, so the first is the latest scan.
+        times = [t for r in results if isinstance(t := (r.get("task") or {}).get("time"), str)]
+        total = data.get("total")
+        return EnrichmentResult(
+            source="urlscan",
+            ioc=ioc,
+            ioc_type=ioc_type,
+            found=bool(results),
+            reputation_score=round(flagged / len(judged) * 100) if judged else None,
+            malicious=flagged > 0,
+            tags=[f"{total} scans"] if results and isinstance(total, int) else None,
+            last_seen=times[0] if times else None,
+            first_seen=times[-1] if times else None,
+            raw={"total": total, "sampled": len(results), "malicious": flagged},
+        )
+    except Exception as exc:
+        return EnrichmentResult(
+            source="urlscan", ioc=ioc, ioc_type=ioc_type, found=False, error=str(exc)
         )
 
 
@@ -530,11 +741,25 @@ async def _enrich_single_ioc(
             "cached": True,
         }
 
+    # A URL is looked up by its host: the path can carry a token or stolen
+    # data and must not be sent to a third party.
+    original = ioc
+    if "://" in ioc:
+        ioc = urlsplit(ioc.strip()).hostname or ioc
     ioc_type = classify_ioc(ioc)
     results: list[EnrichmentResult] = []
 
+    if "exfil-list" not in skip_sources and (listed := _query_exfil_list(ioc, ioc_type)):
+        results.append(listed)
+
     if "ip-api" not in skip_sources and ioc_type == "ipv4":
         results.append(await _query_ip_api(client, ioc, ioc_type, api_keys.get("ip-api")))
+
+    if "greynoise" not in skip_sources and "greynoise" in api_keys and ioc_type == "ipv4":
+        results.append(await _query_greynoise(client, ioc, ioc_type, api_keys["greynoise"]))
+
+    if "urlscan" not in skip_sources and "urlscan" in api_keys and ioc_type in ("domain", "ipv4"):
+        results.append(await _query_urlscan(client, ioc, ioc_type, api_keys["urlscan"]))
 
     if "abuseipdb" not in skip_sources and "abuseipdb" in api_keys:
         results.append(await _query_abuseipdb(client, ioc, ioc_type, api_keys["abuseipdb"]))
@@ -545,10 +770,10 @@ async def _enrich_single_ioc(
     if "virustotal" not in skip_sources and "virustotal" in api_keys:
         results.append(await _query_virustotal(client, ioc, ioc_type, api_keys["virustotal"]))
 
-    _session_cache.put(ioc, results)
+    _session_cache.put(original, results)
 
     return {
-        "ioc": ioc,
+        "ioc": original,
         "ioc_type": ioc_type,
         "sources": [_result_to_dict(r) for r in results],
         "aggregate_score": _aggregate_score(results),
@@ -587,7 +812,8 @@ async def enrich_iocs(
 
     Args:
         case_id: Active case identifier.
-        iocs: List of IOC strings (IPs, domains, MD5/SHA1/SHA256 hashes).
+        iocs: List of IOC strings (IPs, domains, MD5/SHA1/SHA256 hashes, or
+            URLs, which are looked up by host only).
         skip_sources: Optional list of source names to skip (e.g.,
             ``["virustotal"]`` if no API key is configured).
 
