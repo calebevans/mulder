@@ -220,9 +220,18 @@ class TestZircolite:
         """Pinned against Zircolite 2.20.0's requirements.txt and import block.
 
         A longer list would block a working install, which is the one failure
-        mode this gate must never have.
+        mode this gate must never have. pySigma and its SQLite backend are
+        "optional" upstream, but without them no Sigma YAML rule compiles and
+        every scan comes back empty, so they belong here.
         """
-        assert set(_ZIRCOLITE_MODULES) == {"orjson", "xxhash", "colorama", "tqdm"}
+        assert set(_ZIRCOLITE_MODULES) == {
+            "orjson",
+            "xxhash",
+            "colorama",
+            "tqdm",
+            "sigma",
+            "sigma.backends.sqlite",
+        }
 
     def test_reports_missing_modules(self) -> None:
         from mulder.server.tools.zircolite import run_zircolite

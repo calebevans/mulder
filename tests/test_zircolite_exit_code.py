@@ -151,3 +151,47 @@ def test_partial_results_are_kept_when_zircolite_exits_non_zero(
 
     assert written, "the fake Zircolite never ran"
     assert result["status"] == "success"
+
+
+def test_a_ruleset_that_loaded_no_rules_is_an_error_not_a_clean_scan(
+    evidence: dict[str, Path],
+) -> None:
+    """Zircolite exits 0 and writes nothing when no rule compiled.
+
+    That is what a Sigma YAML ruleset does without pySigma installed, and it
+    used to be reported as a successful scan with no detections.
+    """
+    proc = subprocess.CompletedProcess(
+        args=["zircolite.py"],
+        returncode=0,
+        stdout="[+] Loading ruleset(s)\n   [-] No rules to execute !\n",
+        stderr="",
+    )
+
+    result = _invoke(evidence, proc)
+
+    assert result["status"] == "error"
+    assert result["error_type"] == "tool_failed"
+    assert "loaded no rules" in str(result["error_message"])
+
+
+def test_missing_pysigma_is_reported_by_its_pypi_name(evidence: dict[str, Path]) -> None:
+    """Without pySigma no Sigma rule can compile, so the preflight must stop the run."""
+
+    def _find_spec(name: str) -> object:
+        if name.startswith("sigma"):
+            raise ModuleNotFoundError(name)
+        return MagicMock()
+
+    with (
+        patch("mulder.server.tools.zircolite.sources_already_indexed", return_value=[]),
+        patch("mulder.server.tools.zircolite.importlib.util.find_spec", side_effect=_find_spec),
+    ):
+        result = run_zircolite.__wrapped__(  # type: ignore[attr-defined]
+            str(evidence["events"]),
+            ruleset_path=str(evidence["ruleset"]),
+        )
+
+    assert result["status"] == "error"
+    assert result["error_type"] == "binary_missing"
+    assert "pysigma, pysigma-backend-sqlite" in str(result["error_message"])

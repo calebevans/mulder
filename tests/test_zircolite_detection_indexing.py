@@ -21,19 +21,25 @@ import pytest
 from mulder.server.helpers import tool_response as real_tool_response
 from mulder.server.tools.zircolite import run_zircolite
 
-_DETECTION = {
+# One rule object in the shape Zircolite 2.20.0 writes: the rule's metadata and
+# every event it matched.
+_MATCH = {
+    "row_id": 1,
     "timestamp": "2024-03-11T09:15:22",
-    "rule_title": "Suspicious Base64 Encoded Shell Command",
-    "rule_id": "b7c4f9a1-2e3d-4c5b-8a90-1122334455ff",
+    "process.executable": "/bin/sh",
+    "process.command_line": "sh -c echo cGF5bG9hZA== | base64 -d | sh",
+    "user.name": "svc_backup",
+}
+_DETECTION = {
+    "title": "Suspicious Base64 Encoded Shell Command",
+    "id": "b7c4f9a1-2e3d-4c5b-8a90-1122334455ff",
+    "description": "Detects a base64-encoded payload passed to /bin/sh",
+    "sigmafile": "",
+    "sigma": ["SELECT * FROM logs"],
     "rule_level": "critical",
-    "rule_description": "Detects a base64-encoded payload passed to /bin/sh",
-    "rule_mitre": [{"tactic": "execution", "technique": "T1059.004"}],
-    "matched_fields": {
-        "process.executable": "/bin/sh",
-        "process.command_line": "sh -c echo cGF5bG9hZA== | base64 -d | sh",
-        "user.name": "svc_backup",
-    },
-    "count": 3,
+    "tags": ["attack.execution", "attack.t1059.004"],
+    "count": 1,
+    "matches": [_MATCH],
 }
 
 
@@ -125,7 +131,7 @@ def test_one_line_per_detection_so_none_is_split_across_windows(
     index windows, and the per-window timestamp would come from whichever
     fragment happened to carry one.
     """
-    raw = [dict(_DETECTION, rule_id=f"rule-{i}") for i in range(5)]
+    raw = [dict(_DETECTION, id=f"rule-{i}") for i in range(5)]
 
     _result, text = _run(evidence, raw)
 
@@ -148,8 +154,8 @@ def test_a_newline_inside_a_matched_field_cannot_break_the_line(
     raw = [
         dict(
             _DETECTION,
-            matched_fields={"cmd": "line one\nline two"},
-            rule_description="desc one\ndesc two",
+            matches=[dict(_MATCH, cmd={"argv": "line one\nline two"})],
+            description="desc one\ndesc two",
         )
     ]
 
@@ -170,7 +176,7 @@ def test_every_detection_is_indexed_even_past_the_response_cap(
     Truncating before indexing would silently drop detection 501 onward from
     the case database, with nothing to say they existed.
     """
-    raw = [dict(_DETECTION, rule_id=f"rule-{i}") for i in range(600)]
+    raw = [dict(_DETECTION, id=f"rule-{i}") for i in range(600)]
 
     result, text = _run(evidence, raw)
 
@@ -180,7 +186,7 @@ def test_every_detection_is_indexed_even_past_the_response_cap(
 
 def test_the_response_stays_bounded(evidence: dict[str, Path]) -> None:
     """Pins the other half: indexing everything must not unbound the response."""
-    raw = [dict(_DETECTION, rule_id=f"rule-{i}") for i in range(600)]
+    raw = [dict(_DETECTION, id=f"rule-{i}") for i in range(600)]
 
     result, _text = _run(evidence, raw)
 
@@ -198,3 +204,26 @@ def test_a_quiet_log_indexes_a_header_and_no_detection_lines(
     assert "Total detections: 0" in text
     assert [line for line in text.splitlines() if "\t" in line] == []
     assert result["status"] == "success"
+
+
+def test_each_matched_event_is_its_own_detection(evidence: dict[str, Path]) -> None:
+    """A rule that matched three events is three detections, each with its own time."""
+    times = ["2024-03-11T09:15:22", "2024-03-11T09:16:00", "2024-03-11T09:17:30"]
+    raw = [dict(_DETECTION, count=3, matches=[dict(_MATCH, timestamp=t) for t in times])]
+
+    result, text = _run(evidence, raw)
+
+    assert result["_results"]["total_detections"] == 3
+    lines = [line for line in text.splitlines() if "\t" in line]
+    assert [line.split("\t")[0] for line in lines] == times
+
+
+def test_the_empty_object_zircolite_pads_its_output_with_is_not_a_detection(
+    evidence: dict[str, Path],
+) -> None:
+    result, _text = _run(evidence, [_DETECTION, {}])
+
+    results = result["_results"]
+    assert results["total_detections"] == 1
+    assert results["level_counts"] == {"critical": 1}
+    assert results["mitre_coverage"] == {"tactics": ["execution"], "techniques": ["T1059.004"]}

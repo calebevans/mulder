@@ -582,7 +582,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install pure Python forensic tool dependencies
 RUN uv pip install --system --no-cache \
-        stix2 evtx jsonpath-ng colorama tqdm aiohttp lark
+        stix2 evtx jsonpath-ng colorama tqdm aiohttp lark \
+        orjson xxhash pysigma pysigma-backend-sqlite
 
 # Keep real Git metadata for setup --verify, excluding mobile test fixtures
 # from both the working tree and the partial clone's object store.

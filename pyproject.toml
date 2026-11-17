@@ -69,7 +69,9 @@ stix = ["stix2>=3.0"]
 # required entries) plus `evtx`, which Zircolite imports optionally and which
 # mulder needs for the "evtx" input format exposed in zircolite.py:_FORMAT_FLAGS.
 # NOT included: aiohttp / urllib3 / requests / elasticsearch (remote forwarding),
-# lxml (XML input), pysigma* (rule compilation) - mulder uses none of those paths.
+# lxml (XML input) - mulder uses none of those paths.  pysigma and its SQLite
+# backend are "optional" upstream but compile Sigma YAML into the queries
+# Zircolite runs; without them it loads no rules and reports a clean scan.
 # jinja2 and pyyaml, which Zircolite also imports optionally, are already
 # mulder dependencies above.
 # NOT covered by this extra: ALEAPP and iLEAPP. Their upstream requirements.txt
@@ -82,6 +84,8 @@ forensics = [
     "colorama>=0.4.4",
     "tqdm>=4.58.0",
     "evtx>=0.6.2",
+    "pysigma>=0.10.10",
+    "pysigma-backend-sqlite>=0.1.1",
 ]
 dev = [
     "pytest",
