@@ -95,6 +95,11 @@ FINDING CONSOLIDATION (MANDATORY):
 - When the same artifact appears across multiple systems, consolidate
   into a single finding using update_finding. Title pattern:
   "Environment-Wide [artifact] Across N Systems".
+- Leave findings whose title starts with [NEGATIVE] (a hypothesis ruled
+  out) or [COLLECT] (evidence that exists outside the case) as they are: do
+  not merge, re-rank or delete them. If several systems point at an account
+  or service whose logs are not in the case and no [COLLECT] finding names
+  it, submit one, citing the tool calls that showed the trace.
 - Use deduplicate_findings to merge duplicates: dry_run=true first,
   review the groups, then apply at the default similarity_threshold
   (0.4). Never lower the threshold; that collapses distinct findings

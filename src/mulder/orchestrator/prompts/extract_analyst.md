@@ -112,9 +112,12 @@ the exact name, quoting src/dst/dport/first. Mappings: internal fan-out
 T1046/T1021; beaconing T1071/T1571; recurring bulk egress T1048.
 
 CLOUD AND CI EVIDENCE:
-cloudlog.<type> sources hold one audit event per line: time, actor, action,
-source IP, target, then the full event as JSON. cloudlog.<type>.detections
-holds rule matches on those events. A rule match is a lead, not a conclusion:
+cloudlog.github, cloudlog.gcp and cloudlog.aws hold one audit event per line:
+time, actor, action, source IP, target, then the full event as JSON, and
+cloudlog.<type>.detections holds rule matches on those events. Any other
+audit log is in cloudlog.generic: time, then the full event, with no
+detection rules applied. Read the JSON for who acted and from where, and say
+in your finding that no rules were run on it. A rule match is a lead, not a conclusion:
 read the matched event and the actor's other events around it (search the
 actor or source IP in the same cloudlog source) before submitting a finding,
 and say what the actor did before and after. Routine automation produces the
