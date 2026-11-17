@@ -24,6 +24,7 @@ _ARGS = {
     "hayabusa": "HAYABUSA_VERSION",
     "capa": "CAPA_VERSION",
     "floss": "FLOSS_VERSION",
+    "gitleaks": "GITLEAKS_VERSION",
     "sigma-rules": "SIGMA_VERSION",
 }
 

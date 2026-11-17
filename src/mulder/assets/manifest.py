@@ -109,6 +109,7 @@ CHAINSAW_VERSION = "2.16.0"
 HAYABUSA_VERSION = "3.8.1"
 CAPA_VERSION = "9.4.0"
 FLOSS_VERSION = "3.1.0"
+GITLEAKS_VERSION = "8.30.1"
 ZIRCOLITE_VERSION = "2.20.0"
 SIGMA_VERSION = "r2024-09-02"
 
@@ -298,6 +299,28 @@ _ASSETS: tuple[Asset, ...] = (
         arch_only=("amd64",),
         substitute="pipx inject mulder-dfir flare-floss",
         note="obfuscated string extraction",
+    ),
+    Asset(
+        key="gitleaks",
+        version=GITLEAKS_VERSION,
+        kind="archive",
+        urls={
+            "amd64": (
+                f"{_GH}/gitleaks/gitleaks/releases/download/v{GITLEAKS_VERSION}"
+                f"/gitleaks_{GITLEAKS_VERSION}_linux_x64.tar.gz"
+            ),
+            "arm64": (
+                f"{_GH}/gitleaks/gitleaks/releases/download/v{GITLEAKS_VERSION}"
+                f"/gitleaks_{GITLEAKS_VERSION}_linux_arm64.tar.gz"
+            ),
+        },
+        dest=("gitleaks",),
+        sentinel=("gitleaks",),
+        pinnable=True,
+        size_estimate=22 * _MB,
+        chmod_x=("gitleaks",),
+        shims=("gitleaks",),
+        note="secret detection in CI logs, artifacts and source trees",
     ),
     Asset(
         key="aleapp",

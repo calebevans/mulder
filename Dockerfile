@@ -293,6 +293,26 @@ RUN mkdir -p /opt/floss \
         && rm /tmp/floss.zip; \
     fi
 
+# gitleaks: download pre-built binary (multi-arch)
+FROM ubuntu:22.04 AS gitleaks-fetch
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG TARGETARCH
+ARG GITLEAKS_VERSION=8.30.1
+RUN case "${TARGETARCH}" in \
+        arm64) GITLEAKS_ARCH="arm64" ;; \
+        *)     GITLEAKS_ARCH="x64" ;; \
+    esac \
+    && mkdir -p /opt/gitleaks \
+    && curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_${GITLEAKS_ARCH}.tar.gz" \
+        | tar xz -C /opt/gitleaks \
+    && chmod +x /opt/gitleaks/gitleaks
+
 # Chainsaw: download pre-built binary (multi-arch), Sigma rules, and mappings
 FROM ubuntu:22.04 AS chainsaw-fetch
 
@@ -505,6 +525,8 @@ COPY --from=hayabusa-fetch /opt/hayabusa /opt/hayabusa
 COPY --from=capa-fetch /opt/capa/ /opt/capa/
 RUN ln -sf /opt/capa/capa /usr/local/bin/capa
 COPY --from=floss-fetch /opt/floss/ /opt/floss/
+COPY --from=gitleaks-fetch /opt/gitleaks/ /opt/gitleaks/
+RUN ln -sf /opt/gitleaks/gitleaks /usr/local/bin/gitleaks
 COPY --from=chainsaw-fetch /opt/chainsaw/ /opt/chainsaw/
 RUN ln -sf /opt/chainsaw/chainsaw /usr/local/bin/chainsaw
 COPY --from=chainsaw-fetch /opt/sigma-rules/ /opt/sigma-rules/
