@@ -227,3 +227,42 @@ def test_the_empty_object_zircolite_pads_its_output_with_is_not_a_detection(
     assert results["total_detections"] == 1
     assert results["level_counts"] == {"critical": 1}
     assert results["mitre_coverage"] == {"tactics": ["execution"], "techniques": ["T1059.004"]}
+
+
+def test_coverage_describes_reported_detections_and_only_real_tactics(
+    evidence: dict[str, Path],
+) -> None:
+    """Sigma tags also name groups and software; a filtered-out rule adds nothing."""
+    tagged = dict(
+        _DETECTION, tags=["attack.execution", "attack.t1059.004", "attack.g0032", "attack.s0002"]
+    )
+    hidden = dict(_DETECTION, rule_level="low", tags=["attack.collection", "attack.t1123"])
+    from mulder.server.tools.zircolite import _parse_zircolite_output
+
+    results = evidence["events"].with_name("results.json")
+    results.write_text(json.dumps([tagged, hidden, {}]))
+    parsed = _parse_zircolite_output(results, "x", "auditd", "medium")
+
+    assert parsed["mitre_coverage"] == {"tactics": ["execution"], "techniques": ["T1059.004"]}
+    # The filter's effect stays visible in the counts.
+    assert parsed["level_counts"] == {"critical": 1, "low": 1}
+    assert parsed["total_detections"] == 1
+
+
+@pytest.mark.parametrize(
+    ("match", "expected"),
+    [
+        ({"timestamp": "2024-03-11 09:15:22"}, "2024-03-11 09:15:22"),
+        ({"UtcTime": "2023-11-14 22:13:20.123"}, "2023-11-14 22:13:20.123"),  # Sysmon
+        ({"timestamp": 1731800000000}, "2024-11-16T23:33:20Z"),  # GitHub: epoch ms
+        ({"timestamp": 1731800000}, "2024-11-16T23:33:20Z"),
+        ({}, ""),
+    ],
+)
+def test_the_event_time_is_found_and_epochs_become_iso(
+    evidence: dict[str, Path], match: dict[str, Any], expected: str
+) -> None:
+    _result, text = _run(evidence, [dict(_DETECTION, matches=[match])])
+
+    (line,) = [line for line in text.splitlines() if "\t" in line]
+    assert line.split("\t")[0] == expected
