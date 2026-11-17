@@ -557,15 +557,17 @@ The analyst receives complementary guidance: when execution artifacts show commu
 
 ## Cloud Audit Logs
 
-Mulder's agents work offline, so it does not call cloud APIs. Export the audit logs yourself, put the JSON files in the evidence directory, and `run_cloud_audit_logs` indexes every event and applies Sigma rules. JSON arrays, JSON lines and CloudTrail `Records` files are all read; the log type is recognised from the events.
+Mulder's agents work offline, so it does not call cloud APIs. Export the audit logs yourself, put the JSON files in the evidence directory, and `run_cloud_audit_logs` indexes every event and applies Sigma rules. JSON arrays, JSON lines and CloudTrail `Records` files are all read, with or without a byte-order mark; the log type is recognised from the events.
 
 | Log | One way to export it |
 |-----|----------------------|
-| GitHub organization audit log (Enterprise Cloud) | `gh api --paginate "/orgs/ORG/audit-log?include=all&per_page=100" > github-audit.json` |
+| GitHub organization audit log (Enterprise Cloud) | `gh api --paginate "/orgs/ORG/audit-log?include=all&per_page=100&phrase=created:>=2026-01-01" > github-audit.json` |
 | GCP Cloud Audit Logs | `gcloud logging read 'logName:"cloudaudit.googleapis.com"' --project=PROJECT --freshness=30d --format=json > gcp-audit.json` |
 | AWS CloudTrail | `aws s3 sync s3://BUCKET/AWSLogs/ACCOUNT/CloudTrail/ cloudtrail/ && gunzip -r cloudtrail/` |
 
-Events land in `cloudlog.github`, `cloudlog.gcp` and `cloudlog.aws`, one per line with time, actor, action, source IP and target ahead of the raw event, so `search` and `get_timeline` work on them. Sigma matches land in `cloudlog.<type>.detections`.
+Set the GitHub `created:` date and the gcloud `--freshness` to cover the incident; without a date filter GitHub returns only recent months. `aws cloudtrail lookup-events` output is not recognised; use the S3 log files. Do not put the exports in a directory named `logs` or `log`: mulder treats that as a host log directory and does not look inside for audit logs.
+
+Events land in `cloudlog.github`, `cloudlog.gcp` and `cloudlog.aws`, one per line with time, actor, action, source IP and target ahead of the raw event, so `search` finds them. Sigma matches land in `cloudlog.<type>.detections`. The result names any file that was damaged, truncated or empty.
 
 GCP token exchanges, service account impersonation and Secret Manager reads appear only if Data Access audit logs were enabled for those APIs before the incident. Any other JSON log is indexed as `cloudlog.generic`; pass `ruleset_path` to scan it with your own Sigma rules.
 

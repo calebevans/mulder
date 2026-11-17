@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -101,12 +102,48 @@ def test_every_export_framing_is_read(tmp_path: Path) -> None:
         "pretty": json.dumps(a, indent=2) + "\n" + json.dumps(b, indent=2),
         "paginated": json.dumps([a]) + json.dumps([b]),
         "records": json.dumps({"Records": [a, b]}),
-        "truncated": f'{json.dumps(a)}\n{json.dumps(b)}\n{{"action": "cut off',
+        "bom": "\ufeff" + json.dumps([a, b]),
     }
     for name, text in cases.items():
         file = tmp_path / f"{name}.json"
         file.write_text(text)
-        assert _read_events(file) == [a, b], name
+        assert _read_events(file) == ([a, b], False), name
+
+    utf16 = tmp_path / "powershell.json"
+    utf16.write_bytes(json.dumps([a, b]).encode("utf-16"))
+    assert _read_events(utf16) == ([a, b], False)
+
+
+def test_a_damaged_export_keeps_its_complete_events_and_says_so(tmp_path: Path) -> None:
+    """Truncated mid-event, in every framing: no event lost, none invented."""
+    a, b = _GITHUB
+    whole = json.dumps([a, b, _GCP], indent=2)
+    cut = whole[: whole.rindex('"timestamp"')]  # inside the third, nested event
+    cases = {
+        "pretty-array": cut,
+        "compact-array": json.dumps([a, b, _GCP])[:-40],
+        "lines": f'{json.dumps(a)}\n{json.dumps(b)}\n{{"action": "cut off',
+        "bad-line-in-the-middle": f"{json.dumps(a)}\nnot json at all\n{json.dumps(b)}\n",
+    }
+    for name, text in cases.items():
+        file = tmp_path / f"{name}.json"
+        file.write_text(text)
+        assert _read_events(file) == ([a, b], True), name
+
+
+@pytest.mark.parametrize("poison", ["[" * 200_000, '{"n": ' + "9" * 5000 + "}"])
+def test_one_unparseable_file_does_not_cost_the_rest(
+    case: CaseDB, logs: Path, poison: str
+) -> None:
+    """Nesting past the decoder's depth, or an integer too long to convert."""
+    (logs / "poison.json").write_text(poison)
+
+    with patch.object(cloudlogs, "_zircolite_script", return_value=None):
+        result = run_cloud_audit_logs.__wrapped__(str(logs))  # type: ignore[attr-defined]
+
+    summary = result["results"]
+    assert summary["log_types"]["github"]["events"] == 2
+    assert str(logs / "poison.json") in summary["files_with_problems"]
 
 
 def test_events_are_indexed_per_log_type_even_when_sigma_cannot_run(
@@ -123,6 +160,8 @@ def test_events_are_indexed_per_log_type_even_when_sigma_cannot_run(
         "github": 2,
     }
     assert types["github"]["sigma"].startswith("skipped")
+    # package.json is one object that is not a log event: indexed, not hidden.
+    assert "files_with_problems" not in result["results"]
 
     github = _text(case, "cloudlog.github").splitlines()
     # Epoch milliseconds become ISO, and the summary columns lead the line.
@@ -162,7 +201,7 @@ def test_sigma_matches_are_indexed_and_gcp_gets_its_field_mapping(
         rulesets = cmd[cmd.index("--ruleset") + 1 : cmd.index("--outfile")]
         config = json.loads(Path(cmd[cmd.index("--config") + 1]).read_text())
         events = Path(cmd[cmd.index("--events") + 1]).read_text().splitlines()
-        seen.append({"rulesets": rulesets, "config": config, "events": len(events)})
+        seen.append({"rulesets": rulesets, "config": config, "events": events})
         hit = {
             "title": "GCP Service Account Key Created",
             "id": "5d6f1c1e-2a57-4b0a-9d5c-0f3f6f0a7c11",
@@ -170,7 +209,7 @@ def test_sigma_matches_are_indexed_and_gcp_gets_its_field_mapping(
             "rule_level": "medium",
             "tags": ["attack.persistence", "attack.t1098.001"],
             "count": 1,
-            "matches": [{"row_id": 1, "timestamp": 1731800000000, "principalEmail": "mallory"}],
+            "matches": [{"row_id": 1, "mulder.event_time": "2026-11-10T12:01:00.5Z"}],
         }
         Path(cmd[cmd.index("--outfile") + 1]).write_text(json.dumps([hit, {}]))
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
@@ -190,13 +229,16 @@ def test_sigma_matches_are_indexed_and_gcp_gets_its_field_mapping(
 
     (call,) = seen
     assert call["rulesets"] == [str(stock.resolve()), str((_MULDER_RULES / "gcp").resolve())]
-    assert call["config"]["mappings"]["protoPayload.methodName"] == "gcp.audit.method_name"
-    assert call["events"] == 1
+    # Sigma's name for the field is added beside the real one, not instead of it.
+    assert call["config"]["alias"]["protoPayload.methodName"] == "gcp.audit.method_name"
+    (event,) = (json.loads(line) for line in call["events"])
+    assert event["protoPayload.methodName"] == "google.iam.admin.v1.CreateServiceAccountKey"
+    # Every field keeps its full path as its column name.
+    assert call["config"]["mappings"] == {name: name for name in event}
 
     detections = _text(case, "cloudlog.gcp.detections").splitlines()
-    assert detections[1].startswith(
-        "2024-11-16T23:33:20Z\tmedium\tGCP Service Account Key Created"
-    )
+    # The event's own time, carried through the scan by mulder.
+    assert detections[1].startswith("2026-11-10T12:01:00.5Z\tmedium\tGCP Service Account Key")
 
 
 def test_generic_json_is_indexed_but_not_scanned_without_a_ruleset(
@@ -235,3 +277,86 @@ def test_the_shipped_gcp_rules_are_valid_sigma() -> None:
         (query,) = backend.sqlite.sqliteBackend().convert(rules)
         assert "gcp.audit.method_name" in query, file.name
     assert len(ids) == len(files)
+
+
+def test_a_nested_key_cannot_stand_in_for_a_top_level_field() -> None:
+    """Zircolite names a column by its last path segment, last one wins.
+
+    A tag called "eventName" would replace the real eventName, hiding a
+    detection or forging one. Full paths cannot collide.
+    """
+    event = {
+        "eventName": "StopLogging",
+        "eventSource": "cloudtrail.amazonaws.com",
+        "requestParameters": {"tags": {"eventName": "DescribeTrails"}},
+        "userIdentity": {"type": "Root"},
+        "resources": [{"ARN": "a"}],
+        "empty": "",
+    }
+
+    assert cloudlogs._flatten(event) == {
+        "eventName": "StopLogging",
+        "eventSource": "cloudtrail.amazonaws.com",
+        "requestParameters.tags.eventName": "DescribeTrails",
+        "userIdentity.type": "Root",
+        "resources": '[{"ARN": "a"}]',
+    }
+
+
+def test_field_names_from_the_evidence_are_made_safe_for_sql() -> None:
+    """Zircolite builds its CREATE TABLE from field names, which an attacker picks."""
+    flat = cloudlogs._flatten({"a' TEXT, x": {"b`c": 1, "": 2}})
+
+    assert set(flat) == {"a__TEXT__x.b_c", "a__TEXT__x._"}
+
+
+def test_a_line_separator_in_a_field_cannot_start_a_second_record() -> None:
+    forged = "obj\u20282026-11-09T00:00:00Z\tadmin@victim.example\tCreateServiceAccountKey"
+    event = json.loads(json.dumps(_GCP))
+    event["protoPayload"]["resourceName"] = forged
+
+    line = cloudlogs._event_line("gcp", event)
+
+    assert len(line.splitlines()) == 1
+    assert line.count("\t") == 5
+
+
+def test_the_whole_event_is_indexed_however_long(case: CaseDB, tmp_path: Path) -> None:
+    event = json.loads(json.dumps(_GCP))
+    event["protoPayload"]["bindings"] = ["user:pad@example.com"] * 300 + ["user:NEEDLE@x.example"]
+    file = tmp_path / "big.json"
+    file.write_text(json.dumps([event]))
+
+    with patch.object(cloudlogs, "_zircolite_script", return_value=None):
+        run_cloud_audit_logs.__wrapped__(str(file))  # type: ignore[attr-defined]
+
+    assert "NEEDLE" in _text(case, "cloudlog.gcp")
+
+
+def test_github_events_are_recognised_without_an_actor_or_at_timestamp() -> None:
+    disable_2fa = {"action": "org.disable_two_factor_requirement", "org": "a"}
+    assert cloudlogs._log_type(disable_2fa) == "github"
+    assert cloudlogs._log_type({"action": "repo.create", "created_at": 1731800000000}) == "github"
+    # "action" alone, or an action that is not category.event, is not GitHub's log.
+    assert cloudlogs._log_type({"action": "repo.create"}) == "generic"
+    assert cloudlogs._log_type({"action": "Thriller", "actor": "Someone"}) == "generic"
+
+
+def test_symlinks_are_not_followed_out_of_the_evidence(
+    case: CaseDB, logs: Path, tmp_path: Path
+) -> None:
+    outside = tmp_path / "outside.json"
+    outside.write_text(json.dumps([{"action": "org.outside_event", "actor": "x"}]))
+    (logs / "link.json").symlink_to(outside)
+
+    with patch.object(cloudlogs, "_zircolite_script", return_value=None):
+        run_cloud_audit_logs.__wrapped__(str(logs))  # type: ignore[attr-defined]
+
+    assert "org.outside_event" not in _text(case, "cloudlog.github")
+
+
+def test_the_classifier_does_not_open_a_fifo_or_flag_unrelated_json(tmp_path: Path) -> None:
+    os.mkfifo(tmp_path / "pipe.json")  # opening it would block forever
+    (tmp_path / "movies.json").write_text('[{"title": "x", "action": "y", "actor": "z"}]')
+
+    assert EvidenceClassifier().classify(tmp_path) == []

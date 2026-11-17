@@ -203,9 +203,13 @@ def is_cloud_audit_log(path: Path) -> bool:
     """Sniff the head of a JSON file for the keys a cloud audit log export carries.
 
     GCP Cloud Audit Logs have ``protoPayload``, AWS CloudTrail ``eventSource`` and
-    ``eventName``, GitHub audit logs ``action`` and ``actor``.
+    ``eventName``, GitHub audit logs ``action``, ``actor`` and a timestamp key.
+    Deliberately loose: a false positive costs one indexed file, a miss costs
+    the log.
     """
     try:
+        if not path.is_file():  # a FIFO named x.json would block the open
+            return False
         with path.open("rb") as f:
             head = f.read(65536)
     except OSError:
@@ -213,7 +217,11 @@ def is_cloud_audit_log(path: Path) -> bool:
     return (
         b'"protoPayload"' in head
         or (b'"eventSource"' in head and b'"eventName"' in head)
-        or (b'"action"' in head and b'"actor"' in head)
+        or (
+            b'"action"' in head
+            and b'"actor"' in head
+            and (b'"@timestamp"' in head or b'"created_at"' in head)
+        )
     )
 
 

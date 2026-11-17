@@ -613,12 +613,12 @@ event. Any other JSON is indexed as `cloudlog.generic` and scanned only when
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| log_path | str | yes | JSON log file, or a directory searched for .json/.jsonl/.ndjson |
+| evidence_path | str | yes | JSON log file, or a directory searched for .json/.jsonl/.ndjson |
 | ruleset_path | str \| None | no | Sigma rules to use instead of the defaults |
 | sigma_level_filter | Literal['informational', 'low', 'medium', 'high', 'critical'] \| None | no | Minimum Sigma level (default "low") |
 | force | bool | no | Re-run even if these logs were already indexed |
 
-**Returns:** `files_read`, `log_types{<type>: events, source, sigma, detections, level_counts{}, rules_matched{}, mitre_coverage{}}`
+**Returns:** `files_read`, `files_with_problems{}`, `log_types{<type>: events, source, sigma, detections, level_counts{}, rules_matched{}, mitre_coverage{}}`
 
 Events are indexed one per line in `cloudlog.<type>` (time, actor, action,
 source IP, target, raw event) and Sigma matches in `cloudlog.<type>.detections`.
@@ -627,6 +627,15 @@ either way. Default rules are the SigmaHQ `rules/cloud` set for the log type,
 plus mulder's own GCP rules for service account key creation, federated token
 exchange, service account impersonation, IAM policy changes and Secret Manager
 reads.
+
+A file that was damaged or truncated, or that held no events, is named in
+`files_with_problems`; complete events before the damage are kept. Events are
+indexed in time order, and the index keeps one time per window of lines (a few
+events), so a time-range query finds a window by its earliest event. Sigma
+matches on full field paths (`userIdentity.type`), so a nested key cannot
+stand in for a top-level field. If the events hold more than about 2,000
+distinct field paths, the least-used deep ones are left out of the scan and
+`sigma` says how many. Symlinks under a directory are not followed.
 
 **Roles:** `EXTRACT_EXECUTOR`
 

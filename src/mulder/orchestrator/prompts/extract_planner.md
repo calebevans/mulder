@@ -79,7 +79,7 @@ holds the files, never from another system's plan.
 
 When the evidence includes CLOUD AUDIT LOGS (JSON exports of GitHub audit
 logs, GCP Cloud Audit Logs or AWS CloudTrail, type "cloud_audit_log"), always
-plan run_cloud_audit_logs(log_path="<the file, or the directory holding the
+plan run_cloud_audit_logs(evidence_path="<the file, or the directory holding the
 exports>"), group "foundation". It indexes every event and applies Sigma rules.
 
 When the evidence includes MOBILE DATA, plan:
