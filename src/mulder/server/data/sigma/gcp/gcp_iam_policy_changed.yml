@@ -1,0 +1,24 @@
+title: GCP IAM Policy Changed
+id: 9a3d5e71-4b2c-4f19-a6d8-e7c1b0f4d044
+status: experimental
+description: Detects a change to the IAM allow policy of a project, folder, organization, service account or other resource.
+references:
+    - https://cloud.google.com/iam/docs/audit-logging/examples-service-accounts
+author: mulder
+date: 2026-11-17
+tags:
+    - attack.persistence
+    - attack.privilege-escalation
+    - attack.t1098.003
+logsource:
+    product: gcp
+    service: gcp.audit
+detection:
+    selection:
+        gcp.audit.method_name|endswith:
+            - 'SetIamPolicy'
+            - 'SetIAMPolicy'
+    condition: selection
+falsepositives:
+    - Routine access management and infrastructure-as-code deployments
+level: medium

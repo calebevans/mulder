@@ -34,6 +34,7 @@ Try-it-out instructions for running Mulder, the forensic investigation platform.
     - [How It Works](#how-it-works)
     - [Example](#example)
   - [Artifact Awareness](#artifact-awareness)
+  - [Cloud Audit Logs](#cloud-audit-logs)
   - [CLI Reference](#cli-reference)
     - [`mulder investigate`](#mulder-investigate)
     - [`mulder setup`](#mulder-setup)
@@ -553,6 +554,20 @@ The extraction planner adapts its tool selection based on what the evidence actu
 **Investigator briefing keywords** also influence tool selection. Briefings mentioning hacking or intrusion trigger searches for exploit tool configs and PCAPs. Briefings about insider threats or data theft prioritize USB history and cloud storage artifacts. Briefings about communications prioritize email and chat application data.
 
 The analyst receives complementary guidance: when execution artifacts show communication tools were used, the analyst searches indexed application files for contacts, server addresses, and credentials, then cross-references those with network connection data.
+
+## Cloud Audit Logs
+
+Mulder's agents work offline, so it does not call cloud APIs. Export the audit logs yourself, put the JSON files in the evidence directory, and `run_cloud_audit_logs` indexes every event and applies Sigma rules. JSON arrays, JSON lines and CloudTrail `Records` files are all read; the log type is recognised from the events.
+
+| Log | One way to export it |
+|-----|----------------------|
+| GitHub organization audit log (Enterprise Cloud) | `gh api --paginate "/orgs/ORG/audit-log?include=all&per_page=100" > github-audit.json` |
+| GCP Cloud Audit Logs | `gcloud logging read 'logName:"cloudaudit.googleapis.com"' --project=PROJECT --freshness=30d --format=json > gcp-audit.json` |
+| AWS CloudTrail | `aws s3 sync s3://BUCKET/AWSLogs/ACCOUNT/CloudTrail/ cloudtrail/ && gunzip -r cloudtrail/` |
+
+Events land in `cloudlog.github`, `cloudlog.gcp` and `cloudlog.aws`, one per line with time, actor, action, source IP and target ahead of the raw event, so `search` and `get_timeline` work on them. Sigma matches land in `cloudlog.<type>.detections`.
+
+GCP token exchanges, service account impersonation and Secret Manager reads appear only if Data Access audit logs were enabled for those APIs before the incident. Any other JSON log is indexed as `cloudlog.generic`; pass `ruleset_path` to scan it with your own Sigma rules.
 
 ## CLI Reference
 

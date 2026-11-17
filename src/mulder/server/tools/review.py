@@ -52,6 +52,9 @@ _EVIDENCE_TOOL_MAP: dict[str, list[str]] = {
     "netflow_capture": [
         "run_netflow_analysis",
     ],
+    "cloud_audit_log": [
+        "run_cloud_audit_logs",
+    ],
     "evtx": [
         "run_evtx_parser",
         "run_hayabusa",
@@ -81,6 +84,7 @@ _EVIDENCE_TOOL_MAP: dict[str, list[str]] = {
 # out, so a call is credited only to the evidence it was run on.
 _EVIDENCE_INPUT_PARAMS: dict[str, tuple[str, ...]] = {
     "run_netflow_analysis": ("evidence_path",),
+    "run_cloud_audit_logs": ("log_path",),
     "run_volatility": ("memory_path",),
     "run_volatility_batch": ("memory_path",),
     "run_fls": ("image_path",),

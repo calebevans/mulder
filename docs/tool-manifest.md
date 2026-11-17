@@ -601,6 +601,35 @@ in `zircolite.detections`; the response preview may be shorter than the index.
 
 **Roles:** `EXTRACT_EXECUTOR`
 
+### run_cloud_audit_logs
+
+Index exported cloud audit logs and apply Sigma detection rules to them.
+
+Reads JSON arrays, JSON lines and CloudTrail `{"Records": [...]}` files, and
+recognises GitHub audit logs, GCP Cloud Audit Logs and AWS CloudTrail per
+event. Any other JSON is indexed as `cloudlog.generic` and scanned only when
+`ruleset_path` is given. Nothing is fetched: export the logs first (see the
+[usage guide](usage-guide.md#cloud-audit-logs)).
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| log_path | str | yes | JSON log file, or a directory searched for .json/.jsonl/.ndjson |
+| ruleset_path | str \| None | no | Sigma rules to use instead of the defaults |
+| sigma_level_filter | Literal['informational', 'low', 'medium', 'high', 'critical'] \| None | no | Minimum Sigma level (default "low") |
+| force | bool | no | Re-run even if these logs were already indexed |
+
+**Returns:** `files_read`, `log_types{<type>: events, source, sigma, detections, level_counts{}, rules_matched{}, mitre_coverage{}}`
+
+Events are indexed one per line in `cloudlog.<type>` (time, actor, action,
+source IP, target, raw event) and Sigma matches in `cloudlog.<type>.detections`.
+`sigma` is `ok`, or says why the scan was skipped or failed; events are indexed
+either way. Default rules are the SigmaHQ `rules/cloud` set for the log type,
+plus mulder's own GCP rules for service account key creation, federated token
+exchange, service account impersonation, IAM policy changes and Secret Manager
+reads.
+
+**Roles:** `EXTRACT_EXECUTOR`
+
 ---
 
 ## 5. Extraction: Network

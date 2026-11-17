@@ -196,6 +196,27 @@ def _is_evidence_sidecar(path: Path) -> bool:
     return stem_lower.endswith("-raw") or stem_lower.endswith("_raw")
 
 
+JSON_LOG_EXTS = {".json", ".jsonl", ".ndjson"}
+
+
+def is_cloud_audit_log(path: Path) -> bool:
+    """Sniff the head of a JSON file for the keys a cloud audit log export carries.
+
+    GCP Cloud Audit Logs have ``protoPayload``, AWS CloudTrail ``eventSource`` and
+    ``eventName``, GitHub audit logs ``action`` and ``actor``.
+    """
+    try:
+        with path.open("rb") as f:
+            head = f.read(65536)
+    except OSError:
+        return False
+    return (
+        b'"protoPayload"' in head
+        or (b'"eventSource"' in head and b'"eventName"' in head)
+        or (b'"action"' in head and b'"actor"' in head)
+    )
+
+
 def has_nfdump_magic(path: Path) -> bool:
     """4-byte header check; empty, short, unreadable and symlinked files fail."""
     try:
@@ -353,6 +374,10 @@ class EvidenceClassifier:
         # Autoruns CSV files are classified before the general extension skip
         if ext == ".csv" and any(pat in name for pat in _AUTORUNS_CSV_PATTERNS):
             return ClassifiedEvidence(path=path, artifact_type="autoruns_csv")
+
+        # Likewise for JSON, which is otherwise skipped as project clutter.
+        if ext in JSON_LOG_EXTS and is_cloud_audit_log(path):
+            return ClassifiedEvidence(path=path, artifact_type="cloud_audit_log")
 
         if name in _SKIP_FILENAMES or ext in _SKIP_EXTENSIONS:
             return None
