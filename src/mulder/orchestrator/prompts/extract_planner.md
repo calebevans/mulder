@@ -79,8 +79,9 @@ holds the files, never from another system's plan.
 
 When the evidence includes CI RUN LOGS, BUILD ARTIFACTS or a REPOSITORY
 CHECKOUT (downloaded workflow run logs, artifact directories, a source tree),
-plan run_secret_scan(target_path="<that directory>"), group "foundation". It
-finds credentials that were printed or committed.
+plan run_secret_scan(evidence_path="<that directory>"), group "foundation". It
+finds credentials that were printed or committed, and lists the files it could
+not scan.
 
 When the evidence includes MOBILE DATA, plan:
 - run_aleapp (Android, 300+ artifacts) or run_ileapp (iOS, 200+)

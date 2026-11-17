@@ -1142,14 +1142,46 @@ Scan files for malware signatures using ClamAV.
 Find leaked credentials in CI run logs, build artifacts, repository checkouts or any other files, using gitleaks.
 
 Scans files as they are on disk (no git history) and looks inside archives up
-to two levels deep. Secrets are 80% redacted before they are indexed or
-returned: the leading characters that remain identify the key without
-disclosing it. Suppression planted in the evidence is not honoured: inline
-`gitleaks:allow` comments, a `.gitleaks.toml` and a `.gitleaksignore` in the
-scanned tree all have no effect.
+to two levels deep. Secrets are redacted before they are indexed or returned:
+at most the first 12 characters remain, enough to identify the key without
+disclosing it.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
+| evidence_path | str | yes | File or directory to scan |
+| force | bool | no | Re-run even if this path was already scanned |
+
+**Returns:** `total_findings`, `by_rule{}`, `files_with_findings`, `by_file{}` (50 files with the most findings), `source` (secrets.findings), `not_scanned{reason: count}`, `not_scanned_source` (secrets.not_scanned)
+
+Each finding is one line in `secrets.findings`: time, rule, file:line, redacted
+secret, description. The time is the timestamp on the line the secret sits on,
+which in a CI run log is when it was printed; `-` when the line has none or the
+file is inside an archive. Dated findings come first in time order. The index
+keeps one time per window of lines, so a finding is placed on the timeline at
+the time of the earliest finding in its window, not exactly at its own.
+
+**What a clean result does and does not mean.** Suppression planted in the
+scanned tree is not honoured: inline `gitleaks:allow` comments, a
+`.gitleaks.toml` and a `.gitleaksignore` all have no effect. But gitleaks
+leaves some content unscanned by its own rules, and file names and content are
+attacker-influenced:
+
+- files whose path matches its built-in allowlist (images, PDFs, lock files,
+  `node_modules/`, `vendor/`, `.git/` and similar);
+- files whose first bytes look like a binary format (PDF, ELF, zip, gzip);
+- archives it does not recognise by extension (`.jar`, `.whl`, `.nupkg`), and
+  text files named like an archive (`run.log.gz`);
+- archives nested more than two levels deep, and unreadable files.
+
+Every one of these that gitleaks reports is listed in `secrets.not_scanned`
+with the reason, and counted in `not_scanned`. A secret in a listed file is
+not ruled out. Two gaps are not reported: a secret that straddles gitleaks'
+125,000-byte read boundary in a file with no blank lines, and the
+`generic-api-key` rule's own line-level exceptions.
+
+**Roles:** `EXTRACT_EXECUTOR`
+
+-----------|------|----------|-------------|
 | target_path | str | yes | File or directory to scan |
 | force | bool | no | Re-run even if this path was already scanned |
 
