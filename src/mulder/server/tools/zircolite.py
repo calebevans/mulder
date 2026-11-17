@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
@@ -61,6 +62,9 @@ _ZIRCOLITE_MODULES = {
     "tqdm": "tqdm",
     "sigma": "pysigma",
     "sigma.backends.sqlite": "pysigma-backend-sqlite",
+    # Sysmon-for-Linux events are XML inside syslog lines. Without lxml
+    # Zircolite swallows the parse error for every event and scans nothing.
+    "lxml": "lxml",
 }
 
 # What Zircolite logs, while still exiting 0, when a ruleset compiled to nothing.
@@ -74,6 +78,47 @@ _FORMAT_FLAGS: dict[str, list[str]] = {
 }
 
 _LEVEL_ORDER = ["informational", "low", "medium", "high", "critical"]
+
+# Sigma tags under "attack." also name groups (g0032) and software (s0002).
+_ATTACK_TACTICS = frozenset(
+    {
+        "reconnaissance",
+        "resource-development",
+        "initial-access",
+        "execution",
+        "persistence",
+        "privilege-escalation",
+        "defense-evasion",
+        "credential-access",
+        "discovery",
+        "lateral-movement",
+        "collection",
+        "command-and-control",
+        "exfiltration",
+        "impact",
+    }
+)
+
+# Where a matched event keeps its time, by input format: auditd (set by
+# Zircolite), then Sysmon's two fields.
+_TIME_FIELDS = ("timestamp", "UtcTime", "SystemTime")
+
+
+def _event_time(match: dict[str, Any]) -> object:
+    """A matched event's time; epoch numbers become ISO 8601 UTC.
+
+    Logs such as GitHub's audit log carry epoch milliseconds, which the index
+    cannot place on a timeline.
+    """
+    value = next((match[k] for k in _TIME_FIELDS if match.get(k) not in (None, "")), "")
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return value
+    seconds = value / 1000 if value > 1e11 else value
+    try:
+        return datetime.fromtimestamp(seconds, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except (OverflowError, OSError, ValueError):
+        return value
+
 
 # How many detections the tool response carries back. The index is not bounded
 # by this: every detection is indexed, and the list is truncated only for the
@@ -172,7 +217,7 @@ def _run_zircolite_process(
     # mulder was not started from Zircolite's own checkout.
     cmd = [
         sys.executable,
-        script,
+        str(Path(script).resolve()),
         "--events",
         str(events_path.resolve()),
         "--ruleset",
@@ -285,26 +330,24 @@ def _parse_zircolite_output(
         level = str(entry.get("rule_level") or "informational")
         level_idx = _LEVEL_ORDER.index(level) if level in _LEVEL_ORDER else 0
         # Sigma tags: "attack.t1059.004" is a technique, "attack.execution" a tactic.
-        mitre_attack: list[str] = []
-        for tag in entry.get("tags") or []:
-            name = str(tag).removeprefix("attack.")
-            if name == str(tag):
-                continue
-            if name[:1] == "t" and name[1:2].isdigit():
-                name = name.upper()
-                techniques.add(name)
-            else:
-                tactics.add(name)
-            mitre_attack.append(name)
+        mitre_attack = [
+            name.upper() if name[:1] == "t" and name[1:2].isdigit() else name
+            for tag in entry.get("tags") or []
+            if (name := str(tag).removeprefix("attack.")) != str(tag)
+        ]
 
         matches = [m for m in entry.get("matches") or [] if isinstance(m, dict)]
         for match in matches or [{}]:
+            # Counted before the filter, so the caller can see what it hid.
             level_counts[level] = level_counts.get(level, 0) + 1
             if level_idx < min_idx:
                 continue
+            # Coverage describes the detections reported, not the ones filtered out.
+            techniques.update(n for n in mitre_attack if n[:1] == "T" and n[1:2].isdigit())
+            tactics.update(n for n in mitre_attack if n in _ATTACK_TACTICS)
             detections.append(
                 {
-                    "timestamp": match.get("timestamp", ""),
+                    "timestamp": _event_time(match),
                     "rule_title": entry.get("title", ""),
                     "rule_id": entry.get("id", ""),
                     "rule_level": level,
@@ -482,7 +525,9 @@ def run_zircolite(
                 suggestion="Point ruleset_path at Sigma YAML rules or a Zircolite JSON ruleset.",
             )
 
-        if proc.returncode != 0 and not results_path.exists():
+        # Zircolite writes a results file even when nothing matched, so a
+        # missing one means it never got as far as scanning, whatever it exited.
+        if not results_path.exists():
             # The tail: Zircolite opens with a banner and ends with the cause.
             detail = ((proc.stderr or "").strip() or (proc.stdout or "").strip())[
                 -_STDERR_PREVIEW_CHARS:
