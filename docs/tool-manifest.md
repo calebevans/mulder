@@ -2180,12 +2180,12 @@ Run multiple tool calls in parallel and return all results. `open_case` and `sca
 
 ### enrich_iocs
 
-Enrich IOCs against public threat intelligence APIs (VirusTotal, AbuseIPDB, OTX, ip-api). ip-api uses HTTPS with `IP_API_KEY`; without a key it is skipped unless `MULDER_IP_API_ALLOW_HTTP=1` allows the plaintext free endpoint.
+Enrich IOCs against public threat intelligence APIs (VirusTotal, AbuseIPDB, OTX, GreyNoise, urlscan.io, ip-api). Each source runs only when its key is set (`VIRUSTOTAL_API_KEY`, `ABUSEIPDB_API_KEY`, `OTX_API_KEY`, `GREYNOISE_API_KEY`, `URLSCAN_API_KEY`). GreyNoise says whether an IP is a known internet-wide scanner; urlscan is searched for existing scans of pages on that host and never asked to scan; it contributes a scan count for the window the plan can search (30 days on the free plan) and the latest scan time, and a score only on plans that return verdicts. GreyNoise's classification is a tag; only `malicious` scores. Domains are also checked offline against a built-in list of exfiltration-capable services (request catchers, tunnels, paste sites, file drops, messaging webhooks), reported as source `exfil-list` with tags and no score. Every indicator is reduced to a host, IP or hash before any lookup: defanging (`hxxps://evil[.]example`) is undone and a URL's scheme, credentials, port, path and query are dropped, so they are never sent to a third party. The indicator as given is still stored in the case index. ip-api uses HTTPS with `IP_API_KEY`; without a key it is skipped unless `MULDER_IP_API_ALLOW_HTTP=1` allows the plaintext free endpoint.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | case_id | str | yes | Active case identifier |
-| iocs | list[str] | yes | IOC strings (IPs, domains, hashes) |
+| iocs | list[str] | yes | IOC strings (IPs, domains, hashes, URLs) |
 | skip_sources | list[str] \| None | no | Source names to skip |
 
 **Returns:** list of enrichment dicts with `ioc`, `ioc_type`, `sources[]`, `aggregate_score`
