@@ -102,7 +102,7 @@ def test_the_planner_is_given_the_type_the_path_and_the_tool(tmp_path: Path) -> 
 
     assert 'Cloud audit logs (type "cloud_audit_log"):' in cloud
     assert f"  {root / 'acme-org-audit'}  (2 files)" in cloud
-    assert "run_cloud_audit_logs(evidence_path=<directory>)" in cloud
+    assert "run_cloud_audit_logs(evidence_path=<path>)" in cloud
     assert "Repository checkouts" not in cloud
 
     assert f"  {root / 'acme-app'}" in repo
@@ -259,3 +259,40 @@ def test_the_coverage_audit_flags_unrun_tools_including_in_unpacked_archives(
     assert gaps[str(unpacked / "acme-app")] == ["run_workflow_audit", "run_secret_scan"]
     assert gaps[str(unpacked / "run-12345")] == ["run_secret_scan"]
     assert gaps[str(unpacked / "acme-org-audit" / "more.json")] == ["run_cloud_audit_logs"]
+
+
+def test_dedup_never_merges_across_kinds_of_statement() -> None:
+    """A lead cites the same call as the finding it came from, and scored as
+    its duplicate: the lead was deleted, or a negative absorbed a finding."""
+    from mulder.server.tools.findings import _group_duplicates
+
+    trace = _finding("gcloud credentials for project acme-prod found on host", "medium")
+    lead = _finding(_COLLECT)
+    negative = _finding("[NEGATIVE] gcloud credentials for project acme-prod were used")
+    twin = _finding("gcloud credentials for project acme-prod found on host (copy)", "medium")
+
+    groups = _group_duplicates([trace, lead, negative, twin], threshold=0.4)
+
+    merged = sorted(sorted(f.title for f in g) for g in groups)
+    assert merged == sorted(
+        [
+            sorted([trace.title, twin.title]),  # same kind, same evidence: still merged
+            [lead.title],
+            [negative.title],
+        ]
+    )
+
+
+def test_an_audit_log_at_the_top_of_the_evidence_is_planned_by_itself(tmp_path: Path) -> None:
+    """Its directory is the evidence root; planning that would index every
+    JSON file in the case, once per system that owns a log."""
+    root = tmp_path / "evidence"
+    root.mkdir()
+    (root / "github-audit.json").write_text(json.dumps([_AUDIT_EVENT]))
+    (root / "gcp-audit.json").write_text(json.dumps([{"protoPayload": {}, "timestamp": "t"}]))
+
+    text = _context(root, "github-audit", ["cloud_audit_log"])
+
+    assert f"  {root / 'github-audit.json'}\n" in text
+    assert "gcp-audit" not in text
+    assert f"  {root}  (" not in text

@@ -35,10 +35,9 @@ OUTPUT REQUIREMENTS:
   NetFlow (nfdump "nfcapd.*" files, type "netflow_capture": the exporter
   directory is the system, platform "Network"; its "name" MUST be that
   directory's name exactly as it appears in the path, e.g. "edge-router", not a
-  description), cloud audit log (JSON exports of cloud or SaaS audit logs,
-  type "cloud_audit_log", platform "Cloud"), repository checkout (a source
-  tree with CI workflow definitions, type "repository", platform "CI"), CI run
-  logs (downloaded pipeline run logs, type "ci_run_logs", platform "CI"),
+  description), cloud audit log (type "cloud_audit_log", platform "Cloud"),
+  repository checkout (type "repository", platform "CI"), CI run logs (type
+  "ci_run_logs", platform "CI"), as scan_evidence labels them,
   event logs, phone dump (Android/iOS), compressed archive, log directory,
   database files, documents, executables, images/media files (potential
   steganography targets), or other.

@@ -38,8 +38,8 @@ logger = logging.getLogger(__name__)
 _CI_CLOUD_TYPES: dict[str, tuple[str, str]] = {
     "cloud_audit_log": (
         "Cloud audit logs",
-        'Plan one run_cloud_audit_logs(evidence_path=<directory>) task, group "foundation", '
-        "for each directory above.",
+        'Plan one run_cloud_audit_logs(evidence_path=<path>) task, group "foundation", '
+        "for each path above.",
     ),
     "repository": (
         "Repository checkouts",
@@ -342,8 +342,12 @@ class EvidenceContext:
                 if item.artifact_type not in found:
                     continue
                 # Loose audit log files are planned once, by their directory.
+                # One at the top of the evidence is planned by itself: its
+                # "directory" is the whole evidence root, which the tool would
+                # then search recursively, for every system that owns a file.
                 is_file = item.artifact_type == "cloud_audit_log"
-                target = str(item.path.parent if is_file else item.path)
+                grouped = is_file and item.path.parent.resolve() != root.resolve()
+                target = str(item.path.parent if grouped else item.path)
                 found[item.artifact_type][target] = found[item.artifact_type].get(target, 0) + 1
 
         catalog_ev = self._catalog_systems.get(sys_lower, {}).get("evidence", [])
@@ -364,7 +368,8 @@ class EvidenceContext:
                 continue
             lines.append(f'{label} (type "{artifact_type}"):')
             for path, count in sorted(mine.items()):
-                suffix = f"  ({count} files)" if artifact_type == "cloud_audit_log" else ""
+                is_dir = artifact_type == "cloud_audit_log" and Path(path).is_dir()
+                suffix = f"  ({count} files)" if is_dir else ""
                 lines.append(f"  {path}{suffix}")
             lines.append(f"  {plan}")
         return lines
