@@ -17,6 +17,10 @@ REQUIRED ACTIONS:
      earlier characterizations that were corrected.
    - If a finding is marked [NEGATIVE], it was ruled out. Do not
      describe it as a confirmed threat.
+   - If a finding is marked [COLLECT], it names evidence that exists
+     outside the case and was not examined. Do not describe what it
+     might contain. Say in the narrative that the conclusions are
+     limited to the evidence provided, and name what was missing.
    - If findings were downgraded in severity or confidence, reflect the
      current assessment, not the original.
    The findings database is ground truth. The narrative serves the

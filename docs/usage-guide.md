@@ -571,6 +571,33 @@ Events land in `cloudlog.github`, `cloudlog.gcp` and `cloudlog.aws`, one per lin
 
 GCP token exchanges, service account impersonation and Secret Manager reads appear only if Data Access audit logs were enabled for those APIs before the incident. Any other JSON log is indexed as `cloudlog.generic`; pass `ruleset_path` to scan it with your own Sigma rules.
 
+### Laying out cloud and CI evidence
+
+Give each kind of evidence its own directory under the evidence root. Mulder recognises three kinds, lists each for the planner with its path and the tool to run, and checks afterwards that the tool was run:
+
+| Evidence | How it is recognised | Tools planned |
+|----------|----------------------|---------------|
+| Cloud audit log exports | `.json`, `.jsonl` or `.ndjson` files that carry audit-log keys | `run_cloud_audit_logs` |
+| Repository checkout | a directory containing `.github/workflows` | `run_workflow_audit`, `run_secret_scan` |
+| CI run logs | a directory of GitHub Actions run logs as downloaded (`1_build.txt`, timestamped lines) | `run_secret_scan` |
+
+For example:
+
+```
+evidence/
+  ws-042.E01                 a host image, as before
+  acme-org-audit/            gh api ... > github-audit.json
+  acme-prod-gcp/             gcloud logging read ... > gcp-audit.json
+  acme-app/                  git clone of the repository
+  run-18234/                 unzipped "Download log archive" of a workflow run
+```
+
+Each directory becomes its own "system" in the investigation, named after the directory, so name it for what it holds. A zip of any of these works too; it is unpacked first and recognised where it lands. Other CI systems' logs and artifacts are not recognised automatically: name them in the case briefing and the planner can still run `run_secret_scan` on them.
+
+### Evidence that was not provided
+
+When the evidence shows that more evidence exists elsewhere, for example a host image whose user ran a cloud CLI, and the corresponding logs are not in the case, the analyst records it as a `[COLLECT]` finding citing where it saw the trace. These are not counted as findings. The report lists them under **Evidence To Collect**, with the account or project and the time range worth exporting, so you can add the export and run again.
+
 ## CLI Reference
 
 ### `mulder investigate`

@@ -198,6 +198,32 @@ def _is_evidence_sidecar(path: Path) -> bool:
 
 JSON_LOG_EXTS = {".json", ".jsonl", ".ndjson"}
 
+# GitHub Actions run logs, as downloaded: "1_build.txt", "build/3_Run tests.txt",
+# every line opening with a timestamp to seven decimal places.
+_CI_LOG_NAME_RE = re.compile(r"^\d+_.+\.txt$")
+_CI_LOG_LINE_RE = re.compile(rb"^(?:\xef\xbb\xbf)?\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z ")
+
+
+def is_repository(path: Path) -> bool:
+    """A directory holding a source checkout with GitHub Actions workflows."""
+    return (path / ".github" / "workflows").is_dir()
+
+
+def is_ci_run_log_directory(path: Path) -> bool:
+    """A directory of downloaded GitHub Actions run logs."""
+    try:
+        candidates = [p for p in path.iterdir() if _CI_LOG_NAME_RE.match(p.name) and p.is_file()]
+    except OSError:
+        return False
+    for candidate in sorted(candidates)[:3]:
+        try:
+            with candidate.open("rb") as f:
+                if _CI_LOG_LINE_RE.match(f.read(64)):
+                    return True
+        except OSError:
+            continue
+    return False
+
 
 def is_cloud_audit_log(path: Path) -> bool:
     """Sniff the head of a JSON file for the keys a cloud audit log export carries.
@@ -323,7 +349,7 @@ class EvidenceClassifier:
             all_items = []
 
         for item in all_items:
-            if _is_hidden(item):
+            if _is_hidden(item.relative_to(evidence_root)):
                 continue
             if self._is_excluded(item, evidence_root):
                 continue
@@ -359,6 +385,15 @@ class EvidenceClassifier:
         if item.is_dir():
             if self._is_ios_backup(item):
                 results.append(ClassifiedEvidence(path=item, artifact_type="ios_backup"))
+                return
+            # A source tree is evidence as a whole: its workflows are how a CI
+            # compromise happens, and they live in a hidden directory the walk
+            # never enters.
+            if is_repository(item):
+                results.append(ClassifiedEvidence(path=item, artifact_type="repository"))
+            if is_ci_run_log_directory(item) and item not in seen_log_dirs:
+                results.append(ClassifiedEvidence(path=item, artifact_type="ci_run_logs"))
+                seen_log_dirs.add(item)
                 return
             if self._is_log_directory(item) and item not in seen_log_dirs:
                 results.append(ClassifiedEvidence(path=item, artifact_type="log_directory"))
@@ -465,5 +500,9 @@ class EvidenceClassifier:
 
 
 def _is_hidden(path: Path) -> bool:
-    """True if any path component is a dot-prefixed segment other than the root ``.``."""
+    """True if any component of *path* is dot-prefixed.
+
+    *path* is relative to the evidence root: a dot-directory above the root
+    (``~/.cache/case/evidence``) says nothing about what is inside it.
+    """
     return any(part.startswith(".") for part in path.parts if part != ".")

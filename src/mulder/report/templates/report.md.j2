@@ -84,6 +84,18 @@ SHA-256 hashes recorded at ingestion. Verify with `sha256sum <file>`.
 No timestamped findings to build a timeline from.
 {% endif %}
 
+{% if collect_findings %}
+---
+
+## Evidence To Collect
+
+The evidence examined points to these sources outside the case. They were not available to this investigation, so nothing in them has been ruled in or out.
+
+{% for f in collect_findings %}
+- **{{ f.title | replace("[COLLECT] ", "") }}** : {{ f.description }}
+{% endfor %}
+{% endif %}
+
 {% if negative_findings %}
 ---
 

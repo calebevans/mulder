@@ -77,22 +77,17 @@ context>") once per exporter directory, group "foundation", and no other run_net
 tool (they are follow-ups for the analyst); plan it only for the system whose directory
 holds the files, never from another system's plan.
 
-When the evidence includes CLOUD AUDIT LOGS (JSON exports of GitHub audit
-logs, GCP Cloud Audit Logs or AWS CloudTrail, type "cloud_audit_log"), always
-plan run_cloud_audit_logs(evidence_path="<the file, or the directory holding the
-exports>"), group "foundation". It indexes every event and applies Sigma rules.
-
-When the evidence includes CI RUN LOGS, BUILD ARTIFACTS or a REPOSITORY
-CHECKOUT (downloaded workflow run logs, artifact directories, a source tree),
-plan run_secret_scan(evidence_path="<that directory>"), group "foundation". It
-finds credentials that were printed or committed, and lists the files it could
-not scan.
-
-When the evidence includes a REPOSITORY CHECKOUT or exported GitHub Actions
-workflow files (a .github/workflows directory), plan
-run_workflow_audit(evidence_path="<the checkout or workflow directory>"), group
-"foundation". It finds injectable and over-privileged workflows and lists the
-secrets each one refers to.
+When the evidence context lists CLOUD AUDIT LOGS, REPOSITORY CHECKOUTS or CI
+RUN LOGS, plan the tools named under each heading, with the paths spelled
+exactly as listed, group "foundation":
+- run_cloud_audit_logs indexes exported audit log events (type
+  "cloud_audit_log") and applies detection rules to them.
+- run_workflow_audit finds CI workflows an outsider could drive and lists the
+  secrets each refers to (type "repository").
+- run_secret_scan finds credentials printed in run logs or left in artifacts
+  and source trees (types "ci_run_logs" and "repository").
+If the briefing or a directory listing shows such evidence that the context
+did not list, plan the same tools on it.
 
 When the evidence includes MOBILE DATA, plan:
 - run_aleapp (Android, 300+ artifacts) or run_ileapp (iOS, 200+)

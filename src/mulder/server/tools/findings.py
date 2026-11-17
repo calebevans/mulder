@@ -87,6 +87,11 @@ def is_evidence_source(source: SourceRow) -> bool:
 # Findings the timestamp_coverage gate leaves alone: negative findings and
 # state-not-event severities. Keep in step with _evaluate_finalize_gates.
 _NEGATIVE_PREFIX = "[NEGATIVE]"
+# A lead, not a finding: evidence that exists outside the case (a cloud audit
+# log, CI run logs) and should be exported and added. Cites the tool call that
+# showed it exists. Kept out of the finding count, the timeline and the IOCs.
+_COLLECT_PREFIX = "[COLLECT]"
+_NON_EVENT_PREFIXES = (_NEGATIVE_PREFIX, _COLLECT_PREFIX)
 _TS_EXEMPT_SEVERITIES = ("info", "informational")
 
 
@@ -99,7 +104,7 @@ def _timestamp_gap(title: str, severity: str, event_time_start: str | None) -> s
     first and timestamping via ``update_finding`` is how existing runs work,
     and a hard reject would push a weaker model to fabricate a timestamp.
     """
-    if event_time_start or title.startswith(_NEGATIVE_PREFIX):
+    if event_time_start or title.startswith(_NON_EVENT_PREFIXES):
         return None
     if severity in _TS_EXEMPT_SEVERITIES:
         return None
@@ -127,7 +132,7 @@ def _evaluate_finalize_gates(
     (which reports all gates).
     """
     gates: list[dict[str, object]] = []
-    non_negative = [f for f in findings if not f.title.startswith(_NEGATIVE_PREFIX)]
+    non_negative = [f for f in findings if not f.title.startswith(_NON_EVENT_PREFIXES)]
 
     # Gate 1: Minimum non-negative finding count
     count = len(non_negative)

@@ -5,8 +5,8 @@ REQUIRED ACTIONS:
 1. Call scan_evidence with the evidence_path argument set to the exact
    evidence directory path provided in your prompt.
 2. After scan_evidence returns, examine its output for the list of files
-   and their paths. The output includes the full filesystem path for each
-   file discovered.
+   and their paths. The evidence tree gives each item's path relative to
+   the evidence directory, with its type in brackets.
 3. If compressed archives are found (.7z, .zip, .tar.gz, .rar, etc.),
    extract them using extract_archive. Pass the EXACT full path from the
    scan_evidence output as the archive_path argument.
@@ -35,11 +35,19 @@ OUTPUT REQUIREMENTS:
   NetFlow (nfdump "nfcapd.*" files, type "netflow_capture": the exporter
   directory is the system, platform "Network"; its "name" MUST be that
   directory's name exactly as it appears in the path, e.g. "edge-router", not a
-  description), cloud audit log (JSON exports of GitHub, GCP or AWS audit
-  logs, type "cloud_audit_log": the organization, project or account is the
-  system, platform "Cloud"), event logs, phone dump (Android/iOS), compressed
-  archive, log directory, database files, documents, executables, images/media
-  files (potential steganography targets), or other.
+  description), cloud audit log (JSON exports of cloud or SaaS audit logs,
+  type "cloud_audit_log", platform "Cloud"), repository checkout (a source
+  tree with CI workflow definitions, type "repository", platform "CI"), CI run
+  logs (downloaded pipeline run logs, type "ci_run_logs", platform "CI"),
+  event logs, phone dump (Android/iOS), compressed archive, log directory,
+  database files, documents, executables, images/media files (potential
+  steganography targets), or other.
+- Cloud audit logs, repository checkouts and CI run logs are not hosts. Give
+  each its own system, and as with NetFlow its "name" MUST be the name of the
+  directory that holds it exactly as it appears in the path (for a file at the
+  top of the evidence directory, the file name without its extension), so
+  later phases can find it. Say which organization, project, account or
+  repository it covers in "description".
 
 FINAL OUTPUT (MANDATORY):
 Your FINAL message MUST be ONLY valid JSON. No text before or after it.
@@ -55,7 +63,7 @@ Rules for the JSON output:
   directory name). NOT a sentence or description.
 - "evidence" is an array of evidence type strings for that system.
 - "type" is the OS or platform (Windows, Linux, macOS, Android, iOS,
-  Network, Unknown).
+  Network, Cloud, CI, Unknown).
 - "archives_extracted" indicates whether all compressed archives were
   successfully extracted.
 - "total_sources" is the total number of distinct evidence files found.

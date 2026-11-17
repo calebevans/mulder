@@ -21,13 +21,14 @@ from mulder.patterns import (
     IP_RE,
     UNIX_PATH_RE,
     WIN_PATH_RE,
+    case_extract_dir,
     classify_ip,
     source_is_cited,
 )
-from mulder.server.app import get_ctx, mcp
+from mulder.server.app import get_cfg, get_ctx, mcp
 from mulder.server.helpers import hash_output, make_tool_call_id
 from mulder.server.tool_access import ANALYSTS, Role, tool_access
-from mulder.server.tools.findings import _evaluate_finalize_gates
+from mulder.server.tools.findings import _NON_EVENT_PREFIXES, _evaluate_finalize_gates
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,13 @@ _EVIDENCE_TOOL_MAP: dict[str, list[str]] = {
     "cloud_audit_log": [
         "run_cloud_audit_logs",
     ],
+    "repository": [
+        "run_workflow_audit",
+        "run_secret_scan",
+    ],
+    "ci_run_logs": [
+        "run_secret_scan",
+    ],
     "evtx": [
         "run_evtx_parser",
         "run_hayabusa",
@@ -79,12 +87,19 @@ _EVIDENCE_TOOL_MAP: dict[str, list[str]] = {
     ],
 }
 
+# Types audited inside the case's extracted-archives directory as well as in
+# the evidence root. Disk and memory images found there are handled by their
+# own planner listings and stay out, as before.
+_UNPACKED_EVIDENCE_TYPES = frozenset({"cloud_audit_log", "repository", "ci_run_logs"})
+
 # Parameters that name the evidence a mapped tool reads. Output locations
 # such as extract_to and auxiliary inputs such as ssl_keylog_path are left
 # out, so a call is credited only to the evidence it was run on.
 _EVIDENCE_INPUT_PARAMS: dict[str, tuple[str, ...]] = {
     "run_netflow_analysis": ("evidence_path",),
     "run_cloud_audit_logs": ("evidence_path",),
+    "run_secret_scan": ("evidence_path",),
+    "run_workflow_audit": ("evidence_path",),
     "run_volatility": ("memory_path",),
     "run_volatility_batch": ("memory_path",),
     "run_fls": ("image_path",),
@@ -277,6 +292,18 @@ def audit_tool_coverage() -> dict[str, object]:
 
     classifier = EvidenceClassifier(ClassifierConfig())
     classified = classifier.classify(evidence_root)
+    # Evidence delivered inside an archive is audited where it was unpacked.
+    # Only the types that arrive that way and are run on the unpacked copy.
+    try:
+        extracted = case_extract_dir(get_cfg().db_dir, ctx.case_id)
+    except RuntimeError:  # no server config: nothing was extracted through it
+        extracted = None
+    if extracted is not None and extracted.is_dir():
+        classified += [
+            ev
+            for ev in classifier.classify(extracted)
+            if ev.artifact_type in _UNPACKED_EVIDENCE_TYPES
+        ]
 
     evidence = [
         form
@@ -548,7 +575,7 @@ def get_investigation_summary() -> dict[str, object]:
     blockers: list[str] = [f"{g['name']}: {g['detail']}" for g in gate_results if not g["passed"]]
 
     remaining_work: list[str] = []
-    non_negative = [f for f in findings if not f.title.startswith("[NEGATIVE]")]
+    non_negative = [f for f in findings if not f.title.startswith(_NON_EVENT_PREFIXES)]
     if any(not f.event_time_start for f in non_negative):
         remaining_work.append("Add timestamps to non-negative findings missing event_time_start")
     if not (case_metadata.narrative and case_metadata.narrative.strip()):
