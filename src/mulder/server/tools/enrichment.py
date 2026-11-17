@@ -29,7 +29,13 @@ logger = logging.getLogger(__name__)
 IOCType = Literal["ipv4", "domain", "md5", "sha1", "sha256", "unknown"]
 
 _IPV4_RE = re.compile(r"^(?:\d{1,3}\.){3}\d{1,3}$")
-_DOMAIN_RE = re.compile(r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.[A-Za-z]{2,})+$")
+# Any label may hold digits and inner hyphens ("abc123.ngrok-free.app",
+# "x.m.pipedream.net"); only the TLD must be alphabetic or punycode.
+_DOMAIN_RE = re.compile(
+    r"^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
+    r"(?:[A-Za-z]{2,63}|xn--[A-Za-z0-9-]{1,59})$"
+)
+_DEFANG = (("hxxp", "http"), ("[.]", "."), ("(.)", "."), ("[:]", ":"), ("[://]", "://"))
 _MD5_RE = re.compile(r"^[a-fA-F0-9]{32}$")
 _SHA1_RE = re.compile(r"^[a-fA-F0-9]{40}$")
 _SHA256_RE = re.compile(r"^[a-fA-F0-9]{64}$")
@@ -57,6 +63,8 @@ _EXFIL_SERVICES: dict[str, str] = {
             "requestcatcher.com",
             "beeceptor.com",
             "hookbin.com",
+            "requestbin.net",
+            "requestrepo.com",
         ),
         "request-catcher",
     ),
@@ -72,6 +80,8 @@ _EXFIL_SERVICES: dict[str, str] = {
             "oastify.com",
             "burpcollaborator.net",
             "dnslog.cn",
+            "dnslog.ink",
+            "ceye.io",
             "canarytokens.com",
         ),
         "oob-interaction",
@@ -81,15 +91,27 @@ _EXFIL_SERVICES: dict[str, str] = {
             "ngrok.io",
             "ngrok.app",
             "ngrok-free.app",
+            "ngrok.dev",
+            "ngrok-free.dev",
             "trycloudflare.com",
+            "devtunnels.ms",
             "serveo.net",
             "localhost.run",
+            "lhr.life",
             "loca.lt",
         ),
         "tunnel",
     ),
     **dict.fromkeys(
-        ("pastebin.com", "paste.ee", "rentry.co", "hastebin.com", "dpaste.com"),
+        (
+            "pastebin.com",
+            "pastebin.pl",
+            "paste.ee",
+            "rentry.co",
+            "rentry.org",
+            "hastebin.com",
+            "dpaste.com",
+        ),
         "paste-site",
     ),
     **dict.fromkeys(
@@ -97,7 +119,14 @@ _EXFIL_SERVICES: dict[str, str] = {
             "transfer.sh",
             "file.io",
             "0x0.st",
+            "x0.at",
             "gofile.io",
+            "anonfiles.com",
+            "pixeldrain.com",
+            "sendspace.com",
+            "ufile.io",
+            "mediafire.com",
+            "mega.nz",
             "temp.sh",
             "bashupload.com",
             "catbox.moe",
@@ -106,7 +135,8 @@ _EXFIL_SERVICES: dict[str, str] = {
     ),
     **dict.fromkeys(
         ("discord.com", "discordapp.com", "api.telegram.org", "hooks.slack.com"),
-        "messaging-webhook",
+        # Webhooks, and for Discord also attachment hosting on its CDN.
+        "messaging-platform",
     ),
 }
 
@@ -139,6 +169,23 @@ logging.getLogger("httpx").addFilter(_RedactUrlKeyFilter())
 
 _REQUEST_TIMEOUT = 10.0
 _MAX_REQUESTS_PER_SECOND = 4
+
+
+def _lookup_value(ioc: str) -> str:
+    """Reduce an indicator to what is looked up: a bare host, IP or hash.
+
+    Undoes common defanging (``hxxps://evil[.]example``), drops any scheme,
+    credentials, port, path and query, lower-cases, and strips the root dot.
+    Input that cannot be parsed is returned as given and classifies as unknown.
+    """
+    value = ioc.strip()
+    for defanged, plain in _DEFANG:
+        value = value.replace(defanged, plain)
+    try:
+        host = urlsplit("//" + value.split("://", 1)[-1]).hostname
+    except ValueError:
+        return ioc
+    return host.rstrip(".") if host else ioc
 
 
 def classify_ioc(value: str) -> IOCType:
@@ -325,7 +372,7 @@ def _query_exfil_list(ioc: str, ioc_type: IOCType) -> EnrichmentResult | None:
     """
     if ioc_type != "domain":
         return None
-    host = ioc.lower().rstrip(".")
+    host = ioc.lower()
     for domain, category in _EXFIL_SERVICES.items():
         if host == domain or host.endswith("." + domain):
             return EnrichmentResult(
@@ -376,6 +423,8 @@ async def _query_greynoise(
         data = resp.json()
         classification = data.get("classification")
         tags = [name for name in ("noise", "riot") if data.get(name) is True]
+        if isinstance(classification, str) and classification:
+            tags.append(classification)
         if isinstance(data.get("name"), str) and data["name"] not in ("", "unknown"):
             tags.append(data["name"][:_MAX_IP_API_FIELD_LEN])
         return EnrichmentResult(
@@ -383,7 +432,9 @@ async def _query_greynoise(
             ioc=ioc,
             ioc_type=ioc_type,
             found=True,
-            reputation_score={"malicious": 100, "benign": 0}.get(classification),
+            # "benign" means a known scanner or service, not a clean bill for
+            # this case, so it is a tag and does not pull the aggregate down.
+            reputation_score=100 if classification == "malicious" else None,
             malicious=classification == "malicious",
             tags=tags or None,
             last_seen=data.get("last_seen") if isinstance(data.get("last_seen"), str) else None,
@@ -402,10 +453,12 @@ async def _query_urlscan(
 
     Search only. Nothing is submitted for scanning: a submission would fetch
     the indicator from urlscan's network and publish the result.
-    ``first_seen`` is the oldest of the 100 most recent scans, and the free
-    plan searches a limited window, so it is a lower bound on age.
+    Free plans search only a recent window, so the scan count is tagged with
+    that window and no first-seen date is claimed.
     """
-    queries: dict[str, str] = {"domain": f"domain:{ioc}", "ipv4": f'ip:"{ioc}"'}
+    # page.*: scans OF this indicator. Plain domain:/ip: also match every page
+    # that merely loaded something from it.
+    queries: dict[str, str] = {"domain": f"page.domain:{ioc}", "ipv4": f'page.ip:"{ioc}"'}
     query = queries.get(ioc_type)
     if not query:
         return EnrichmentResult(
@@ -440,6 +493,8 @@ async def _query_urlscan(
         # Results come newest first, so the first is the latest scan.
         times = [t for r in results if isinstance(t := (r.get("task") or {}).get("time"), str)]
         total = data.get("total")
+        window = data.get("search_date_limit_days")
+        scope = f" in the last {window} days" if isinstance(window, int) else ""
         return EnrichmentResult(
             source="urlscan",
             ioc=ioc,
@@ -447,9 +502,8 @@ async def _query_urlscan(
             found=bool(results),
             reputation_score=round(flagged / len(judged) * 100) if judged else None,
             malicious=flagged > 0,
-            tags=[f"{total} scans"] if results and isinstance(total, int) else None,
+            tags=[f"{total} scans{scope}"] if results and isinstance(total, int) else None,
             last_seen=times[0] if times else None,
-            first_seen=times[-1] if times else None,
             raw={"total": total, "sampled": len(results), "malicious": flagged},
         )
     except Exception as exc:
@@ -731,22 +785,23 @@ async def _enrich_single_ioc(
     Returns:
         Dict with per-source results and aggregate score.
     """
+    # Everything is looked up by host. A URL's path can carry a token or
+    # stolen data and must not be sent to a third party, and the cache is
+    # keyed the same way so ten URLs on one host cost one lookup.
+    original = ioc
+    ioc = _lookup_value(ioc)
+    ioc_type = classify_ioc(ioc)
+
     cached = _session_cache.get(ioc)
     if cached is not None:
         return {
-            "ioc": ioc,
-            "ioc_type": cached[0].ioc_type if cached else "unknown",
+            "ioc": original,
+            "ioc_type": ioc_type,
             "sources": [_result_to_dict(r) for r in cached],
             "aggregate_score": _aggregate_score(cached),
             "cached": True,
         }
 
-    # A URL is looked up by its host: the path can carry a token or stolen
-    # data and must not be sent to a third party.
-    original = ioc
-    if "://" in ioc:
-        ioc = urlsplit(ioc.strip()).hostname or ioc
-    ioc_type = classify_ioc(ioc)
     results: list[EnrichmentResult] = []
 
     if "exfil-list" not in skip_sources and (listed := _query_exfil_list(ioc, ioc_type)):
@@ -770,7 +825,7 @@ async def _enrich_single_ioc(
     if "virustotal" not in skip_sources and "virustotal" in api_keys:
         results.append(await _query_virustotal(client, ioc, ioc_type, api_keys["virustotal"]))
 
-    _session_cache.put(original, results)
+    _session_cache.put(ioc, results)
 
     return {
         "ioc": original,
@@ -838,7 +893,7 @@ async def enrich_iocs(
                 enrichment_results.append(
                     {
                         "ioc": ioc,
-                        "ioc_type": classify_ioc(ioc),
+                        "ioc_type": classify_ioc(_lookup_value(ioc)),
                         "sources": [],
                         "aggregate_score": 0,
                         "error": "circuit breaker: skipped after 3 consecutive failures",
@@ -851,11 +906,13 @@ async def enrich_iocs(
                 enrichment_results.append(result)
             except (httpx.ConnectError, httpx.TimeoutException) as exc:
                 consecutive_failures += 1
-                logger.warning("Enrichment connection failed for IOC %s: %s", ioc, exc)
+                logger.warning(
+                    "Enrichment connection failed for IOC %s: %s", _lookup_value(ioc), exc
+                )
                 enrichment_results.append(
                     {
                         "ioc": ioc,
-                        "ioc_type": classify_ioc(ioc),
+                        "ioc_type": classify_ioc(_lookup_value(ioc)),
                         "sources": [],
                         "aggregate_score": 0,
                         "error": str(exc),
@@ -863,11 +920,11 @@ async def enrich_iocs(
                 )
             except Exception as exc:
                 consecutive_failures = 0
-                logger.warning("Enrichment failed for IOC %s: %s", ioc, exc)
+                logger.warning("Enrichment failed for IOC %s: %s", _lookup_value(ioc), exc)
                 enrichment_results.append(
                     {
                         "ioc": ioc,
-                        "ioc_type": classify_ioc(ioc),
+                        "ioc_type": classify_ioc(_lookup_value(ioc)),
                         "sources": [],
                         "aggregate_score": 0,
                         "error": str(exc),
