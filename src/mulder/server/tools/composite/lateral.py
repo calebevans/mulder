@@ -301,6 +301,10 @@ def _correlate_by_timestamp(
 def find_lateral_movement_indicators() -> dict[str, object]:
     """Detect lateral movement by correlating logon events, network connections, and RDP artifacts.
 
+    Windows evidence only: it reads Windows artifacts, so on Linux, macOS,
+    mobile, network-only or cloud evidence it returns nothing, and that
+    empty result is not a negative finding.
+
     Searches Windows Security event log (raw and structured EZ EVTX) for
     network logons (Event ID 4624 Type 3/10), failed logons (4625), and
     explicit credential use (4648).  Cross-references with Volatility

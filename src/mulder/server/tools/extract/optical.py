@@ -125,7 +125,7 @@ def extract_optical_file(image_path: str, file_path: str) -> dict[str, object]:
     Args:
         image_path: Path to the disc image (E01, dd, iso, bin).
         file_path: Path on the disc exactly as run_optical_listing shows it
-            (e.g. ``/design/winter_storm.amr``).
+            (e.g. ``/photos/img_0042.jpg``).
     """
     tc_id = make_tool_call_id()
     t0 = time.monotonic()

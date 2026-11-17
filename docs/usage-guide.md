@@ -512,7 +512,7 @@ You can provide investigation context by placing a `MULDER.md` file in the root 
 The contents of `MULDER.md` are prepended as an "INVESTIGATOR BRIEFING" to the planner and analyst prompts in every phase. This means:
 
 - The extraction planner uses it to prioritize which tools to run
-- The analyst uses it to focus analysis on relevant questions
+- The analysts in each phase use it to answer your questions and take its facts (time zone, known accounts, scope) as given
 - The cross-system correlator uses it to understand relationships
 - The report writer uses it to frame conclusions around your questions
 

@@ -313,8 +313,7 @@ def _scan_evidence_inner(ev_path: Path, case_id: str, replace: bool) -> dict[str
     archive_count = type_counts.get("compressed_archive", 0)
     message = (
         f"Case '{case_id}' created. Found {len(manifest)} evidence item(s). "
-        "Evidence hashing complete for chain of custody. "
-        "Use Tier 2 extraction tools to start analyzing immediately."
+        "Evidence hashing complete for chain of custody."
     )
     if failed_files:
         message += f" WARNING: {len(failed_files)} file(s) failed to hash."

@@ -236,9 +236,9 @@ def start_extraction_batch(tasks: list[dict[str, Any]]) -> dict[str, Any]:
             for t in tasks_to_submit
         ],
         "hint": (
-            "Extractions are running in the background. "
-            "Continue with fast analysis (search, correlate, submit_finding, "
-            "composite tools) and poll with check_extraction_status(batch_id)."
+            "Extractions are running in the background. Follow your "
+            "instructions for waiting on this batch (wait or "
+            "check_extraction_status with this batch_id)."
         ),
     }
     if skipped:
