@@ -64,6 +64,9 @@ dependencies = [
 [project.optional-dependencies]
 pdf = ["weasyprint>=60.0"]
 stix = ["stix2>=3.0"]
+# `mulder collect gcp` signs a token request with the service account key.
+# GitHub collection needs nothing beyond httpx.
+cloud = ["pyjwt[crypto]>=2.8"]
 # Zircolite's runtime dependencies. Verified against
 # https://github.com/wagga40/Zircolite/blob/2.20.0/requirements.txt (the four
 # required entries) plus `evtx`, which Zircolite imports optionally and which

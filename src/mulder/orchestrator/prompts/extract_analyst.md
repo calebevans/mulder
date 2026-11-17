@@ -151,6 +151,10 @@ missing source with:
   question the missing evidence would answer.
 Do not speculate about what the missing evidence contains, and do not submit
 a [COLLECT] finding without a concrete trace in the evidence.
+When the missing source is a cloud or source-hosting audit log, you may first
+request a follow-up plan naming collect_cloud_audit_logs. It fetches the log
+only if the investigator enabled live collection for that account; if it
+reports that collection is not enabled, submit the [COLLECT] finding.
 
 TARGETED FOLLOW-UP TOOLS (NetFlow): after reading the indexed netflow.* sources,
 run_netflow_query, run_netflow_host_profile, run_netflow_pair_timeline,

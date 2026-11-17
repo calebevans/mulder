@@ -594,6 +594,38 @@ evidence/
 
 Each directory becomes its own "system" in the investigation, named after the directory, so name it for what it holds. A zip of any of these works too; it is unpacked first and recognised where it lands. Other CI systems' logs and artifacts are not recognised automatically: name them in the case briefing and the planner can still run `run_secret_scan` on them.
 
+### Collecting with read-only credentials
+
+Instead of exporting by hand, you can give mulder credentials that can only read audit logs and let it fetch them. Two things are yours to get right: create a dedicated identity for this, and grant it nothing but log reading.
+
+| Provider | Create | Set |
+|----------|--------|-----|
+| GitHub (Enterprise Cloud) | A classic personal access token with **only** the `read:audit_log` scope, from an organization owner | `MULDER_GITHUB_TOKEN`, and `MULDER_GITHUB_ORGS=org1,org2` |
+| Google Cloud | A service account with `roles/logging.viewer` on the project, plus `roles/logging.privateLogViewer` if you need Data Access logs (secret reads, token exchanges); download its key file | `MULDER_GCP_CREDENTIALS=/path/key.json`, and optionally `MULDER_GCP_PROJECTS=p1,p2` (default: the key's own project) |
+
+Then either collect before the investigation:
+
+```
+mulder collect github --out evidence/acme-org-audit --since 2026-11-01 --until 2026-11-12
+mulder collect gcp    --out evidence/acme-prod-gcp  --days 30
+mulder investigate evidence case-1
+```
+
+or let the investigation collect what it needs, by also setting `MULDER_AGENT_COLLECTION=1`. The planner is then told which organizations and projects it may collect from, and the analyst can ask for a log it finds it needs.
+
+What mulder does to keep this safe:
+
+- **Only `MULDER_*` variables are read.** Your own `gh` or `gcloud` login, `GH_TOKEN` and `GOOGLE_APPLICATION_CREDENTIALS` are never used, since those can usually write.
+- **The targets are fixed by you.** An investigation chooses a time window. It cannot name an organization or project that is not in your configuration.
+- **Google tokens are requested for log reading only** (`logging.read`), so even an over-privileged service account yields a token that can do nothing else.
+- **A GitHub token that can do more than read is called out** in the result, and a fine-grained or app token, whose scopes cannot be checked, is flagged as unverified.
+- **Only audit-log read endpoints are called.** The GitHub token is sent to the GitHub API host and nowhere else.
+- **Nothing is written to the evidence directory** during an investigation. Collected logs go under the case's own directory. Each export has a manifest beside it with the query, the time, the event count and the SHA-256.
+
+It cannot check that a Google service account or a fine-grained GitHub token is read-only; that part is on you. AWS is not supported yet; export CloudTrail as above.
+
+GitHub keeps audit events for about six months and Git events for seven days, so collect early.
+
 ### Evidence that was not provided
 
 When the evidence shows that more evidence exists elsewhere, for example a host image whose user ran a cloud CLI, and the corresponding logs are not in the case, the analyst records it as a `[COLLECT]` finding citing where it saw the trace. These are not counted as findings. The report lists them under **Evidence To Collect**, with the account or project and the time range worth exporting, so you can add the export and run again.

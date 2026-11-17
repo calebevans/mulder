@@ -639,6 +639,31 @@ distinct field paths, the least-used deep ones are left out of the scan and
 
 **Roles:** `EXTRACT_EXECUTOR`
 
+### collect_cloud_audit_logs
+
+Fetch and index cloud audit logs for a time window, using read-only credentials the investigator configured.
+
+Disabled unless the investigator sets `MULDER_AGENT_COLLECTION=1` and
+configures a provider (see the [usage guide](usage-guide.md#collecting-with-read-only-credentials));
+otherwise it returns `not_enabled` and the missing log belongs in a `[COLLECT]`
+finding. The organizations and projects read are fixed by that configuration
+and cannot be chosen by the caller.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| provider | str | yes | `github` or `gcp` |
+| start | str \| None | no | Start of the window, ISO 8601 (default: `days` before `end`) |
+| end | str \| None | no | End of the window, ISO 8601 (default: now) |
+| days | int | no | Window length when `start` is not given (default 30) |
+
+**Returns:** `scopes{<org or project>: status, events, window, sha256, warnings[], path, indexed{}}`
+
+Exports are written under the case directory, never the evidence directory,
+each with a manifest. Events are indexed exactly as `run_cloud_audit_logs`
+does. A window already collected is not fetched again.
+
+**Roles:** `EXTRACT_EXECUTOR`
+
 ---
 
 ## 5. Extraction: Network

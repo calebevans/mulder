@@ -15,6 +15,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from mulder import collect as collector
 from mulder.extractors.classifier import (
     RAW_CONTAINER_EXTS,
     EvidenceClassifier,
@@ -286,6 +287,8 @@ class EvidenceContext:
             )
 
         lines.extend(ci_cloud)
+        # Not evidence paths, so they do not stand in for the fallback below.
+        collection = self._collection_lines()
 
         if (
             not disk_images
@@ -299,7 +302,24 @@ class EvidenceContext:
                 f"Call list_directory on {self.evidence_path} to discover files.)"
             )
 
+        lines.extend(collection)
         return "\n".join(lines)
+
+    @staticmethod
+    def _collection_lines() -> list[str]:
+        """Tell the planner which audit logs it may fetch, when it may at all."""
+        configured = collector.targets()
+        if not collector.agent_collection_enabled() or not configured:
+            return []
+        lines = ["Live collection is enabled for the audit logs of:"]
+        lines += [f"  {provider}: {', '.join(scopes)}" for provider, scopes in configured.items()]
+        lines.append(
+            "  If this system or the briefing involves one of these and no export of its "
+            "audit log is listed above, plan collect_cloud_audit_logs(provider=<provider>, "
+            'start=<ISO time>, end=<ISO time>) covering the incident window, group "foundation". '
+            "Otherwise do not plan it."
+        )
+        return lines
 
     def _ci_cloud_lines(self, sys_lower: str) -> list[str]:
         """Planner lines for cloud audit logs, repository checkouts and CI run logs.
