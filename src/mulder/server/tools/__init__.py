@@ -26,6 +26,7 @@ from mulder.server.tools import (  # noqa: F401  # noqa: F401
     review,
     secretscan,
     tsk,
+    workflowaudit,
     yara,
     zircolite,
 )

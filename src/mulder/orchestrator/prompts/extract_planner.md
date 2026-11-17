@@ -88,6 +88,12 @@ plan run_secret_scan(evidence_path="<that directory>"), group "foundation". It
 finds credentials that were printed or committed, and lists the files it could
 not scan.
 
+When the evidence includes a REPOSITORY CHECKOUT or exported GitHub Actions
+workflow files (a .github/workflows directory), plan
+run_workflow_audit(evidence_path="<the checkout or workflow directory>"), group
+"foundation". It finds injectable and over-privileged workflows and lists the
+secrets each one refers to.
+
 When the evidence includes MOBILE DATA, plan:
 - run_aleapp (Android, 300+ artifacts) or run_ileapp (iOS, 200+)
 - run_mvt_android/ios (spyware detection)

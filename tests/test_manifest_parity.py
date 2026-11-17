@@ -26,6 +26,7 @@ _ARGS = {
     "floss": "FLOSS_VERSION",
     "gitleaks": "GITLEAKS_VERSION",
     "sigma-rules": "SIGMA_VERSION",
+    "zizmor": "ZIZMOR_VERSION",
 }
 
 

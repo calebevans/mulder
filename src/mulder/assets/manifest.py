@@ -111,6 +111,7 @@ CAPA_VERSION = "9.4.0"
 FLOSS_VERSION = "3.1.0"
 GITLEAKS_VERSION = "8.30.1"
 ZIRCOLITE_VERSION = "2.20.0"
+ZIZMOR_VERSION = "1.32.0"
 SIGMA_VERSION = "r2024-09-02"
 
 _ASSETS: tuple[Asset, ...] = (
@@ -233,6 +234,28 @@ _ASSETS: tuple[Asset, ...] = (
         requires=("sigma-rules",),
         validate="git",
         note="Linux Sigma detection (auditd / Sysmon-for-Linux)",
+    ),
+    Asset(
+        key="zizmor",
+        version=ZIZMOR_VERSION,
+        kind="archive",
+        urls={
+            "amd64": (
+                f"{_GH}/zizmorcore/zizmor/releases/download/v{ZIZMOR_VERSION}"
+                "/zizmor-x86_64-unknown-linux-gnu.tar.gz"
+            ),
+            "arm64": (
+                f"{_GH}/zizmorcore/zizmor/releases/download/v{ZIZMOR_VERSION}"
+                "/zizmor-aarch64-unknown-linux-gnu.tar.gz"
+            ),
+        },
+        dest=("zizmor",),
+        sentinel=("zizmor",),
+        pinnable=True,
+        size_estimate=28 * _MB,
+        chmod_x=("zizmor",),
+        shims=("zizmor",),
+        note="GitHub Actions workflow static analysis",
     ),
     Asset(
         key="capa",
