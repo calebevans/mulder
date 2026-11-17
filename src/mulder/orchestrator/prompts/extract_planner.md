@@ -79,9 +79,9 @@ holds the files, never from another system's plan.
 
 When the evidence includes a REPOSITORY CHECKOUT or exported GitHub Actions
 workflow files (a .github/workflows directory), plan
-run_workflow_audit(repo_path="<the checkout or workflow directory>"), group
+run_workflow_audit(evidence_path="<the checkout or workflow directory>"), group
 "foundation". It finds injectable and over-privileged workflows and lists the
-secrets each one can reach.
+secrets each one refers to.
 
 When the evidence includes MOBILE DATA, plan:
 - run_aleapp (Android, 300+ artifacts) or run_ileapp (iOS, 200+)

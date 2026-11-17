@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -15,7 +17,6 @@ from mulder.server.helpers import (
     error_response,
     make_tool_call_id,
     require_binary,
-    run_subprocess,
     sources_already_indexed,
     tool_response,
 )
@@ -25,33 +26,77 @@ __all__ = ["run_workflow_audit"]
 
 logger = logging.getLogger(__name__)
 
-_TIMEOUT = 600
+# One workflow is audited per zizmor run, so one that cannot be parsed, or
+# that is built to be slow (zizmor is quadratic in comment lines), costs only
+# itself. The budget bounds the whole call.
+_FILE_TIMEOUT = 60
+_TOTAL_BUDGET = 900
 _FINDINGS_SOURCE = "workflow.findings"
 _SECRETS_SOURCE = "workflow.secrets"
+_NOT_AUDITED_SOURCE = "workflow.not_audited"
 _SNIPPET_CHARS = 300
 _MAX_WORKFLOW_BYTES = 1024 * 1024
 _MAX_RESPONSE_WORKFLOWS = 50
 
 _SEVERITY_ORDER = {"High": 0, "Medium": 1, "Low": 2, "Informational": 3}
 _YAML_EXTS = {".yml", ".yaml"}
-_SECRET_REF_RE = re.compile(r"\bsecrets\.([A-Za-z_][A-Za-z0-9_]*)")
+_ACTION_NAMES = {"action.yml", "action.yaml"}
+# The secrets context, not a property that happens to be called "secrets"
+# (steps.vault.outputs.secrets). Context names are case-insensitive.
+_SECRETS = r"(?<![\w.])secrets"
+_SECRET_REF_RE = re.compile(
+    _SECRETS + r"""(?:\.([A-Za-z_][A-Za-z0-9_]*)|\[\s*['"]([^'"]+)['"]\s*\])""", re.IGNORECASE
+)
 _SECRETS_INHERIT_RE = re.compile(r"^\s*secrets:\s*inherit\s*(#.*)?$", re.MULTILINE)
+# toJSON(secrets) hands a step every secret; secrets[<expression>] can name any.
+_ALL_SECRETS_RE = re.compile(
+    r"tojson\(\s*secrets\s*\)|" + _SECRETS + r"""\[\s*[^'"\s]""", re.IGNORECASE
+)
 
 
-def _workflow_files(root: Path) -> tuple[list[Path], bool]:
-    """Return (workflow files, whether *root* is laid out as a repository).
+def _workflow_files(root: Path) -> tuple[list[Path], dict[str, str]]:
+    """Return (files to audit, files left out and why).
 
-    A repository keeps them in ``.github/workflows``; several checkouts under
-    one directory are all found. A directory with no such folder is taken to
-    be the workflows folder itself, exported on its own.
+    mulder chooses the inputs itself rather than letting zizmor discover
+    them: zizmor stops at the first ``.git`` it meets and honours
+    ``.gitignore``, either of which lets a tree hide its own workflows.
+
+    In a checkout, or a directory of checkouts at any depth, the inputs are
+    every workflow in a ``.github/workflows`` folder and every composite
+    action (``action.yml``) under ``.github`` or beside it. A directory with
+    no such folder is taken to be a folder of exported workflow files, and
+    its own YAML files are audited (not its subdirectories': a tree of
+    unrelated YAML is not a set of workflows).
+
+    Only regular files are audited. A symlink could point outside the
+    evidence, and a FIFO would block the read.
     """
-    if root.is_file():
-        return [root], False
-    yaml_files = sorted(p for p in root.rglob("*") if p.suffix.lower() in _YAML_EXTS)
-    in_repo = [
-        p for p in yaml_files if p.parent.name == "workflows" and p.parent.parent.name == ".github"
-    ]
-    return (in_repo, True) if in_repo else ([p for p in yaml_files if p.is_file()], False)
+    if not root.is_dir():
+        return ([root], {}) if root.is_file() and not root.is_symlink() else ([], {})
+    candidates: list[Path] = []
+    for path in sorted(root.rglob("*")):
+        if path.suffix.lower() not in _YAML_EXTS:
+            continue
+        parent = path.parent
+        in_workflows = parent.name == "workflows" and parent.parent.name == ".github"
+        is_action = path.name.lower() in _ACTION_NAMES and (
+            ".github" in parent.parts or (parent / ".github").is_dir()
+        )
+        if in_workflows or is_action:
+            candidates.append(path)
+    if not any(c.parent.name == "workflows" for c in candidates):
+        candidates = sorted(p for p in root.iterdir() if p.suffix.lower() in _YAML_EXTS)
+
+    files: list[Path] = []
+    left_out: dict[str, str] = {}
+    for path in candidates:
+        if path.is_symlink():
+            left_out[str(path)] = "symlink, not followed"
+        elif path.is_file():
+            files.append(path)
+        else:
+            left_out[str(path)] = "not a regular file"
+    return files, left_out
 
 
 def _secrets_used(workflow: Path) -> list[str]:
@@ -63,14 +108,60 @@ def _secrets_used(workflow: Path) -> list[str]:
     """
     try:
         if workflow.stat().st_size > _MAX_WORKFLOW_BYTES:
-            return []
-        text = workflow.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return []
-    names = set(_SECRET_REF_RE.findall(text))
+            return ["(not read: file larger than 1 MiB)"]
+        text = workflow.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError as exc:
+        return [f"(not read: {exc.strerror or exc})"]
+    names = {dotted or quoted for dotted, quoted in _SECRET_REF_RE.findall(text)}
     if _SECRETS_INHERIT_RE.search(text):
         names.add("(all, via secrets: inherit)")
+    if _ALL_SECRETS_RE.search(text):
+        names.add("(all, via toJSON(secrets) or a computed name)")
     return sorted(names)
+
+
+def _run_zizmor(zizmor: str, workflow: Path, timeout: float) -> tuple[list[dict[str, Any]], str]:
+    """Audit one file. Returns (findings, "" or why it could not be audited)."""
+    # Offline, and deaf to the evidence and to the server's own environment:
+    # a zizmor.yml, an inline ignore comment or ZIZMOR_* variable would
+    # otherwise hide findings or change what is audited.
+    env = {k: v for k, v in os.environ.items() if not k.upper().startswith("ZIZMOR_")}
+    try:
+        proc = subprocess.run(
+            [
+                zizmor,
+                "--offline",
+                "--no-config",
+                "--no-ignores",
+                "--collect=all",
+                "--format=json",
+                "--no-exit-codes",
+                "--no-progress",
+                "--color=never",
+                "--",
+                str(workflow.resolve()),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return [], f"zizmor did not finish within {int(timeout)}s"
+    except OSError as exc:
+        return [], f"zizmor could not be run: {exc}"
+    try:
+        findings = json.loads(proc.stdout)
+    except ValueError:
+        findings = None
+    if proc.returncode != 0 or not isinstance(findings, list):
+        # zizmor's last WARN/error line says why: not valid YAML, not a
+        # workflow, not UTF-8, more than one document (a byte-order mark).
+        reasons = [ln for ln in (proc.stderr or "").splitlines() if "WARN" in ln or "rror" in ln]
+        detail = _flat(reasons[0] if reasons else (proc.stderr or "no output").strip(), 200)
+        return [], f"zizmor exited {proc.returncode}: {detail}"
+    return [f for f in findings if isinstance(f, dict)], ""
 
 
 def _flat(value: object, limit: int = _SNIPPET_CHARS) -> str:
@@ -108,7 +199,7 @@ def _finding_line(finding: dict[str, Any]) -> tuple[int, str]:
 
 @mcp.tool()
 @tool_access(Role.EXTRACT_EXECUTOR)
-def run_workflow_audit(repo_path: str, force: bool = False) -> dict[str, object]:
+def run_workflow_audit(evidence_path: str, force: bool = False) -> dict[str, object]:
     """Audit GitHub Actions workflows for exploitable weaknesses using zizmor.
 
     Call when the evidence holds a repository checkout or exported workflow
@@ -118,21 +209,23 @@ def run_workflow_audit(repo_path: str, force: bool = False) -> dict[str, object]
     permissions and credential persistence, and lists the secrets each
     workflow refers to.
 
-    Returns finding counts by severity and audit, and the secrets map. Findings
-    are indexed in workflow.findings and the secrets map in workflow.secrets.
+    Returns finding counts by severity and audit, the secrets map, and the
+    files that could not be audited and why. Findings are indexed in
+    workflow.findings, the secrets map in workflow.secrets and unaudited files
+    in workflow.not_audited: a weakness in one of those is NOT ruled out.
 
     Args:
-        repo_path: A repository checkout (or a directory of several), a
+        evidence_path: A repository checkout (or a directory of several), a
             directory of workflow YAML files, or one workflow file.
         force: Re-run even if this path was already audited.
     """
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
     name = "run_workflow_audit"
-    params: dict[str, object] = {"repo_path": repo_path, "force": force}
+    params: dict[str, object] = {"evidence_path": evidence_path, "force": force}
 
     if not force:
-        existing = sources_already_indexed(["workflow."], evidence_path=repo_path)
+        existing = sources_already_indexed(["workflow."], evidence_path=evidence_path)
         if existing:
             skipped: dict[str, object] = {
                 "status": "skipped",
@@ -151,53 +244,49 @@ def run_workflow_audit(repo_path: str, force: bool = False) -> dict[str, object]
             error_type="binary_missing",
             suggestion="Run 'mulder setup' (installs zizmor).",
         )
-    root = Path(repo_path)
+    root = Path(evidence_path)
     if not root.exists():
         return error_response(
-            tc_id, name, params, f"Path not found: {repo_path}", error_type="file_not_found"
+            tc_id, name, params, f"Path not found: {evidence_path}", error_type="file_not_found"
         )
-    workflows, is_repo = _workflow_files(root)
+    workflows, not_audited = _workflow_files(root)
     if not workflows:
-        return error_response(
-            tc_id, name, params, f"No workflow YAML found under {repo_path}", error_type="no_data"
-        )
-
-    # Offline, and deaf to the evidence: a zizmor.yml, inline ignore comments
-    # or a .gitignore in the audited tree would otherwise hide findings.
-    result = run_subprocess(
-        [
-            zizmor,
-            "--offline",
-            "--no-config",
-            "--no-ignores",
-            "--collect=all",
-            "--format=json",
-            "--no-exit-codes",
-            "--no-progress",
-            "--color=never",
-            *([str(root)] if is_repo else [str(w) for w in workflows]),
-        ],
-        timeout=_TIMEOUT,
-    )
-    elapsed = (time.monotonic() - t0) * 1000
-    if isinstance(result, str):
-        return error_response(tc_id, name, params, result, elapsed, error_type="timeout")
-    try:
-        findings = json.loads(result.stdout)
-    except ValueError:
-        findings = None
-    if result.returncode != 0 or not isinstance(findings, list):
-        detail = (result.stderr or "").strip()[-500:]
         return error_response(
             tc_id,
             name,
             params,
-            f"zizmor exited {result.returncode} without usable output: {detail}",
+            f"No workflow YAML found under {evidence_path}",
+            error_type="no_data",
+        )
+
+    # ponytail: one process per file; batch them if a tree of thousands of
+    # workflows makes the start-up cost matter.
+    findings: list[dict[str, Any]] = []
+    audited = 0
+    for workflow in workflows:
+        remaining = _TOTAL_BUDGET - (time.monotonic() - t0)
+        if remaining <= 0:
+            not_audited[str(workflow)] = f"time budget of {_TOTAL_BUDGET}s spent on earlier files"
+            continue
+        found, problem = _run_zizmor(zizmor, workflow, min(_FILE_TIMEOUT, remaining))
+        if problem:
+            not_audited[str(workflow)] = problem
+        else:
+            audited += 1
+            findings.extend(found)
+
+    elapsed = (time.monotonic() - t0) * 1000
+    if not audited:
+        why = "; ".join(sorted(set(not_audited.values())))[:500]
+        return error_response(
+            tc_id,
+            name,
+            params,
+            f"zizmor could not audit any of {len(workflows)} files: {why}",
             elapsed,
             error_type="tool_failed",
         )
 
-    findings = [f for f in findings if isinstance(f, dict)]
     by_severity: dict[str, int] = {}
     by_audit: dict[str, int] = {}
     for finding in findings:
@@ -208,24 +297,34 @@ def run_workflow_audit(repo_path: str, force: bool = False) -> dict[str, object]
     suppressed = sum(1 for f in findings if f.get("ignored"))
 
     lines = [line for _rank, line in sorted(_finding_line(f) for f in findings)]
-    header = f"zizmor workflow audit of {repo_path}: {len(findings)} findings"
-    extract_and_index("\n".join([header, *lines]), _FINDINGS_SOURCE, repo_path, "zizmor")
+    header = f"zizmor workflow audit of {evidence_path}: {len(findings)} findings"
+    extract_and_index("\n".join([header, *lines]), _FINDINGS_SOURCE, evidence_path, "zizmor")
 
-    secrets = {str(w): _secrets_used(w) for w in workflows}
+    secrets = {_flat(w, 1000): _secrets_used(w) for w in workflows}
     secret_lines = [f"{w}\t{', '.join(names) or '(none)'}" for w, names in secrets.items()]
-    header = f"Secrets referenced by each workflow under {repo_path}"
-    extract_and_index("\n".join([header, *secret_lines]), _SECRETS_SOURCE, repo_path, "zizmor")
+    header = f"Secrets referenced by each workflow under {evidence_path}"
+    extract_and_index("\n".join([header, *secret_lines]), _SECRETS_SOURCE, evidence_path, "zizmor")
+
+    if not_audited:
+        header = f"Not audited under {evidence_path}: {len(not_audited)} files"
+        gaps = [f"{_flat(why)}\t{_flat(path, 1000)}" for path, why in sorted(not_audited.items())]
+        extract_and_index("\n".join([header, *gaps]), _NOT_AUDITED_SOURCE, evidence_path, "zizmor")
 
     with_secrets = {w: names for w, names in secrets.items() if names}
+    shown = dict(list(not_audited.items())[:_MAX_RESPONSE_WORKFLOWS])
     summary: dict[str, object] = {
-        "repo_path": repo_path,
-        "workflows_audited": len(workflows),
+        "evidence_path": evidence_path,
+        "workflows_audited": audited,
         "total_findings": len(findings),
         "by_severity": by_severity,
         "by_audit": dict(sorted(by_audit.items())),
         "suppressed_in_source": suppressed,
         "secrets_by_workflow": dict(list(with_secrets.items())[:_MAX_RESPONSE_WORKFLOWS]),
-        "sources": [_FINDINGS_SOURCE, _SECRETS_SOURCE],
+        # A weakness in any of these is not ruled out.
+        "not_audited_count": len(not_audited),
+        "not_audited": {_flat(path, 1000): why for path, why in shown.items()},
+        "sources": [_FINDINGS_SOURCE, _SECRETS_SOURCE]
+        + ([_NOT_AUDITED_SOURCE] if not_audited else []),
     }
-    # Returned in full: it is bounded, and the counts are what the caller acts on.
+    # Returned in full: the lists are capped, and the counts are what the caller acts on.
     return tool_response(tc_id, name, params, summary, None, (time.monotonic() - t0) * 1000)

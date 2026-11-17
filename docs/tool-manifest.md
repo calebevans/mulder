@@ -1143,13 +1143,39 @@ Audit GitHub Actions workflows for exploitable weaknesses using zizmor, and list
 
 Runs offline. Finds template injection of attacker-controlled input,
 dangerous triggers (`pull_request_target`, `workflow_run`), unpinned actions,
-excessive permissions and credential persistence. Suppression in the audited
-tree is not honoured: a `zizmor.yml`, a `.gitignore` hiding `.github/`, and
-inline `zizmor: ignore[...]` comments have no effect, and a finding that an
-ignore comment tried to hide is marked `suppressed-in-source`.
+excessive permissions and credential persistence.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
+| evidence_path | str | yes | A repository checkout (or a directory of several), a directory of workflow YAML files, or one workflow file |
+| force | bool | no | Re-run even if this path was already audited |
+
+**Returns:** `workflows_audited`, `total_findings`, `by_severity{}`, `by_audit{}`, `suppressed_in_source`, `secrets_by_workflow{}`, `not_audited_count`, `not_audited{}`, `sources[]`
+
+mulder picks the files itself and audits each in its own zizmor run: every
+workflow in a `.github/workflows` folder at any depth, and every composite
+action under or beside a `.github` folder. A directory with no such folder is
+treated as a folder of exported workflows and its own YAML files are audited.
+Nothing in the audited tree can narrow that: a `.git` or `.gitignore`, a
+`zizmor.yml`, and inline `zizmor: ignore[...]` comments have no effect, and a
+finding an ignore comment tried to hide is marked `suppressed-in-source`.
+
+A file that could not be audited (not valid YAML, not UTF-8, a byte-order
+mark, a symlink, slower than 60 seconds) is listed in `workflow.not_audited`
+with the reason; a weakness in it is not ruled out. If no file could be
+audited the call is an error.
+
+Findings are indexed in `workflow.findings`, highest severity first: severity,
+confidence, audit, file:line, annotation, description, suppression marker, the
+offending YAML. `workflow.secrets` holds one line per file with the secrets
+its text refers to (`secrets.NAME`, `secrets['NAME']`, `secrets: inherit`,
+and `toJSON(secrets)` or a computed name, which reach all of them). It is per
+file, not per job, counts a reference inside a comment, and does not follow a
+secret passed through an environment variable or a reusable workflow.
+
+**Roles:** `EXTRACT_EXECUTOR`
+
+-----------|------|----------|-------------|
 | repo_path | str | yes | A repository checkout (or a directory of several), a directory of workflow YAML files, or one workflow file |
 | force | bool | no | Re-run even if this path was already audited |
 
