@@ -25,6 +25,7 @@ _ARGS = {
     "capa": "CAPA_VERSION",
     "floss": "FLOSS_VERSION",
     "sigma-rules": "SIGMA_VERSION",
+    "zizmor": "ZIZMOR_VERSION",
 }
 
 

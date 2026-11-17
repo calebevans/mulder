@@ -1137,6 +1137,31 @@ Scan files for malware signatures using ClamAV.
 
 **Roles:** `EXTRACT_EXECUTOR`
 
+### run_workflow_audit
+
+Audit GitHub Actions workflows for exploitable weaknesses using zizmor, and list the secrets each workflow refers to.
+
+Runs offline. Finds template injection of attacker-controlled input,
+dangerous triggers (`pull_request_target`, `workflow_run`), unpinned actions,
+excessive permissions and credential persistence. Suppression in the audited
+tree is not honoured: a `zizmor.yml`, a `.gitignore` hiding `.github/`, and
+inline `zizmor: ignore[...]` comments have no effect, and a finding that an
+ignore comment tried to hide is marked `suppressed-in-source`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| repo_path | str | yes | A repository checkout (or a directory of several), a directory of workflow YAML files, or one workflow file |
+| force | bool | no | Re-run even if this path was already audited |
+
+**Returns:** `workflows_audited`, `total_findings`, `by_severity{}`, `by_audit{}`, `suppressed_in_source`, `secrets_by_workflow{}`, `sources[]`
+
+Findings are indexed in `workflow.findings`, highest severity first: severity,
+confidence, audit, file:line, annotation, description, suppression marker, the
+offending YAML. `workflow.secrets` holds one line per workflow with the
+`secrets.NAME` references found in its text; it is per file, not per job.
+
+**Roles:** `EXTRACT_EXECUTOR`
+
 ---
 
 ## 10. Query Tools

@@ -77,6 +77,12 @@ context>") once per exporter directory, group "foundation", and no other run_net
 tool (they are follow-ups for the analyst); plan it only for the system whose directory
 holds the files, never from another system's plan.
 
+When the evidence includes a REPOSITORY CHECKOUT or exported GitHub Actions
+workflow files (a .github/workflows directory), plan
+run_workflow_audit(repo_path="<the checkout or workflow directory>"), group
+"foundation". It finds injectable and over-privileged workflows and lists the
+secrets each one can reach.
+
 When the evidence includes MOBILE DATA, plan:
 - run_aleapp (Android, 300+ artifacts) or run_ileapp (iOS, 200+)
 - run_mvt_android/ios (spyware detection)

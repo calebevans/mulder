@@ -293,6 +293,26 @@ RUN mkdir -p /opt/floss \
         && rm /tmp/floss.zip; \
     fi
 
+# zizmor: download pre-built binary (multi-arch; needs GLIBC 2.34, jammy has 2.35)
+FROM ubuntu:22.04 AS zizmor-fetch
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG TARGETARCH
+ARG ZIZMOR_VERSION=1.32.0
+RUN case "${TARGETARCH}" in \
+        arm64) ZIZMOR_ARCH="aarch64" ;; \
+        *)     ZIZMOR_ARCH="x86_64" ;; \
+    esac \
+    && mkdir -p /opt/zizmor \
+    && curl -fsSL "https://github.com/zizmorcore/zizmor/releases/download/v${ZIZMOR_VERSION}/zizmor-${ZIZMOR_ARCH}-unknown-linux-gnu.tar.gz" \
+        | tar xz -C /opt/zizmor \
+    && chmod +x /opt/zizmor/zizmor
+
 # Chainsaw: download pre-built binary (multi-arch), Sigma rules, and mappings
 FROM ubuntu:22.04 AS chainsaw-fetch
 
@@ -505,6 +525,8 @@ COPY --from=hayabusa-fetch /opt/hayabusa /opt/hayabusa
 COPY --from=capa-fetch /opt/capa/ /opt/capa/
 RUN ln -sf /opt/capa/capa /usr/local/bin/capa
 COPY --from=floss-fetch /opt/floss/ /opt/floss/
+COPY --from=zizmor-fetch /opt/zizmor/ /opt/zizmor/
+RUN ln -sf /opt/zizmor/zizmor /usr/local/bin/zizmor
 COPY --from=chainsaw-fetch /opt/chainsaw/ /opt/chainsaw/
 RUN ln -sf /opt/chainsaw/chainsaw /usr/local/bin/chainsaw
 COPY --from=chainsaw-fetch /opt/sigma-rules/ /opt/sigma-rules/
