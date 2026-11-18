@@ -146,6 +146,7 @@ Mulder integrates 35+ open-source forensic tools exposed as 140+ typed MCP opera
 | Mobile | ALEAPP, iLEAPP, MVT |
 | Ransomware | Encryption timeline from the USN journal and MFT, offline family hints (Splunk lookups, ThreatLabz ransom notes), remote access tools (LOLRMM catalog) and their logs, Hayabusa logon summary |
 | Cloud and CI | Sigma rules over cloud audit logs (GCP, GitHub, AWS, Microsoft 365), sign-in, persistence and mailbox-access summaries for Microsoft 365 and Entra ID exports, gitleaks (secrets in repositories and CI logs), zizmor (GitHub Actions workflows), read-only audit log collection from GitHub and GCP |
+| Loose logs | Web server (Apache, nginx, IIS), VPN and firewall (FortiGate, SonicWall, Cisco ASA), Zeek, Suricata, ESXi and syslog files as countable log tables; SigmaHQ web server rules, web shell candidates, ESXi ransomware highlights |
 | Other | bulk_extractor, binwalk, ExifTool, ssdeep, hashdeep, steghide, Hindsight |
 
 \* Detect-It-Easy is supported but not bundled: its `.deb` pulls in ten `libqt5*` packages for a CLI that draws nothing. `run_detect_it_easy` uses it if `diec` is on `$PATH`, and reports it as missing otherwise. Packing is still flagged without it — `triage_binary` checks section entropy, RWX permissions, known packer section names and import-table shape.

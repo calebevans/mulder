@@ -38,6 +38,7 @@ Try-it-out instructions for running Mulder, the forensic investigation platform.
   - [Artifact Awareness](#artifact-awareness)
   - [Ransomware Cases](#ransomware-cases)
   - [Cloud Audit Logs](#cloud-audit-logs)
+  - [Loose Logs](#loose-logs)
   - [Counting Over Logs](#counting-over-logs)
   - [Triage Collections](#triage-collections)
   - [CLI Reference](#cli-reference)
@@ -766,6 +767,31 @@ GitHub keeps audit events for about six months and Git events for seven days, so
 
 When the evidence shows that more evidence exists elsewhere, for example a host image whose user ran a cloud CLI, and the corresponding logs are not in the case, the analyst records it as a `[COLLECT]` finding citing where it saw the trace. These are not counted as findings. The report lists them under **Evidence To Collect**, with the account or project and the time range worth exporting, so you can add the export and run again.
 
+## Loose Logs
+
+The logs that say how an intruder got in rarely come inside a disk image: a VPN or firewall export, a web server's access logs, the output of a Zeek or Suricata sensor, the support bundle of a hypervisor. Put them in the evidence directory and `run_loose_logs` reads them. It recognises each file's format from its content, indexes every line as text, and loads what it can parse into [log tables](#counting-over-logs).
+
+| What you have | Put it | It becomes |
+|---------------|--------|------------|
+| Web server access logs: Apache or nginx (common or combined format), IIS (`u_ex*.log`) | in a directory of their own, e.g. `web01-iis/` | `logs.web`, with Sigma matches in `logs.web.detections` and web shell candidates in `logs.web.webshell` |
+| VPN and firewall logs: FortiGate or SonicWall key=value syslog, Cisco ASA syslog | a file or directory, e.g. `fortigate/` | `logs.firewall`: who logged in, from which address, when, over which kind of tunnel |
+| Zeek logs (tab-separated or JSON) and Suricata `eve.json` | the sensor's log directory | `logs.zeek.*` and `logs.suricata.*` |
+| An ESXi `vm-support` bundle | the unpacked bundle directory, or the `.tgz` (it is unpacked first) | `logs.esxi`, with the lines that matter in a ransomware case in `logs.esxi.highlights` |
+| A Linux host's `/var/log`, or any directory named `log` or `logs` | as it is, e.g. `web01/var/log/` | `logs.syslog`, and whichever of the above its files turn out to be |
+| Any other text | | `logs.text`: searchable, nothing parsed |
+
+A directory named `log` or `logs`, a directory under `var/log`, and an ESXi bundle are each read as a whole. Loose `.log` and `.txt` files elsewhere (and rotated ones such as `access.log.1`) are read through the highest directory that holds no other evidence mulder recognises, so a tree with a log in every folder is one run; a log that sits beside, say, a disk image is read by itself. From such a directory only those files are read: a web root or source files beside the logs are left alone and counted as not read. Each directory becomes part of the system named after it, as for cloud evidence; a firewall export or a sensor is a system of its own. Gzip files in a log directory are read as they are; any other archive there (`.zip`, `.7z`, a tarball, a log rotated with `xz` or `zstd`) is unpacked first, like an archive anywhere else. A `Logs` folder that holds only Windows event logs (`.evtx`) is not read by this tool.
+
+What to know before relying on the result:
+
+- **Leads, not verdicts.** A Sigma match in `logs.web.detections` is a request that looked like an attack; its status code and what the same address did next say whether it worked. `logs.web.webshell` lists scripts that took a successful POST and that at most three addresses ever requested: a web shell looks like that, and so does an admin page. A shell that was only ever fetched with GET is not listed. `logs.esxi.highlights` matches known ESXi messages (SSH or the shell enabled, logins, shell commands, machines powered off, the execInstalledOnly setting, VIB installs): it says what a line is about, not that it was hostile.
+- **Times.** Offsets in the log are applied. A time without one (syslog, ASA, older FortiGate) is read as UTC, and the tool's result names the tables that applies to: if the device kept local time, those times are off by its offset. Syslog lines carry no year; it is taken from the file's modification time, so keep that when you copy logs (`cp -p`, `tar`, `zip`).
+- **Coverage.** A table holds the files you provided and nothing else. ESXi and firewalls keep little history, and the period that matters may already be gone. `list_log_tables` shows each table's first and last time. When the logs that would answer a question are missing, the analyst records them as a `[COLLECT]` finding rather than reporting that nothing happened.
+- **Not parsed.** Palo Alto CSV, Citrix NetScaler and Ivanti Connect Secure logs, FortiGate CEF or CSV exports, Windows firewall logs, the binary systemd journal and application logs in JSON are not recognised. Text among them is indexed as `logs.text` and can be searched. Ivanti's binary `.vc0` logs are read by Plaso instead: `run_plaso(parsers="ivanti_vc0")`. In a file that mixes formats, such as a syslog server's catch-all file, the lines of the minority format count as not parsed.
+- **Limits.** 1 GiB of text per file and 4 GiB and 5,000 files per run; what is cut off is reported, as is a directory the tool was not allowed to list. Split a larger set into directories. Symbolic links are not followed.
+
+The formats, the fields of each table and every limit are in the [Tool Manifest](tool-manifest.md#run_loose_logs).
+
 ## Counting Over Logs
 
 Search answers "is this string in the log". It does not answer "which source IPs signed in as this user, and how often" or "how many events per hour": the index keeps a log as windows of text, a few events per window, and counting by paging through hits is where a model with a small context window gives up or miscounts.
@@ -779,7 +805,7 @@ Logs that mulder parses into events are therefore also loaded as rows into a **l
 | `log_histogram` | events per minute, hour or day, optionally split by one field |
 | `log_rows` | the matching events themselves, a page at a time, in time order |
 
-Today `run_cloud_audit_logs` fills `cloudlog.github`, `cloudlog.gcp`, `cloudlog.aws`, `cloudlog.m365`, `cloudlog.entra_signin` and `cloudlog.entra_audit` (and so does `collect_cloud_audit_logs`, which indexes through it). For example, on a CloudTrail export:
+Today `run_cloud_audit_logs` fills `cloudlog.github`, `cloudlog.gcp`, `cloudlog.aws`, `cloudlog.m365`, `cloudlog.entra_signin` and `cloudlog.entra_audit` (and so does `collect_cloud_audit_logs`, which indexes through it), and `run_loose_logs` fills `logs.web`, `logs.firewall`, `logs.zeek.*`, `logs.suricata.*`, `logs.esxi` and `logs.syslog` (see [Loose Logs](#loose-logs)). For example, on a CloudTrail export:
 
 ```
 log_top(table="cloudlog.aws", fields=["src_ip"],

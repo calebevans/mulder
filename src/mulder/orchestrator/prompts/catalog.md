@@ -59,6 +59,14 @@ OUTPUT REQUIREMENTS:
 - A mailbox file in a host's directory belongs to that host. One exported from
   a mail service follows the rule above (platform "Cloud"), together with any
   audit logs in the same directory.
+- Loose logs (types "log_file" and "log_directory": web server, VPN,
+  firewall, Zeek, Suricata and syslog files) and ESXi support bundles (type
+  "esxi_bundle", platform "ESXi") belong to the system whose directory holds
+  them: list the type, as scan_evidence labels it, in that system's
+  "evidence". When they are all there is of a device (a firewall or VPN
+  export, a sensor's logs, a hypervisor bundle), give that device its own
+  system, named after the directory that holds them in the same way
+  (platform "Network" for a firewall, VPN gateway or sensor).
 - A triage collection (type "triage_collection": KAPE target output, a
   Velociraptor offline collection, UAC output or a Windows volume directory,
   as scan_evidence and extract_archive label it) is the files copied from ONE
@@ -85,7 +93,7 @@ Rules for the JSON output:
   directory name). NOT a sentence or description.
 - "evidence" is an array of evidence type strings for that system.
 - "type" is the OS or platform (Windows, Linux, macOS, Android, iOS,
-  Network, Cloud, CI, Unknown).
+  Network, Cloud, CI, ESXi, Unknown).
 - "archives_extracted" indicates whether all compressed archives were
   successfully extracted.
 - "total_sources" is the total number of distinct evidence files found.
