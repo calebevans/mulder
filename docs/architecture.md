@@ -219,6 +219,28 @@ The `progress` table has no role column and findings have no system column, so n
 
 **Failed resumes and the switch.** A resumed session that ends on an error before its first tool call is treated as a resume that failed: its text is not kept, and it is not recorded as the run's last query error, which the partial report quotes. The reason is logged and the fallback above applies; a silent ending is left as it was. A resumed session that had started working is an ordinary session, and an error in it is recorded like any other. Fatal errors still end the run. `--no-wrapup` (`MULDER_WRAPUP=0`) turns off the resume, the wrap-up, the seeded prompt, the turn-budget notice and the nudge together, which is the behaviour before any of this existed, so the two can be compared on one image.
 
+### Cut-Short Sessions
+
+When `RoleRunner.compaction_loop` ends with the session still unfinished (no continuation left, and the wrap-up, if one ran, is over), the session is recorded as cut short. That is the one place every continuable role session passes through: analysts, gate remediation, executors, and the single-mode catalog and report sessions. It holds under `--no-wrapup` and `--max-compactions 0` as well. A planner that produces no plan is not recorded here; it has no continuation, and its failure already re-plans or fails the phase.
+
+`RoleRunner._note_cut_short` writes `{phase, role, system, question, recorded_at}` through `ServerBridge.record_cut_short` to `CaseDB.record_cut_short`. `role` is empty for a single-mode phase, `system` is empty when the phase has none, and `question` is set only for a per-question analyst session. The system name comes from evidence file names and the question from a model, so both are flattened to one printable line and cut (200 and 500 characters) before they are stored. The rows are one JSON list under the `kv_store` key `cut_short_sessions`, last 100 kept; the orchestrator is the only writer. A failure to record is logged and does not end the run.
+
+The record is read in three places, all through `mulder/cut_short.py` so they name a session the same way:
+
+- `get_investigation_summary` adds one `remaining_work` item starting `Analysis cut short`: the most recent ten distinct sessions, each cut to 200 characters, and a count of the rest. It says what the record establishes (the session ended at a limit) and what it does not (that the system is clean, or that anything was ruled out). The narrative gate copies `remaining_work` into its gap list, which a remediation analyst is told to fix exactly; this item cannot be fixed, so `validate_narrative` skips it by its prefix.
+- `InvestigationDashboard.log_cut_short` logs the line and keeps it for the **Sessions Cut Short** table in the run summary.
+- `ReportRenderer.build_context` takes the rows as `cut_short`, and both templates render an **Analysis Cut Short** section. `finalize_report`, `mulder report` and the partial report all pass them.
+
+### Analyst Scope
+
+`--analyst-scope question` changes one step: the extraction analyst. `RoleRunner.run_analyst` then runs `_run_question_sessions` when the plan has at least two usable questions (strings, each flattened to one line of at most 500 characters, duplicates dropped); otherwise, and in every other phase, it runs the single session as before. `_run_split_phase` is unchanged and receives one `AnalystResult` either way.
+
+- **Question sessions.** One per question, in plan order, one after another. `_MAX_QUESTION_SESSIONS` (6) caps them: the last session takes every question that is left. Each gets the ordinary analyst prompt with only its own question, followed by `_QUESTION_MANDATE`: answer this, save findings as they are established, record one `track_progress` note under the pinned system label (the answer, what was examined, what could not be determined, and any tool that would settle it), then stop. It is told that an unanswered question is open, not ruled out, and not to emit a follow-up request. The turn limit is `_QUESTION_MAX_TURNS` (25).
+- **Consolidation session.** `_CONSOLIDATION_MAX_TURNS` (15) turns, the ordinary analyst prompt with all the questions, followed by `_CONSOLIDATION_MANDATE`: do not repeat the analysis; look across the saved findings for duplicates and contradictions (`update_finding`; `delete_finding` is not an extraction tool, and the narrative phase de-duplicates) and for open questions; end with the follow-up request if a tool that was not run would close one. It is given what the question sessions left, quoted and sanitised the way a handoff is: their progress notes, the findings saved since the first of them started, and any follow-up request one of them emitted anyway.
+- **Result.** Turns and `submit_finding` counts are summed, messages concatenated, and the follow-up request is the consolidation session's.
+
+Every one of these sessions goes through `_analyst_session`, with the same system prompt and tools as any extraction analyst, so resume, wrap-up, the new-session fallback and the cut-short record apply to each; a question session that is cut short is recorded with its question, and the remaining sessions still run.
+
 ### Fatal Errors
 
 Three errors bypass the retry system and end the run at once (`FATAL_ERRORS` in `orchestrator/errors.py`): `AuthenticationError`, `ModelNotAvailableError` and `OutOfCreditError`. Each is account-wide, so every later session would fail the same way. `SessionExecutor` raises them from the SDK's error channels only: the text of an exception raised by `query`, and assistant messages the CLI itself flagged with `error`. Model-written text can quote evidence and is never classified.
@@ -414,7 +436,7 @@ erDiagram
 - **evidence_registry**: SHA-256 chain-of-custody records for original evidence files
 - **bookmarks**: Agent-flagged windows of interest for later review
 - **progress**: Per-system records of tools executed and questions addressed
-- **kv_store**: General-purpose key-value persistence for cross-tool state sharing. Stores TSK partition offsets (`tsk_partition_offset:<image>`), EVTX extraction directory paths, and other data that must survive server restarts and context compaction
+- **kv_store**: General-purpose key-value persistence for cross-tool state sharing. Stores TSK partition offsets (`tsk_partition_offset:<image>`), EVTX extraction directory paths, and other data that must survive server restarts and context compaction. Also holds the role sessions that were cut short (`cut_short_sessions`, see [Cut-Short Sessions](#cut-short-sessions))
 
 ### Write Safety
 

@@ -369,6 +369,10 @@ _QueueItem = tuple[
     Callable[..., object], tuple[object, ...], dict[str, object], _QueueResult, threading.Event
 ]
 
+_CUT_SHORT_KEY = "cut_short_sessions"
+_CUT_SHORT_FIELDS = ("phase", "role", "system", "question", "recorded_at")
+_MAX_CUT_SHORT = 100
+
 
 class _WriteQueue:
     """Single-writer thread that serialises all DB write operations.
@@ -1469,6 +1473,50 @@ class CaseDB:
                 {"key": key},
             ).fetchone()
         return row[0] if row else None
+
+    def record_cut_short(self, phase: str, role: str, system: str, question: str) -> None:
+        """Record a role session that was still unfinished after every continuation.
+
+        Args:
+            phase: Phase the session belonged to.
+            role: Its role in a split phase; empty for a single-mode phase.
+            system: The system it worked on; empty when the phase has none.
+            question: The investigation question it was given, when it had
+                one of its own.
+        """
+        # ponytail: read-modify-write of one kv value, kept to the last
+        # _MAX_CUT_SHORT rows. The orchestrator is the only writer; give it
+        # a table if a second one ever appears.
+        rows = self.get_cut_short()
+        rows.append(
+            {
+                "phase": phase,
+                "role": role,
+                "system": system,
+                "question": question,
+                "recorded_at": datetime.now(UTC).isoformat(timespec="seconds"),
+            }
+        )
+        self.set_kv(_CUT_SHORT_KEY, json.dumps(rows[-_MAX_CUT_SHORT:]))
+
+    def get_cut_short(self) -> list[dict[str, str]]:
+        """Return the role sessions recorded as cut short, oldest first.
+
+        Empty for a case with none, and for a database with no ``kv_store``:
+        one from before it existed, opened without migrations the way
+        ``mulder report`` opens it.
+        """
+        try:
+            rows = json.loads(self.get_kv(_CUT_SHORT_KEY) or "[]")
+        except (OperationalError, ValueError):
+            return []
+        if not isinstance(rows, list):
+            return []
+        return [
+            {field: str(row.get(field, "")) for field in _CUT_SHORT_FIELDS}
+            for row in rows
+            if isinstance(row, dict)
+        ]
 
     def _get_case_id(self) -> str:
         """Read case_id from the case_metadata table (cached after first call)."""

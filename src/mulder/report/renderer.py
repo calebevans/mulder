@@ -8,7 +8,7 @@ import json
 import logging
 import re
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,6 +20,7 @@ import markdown
 from markdown.extensions import Extension
 from markdown.treeprocessors import Treeprocessor
 
+from mulder.cut_short import cut_short_label
 from mulder.models import AuditSummary, CaseMetadataRow, Finding, SourceRow
 from mulder.patterns import (
     EMAIL_RE,
@@ -1074,6 +1075,7 @@ class ReportRenderer:
         source_windows: dict[str, list[dict[str, Any]]] | None = None,
         enrichment_windows: list[dict[str, Any]] | None = None,
         incomplete: Sequence[str] = (),
+        cut_short: Sequence[Mapping[str, str]] = (),
     ) -> dict[str, Any]:
         """Assemble template variables from case metadata, findings, audit trail, and sources.
 
@@ -1091,6 +1093,8 @@ class ReportRenderer:
             incomplete: Plain-text lines saying where and why the
                 investigation stopped. When non-empty both templates open
                 with an INCOMPLETE banner listing them.
+            cut_short: Rows from ``CaseDB.get_cut_short``: role sessions that
+                ended unfinished. When non-empty both templates name them.
 
         Returns:
             Dict of template variables ready for Jinja2 rendering.
@@ -1241,6 +1245,10 @@ class ReportRenderer:
             "mitre_tactic_groups": active_tactic_groups,
             "source_windows": source_windows or {},
             "incomplete": list(incomplete),
+            "cut_short": [
+                {"label": cut_short_label(row), "recorded_at": row["recorded_at"]}
+                for row in cut_short
+            ],
             "model_token_breakdown": self._load_model_usage(
                 Path(audit_log_path).parent, case_metadata.case_id
             ),
@@ -1434,6 +1442,7 @@ class ReportRenderer:
         evidence_integrity: list[dict[str, object]] | None = None,
         enrichment_windows: list[dict[str, Any]] | None = None,
         incomplete: Sequence[str] = (),
+        cut_short: Sequence[Mapping[str, str]] = (),
     ) -> str:
         """Render the markdown report template (``report.md.j2``) to a string.
 
@@ -1451,6 +1460,7 @@ class ReportRenderer:
             enrichment_windows: Raw windows from the ``enrichment.iocs``
                 DB source for threat intel context.
             incomplete: Lines for the INCOMPLETE banner (see ``build_context``).
+            cut_short: Role sessions that ended unfinished (see ``build_context``).
 
         Returns:
             Rendered markdown report string.
@@ -1465,6 +1475,7 @@ class ReportRenderer:
             evidence_integrity=evidence_integrity,
             enrichment_windows=enrichment_windows,
             incomplete=incomplete,
+            cut_short=cut_short,
         )
         return self._render_markdown(ctx)
 
@@ -1480,6 +1491,7 @@ class ReportRenderer:
         source_windows: dict[str, list[dict[str, Any]]] | None = None,
         enrichment_windows: list[dict[str, Any]] | None = None,
         incomplete: Sequence[str] = (),
+        cut_short: Sequence[Mapping[str, str]] = (),
     ) -> str:
         """Render the HTML report with markdown descriptions converted to HTML.
 
@@ -1498,6 +1510,7 @@ class ReportRenderer:
             enrichment_windows: Raw windows from the ``enrichment.iocs``
                 DB source for threat intel context.
             incomplete: Lines for the INCOMPLETE banner (see ``build_context``).
+            cut_short: Role sessions that ended unfinished (see ``build_context``).
 
         Returns:
             Rendered HTML report string.
@@ -1513,6 +1526,7 @@ class ReportRenderer:
             source_windows=source_windows,
             enrichment_windows=enrichment_windows,
             incomplete=incomplete,
+            cut_short=cut_short,
         )
         return self._render_html(ctx)
 
@@ -1528,6 +1542,7 @@ class ReportRenderer:
         source_windows: dict[str, list[dict[str, Any]]] | None = None,
         generate_pdf: bool = True,
         enrichment_windows: list[dict[str, Any]] | None = None,
+        cut_short: Sequence[Mapping[str, str]] = (),
     ) -> tuple[str, str, bytes | None]:
         """Render markdown, HTML, and optionally PDF reports.
 
@@ -1548,6 +1563,7 @@ class ReportRenderer:
             generate_pdf: Attempt PDF generation if weasyprint is available.
             enrichment_windows: Raw windows from the ``enrichment.iocs``
                 DB source for threat intel context.
+            cut_short: Role sessions that ended unfinished (see ``build_context``).
 
         Returns:
             Tuple of (markdown_text, html_text, pdf_bytes_or_none).
@@ -1562,6 +1578,7 @@ class ReportRenderer:
             evidence_integrity=evidence_integrity,
             source_windows=source_windows,
             enrichment_windows=enrichment_windows,
+            cut_short=cut_short,
         )
         md_text = self._render_markdown(ctx)
         html_text = self._render_html(dict(ctx))

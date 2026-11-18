@@ -637,6 +637,20 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
     <p>{{ executive_summary | safe }}</p>
   </div>
 
+  {% if cut_short %}
+  <div class="card mb-1">
+    <div class="card-header">&#9888; Analysis Cut Short</div>
+    <div class="card-body" style="font-size:0.88rem;line-height:1.7;">
+      <p style="color:var(--text-muted);margin-bottom:0.75em;">These sessions ended at a turn or context limit and had no continuation left. What each one saved is in this report. What it had not reached was not examined, which is not the same as absent: conclusions about these parts of the investigation may be incomplete.</p>
+      <ul style="margin-left:1.25rem;">
+        {% for c in cut_short %}
+        <li>{{ c.label }} <span style="opacity:0.6;">(recorded {{ c.recorded_at }})</span></li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+  {% endif %}
+
   <div class="stats-grid stagger-in">
     <div class="stat"><div class="stat-value" data-count="{{ finding_count }}">0</div><div class="stat-label">Total Findings</div></div>
     <div class="stat critical"><div class="stat-value" data-count="{{ critical_count }}">0</div><div class="stat-label">Critical</div></div>

@@ -374,6 +374,16 @@ def report(case_id: str, db_dir: str) -> None:
     "cold (env: MULDER_WRAPUP=0).",
 )
 @click.option(
+    "--analyst-scope",
+    default="system",
+    envvar="MULDER_ANALYST_SCOPE",
+    type=click.Choice(["system", "question"]),
+    show_default=True,
+    help="What one extraction analyst session covers: every investigation "
+    "question for a system, or one question each, followed by a short "
+    "consolidation session (env: MULDER_ANALYST_SCOPE).",
+)
+@click.option(
     "--proxy-config",
     default=None,
     type=click.Path(exists=True),
@@ -398,6 +408,7 @@ def investigate(
     workers: int,
     max_compactions: int,
     wrapup: bool,
+    analyst_scope: str,
     proxy_config: str | None,
     no_thinking: bool,
     show_cli_stderr: bool,
@@ -478,6 +489,8 @@ def investigate(
         click.echo(f"Thinking: disabled (effort ignored), Workers: {workers}", err=True)
     else:
         click.echo(f"Effort: {effort}, Workers: {workers}", err=True)
+    if analyst_scope != "system":
+        click.echo(f"Analyst scope: {analyst_scope}", err=True)
     click.echo(f"Logging to {log_file}", err=True)
 
     orchestrator = Orchestrator(
@@ -495,6 +508,7 @@ def investigate(
         show_cli_stderr=show_cli_stderr,
         max_compactions=max_compactions,
         wrapup=wrapup,
+        question_sessions=analyst_scope == "question",
     )
 
     from mulder.orchestrator.errors import (

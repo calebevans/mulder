@@ -14,6 +14,7 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
+from mulder.cut_short import remaining_work_item
 from mulder.db import CaseDB
 from mulder.extractors.classifier import ClassifierConfig, EvidenceClassifier
 from mulder.patterns import (
@@ -598,6 +599,8 @@ def get_investigation_summary() -> dict[str, object]:
             f"Fix invalid finding(s) {[i['finding_id'] for i in invalid]} with "
             "update_finding (valid evidence_refs) or delete_finding"
         )
+    if cut_short := remaining_work_item(ctx.db.get_cut_short()):
+        remaining_work.append(cut_short)
 
     elapsed = (time.monotonic() - t0) * 1000
     ctx.audit.log_tool_call(

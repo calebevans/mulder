@@ -24,6 +24,8 @@ Try-it-out instructions for running Mulder, the forensic investigation platform.
   - [Starting an Investigation](#starting-an-investigation)
     - [When a Run Ends Early](#when-a-run-ends-early)
     - [When a Session Runs Out of Turns](#when-a-session-runs-out-of-turns)
+    - [When Analysis Is Cut Short](#when-analysis-is-cut-short)
+    - [One Analyst Session per Question](#one-analyst-session-per-question)
   - [Using Non-Anthropic Models via LiteLLM](#using-non-anthropic-models-via-litellm)
     - [Provider Prefixes](#provider-prefixes)
     - [Mixing Providers Across Roles](#mixing-providers-across-roles)
@@ -400,6 +402,34 @@ A note is a model's own account of what it did. A new session is told to treat i
 
 A resumed session sends its whole conversation again on every turn, as any session does, so several continuations of one long session cost more input tokens per turn than new sessions would, most of all with a provider that has no prompt caching. To compare the two behaviours, run with `--no-wrapup` (or `MULDER_WRAPUP=0`): no session is resumed, every continuation is a new session with the generic prompt, and analysts and executors are not told their turn budget.
 
+### When Analysis Is Cut Short
+
+A role session that is still unfinished after every continuation `--max-compactions` allows, and after its wrap-up, is cut short: the phase goes on without the rest of that session's work. Mulder records each one in the case database with its phase, role, system and, when the session had one of its own, its investigation question. The dashboard shows `Cut short, no continuation left: extraction analyst, system DC01`.
+
+You will see the record in four places:
+
+- the run summary on the terminal, in a **Sessions Cut Short** table;
+- both reports, in an **Analysis Cut Short** section (the partial report and `mulder report` included);
+- `get_investigation_summary`, as one `remaining_work` item, so the later phases know which earlier analysis was not finished;
+- the case database itself (`kv_store`, key `cut_short_sessions`).
+
+Read it for what it says. What the session saved is in the findings. What it had not reached was not examined, which is not the same as absent, so conclusions about that system or question may be incomplete. The record does not say the session found nothing, and it is not removed when a later session covers the same ground: each entry carries the time it was recorded, and a second run of the same case adds to the list.
+
+To give sessions more room, raise `--max-compactions`, or split the extraction analyst's work with `--analyst-scope question` (below).
+
+### One Analyst Session per Question
+
+By default one extraction analyst session answers every investigation question the planner wrote for a system. That is `--analyst-scope system`, and nothing about it has changed.
+
+`--analyst-scope question` (or `MULDER_ANALYST_SCOPE=question`) splits that step. After the executor has finished for a system:
+
+1. Each investigation question gets its own analyst session, one after another, with 25 turns instead of 60. Its instruction is that one question: answer it, save the findings, record a progress note, stop. At most 6 such sessions run per system; when the plan has more questions, the sixth takes all that are left.
+2. One consolidation session of 15 turns then looks across what those sessions saved, for duplicate and contradicting findings and for questions left open, and may ask for a follow-up plan. Follow-up cycles, gates and retries work as before.
+
+Systems still run in parallel under `--workers`. A plan with fewer than two usable questions runs the ordinary single session. The other phases are not affected.
+
+This mode is opt-in and has not been benchmarked. It makes more sessions: up to 6 x 25 + 15 turns for a system before any continuation, against 60, and each session re-reads the case context. Whether shorter, single-purpose sessions give better answers or fewer turn-limit stops for a given model is what a benchmark run with and without the flag has to show.
+
 ## Using Non-Anthropic Models via LiteLLM
 
 Mulder includes a built-in LiteLLM proxy that enables any LiteLLM-supported model provider. No manual proxy setup is required.
@@ -708,6 +738,7 @@ Runs a full multi-phase forensic investigation.
 | `--workers` | `3` | Max concurrent extraction sessions |
 | `--max-compactions` | `3` | Continuations allowed per role session after a turn limit (the session is resumed) or context exhaustion (a new session); `0` disables. Also settable via `MULDER_MAX_COMPACTIONS` (the flag wins) |
 | `--wrapup` / `--no-wrapup` | on | At a turn limit, resume the session where it stopped, with its conversation intact, instead of replacing it. `--no-wrapup` restarts cold. Also settable via `MULDER_WRAPUP=0` (the flag wins). See [When a Session Runs Out of Turns](#when-a-session-runs-out-of-turns) |
+| `--analyst-scope` | `system` | What one extraction analyst session covers: `system` is every investigation question for a system; `question` is one question each, then a consolidation session. Also settable via `MULDER_ANALYST_SCOPE` (the flag wins). See [One Analyst Session per Question](#one-analyst-session-per-question) |
 | `--db-dir` | `~/.mulder/cases` | Case database directory |
 | `--cwd` | `~/.mulder/workspace` | Working directory for agent sessions. Also settable via `MULDER_CWD`; the container sets it to `/mulder-investigation`. Created on first use, along with a default `.mcp.json` |
 | `--proxy-config` | None | LiteLLM config YAML for custom model routing |

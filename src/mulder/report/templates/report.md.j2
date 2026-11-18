@@ -74,6 +74,20 @@ tracking via append-only JSONL audit log.
 | Sources | {{ sources | length }} evidence sources across {{ total_tool_calls }} tool calls |
 {% if negative_count %}| Ruled Out | {{ negative_count }} hypotheses tested and rejected |
 {% endif %}
+{% if cut_short %}
+---
+
+## Analysis Cut Short
+
+These sessions ended at a turn or context limit and had no continuation left.
+What each one saved is in this report. What it had not reached was not
+examined, which is not the same as absent: conclusions about these parts of
+the investigation may be incomplete.
+
+{% for c in cut_short %}
+- {{ c.label }} (recorded {{ c.recorded_at }})
+{% endfor %}
+{% endif %}
 {% if evidence_integrity %}
 ---
 
