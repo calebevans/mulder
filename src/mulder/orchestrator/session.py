@@ -579,7 +579,8 @@ class SessionExecutor:
             "Starting query (model=%s, max_turns=%d, effort=%s)",
             model,
             max_turns,
-            options.effort or "none",
+            # Unset means the CLI picks its own default for the model.
+            options.effort or "unset",
         )
 
         tool_count = 0

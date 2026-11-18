@@ -47,12 +47,17 @@ class _FakeSdk:
     """Answer each role session by its system prompt and record its options.
 
     The planner returns string tasks, which fail validation and send the plan
-    to JSON repair. The first executor session stops at its turn limit, so the
-    executor gets one continuation.
+    to JSON repair. The first executor, analyst and single-mode session each
+    stop at their turn limit, so each gets one continuation; with
+    *planner_out_of_turns* so does the planner, which sends it to the
+    plan-from-notes follow-up.
     """
 
-    def __init__(self, phase: PhaseConfig) -> None:
+    def __init__(self, phase: PhaseConfig, planner_out_of_turns: bool = False) -> None:
         self.phase = phase
+        self.out_of_turns = {"executor", "analyst", "single"}
+        if planner_out_of_turns:
+            self.out_of_turns.add("planner")
         self.seen: list[tuple[str, ClaudeAgentOptions]] = []
         # A tool the executor role may run that counts as extraction work.
         self.tool = next(
@@ -75,13 +80,9 @@ class _FakeSdk:
 
     async def query(self, *, prompt: str, options: ClaudeAgentOptions) -> AsyncIterator[object]:
         role = self._role(options.system_prompt)
-        first_executor = role == "executor" and not any(r == "executor" for r, _ in self.seen)
+        first = not any(r == role for r, _ in self.seen)
         self.seen.append((role, options))
-        if role == "planner":
-            yield _text(json.dumps({"tasks": [f"run {self.tool}"]}))
-        elif role == "repair":
-            yield _text(json.dumps({"tasks": [{"tool": self.tool, "args": {}, "purpose": "p"}]}))
-        elif first_executor:
+        if first and role in self.out_of_turns:
             yield ResultMessage(
                 subtype="error_max_turns",
                 duration_ms=1,
@@ -91,6 +92,10 @@ class _FakeSdk:
                 session_id="s1",
                 terminal_reason="max_turns",
             )
+        elif role == "planner":
+            yield _text(json.dumps({"tasks": [f"run {self.tool}"]}))
+        elif role == "repair":
+            yield _text(json.dumps({"tasks": [{"tool": self.tool, "args": {}, "purpose": "p"}]}))
         elif role == "executor":
             yield AssistantMessage(
                 content=[ToolUseBlock(id="t1", name=f"mcp__mulder__{self.tool}", input={})],
@@ -104,12 +109,17 @@ class _FakeSdk:
         return [(role, options.effort) for role, options in self.seen]
 
 
-async def _run_phase(phase: PhaseConfig, tmp_path: Path, **orchestrator_args: Any) -> _FakeSdk:
+async def _run_phase(
+    phase: PhaseConfig,
+    tmp_path: Path,
+    planner_out_of_turns: bool = False,
+    **orchestrator_args: Any,
+) -> _FakeSdk:
     with patch("mulder.orchestrator.runner.InvestigationDashboard"):
         orch = Orchestrator(
             evidence_path="/evidence", case_id="case", db_dir=tmp_path, **orchestrator_args
         )
-    sdk = _FakeSdk(phase)
+    sdk = _FakeSdk(phase, planner_out_of_turns)
     run = orch._run_split_phase if phase.mode == "split" else orch._run_single_phase
     with (
         patch("mulder.orchestrator.session.query", sdk.query),
@@ -133,6 +143,20 @@ async def test_only_executor_sessions_and_repair_use_executor_effort(
         ("executor", "low"),
         ("executor", "low"),  # continuation after the turn limit
         ("analyst", "max"),
+        ("analyst", "max"),  # continuation: same loop as the executor's, other level
+    ]
+
+
+@pytest.mark.asyncio
+async def test_plan_from_notes_follow_up_uses_effort(tmp_path: Path) -> None:
+    sdk = await _run_phase(
+        EXTRACTION, tmp_path, planner_out_of_turns=True, effort="max", executor_effort="low"
+    )
+
+    assert sdk.efforts()[:3] == [
+        ("planner", "max"),
+        ("planner", "max"),  # plan-from-notes follow-up after the turn limit
+        ("repair", "low"),
     ]
 
 
@@ -150,7 +174,8 @@ async def test_executor_effort_defaults_to_low(phase: PhaseConfig, tmp_path: Pat
 async def test_single_phases_follow_effort(phase: PhaseConfig, tmp_path: Path) -> None:
     sdk = await _run_phase(phase, tmp_path, effort="xhigh", executor_effort="low")
 
-    assert sdk.efforts() == [("single", "xhigh")]
+    # The second session is the continuation after the turn limit.
+    assert sdk.efforts() == [("single", "xhigh"), ("single", "xhigh")]
 
 
 @pytest.mark.parametrize("level", LEVELS)
@@ -167,6 +192,7 @@ async def test_equal_levels_give_every_session_one_effort(
         "executor",
         "executor",
         "analyst",
+        "analyst",
     ]
     assert {effort for _, effort in sdk.efforts()} == {level}
 
@@ -177,12 +203,12 @@ async def test_no_thinking_overrides_both_levels(tmp_path: Path) -> None:
         EXTRACTION, tmp_path, effort="max", executor_effort="low", no_thinking=True
     )
 
-    assert len(sdk.seen) == 5
+    assert len(sdk.seen) == 6
     assert {options.effort for _, options in sdk.seen} == {None}
     assert all(options.thinking == {"type": "disabled"} for _, options in sdk.seen)
 
 
-@pytest.mark.parametrize(("no_thinking", "shown"), [(False, "low"), (True, "none")])
+@pytest.mark.parametrize(("no_thinking", "shown"), [(False, "low"), (True, "unset")])
 @pytest.mark.asyncio
 async def test_starting_query_log_line_names_the_effort(
     tmp_path: Path, caplog: pytest.LogCaptureFixture, no_thinking: bool, shown: str
