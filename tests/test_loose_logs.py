@@ -221,6 +221,21 @@ def test_a_single_file_is_read_by_itself(evidence: Path) -> None:
     assert [r["target"] for r in _rows("logs.web")] == ["/"]
 
 
+def test_windows_line_endings_and_utf16_are_read(evidence: Path) -> None:
+    """IIS writes CRLF, and a log saved with PowerShell's ">" is UTF-16."""
+    (evidence / "u_ex160810.log").write_bytes(_IIS.replace("\n", "\r\n").encode())
+    (evidence / "redirected.log").write_bytes(
+        (_hit("203.0.113.9", "GET", "/utf16") + "\r\n").encode("utf-16")
+    )
+
+    summary = _ok(evidence)
+
+    web = summary["sources"]["logs.web"]
+    assert (web["files"], web["rows"], web["rows_not_parsed"]) == (2, 2, 0)
+    assert sorted(r["target"] for r in _rows("logs.web")) == ["/joomla/agent.php", "/utf16"]
+    assert _rows("logs.web")[0]["status"] == "200"  # no carriage return left on the last field
+
+
 def test_line_separators_in_a_line_do_not_shift_the_rows_after_it(evidence: Path) -> None:
     """str.splitlines, which the window builder uses, breaks on all of these. Left in a
     line they would make every later row point one line too early."""
