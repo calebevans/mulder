@@ -143,6 +143,7 @@ Mulder integrates 35+ open-source forensic tools exposed as 140+ typed MCP opera
 | Malware | YARA, CAPA, FLOSS, ClamAV, radare2, Detect-It-Easy&nbsp;\* |
 | Documents | oletools, PDF tools, pst-utils |
 | Mobile | ALEAPP, iLEAPP, MVT |
+| Ransomware | Encryption timeline from the USN journal and MFT, offline family hints (Splunk lookups, ThreatLabz ransom notes), remote access tools (LOLRMM catalog) and their logs, Hayabusa logon summary |
 | Cloud and CI | Sigma rules over cloud audit logs (GCP, GitHub), gitleaks (secrets in repositories and CI logs), zizmor (GitHub Actions workflows), read-only audit log collection from GitHub and GCP |
 | Other | bulk_extractor, binwalk, ExifTool, ssdeep, hashdeep, steghide, Hindsight |
 

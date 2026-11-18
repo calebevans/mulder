@@ -150,7 +150,7 @@ def build_plan(options: SetupOptions, write_root: Path, bin_dir: Path) -> Plan:
 
 def _require_digests(plan: Plan) -> None:
     """A pinnable row with no ``assets.lock`` entry is fatal, never a downgrade."""
-    missing = [a.key for a in plan.selected if a.pinnable and not a.digests.get(plan.arch)]
+    missing = [a.key for a in plan.selected if a.pinnable and not a.digest_for(plan.arch)]
     if missing:
         raise PlanError(
             f"No SHA-256 in assets.lock for: {', '.join(missing)} ({plan.arch}). "
@@ -498,7 +498,7 @@ def _provision_one(
     state.assets[asset.key] = AssetRecord(
         version=asset.version,
         url=asset.url_for(plan.arch) or "",
-        sha256=asset.digests.get(plan.arch),
+        sha256=asset.digest_for(plan.arch),
         commit=fetched.commit,
         arch=plan.arch if asset.arch_only or len(asset.urls) > 1 else ANY_ARCH,
         dest=str(dest),
@@ -664,7 +664,7 @@ def _check_digest(asset: Asset, arch: str, result: FetchResult, *, primary: bool
     """
     if not (asset.pinnable and primary):
         return
-    expected = asset.digests.get(arch)
+    expected = asset.digest_for(arch)
     if expected and result.sha256 != expected:
         raise FetchError(
             f"checksum mismatch: expected {expected[:16]}…, got {result.sha256[:16]}…"
@@ -997,6 +997,10 @@ def capability_gaps(outcomes: Iterable[Outcome]) -> list[str]:
         )
     if absent("sigma-rules"):
         gaps.append("sigma-rules missing -> run_chainsaw hunt mode has no rules to apply")
+    if absent("lolrmm"):
+        gaps.append("lolrmm missing -> find_remote_access_tools has no catalog to match")
+    if absent("ransomware-notes"):
+        gaps.append("ransomware-notes missing -> ransom note text is not compared to known notes")
     if shutil.which("dotnet") is None and not absent("eztools"):
         gaps.append("dotnet missing -> EZ Tools are present but unusable")
     return gaps
