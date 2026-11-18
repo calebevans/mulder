@@ -704,6 +704,8 @@ ENV MULDER_CWD=/mulder-investigation
 # consequently exits 1 -- /opt is root:root 0755 and the process runs as
 # `mulder` -- which is correct; there is nothing for it to do here.
 ENV MULDER_ASSET_ROOT=/opt
+# Mount a directory of your own YARA rules here to have them used in every scan.
+ENV MULDER_YARA_RULES=/rules/yara
 
 HEALTHCHECK --interval=60s --timeout=5s --start-period=10s --retries=3 \
     CMD ["mulder", "--version"]
