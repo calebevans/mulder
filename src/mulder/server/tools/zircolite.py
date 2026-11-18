@@ -11,7 +11,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -116,7 +116,7 @@ def _event_time(match: dict[str, Any]) -> object:
         return value
     seconds = value / 1000 if value > 1e11 else value
     try:
-        return datetime.fromtimestamp(seconds, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return datetime.fromtimestamp(seconds, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     except (OverflowError, OSError, ValueError):
         return value
 

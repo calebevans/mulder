@@ -10,7 +10,7 @@ import re
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, TypedDict, TypeVar, cast
 
@@ -473,7 +473,7 @@ class CaseDB:
         with db._engine.begin() as conn:
             conn.execute(text(_FTS_CREATE))
             conn.execute(text(_IX_WINDOWS_SOURCE_LINE))
-            now = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(UTC).isoformat()
             conn.execute(
                 insert(case_metadata_t).values(
                     case_id=case_id,
@@ -530,7 +530,7 @@ class CaseDB:
 
         def _do_register() -> int:
             """Insert source row and return its auto-generated ID."""
-            now = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(UTC).isoformat()
             case_id = self._get_case_id()
             with self._engine.begin() as conn:
                 result = conn.execute(
@@ -1223,7 +1223,7 @@ class CaseDB:
 
         def _do_register() -> None:
             """Insert a row into the evidence_registry table."""
-            now = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(UTC).isoformat()
             with self._engine.begin() as conn:
                 conn.execute(
                     insert(evidence_registry_t).values(
@@ -1256,7 +1256,7 @@ class CaseDB:
 
         def _do_insert() -> int:
             """Insert a bookmark row and return its auto-generated ID."""
-            now = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(UTC).isoformat()
             with self._engine.begin() as conn:
                 result = conn.execute(
                     insert(bookmarks_t).values(
@@ -1378,7 +1378,7 @@ class CaseDB:
 
         def _do_insert() -> None:
             """Persist a single progress row."""
-            now = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(UTC).isoformat()
             with self._engine.begin() as conn:
                 conn.execute(
                     insert(progress_t).values(
@@ -1441,7 +1441,7 @@ class CaseDB:
         """
 
         def _do_upsert() -> None:
-            now = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(UTC).isoformat()
             with self._engine.begin() as conn:
                 conn.execute(
                     text(

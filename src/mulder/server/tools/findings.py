@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import re
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
 from uuid import uuid4
@@ -359,7 +359,7 @@ def submit_finding(
 
     case_metadata = ctx.db.get_case_metadata()
     finding_id = f"f_{uuid4().hex[:8]}"
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
 
     ts_warnings: list[str] = []
     event_time_start, w = _sanitize_event_time(event_time_start)

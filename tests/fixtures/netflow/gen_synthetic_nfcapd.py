@@ -30,7 +30,7 @@ import json
 import socket
 import struct
 from collections.abc import Sequence
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from random import Random
 from typing import Any
@@ -39,7 +39,7 @@ Flow = dict[
     str, Any
 ]  # one synthetic flow record (sip, sp, dip, dp, pr, flags, pkts, byts, first, last, bucket, tag)
 
-UTC = timezone.utc
+UTC = UTC
 
 # ---------------------------------------------------------------------------
 # Constants

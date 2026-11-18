@@ -8,7 +8,7 @@ import os
 import threading
 from collections import defaultdict
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
@@ -161,7 +161,7 @@ class AuditLog:
             "params": dict(params),
             "output_hash": output_hash,
             "duration_ms": duration_ms,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
         if sub_calls is not None:
             entry["sub_calls"] = sub_calls
@@ -208,7 +208,7 @@ class AuditLog:
             "extractor": extractor,
             "window_count": window_count,
             "duration_ms": duration_ms,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
         self._append(entry)
 
@@ -222,7 +222,7 @@ class AuditLog:
             "type": "finding",
             "finding_id": finding_id,
             "evidence_refs": evidence_refs,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
         self._append(entry)
 

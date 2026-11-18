@@ -30,7 +30,7 @@ import time
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -1669,7 +1669,7 @@ def _progress_start(prep: _Prep, summary_name: str, planned: int) -> tuple[int, 
         f"- netflow header tool={prep.tool} tool_call_id={prep.tc_id} status=running "
         f"summary_id={hid} summary_planned={summary_name} evidence_path={prep.resolved} "
         f"files={len(prep.selected)} sections_planned={planned} "
-        f"started={datetime.now(timezone.utc):%Y-%m-%dT%H:%M:%S}"
+        f"started={datetime.now(UTC):%Y-%m-%dT%H:%M:%S}"
     )
     sid, _ = _index_rows(name, str(prep.resolved), [(None, header)])
     return sid, header

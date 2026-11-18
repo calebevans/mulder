@@ -22,7 +22,7 @@ from collections import Counter
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from mulder.extractors.classifier import has_nfdump_magic
@@ -233,7 +233,7 @@ def _clamp_epoch(epoch: float) -> float:
 def iso_s(epoch: float) -> str:
     """Epoch seconds -> naive UTC ``YYYY-MM-DDTHH:MM:SS`` (the ``event_time`` form)."""
     epoch = _clamp_epoch(epoch)
-    return datetime.fromtimestamp(int(epoch), timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    return datetime.fromtimestamp(int(epoch), UTC).strftime("%Y-%m-%dT%H:%M:%S")
 
 
 def iso_ms(epoch: float) -> str:
@@ -244,7 +244,7 @@ def iso_ms(epoch: float) -> str:
     if ms >= 1000:
         whole += 1
         ms -= 1000
-    return datetime.fromtimestamp(whole, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S") + f".{ms:03d}"
+    return datetime.fromtimestamp(whole, UTC).strftime("%Y-%m-%dT%H:%M:%S") + f".{ms:03d}"
 
 
 _STAT_TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}$", re.ASCII)
@@ -259,7 +259,7 @@ def stat_ts_to_iso(value: str) -> str:
     v = value.strip()
     if not _STAT_TS_RE.match(v):
         raise ValueError(f"not a timestamp: {v!r}")
-    dt = datetime.strptime(v.replace(" ", "T"), "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+    dt = datetime.strptime(v.replace(" ", "T"), "%Y-%m-%dT%H:%M:%S").replace(tzinfo=UTC)
     if not epoch_ok(dt.timestamp()):
         raise ValueError(f"timestamp out of range: {v!r}")
     return v.replace(" ", "T")

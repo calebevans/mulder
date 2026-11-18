@@ -9,7 +9,7 @@ import logging
 import re
 from collections import defaultdict
 from collections.abc import Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -1193,7 +1193,7 @@ class ReportRenderer:
 
         ctx: dict[str, Any] = {
             "case_id": case_metadata.case_id,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "evidence_root": case_metadata.evidence_root,
             "finding_count": len(positive_findings),
             "negative_findings": negative_findings,

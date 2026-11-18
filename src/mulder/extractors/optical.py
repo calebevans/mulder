@@ -29,7 +29,7 @@ import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import BinaryIO
 
@@ -224,7 +224,7 @@ def _udf_timestamp(b: bytes) -> str:
         return ""
     if tz != -2048:  # -2048 means "no timezone recorded"
         dt = dt.replace(tzinfo=timezone(timedelta(minutes=tz)))
-        dt = dt.astimezone(timezone.utc)
+        dt = dt.astimezone(UTC)
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ" if dt.tzinfo else "%Y-%m-%dT%H:%M:%S")
 
 
@@ -503,7 +503,7 @@ def _iso_timestamp(b: bytes) -> str:
     tz = struct.unpack_from("<b", b, 6)[0] * 15
     return (
         dt.replace(tzinfo=timezone(timedelta(minutes=tz)))
-        .astimezone(timezone.utc)
+        .astimezone(UTC)
         .strftime("%Y-%m-%dT%H:%M:%SZ")
     )
 
