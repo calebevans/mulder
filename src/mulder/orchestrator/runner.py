@@ -109,11 +109,11 @@ class Orchestrator:
             show_cli_stderr: Stream agent CLI diagnostics to the dashboard and log.
             max_compactions: Continuation sessions allowed per role session
                 after context exhaustion; ``0`` disables continuations.
-            wrapup: Resume a session at its turn limit to save and hand
-                off, seed continuations with the handoff notes, tell
-                analysts and executors their turn budget, and nudge a
-                session that ended on a silent turn. False restores the
-                cold restart.
+            wrapup: Resume a session at its turn limit where it stopped,
+                seed a new session (when one is needed) with the recorded
+                notes and saved findings, tell analysts and executors
+                their turn budget, and nudge a session that ended on a
+                silent turn. False restores the cold restart.
         """
         self.evidence_path = evidence_path
         self.cwd = str(cwd)

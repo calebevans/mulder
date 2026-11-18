@@ -25,6 +25,7 @@ from mulder.extractors.classifier import (
     is_nfcapd,
 )
 from mulder.extractors.optical import probe_optical
+from mulder.models import Finding
 from mulder.orchestrator.types import PhaseResult, extract_catalog_result
 from mulder.patterns import (
     DISK_IMAGE_EXTS,
@@ -642,8 +643,10 @@ class ServerBridge:
         sanitises them before they reach a prompt.
 
         Args:
-            system_name: The label the notes were recorded under. Case and
-                whitespace differences are ignored.
+            system_name: The label the notes were recorded under. A
+                comma-separated group also matches a note recorded under
+                one of its members, which is how an analyst records one
+                unprompted. Case and whitespace differences are ignored.
             since: Timezone-aware lower bound on when a note was recorded.
 
         Returns:
@@ -658,11 +661,13 @@ class ServerBridge:
             logger.warning("get_progress_notes failed", exc_info=True)
             return []
 
-        wanted = " ".join(system_name.split()).casefold()
+        wanted = {
+            " ".join(name.split()).casefold() for name in (system_name, *system_name.split(","))
+        } - {""}
         notes: list[str] = []
         for record in records:
             note = (record["notes"] or "").strip()
-            if not note or " ".join(record["system_name"].split()).casefold() != wanted:
+            if not note or " ".join(record["system_name"].split()).casefold() not in wanted:
                 continue
             try:
                 if datetime.fromisoformat(record["recorded_at"]) >= since:
@@ -670,3 +675,33 @@ class ServerBridge:
             except (TypeError, ValueError):  # not a timestamp, or not timezone-aware
                 continue
         return notes
+
+    def get_findings_since(self, since: datetime) -> list[Finding]:
+        """Return the findings saved to the case since a time.
+
+        Findings carry no system or role, so this is every finding saved in
+        the window, including any saved by a session running alongside.
+
+        Args:
+            since: Timezone-aware lower bound on when a finding was saved.
+
+        Returns:
+            Findings, oldest first; empty on any failure.
+        """
+        try:
+            self.ensure_context()
+            from mulder.server.app import get_ctx
+
+            findings = get_ctx().db.get_findings()
+        except Exception:
+            logger.warning("get_findings_since failed", exc_info=True)
+            return []
+
+        saved: list[Finding] = []
+        for finding in findings:
+            try:
+                if datetime.fromisoformat(finding.submitted_at) >= since:
+                    saved.append(finding)
+            except (TypeError, ValueError):  # not a timestamp, or not timezone-aware
+                continue
+        return saved

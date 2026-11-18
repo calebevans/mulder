@@ -369,9 +369,9 @@ def report(case_id: str, db_dir: str) -> None:
     default=True,
     envvar="MULDER_WRAPUP",
     show_default=True,
-    help="At a turn limit, resume the session briefly to save its findings and "
-    "record a handoff note for the session that continues; --no-wrapup "
-    "restarts cold (env: MULDER_WRAPUP=0).",
+    help="At a turn limit, resume the session where it stopped, with its "
+    "conversation intact, instead of replacing it; --no-wrapup restarts "
+    "cold (env: MULDER_WRAPUP=0).",
 )
 @click.option(
     "--proxy-config",

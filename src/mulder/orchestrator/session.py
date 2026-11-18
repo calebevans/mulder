@@ -236,15 +236,17 @@ def _is_turns_exhausted(message: object) -> bool:
     return getattr(message, "subtype", None) == _MAX_TURNS_SUBTYPE
 
 
-#: Times one session is resumed after ending on a turn with no text and no
-#: tool call (the answer stayed in the reasoning, #199). Once: Claude Code
-#: 2.1.327 already re-asks once inside the session before it ends.
+#: Times one ``execute`` call resumes its session after it ended on a turn
+#: with no text and no tool call (the answer stayed in the reasoning, #199).
+#: Once: Claude Code 2.1.327 already re-asks once inside the session before
+#: it ends.
 _MAX_NUDGES: int = 1
 
 _NUDGE_PROMPT: str = (
-    "Your last turn ended with no text and no tool call, so nothing was "
-    "recorded. Do not repeat your reasoning. Either call the next tool you "
-    "need, or write your final answer now in the format the task asked for."
+    "Your last turn had no text and no tool call, so it produced nothing. "
+    "Your earlier tool calls were recorded; do not repeat them, or your "
+    "reasoning. Either call the next tool you need, or write your final "
+    "answer now in the format the task asked for."
 )
 
 
@@ -665,8 +667,9 @@ class SessionExecutor:
                 dashboard task panel for this system name.
             resume: Session id to resume, with its conversation intact,
                 instead of starting a new session. *prompt* is then the
-                next user message. A resume that fails returns a result
-                with no ``session_id``.
+                next user message. A resume that fails (an exception, no
+                result, or an error before the resumed session called any
+                tool) returns a result with no ``session_id``.
             nudges: Times this session may still be resumed after ending
                 on a turn with no text and no tool call.
 
@@ -713,6 +716,7 @@ class SessionExecutor:
         turn_has_output = False
         last_silent = False
         silent_end = False
+        resume_failed = False
         got_result = False
         hit_context_limit = False
         hit_turn_limit = False
@@ -768,6 +772,17 @@ class SessionExecutor:
                             hit_turn_limit = True
                         last_silent = turn_id is not None and not turn_has_output
                         silent_end = last_silent and not message.is_error
+                        # A resumed session that ends on an error before its
+                        # first tool call never got going (the provider
+                        # rejected the request, or the conversation no longer
+                        # fits). The CLI then reports the usage of the session
+                        # it loaded, which was counted when that session ran.
+                        resume_failed = (
+                            bool(resume)
+                            and not tool_count
+                            and not hit_turn_limit
+                            and (message.is_error or hit_context_limit)
+                        )
                         if last_silent:
                             self._log_silent_turn(log_prefix)
                         (
@@ -785,6 +800,7 @@ class SessionExecutor:
                             phase_out_tokens,
                             thinking=(thinking_blocks, thinking_chars),
                             last_silent=last_silent,
+                            count_usage=not resume_failed,
                         )
                         if _is_payment_required(message):
                             raise OutOfCreditError(message.result or "HTTP 402 Payment Required")
@@ -835,10 +851,11 @@ class SessionExecutor:
                     hit_context_limit = True
                 elif "error result: success" in exc_lower:
                     self._dashboard.log_info("Query completed (SDK reported success as error)")
-                elif resume:
-                    # A wrap-up or nudge is an extra; its caller falls back to
-                    # what happened before there was one. Not the reason a run
-                    # stopped, so ``last_query_error`` is left alone.
+                elif resume and not tool_count:
+                    # The resume did not take; its caller falls back to a new
+                    # session, or to leaving things as they ended. Not the
+                    # reason a run stopped, so ``last_query_error`` is left
+                    # alone.
                     self._dashboard.log_info(f"Resumed session failed: {exc_msg}")
                     logger.warning("Resumed session %s failed: %s", resume, exc_msg)
                 else:
@@ -868,6 +885,10 @@ class SessionExecutor:
                 phase_in_tokens,
                 phase_out_tokens,
             )
+
+        if resume_failed:
+            logger.warning("Resumed session %s ended on an error before it did anything", resume)
+            session_id = ""
 
         result = PhaseResult(
             phase_name="query",
@@ -1141,6 +1162,7 @@ class SessionExecutor:
         phase_out_tokens: int,
         thinking: tuple[int, int] = (0, 0),
         last_silent: bool = False,
+        count_usage: bool = True,
     ) -> tuple[int, str, bool, int, int]:
         """Process a ResultMessage and reconcile token counts.
 
@@ -1153,6 +1175,8 @@ class SessionExecutor:
             phase_out_tokens: Running output token count.
             thinking: (block count, total chars) of thinking seen this query.
             last_silent: The final assistant turn had no text and no tool use.
+            count_usage: False for a resume that failed, whose reported
+                usage is that of the session it loaded.
 
         Returns:
             Tuple of (turns_used, session_id, got_result,
@@ -1161,7 +1185,9 @@ class SessionExecutor:
         turns_used = getattr(message, "num_turns", 0) or 0
         session_id: str = getattr(message, "session_id", "") or ""
 
-        result_in, result_out = self._extract_tokens(message)
+        result_in, result_out = (
+            self._extract_tokens(message) if count_usage else (phase_in_tokens, phase_out_tokens)
+        )
 
         correction_in = result_in - phase_in_tokens
         correction_out = result_out - phase_out_tokens
@@ -1177,7 +1203,7 @@ class SessionExecutor:
             phase_out_tokens = result_out
 
         model_usage = getattr(message, "model_usage", None)
-        if model_usage and isinstance(model_usage, dict):
+        if count_usage and model_usage and isinstance(model_usage, dict):
             self._dashboard.add_model_usage(model_usage)
 
         total_phase_tokens = phase_in_tokens + phase_out_tokens

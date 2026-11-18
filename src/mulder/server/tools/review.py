@@ -517,6 +517,9 @@ def track_progress(
             "system_name": system_name,
             "tools_completed": tools_completed,
             "questions_addressed": questions_addressed,
+            # A continuation session can be given the note, so commit to it.
+            "notes_chars": len(notes),
+            "notes_hash": hash_output(notes),
         },
         output_hash=hash_output(result),
         duration_ms=elapsed,
