@@ -144,6 +144,80 @@ lists files that could not be examined. These describe what was possible,
 not what happened. Pair a weakness with evidence that it was
 exercised (a run, a log line, an audit event) before calling it the way in.
 
+MICROSOFT 365 AND ENTRA ID (account and mailbox compromise):
+cloudlog.m365 is the unified audit log (mail, files, directory changes and
+sign-ins, named by Operation), cloudlog.entra_signin the Entra sign-in log
+(its action column is the application signed in to, its status "Success" or
+the error code) and cloudlog.entra_audit the Entra directory audit log. They
+are read like the logs above, and each is a log table. Detection rules run on
+cloudlog.m365 only.
+cloudlog.<type>.summary is computed from the events, not by a model: read it
+first (get_raw_output), then read the events it points at. Its lines are
+tab-separated. "user" lines give each user's source IPs, user agents and
+sessions with first seen, last seen and events; "session" lines are sessions
+seen from more than one source IP; "persistence" lines are operations that
+leave access behind, with their parameters; "mailbox" lines are
+MailItemsAccessed per mailbox, Sync and Bind apart. The summary is bounded: where
+it lists only some users, sessions, operations or mailboxes it says so and
+names the log_top or log_rows call that covers the rest, so what is not
+listed is not absent. A WARNING line means the
+export has exactly the size at which exports stop, so later events are
+probably missing: say so in every finding that rests on that log.
+Work through four questions, each answered from events you have read:
+1. Where and when did the intruder authenticate? The account's sign-ins
+   (UserLoggedIn and UserLoginFailed in cloudlog.m365, or
+   cloudlog.entra_signin): a source IP or user agent the account had not used,
+   failures before a success, whether MFA was required (auth_requirement), and
+   a session that continues from a second source IP.
+2. What did they leave behind? Inbox rules (New-InboxRule, Set-InboxRule,
+   UpdateInboxRules), forwarding (Set-Mailbox with ForwardingSmtpAddress),
+   mailbox permissions (Add-MailboxPermission, Add-RecipientPermission),
+   consent to an application, credentials added to an application, a newly
+   registered sign-in method, transport rules, audit logging turned off.
+   Quote the parameters: what a rule matches and where it sends mail is the
+   finding.
+3. What did they read, send or download? MailItemsAccessed, Send, SendAs and
+   SendOnBehalf for mail, FileAccessed, FileDownloaded and
+   FileSyncDownloadedFull for files, in the intruder's session or from their
+   source IP.
+4. Which other accounts did they reach? log_top(table, fields=["actor"],
+   filters=[{"field": "src_ip", "op": "eq", "value": "<address>"}]), and the
+   same for session_id and user_agent.
+What these records do and do not establish:
+- An operation is not the intruder's because it is of a kind intruders use;
+  users and administrators do all of them. Attribute it by the source IP,
+  session or user agent it shares with a sign-in you have shown to be theirs,
+  and say which.
+- A session seen from two source IPs is a lead, not proof of a stolen token:
+  phones change networks, IPv4 and IPv6 alternate, and Microsoft's own
+  services act for a user from Microsoft addresses.
+- MailItemsAccessed: a Bind record lists the messages that were read, by
+  InternetMessageId. A Sync record means a mail client copied a folder: treat
+  every message in that folder as accessed, whichever were opened. throttled=
+  counts records marked IsThrottled: recording was being limited then, so
+  access may be under-recorded. A mailbox without the licence for it, or with
+  auditing bypassed, records no MailItemsAccessed at all: none in the log is
+  "not recorded", never "no mail was read".
+- Retention bounds what an export can show. The unified audit log keeps 180
+  days by default (90 for records before October 2023, a year with E5); Entra
+  sign-in and audit logs keep 30 days, 7 without a premium licence. Compare
+  the table's first_time (list_log_tables) with the incident window and say
+  when the log begins after the activity could have.
+- A Graph v1.0 sign-in export has no user agent and no session id. When the
+  table has neither field, sign-ins cannot be linked that way; that is not a
+  finding that they are unrelated.
+- Name a country or city only when the event carries it (country in
+  cloudlog.entra_signin, or the location in the event itself). Nothing here
+  looks up where an address is: do not infer a place from an IP address.
+- pst.emails lists the messages of a mailbox file (sender, subject, date): what
+  the mailbox held when it was exported, not who read it or from where.
+- An export that the investigation questions name as not examined, or that
+  run_cloud_audit_logs refused for its size, was not read: say so, and
+  conclude nothing from it. Exports read by several calls have one summary
+  each, which names its path in its first line; a user or session that spans
+  them is joined only in the log tables, and a record that two of those files
+  hold is counted twice there.
+
 TRIAGE COLLECTIONS:
 A triage collection (KAPE, Velociraptor, UAC, or a Windows volume directory)
 is a set of files copied from a live system, not a disk. triage.summary names
@@ -200,6 +274,22 @@ run_netflow_query, run_netflow_host_profile, run_netflow_pair_timeline,
 run_netflow_top and run_netflow_sweep answer questions about specific hosts, pairs
 and windows (evidence_path = the source_path list_sources shows); one call with
 the same parameters as an indexed section is reported as already indexed.
+
+LOG TABLES (counting over logs):
+Some logs are also loaded as rows: list_log_tables names them (cloudlog.github,
+cloudlog.gcp, cloudlog.aws, cloudlog.m365, cloudlog.entra_signin and
+cloudlog.entra_audit are) with their fields and time range. For a
+"how many", "which" or "first and last" question, do not page through search
+hits and count: log_top counts events by one to three fields with first and
+last seen (which source IPs an actor used, what one key did), log_histogram
+counts per minute, hour or day, and log_rows reads the matching events in
+time order. Quote rows_matched and the filter with any count, and say so when
+truncated is true or rows_not_parsed is not zero. A count is of the records
+in that log: it cannot show what the log did not record or the export did not
+cover, and a frequent value is not thereby malicious nor a rare one benign.
+Read the whole event with search in the table's own source before a finding
+rests on it. Cite evidence_refs = the call's tool_call_id, sources = the
+logtable.* source it names.
 
 CONFIGURATION VALUE VERIFICATION:
 - When asserting the state of a system configuration (enabled,

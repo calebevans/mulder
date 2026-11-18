@@ -799,18 +799,21 @@ Index exported cloud audit logs and apply Sigma detection rules to them.
 
 Reads JSON arrays, JSON lines and CloudTrail `{"Records": [...]}` files, and
 recognises GitHub audit logs, GCP Cloud Audit Logs and AWS CloudTrail per
-event. Any other JSON is indexed as `cloudlog.generic` and scanned only when
+event. It also reads the Microsoft 365 unified audit log (JSON, or the CSV it is
+usually exported to), Entra ID sign-in logs and Entra ID audit logs: see
+"Microsoft 365 and Entra ID" below. Any other JSON is indexed as
+`cloudlog.generic` and scanned only when
 `ruleset_path` is given. Nothing is fetched: export the logs first (see the
 [usage guide](usage-guide.md#cloud-audit-logs)).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| evidence_path | str | yes | JSON log file, or a directory searched for .json/.jsonl/.ndjson |
+| evidence_path | str | yes | Log file, or a directory searched for .json/.jsonl/.ndjson and unified audit log .csv exports |
 | ruleset_path | str \| None | no | Sigma rules to use instead of the defaults |
 | sigma_level_filter | Literal['informational', 'low', 'medium', 'high', 'critical'] \| None | no | Minimum Sigma level (default "low") |
 | force | bool | no | Re-run even if these logs were already indexed |
 
-**Returns:** `files_read`, `files_with_problems{}`, `log_types{<type>: events, source, sigma, detections, level_counts{}, rules_matched{}, mitre_coverage{}}`
+**Returns:** `files_read`, `files_with_problems{}`, `log_types{<type>: events, duplicates_skipped, source, log_table, log_table_note, summary_source, summary{}, export_warnings[], sigma, detections, level_counts{}, rules_matched{}, mitre_coverage{}}`
 
 Events are indexed one per line in `cloudlog.<type>` (time, actor, action,
 source IP, target, raw event) and Sigma matches in `cloudlog.<type>.detections`.
@@ -820,14 +823,129 @@ plus mulder's own GCP rules for service account key creation, federated token
 exchange, service account impersonation, IAM policy changes and Secret Manager
 reads.
 
-A file that was damaged or truncated, or that held no events, is named in
-`files_with_problems`; complete events before the damage are kept. Events are
+Every type but `generic` is also loaded as rows into a [log table](#log-tables)
+named after the source (`log_table` in the result), so `log_top`, `log_histogram`
+and `log_rows` can count them. Each row has the time, actor, action, source IP and
+target of the text line (for AWS the target is the region), plus:
+
+| Log | Further fields |
+|-----|----------------|
+| AWS | `status` (the `errorCode`; `Failure` when there is only an `errorMessage`; otherwise `Success`), `user_agent`, `session_id` (the access key id), `bytes` (`bytesTransferredOut`), `event_id`, `identity_type`, `account`, `read_only` |
+| GCP | `status` (the `google.rpc` status code, `OK` when there is none), `user_agent`, `event_id` (`insertId`) |
+| GitHub | `user_agent`, `session_id` (`hashed_token`), `event_id` (`_document_id`), `country` |
+| Microsoft 365 (`m365`) | `status` (`ResultStatus`), `user_agent`, `session_id`, `event_id` (`Id`), `workload`, `app_id`, `error` (`ErrorNumber` or `ErrorCode`, when not 0), `mailbox` (`MailboxOwnerUPN`), `access_type` (`Sync` or `Bind`, for MailItemsAccessed) |
+| Entra sign-ins (`entra_signin`) | `status` (`Success`, or the error code), `user_agent`, `session_id`, `event_id`, `app_id`, `client_app`, `interactive`, `auth_requirement`, `conditional_access`, `risk`, `country`, `asn`, `token_id` |
+| Entra audit (`entra_audit`) | `status` (`result`), `user_agent`, `event_id`, `category`, `service`, `target_type`, `correlation_id` |
+
+`cloudlog.generic` gets no table: such an event has a time and nothing to count on.
+A forced re-run replaces the rows it loaded before. Because a directory is read
+recursively, evidence paths can overlap, and the table holds each path's events once:
+a path inside one already loaded adds no rows (`log_table_note` names the path that
+contains it), and a directory replaces the rows of paths inside it. A file without
+a `.json`, `.jsonl` or `.ndjson` suffix (other than a unified audit log `.csv`) is
+read only when it is named itself, so it is
+neither covered nor replaced by a directory. The text index is not deduplicated: both
+runs are indexed as `cloudlog.<type>` sources.
+
+What could not be read is counted as the table's `rows_not_parsed`: each damaged
+stretch of a file, a file that could not be read, and each JSON value that is not
+an object in a file that holds events. A damaged or unreadable file whose log type
+cannot be told (nothing in it was readable) counts against every table the run
+loaded. It is a lower bound on the events lost. Valid JSON that holds no event at
+all (a list of strings, a number) counts against no table.
+
+A file that was damaged or truncated, that held no events, or that held JSON values
+that are not objects is named in `files_with_problems` with which of these it was;
+complete events before the damage are kept. Events are
 indexed in time order, and the index keeps one time per window of lines (a few
 events), so a time-range query finds a window by its earliest event. Sigma
 matches on full field paths (`userIdentity.type`), so a nested key cannot
 stand in for a top-level field. If the events hold more than about 2,000
 distinct field paths, the least-used deep ones are left out of the scan and
-`sigma` says how many. Symlinks under a directory are not followed.
+`sigma` says how many. Symlinks under a directory are not followed, and a path
+that is itself a symlinked file is refused. An event nested about as deep as the
+JSON decoder allows cannot be written back as a line: it is counted in
+`files_with_problems` ("events nested too deeply to index") and as not parsed.
+
+One call reads at most 512 MiB of files. Every event of a call is held in memory,
+at eight to nine times the size of the files (a 533 MB export peaked at 4.4 GB),
+so past that limit the tool reads nothing and returns an error that names the
+largest files: run it once per file or subdirectory. A single file over the limit
+has to be exported again over shorter date ranges, or split. An investigation
+does not plan the call that would be refused: the planner's evidence context
+lists a directory over the limit file by file (the 50 largest that fit), and
+lists apart, as not read, a file over the limit and the files beyond those 50.
+`audit_tool_coverage` does not count a call that returned an error, so what was
+not read is reported there as a gap.
+
+**Microsoft 365 and Entra ID.** Three log types, told apart per record:
+
+| Type | Recognised shapes |
+|------|-------------------|
+| `m365`, the unified audit log | A CSV with an `AuditData` column (the Purview portal's export; `Search-UnifiedAuditLog \| Export-Csv`, with or without the `#TYPE` line; UTF-16 or UTF-8). JSON or JSON lines of Management Activity API records (`CreationTime`, `Operation`, ...). `Search-UnifiedAuditLog \| ConvertTo-Json`, where `AuditData` is an object or a JSON string. Microsoft Graph audit query records (`auditData`). |
+| `entra_signin` | Microsoft Graph `signIn` objects (v1.0 or beta) and Log Analytics `SigninLogs` rows. |
+| `entra_audit` | Microsoft Graph `directoryAudit` objects and Log Analytics `AuditLogs` rows. |
+
+A Graph response page (`{"@odata.context": ..., "value": [...]}`) and an Azure
+Monitor diagnostic-settings stream (`{"records": [...]}`, each record's event in
+`properties`) are unwrapped. Key case is ignored for the two Entra logs. What is
+indexed is the record itself, without its wrapper. A `.csv` in a directory is
+read only when its header has an `AuditData` column; it may be separated by
+commas, semicolons or tabs (`Export-Csv -UseCulture`). A date that Windows
+PowerShell 5.1 wrote as `\/Date(<milliseconds>)\/` is read as the time it is.
+
+A record that the files of one call hold more than once, with the same `Id` and
+the same content, is kept once: `Search-UnifiedAuditLog` returns records on more
+than one page, and exports overlap. `duplicates_skipped` counts the repeats, and
+the summary's first line says how many there were. A record without an `Id`, or
+one that differs in any value, is never taken for a repeat. Repeats are found
+within one call only: a record that two files hold is counted twice when the
+files are read by separate calls.
+
+The fields come from wherever the workload puts them: the source IP from
+`ClientIP`, `ClientIPAddress` or `ActorIpAddress`, without a port or brackets
+and with an IPv4-mapped address unmapped; the user agent from `UserAgent`, from
+`ExtendedProperties` (also inside its `additionalDetails`) or from
+`ClientInfoString`; the session from `SessionId`, `AppAccessContext.AADSessionId`
+or `DeviceProperties`. An actor or mailbox that is a user principal name is stored
+in lower case, because the workloads write one user in different case. For a
+sign-in, the action is the application signed in to
+and the target the resource. `country` is the sign-in record's own; nothing looks
+an address up.
+
+`cloudlog.<type>.summary` (`summary_source`) is computed from the events, with
+no model involved, one tab-separated fact per line:
+
+| Line | Content |
+|------|---------|
+| `user` | per user, each source IP, user agent and session: first seen, events, last seen |
+| `session` | a session seen from more than one source IP, with each address's events and times (loopback addresses, which Exchange records for its own work, are not counted) |
+| `persistence` | an operation that leaves access behind or hides it, with its parameters folded into one object: inbox rules, mailbox forwarding, mailbox permissions, application consent, application credentials, a registered sign-in method, audit logging changes, transport rules. Operations by Exchange's own service account are counted, not listed |
+| `mailbox` | MailItemsAccessed per mailbox, `Sync` and `Bind` apart: events, messages listed, throttled records, folders, who, source IPs, sessions (`m365` only) |
+| `WARNING` | a file whose unified audit record count is exactly 100, 5,000, 10,000, 50,000 or 1,000,000, the sizes at which `Search-UnifiedAuditLog` (100 when no `ResultSize` is given) and the Purview export stop: it is probably incomplete. The rows of a CSV count whether or not they could be read. Also returned as `export_warnings` |
+
+Sign-in summaries have `user` and `session` lines, audit summaries `user` and
+`persistence` lines. Each section is capped and says when it was, with the
+`log_top` or `log_rows` call that covers the rest: 50 users (first those named in
+a listed persistence line, then those named in a listed session line, then those
+with the most source IPs), the
+10 least frequent values per user and field, 200 sessions, 200 mailboxes, and
+the newest 40 operations of each kind, so that many of one kind cannot push
+another off the list; the section's first line counts every kind. A line is at
+most 4,000 characters, which fits one window of the index: a value in a list is
+cut at 120 characters and a longer line ends in `…`. `summary` in the result
+gives the section counts.
+
+Default Sigma rules for `m365` are SigmaHQ's `rules/cloud/m365/audit` (the two
+that match raw audit records) and eight of mulder's own: inbox rule created or
+changed, mailbox forwarding set, mailbox permission granted, application consent
+granted, credentials added to an application or service principal,
+authentication method registered, audit logging bypassed or disabled, and
+transport rule created or changed. The rules that match Exchange cmdlets leave
+out Exchange's own service account (`NT AUTHORITY\SYSTEM ...`). The two Entra
+types have no default rules (`sigma` says so); their `persistence` lines list
+the same operations. A Sigma scan sees `Parameters` and the other name/value
+arrays as one JSON text per record.
 
 **Roles:** `EXTRACT_EXECUTOR`
 
@@ -1334,6 +1452,10 @@ RFC 2047 encoded headers are decoded, quoted recipient names are preserved,
 HTML-only messages get a searchable text body, and named inline MIME parts count
 as attachments.
 
+A `.pst` or `.ost` file in the evidence directory, or unpacked from an archive,
+is classified as `mailbox`: the planner is given its path with this tool, and
+`audit_tool_coverage` reports a mailbox it was not run on.
+
 **Roles:** `EXTRACT_EXECUTOR`
 
 ---
@@ -1637,6 +1759,126 @@ Retrieve IOC data carved by bulk_extractor from the case database.
 **Returns:** summary mode: `results[]` (source_name, feature, window_count); detail mode: windowed response
 
 **Roles:** `CROSS_EXECUTOR`
+
+### Log tables
+
+`search` finds text in a log; it cannot count. Logs that an extractor also loads as rows
+(today `run_cloud_audit_logs`: `cloudlog.github`, `cloudlog.gcp`, `cloudlog.aws`,
+`cloudlog.m365`, `cloudlog.entra_signin`, `cloudlog.entra_audit`) can be
+counted with the four tools below. A row has a UTC time, the fields `actor`, `src_ip`,
+`action`, `target`, `status`, `user_agent`, `session_id` and `bytes` where the log has
+them, and a few log-specific fields (`list_log_tables` names them per table).
+
+`filters` is a list of conditions that must all hold, each
+`{"field": "actor", "op": "eq", "value": "alice"}`:
+
+| op | Meaning |
+|----|---------|
+| `eq`, `ne` | exact, case-sensitive; `ne` also keeps rows that have no value |
+| `in` | `value` is a list of 1 to 50 exact values |
+| `contains`, `prefix` | substring / leading text, ignoring ASCII case; `%` and `_` are ordinary characters |
+| `exists`, `missing` | the row has / does not have the field (no `value`) |
+| `gt`, `ge`, `lt`, `le` | `bytes` only |
+
+`t_start` and `t_end` are inclusive UTC times (`2026-01-31T13:00:00Z`; an offset is
+converted). The model supplies field names and values, never SQL: names are checked
+against the table's own fields and every value is a bound parameter. A field the table
+has no values for is refused with the list of fields it does have.
+
+Every result states `filter_applied` (as understood), `rows_matched`, `rows_in_table`,
+`rows_not_parsed` (records or damaged stretches the extractor could not read: they are
+in no count, and the number is a lower bound), `rows_without_time` (no time, or one
+outside 1990..2100), `truncated`, and `notes[]` saying in words what was left out. The
+rows are indexed as source `logtable.<kind>.<id>`, whose first line is a header with the
+`tool_call_id`, the filter and the counts; cite the call's `tool_call_id` and that source.
+At most about 12,000 characters of rows are returned inline; the rest are in the source.
+An identical query over an unchanged table is not indexed twice: it returns
+`status: "skipped"` with the existing source and the same rows. `force=True` indexes it
+again as `<name>-r<k>`. Stored values are one line of at most 512 characters; a longer
+one ends in `…`. A count is of the records in the table: it says nothing about periods
+or systems the log does not cover. A failure in the case database is returned, and
+audited, as an error like any other.
+
+### list_log_tables
+
+List the log tables of this case: logs loaded as rows that can be counted.
+
+*No parameters.*
+
+**Returns:** `tables[]` (table, rows, rows_without_time, rows_not_parsed, first_time, last_time, fields{name: rows with a value}, loaded_from[] (source_path, rows; the 20 largest, with loaded_from_note, when there are more), ingest_incomplete when loading was cut short)
+
+**Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR`
+
+### log_top
+
+Count log events by the values of one to three fields, with first and last seen.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| table | str | yes | A table name from `list_log_tables` |
+| fields | str \| list[str] | yes | One to three fields to group by |
+| filters | list[dict] \| None | no | Conditions, see above |
+| t_start | str \| None | no | Only events at or after this UTC time |
+| t_end | str \| None | no | Only events at or before this UTC time |
+| n | int | no | Groups to return (default 20, 1..200) |
+| order | str | no | `count` (default), `rare` (least frequent first), `bytes`, `first_seen` (earliest first), `last_seen` (latest first) |
+| force | bool | no | Index the result again (default False) |
+
+**Returns:** `rows[]` (the field values, count, first_seen, last_seen, bytes where the table has byte counts), `groups_total`, `row_count`, and the common fields above (source logtable.top.&lt;id&gt;)
+
+Rows without a value form their own group (`null`), so the counts add up to `rows_matched`.
+A byte sum above 2^53 (8 PiB) is approximate.
+
+**Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR`
+
+### log_histogram
+
+Count log events per minute, hour or day, optionally split by one field.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| table | str | yes | A table name from `list_log_tables` |
+| bucket | str | no | `minute`, `hour` (default) or `day` |
+| split_by | str \| None | no | A field to break each bucket down by |
+| filters | list[dict] \| None | no | Conditions, see above |
+| t_start | str \| None | no | Only events at or after this UTC time |
+| t_end | str \| None | no | Only events at or before this UTC time |
+| n | int | no | Buckets to return (default 100, 1..200) |
+| order | str | no | `time` (default, earliest bucket first) or `count` (busiest first) |
+| force | bool | no | Index the result again (default False) |
+
+**Returns:** `rows[]` (bucket, count; with `split_by` also by[] (value, count) and other), `buckets_total`, `matched_without_time`, `row_count`, and the common fields above (source logtable.histogram.&lt;id&gt;)
+
+A bucket is named by its UTC start: `2026-01-31T13` is the hour from 13:00. Buckets with
+no events are not listed, and events without a time are in no bucket. `split_by` lists the
+field's five most frequent values over the whole match and sums the rest as `other`.
+
+**Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR`
+
+### log_rows
+
+Read log events that match a filter, one page at a time, in time order.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| table | str | yes | A table name from `list_log_tables` |
+| filters | list[dict] \| None | no | Conditions, see above |
+| t_start | str \| None | no | Only events at or after this UTC time |
+| t_end | str \| None | no | Only events at or before this UTC time |
+| limit | int | no | Rows to return (default 25, 1..200) |
+| offset | int | no | Rows to skip, for the next page (default 0, 0..100000; a larger one is read as 100000) |
+| newest_first | bool | no | Latest events first (default False) |
+| force | bool | no | Index the result again (default False) |
+
+**Returns:** `rows[]` (time, the fields that have a value, source, source_path, line), `offset`, `row_count`, and the common fields above (source logtable.rows.&lt;id&gt;)
+
+`source` and `line` say where the whole event is in the indexed text; `source_path` is
+added when the table was loaded from several evidence paths, whose sources share a name.
+Events without a time come last. When `truncated`, `notes` gives the next page's offset
+(`offset + row_count`), or says that the offset cap was reached and the filter or time
+window must be narrowed to read further.
+
+**Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR`
 
 ---
 

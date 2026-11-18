@@ -1,0 +1,27 @@
+title: Microsoft 365 Mailbox Permission Granted
+id: 5b440bbd-6972-48dc-a440-c0b9ea73a025
+status: experimental
+description: Detects another account being given access to a mailbox, the right to send as or on behalf of it, or access to one of its folders. The grant outlives a password reset of the mailbox owner.
+references:
+    - https://learn.microsoft.com/en-us/exchange/recipients-in-exchange-online/manage-permissions-for-recipients
+    - https://learn.microsoft.com/en-us/defender-office-365/responding-to-a-compromised-email-account
+author: mulder
+date: 2026-11-18
+tags:
+    - attack.persistence
+    - attack.t1098.002
+logsource:
+    product: m365
+    service: audit
+detection:
+    selection:
+        Operation:
+            - 'Add-MailboxPermission'
+            - 'Add-RecipientPermission'
+            - 'Add-MailboxFolderPermission'
+    filter_system:
+        UserId|startswith: 'NT AUTHORITY\SYSTEM'
+    condition: selection and not filter_system
+falsepositives:
+    - Delegation set up by an administrator, shared mailboxes and assistants
+level: medium

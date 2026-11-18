@@ -67,6 +67,9 @@ _EVIDENCE_TOOL_MAP: dict[str, list[str]] = {
     "ci_run_logs": [
         "run_secret_scan",
     ],
+    "mailbox": [
+        "parse_pst",
+    ],
     "evtx": [
         "run_evtx_parser",
         "run_hayabusa",
@@ -101,7 +104,7 @@ _EVIDENCE_TOOL_MAP: dict[str, list[str]] = {
 # the evidence root. Disk and memory images found there are handled by their
 # own planner listings and stay out, as before.
 _UNPACKED_EVIDENCE_TYPES = frozenset(
-    {"cloud_audit_log", "repository", "ci_run_logs", "triage_collection"}
+    {"cloud_audit_log", "repository", "ci_run_logs", "mailbox", "triage_collection"}
 )
 
 # Parameters that name the evidence a mapped tool reads. Output locations
@@ -112,6 +115,7 @@ _EVIDENCE_INPUT_PARAMS: dict[str, tuple[str, ...]] = {
     "run_cloud_audit_logs": ("evidence_path",),
     "run_secret_scan": ("evidence_path",),
     "run_workflow_audit": ("evidence_path",),
+    "parse_pst": ("file_path",),
     "index_triage_collection": ("evidence_path",),
     "run_volatility": ("memory_path",),
     "run_volatility_batch": ("memory_path",),
@@ -271,7 +275,8 @@ def audit_tool_coverage() -> dict[str, object]:
     skipped. Re-classifies the evidence directory and compares applicable
     tools against the audit log. A call counts for an evidence item only
     when one of the tool's evidence-input parameters names that item or a
-    directory holding it; a path that matches no item counts for none.
+    directory holding it; a path that matches no item counts for none, and
+    so does a run_cloud_audit_logs call that returned an error.
     Tools that can pick their input themselves count by name only while
     none of their calls names an input path or a source image.
 
@@ -327,6 +332,10 @@ def audit_tool_coverage() -> dict[str, object]:
     for entry in ctx.audit.tool_call_entries():
         params = entry.get("params")
         tool_name = str(entry.get("tool_name"))
+        # A run_cloud_audit_logs call that failed indexed nothing: a path over the size
+        # one call reads is refused whole. It is no coverage of the files under that path.
+        if tool_name == "run_cloud_audit_logs" and entry.get("status") == "error":
+            continue
         hits = targets[tool_name]
         if not isinstance(params, dict):
             continue
