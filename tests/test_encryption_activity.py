@@ -139,10 +139,11 @@ def test_the_encryption_is_the_candidate_and_the_larger_update_burst_is_not(case
     assert candidate["inspect_with"] == (
         "search(query='.locked', source='ez.usnjrnl', evidence_path='/evidence/server.E01')"
     )
-    # Run as written, it returns rows of the burst (a time range over the
-    # source does not: windows are found by their first timestamp).
-    run_search = search.__wrapped__  # type: ignore[attr-defined]
-    hits = eval(candidate["inspect_with"], {"search": run_search})  # noqa: S307
+    # That call returns rows of the burst (a time range over the source does
+    # not: windows are found by their first timestamp).
+    hits = search.__wrapped__(  # type: ignore[attr-defined]
+        query=".locked", source="ez.usnjrnl", evidence_path="/evidence/server.E01"
+    )
     assert hits["total_matches"] > 0
     assert any(".locked,.locked," in hit["window"]["raw_text"] for hit in hits["results"])
     # The servicing burst is four times larger and is context, not a candidate.
