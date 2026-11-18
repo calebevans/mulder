@@ -254,6 +254,10 @@ def _collect_startup_files(
 def find_persistence_mechanisms() -> dict[str, object]:
     """Detect persistence mechanisms across registry, services, event logs, and timeline.
 
+    Windows evidence only: it reads Windows artifacts, so on Linux, macOS,
+    mobile, network-only or cloud evidence it returns nothing, and that
+    empty result is not a negative finding.
+
     Searches Windows registry hives for known autorun keys (Run, RunOnce,
     Userinit, AppInit_DLLs, etc.), cross-references with Volatility service
     scan output, checks event logs for service installation and scheduled

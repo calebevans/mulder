@@ -67,6 +67,10 @@ def run_mvt_android(
 ) -> dict[str, object]:
     """Scan Android device backup for spyware indicators using MVT.
 
+    It matches against the indicator file passed in ``iocs``. mulder ships
+    none, so without one this checks nothing, and an empty result does not
+    mean the device is clean.
+
     Mobile Verification Toolkit detects traces of known spyware
     (Pegasus, Predator, etc.) on mobile devices.  Supports Android
     backup directories and bugreport files.
@@ -175,6 +179,10 @@ def run_mvt_ios(
     mode: str = "backup",
 ) -> dict[str, object]:
     """Scan iOS backup or filesystem dump for spyware indicators using MVT.
+
+    It matches against the indicator file passed in ``iocs``. mulder ships
+    none, so without one this checks nothing, and an empty result does not
+    mean the device is clean.
 
     Supports both iTunes/Finder backup directories and full filesystem
     dumps from jailbroken or acquired devices.

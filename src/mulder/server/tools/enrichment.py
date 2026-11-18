@@ -863,7 +863,10 @@ async def enrich_iocs(
 
     Queries public sources for reputation, geolocation, and metadata
     on each IOC. Degrades gracefully when API keys are unavailable or
-    services are unreachable.
+    services are unreachable. This discloses each indicator to those
+    services: do not submit internal host names, private addresses, or
+    anything that identifies the victim. The scores returned are
+    heuristics, not findings.
 
     Args:
         case_id: Active case identifier.

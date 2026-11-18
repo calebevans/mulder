@@ -619,6 +619,10 @@ def _build_recovery_assessment(
 def find_defense_evasion() -> dict[str, object]:
     """Detect defense evasion techniques across memory, filesystem, and event logs.
 
+    Windows evidence only: it reads Windows artifacts, so on Linux, macOS,
+    mobile, network-only or cloud evidence it returns nothing, and that
+    empty result is not a negative finding.
+
     Checks for timestomping (UsnJrnl vs MFT timestamp discrepancies),
     log clearing (Event IDs 104 and 1102), hidden processes (psscan vs
     pslist diff), hidden kernel modules (modscan vs modules diff), and

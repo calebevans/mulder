@@ -155,6 +155,7 @@ EXTRACTION: PhaseConfig = PhaseConfig(
         "Case ID: {case_id}\n"
         "Call open_case(case_id='{case_id}') as your FIRST action.\n\n"
         "System: {system_name}\n\n"
+        "{case_briefing}"
         "Execution results:\n{execution_results}\n\n"
         "Investigation questions:\n{investigation_questions}"
     ),
@@ -181,6 +182,7 @@ CROSS_SYSTEM: PhaseConfig = PhaseConfig(
     analyst_prompt_template=(
         "Case ID: {case_id}\n"
         "Call open_case(case_id='{case_id}') as your FIRST action.\n\n"
+        "{case_briefing}"
         "Execution results:\n{execution_results}\n\n"
         "Investigation questions:\n{investigation_questions}"
     ),
@@ -207,6 +209,7 @@ ALTERNATIVE_NARRATIVE: PhaseConfig = PhaseConfig(
     analyst_prompt_template=(
         "Case ID: {case_id}\n"
         "Call open_case(case_id='{case_id}') as your FIRST action.\n\n"
+        "{case_briefing}"
         "Execution results:\n{execution_results}\n\n"
         "Investigation questions:\n{investigation_questions}"
     ),
@@ -220,6 +223,7 @@ REPORT: PhaseConfig = PhaseConfig(
     single_role="analyst",
     single_system_prompt=REPORT_PROMPT,
     single_prompt_template=(
+        "Case ID: {case_id}\n\n"
         "{case_briefing}Write the investigation narrative and finalize the report."
     ),
     single_allowed_tools=get_tools_for_role(Role.REPORT),
