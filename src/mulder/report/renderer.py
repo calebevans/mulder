@@ -1261,8 +1261,10 @@ class ReportRenderer:
             case_id: Case identifier.
 
         Returns:
-            List of dicts with model, input, and output keys, or empty
-            list if the sidecar file does not exist.
+            List of dicts with model, input, output, cache_creation and
+            cache_read keys (the last two are 0 for a sidecar written
+            before they were recorded), or empty list if the sidecar file
+            does not exist.
         """
         usage_path = db_dir / f"{case_id}.model_usage.json"
         if not usage_path.exists():
@@ -1275,6 +1277,8 @@ class ReportRenderer:
                         "model": entry.get("model", "unknown"),
                         "input": entry.get("input_tokens", 0),
                         "output": entry.get("output_tokens", 0),
+                        "cache_creation": entry.get("cache_creation_input_tokens", 0),
+                        "cache_read": entry.get("cache_read_input_tokens", 0),
                     }
                     for entry in data
                     if isinstance(entry, dict)

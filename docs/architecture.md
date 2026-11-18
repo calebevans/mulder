@@ -209,6 +209,20 @@ Credit wording in a `ResultError` counts only when the SDK attributes the failur
 
 A fatal error propagates out of the phase loops with no retry and no continuation. In the extraction pool, the worker that hits one cancels the other workers, so a session waiting on a long tool call does not hold the run open. `mulder investigate` exits with status 2.
 
+### Token Budget
+
+`orchestrator/budget.py` holds the run's one token tally, `TokenBudget`. The orchestrator creates it and shares it with the `SessionExecutor`, which fills and obeys it, and with the dashboard, which displays it.
+
+**Tally.** Each session's final `ResultMessage` is added with `record()`. The source is `model_usage` (one entry per model, so it includes any auxiliary model the CLI called) or, when that is empty, `usage` filed under the session's own model. Four disjoint kinds are kept per model: uncached input, output, cache-write input and cache-read input. Per-message usage is never added: behind the LiteLLM proxy only the final message carries usage. The `model_usage` sidecar is written from the tally. Its `input_tokens` and `output_tokens` keep their meaning, and `cache_creation_input_tokens` and `cache_read_input_tokens` are listed beside them.
+
+**Budget.** `--max-tokens` sets `limit`, counted over all four kinds. It is in tokens because Claude Code prices its dollar figure from a table of Claude models, which is wrong behind the proxy. `check()` is the first statement of `SessionExecutor.execute` and `execute_utility`, the two places a session starts, and raises `TokenBudgetReached` when `limit - used` is at or below `reserve`. No caller checks anything, so every kind of session is covered: role sessions, continuations, remediation, the plan-from-notes and JSON-repair sessions, and the `wait_all` utility query. A session that is running is never interrupted, so the total can end above the limit by the sessions in flight.
+
+**Reserve.** `report_reserve()` holds back `REPORT_RESERVE_FRACTION` (15%) of the budget, at least `REPORT_RESERVE_FLOOR` (750,000 tokens) and at most half. `TokenBudgetReached` is not a fatal error. It unwinds the phase loops with no retry and no continuation; `_run_pipeline` catches it, records it on `InvestigationResult.budget_stop` and goes to `_run_report`. That sets the reserve to zero, so report sessions start until the budget is fully spent, and gives the report prompt a note naming the systems and phases that were not completed and how to write about them. The extraction pool cancels nobody: each worker finishes the session it is in, and its next one is refused. A stop during the catalog ends the run without a report phase, since nothing was analysed. So does a stop that leaves `check_finalize_readiness` failing its `minimum_findings` gate, the one gate the report role has no tool to fix: the reserve is left unspent and the partial report takes over.
+
+`InvestigationResult.success` is False whenever `budget_stop` is set, and `mulder investigate` exits with status 1. If a report session was refused because nothing was left, or the report phase failed its gate, `budget_stop` is passed to the partial report as its reason ("token budget reached"). A refusal in the report phase after the report was finalized (a continuation of a session that ran out of turns) is not a stop: the phase passes, and `budget_stop` keeps whatever the analysis phases left there.
+
+**Turns.** A phase the budget cuts short returns no `PhaseResult`, so its turns are not in the per-phase sums. `SessionExecutor.turns_run` counts the turns of every role session; after a budget stop `InvestigationResult.total_turns` is set from it, and the summary's phase table lists the difference as `(cut short)`. Without a budget stop the total is the per-phase sum, as before.
+
 ### Phase Gates
 
 Extraction, cross-system, and narrative gates read the database directly.
@@ -427,7 +441,7 @@ The orchestrator displays a real-time terminal dashboard using Rich's Live displ
 ```
 
 The dashboard has two panels:
-- **Stats header**: Current phase, tool count, finding count, token usage (total and per-model), throughput, system resources, elapsed time
+- **Stats header**: Current phase, tool count, finding count, token usage (total and per-model), throughput, system resources, elapsed time, and with `--max-tokens` the tokens counted against the budget
 - **Scrolling log**: Assistant reasoning, tool calls, findings (color-coded by severity), gate results
 
 ## Evidence Classification and Extractor Framework
