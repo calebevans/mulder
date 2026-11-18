@@ -19,7 +19,7 @@ import codecs
 import json
 import re
 from collections.abc import Callable, Mapping, Sequence
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 __all__ = [
@@ -120,11 +120,15 @@ class Text(Format):
 
 # --- Web access logs ---------------------------------------------------------------
 
+# What stands between two quotes, escaped quotes included. Possessive ("*+"): the
+# plain "*" keeps a way back for every character, hundreds of MB for one 64 KiB field,
+# and there is none to take, since nothing in the field can be read a second way.
+_QUOTED = r'(?:[^"\\]|\\.)*+'
 # Apache and nginx "common" and "combined", with or without a leading virtual host.
 _CLF = re.compile(
     r"(?:(?P<host>\S+) )?(?P<ip>\S+) \S+ (?P<user>\S+) \[(?P<time>[^\]]{1,40})\] "
-    r'"(?P<request>(?:[^"\\]|\\.)*)" (?P<status>\d{3}|-) (?P<bytes>\d+|-)'
-    r'(?: "(?P<referer>(?:[^"\\]|\\.)*)" "(?P<agent>(?:[^"\\]|\\.)*)")?'
+    rf'"(?P<request>{_QUOTED})" (?P<status>\d{{3}}|-) (?P<bytes>\d+|-)'
+    rf'(?: "(?P<referer>{_QUOTED})" "(?P<agent>{_QUOTED})")?'
 )
 
 
@@ -476,13 +480,23 @@ class _Timed(Format):
         if month is None:
             return None
         if not year:
-            # Syslog leaves the year out. The file was last written in some year: take
-            # that one, or the one before for a date later in the calendar.
+            # Syslog leaves the year out. The file was last written on some day: the
+            # line is from the latest year that puts it no more than a day after that
+            # (a host ahead of UTC writes tomorrow's date).
             if self.mtime is None:
                 return None
+            last = self.mtime.toordinal() + 1
+            for guess in (self.mtime.year + 1, self.mtime.year, self.mtime.year - 1):
+                try:
+                    fits = date(guess, month, day).toordinal() <= last
+                except ValueError:  # 29 February, in a year that has none
+                    continue
+                if fits:
+                    year = str(guess)
+                    break
+            else:
+                return None
             self.guessed_year = True
-            ahead = (month, day) > (self.mtime.month, self.mtime.day + 1)
-            year = str(self.mtime.year - 1 if ahead else self.mtime.year)
         self.naive = True
         return f"{year}-{month:02d}-{day:02d}T{head['hms']}"
 
@@ -509,7 +523,7 @@ class Syslog(_Timed):
 
 # A key starts where a word starts: tried inside a long run of letters, the search
 # would rescan the run from every position.
-_KV = re.compile(r'(?<![\w.-])([A-Za-z_][\w.-]*)=(?:"((?:[^"\\]|\\.)*)"|(\S*))')
+_KV = re.compile(rf'(?<![\w.-])([A-Za-z_][\w.-]*)=(?:"({_QUOTED})"|(\S*))')
 _FORTI = re.compile(r"\bdate=\d{4}-\d\d-\d\d\s+time=\d\d:\d\d:\d\d\b")
 _ASA = re.compile(r"%(?:ASA|FTD)-(?P<level>\d)-(?P<id>\d{6}): ?(?P<text>.*)")
 # The VPN session messages; every other ASA message keeps only its id and text.
@@ -849,11 +863,14 @@ def sniff(
         return Firewall(mtime)
     if _most(lines, _CLF.match):
         return Web()
-    if _most(lines, _ESXI.match) and (
-        esxi
-        or name.lower().split(".")[0] in _ESXI_NAMES
-        or any(_ESXI_MARK.search(line) for line in lines)
-    ):
+    # hostd writes an object over many "-->" lines: they are the rest of one entry, and
+    # a file may open with fifty of them. Where the file's name or its place in a
+    # bundle already says ESXi, one line in ESXi's form is enough.
+    entries = [line for line in lines if not line.startswith("-->")]
+    if esxi or name.lower().split(".")[0] in _ESXI_NAMES:
+        if not entries or any(_ESXI.match(line) for line in entries):
+            return Esxi(name)
+    elif _most(entries, _ESXI.match) and any(_ESXI_MARK.search(line) for line in entries):
         return Esxi(name)
     if _most(lines, _is_syslog):
         return Syslog(mtime)

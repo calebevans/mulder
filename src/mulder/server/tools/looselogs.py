@@ -35,7 +35,7 @@ from sqlalchemy import text
 
 from mulder import logparse, logtable
 from mulder.assets.paths import asset_path
-from mulder.extractors.classifier import is_esxi_bundle
+from mulder.extractors.classifier import EvidenceClassifier, is_esxi_bundle, is_loose_log
 from mulder.logparse import SKIP, Row
 from mulder.path_policy import PathPolicyError
 from mulder.server.app import get_ctx, mcp
@@ -63,10 +63,13 @@ _PREFIX = "logs."
 _EXTRACTOR = "looselogs"
 _WEB = "logs.web"
 _ESXI = "logs.esxi"
-# ponytail: a source holds at most this many lines, so the rows waiting to be loaded
-# stay near 150 MB whatever the log's size; the price is one source per 100,000 lines.
-# Index the text in a stream (extract_and_index takes one string) if sources crowd.
+# ponytail: a source holds at most this many lines and this many characters, so what
+# waits to be loaded stays within a few hundred MB whatever the log's size or the
+# length of its lines; the price is one source per 100,000 lines. Index the text in a
+# stream (extract_and_index takes one string) if sources crowd.
 _PART_LINES = 100_000
+_PART_CHARS = 64 << 20  # of the lines and row values queued for one source
+_VALUE_CHARS = 4 * logtable.MAX_VALUE_CHARS  # of one row value that a log table reads
 _READ_CHARS = 65_536  # of one line that are parsed
 _LINE_CHARS = 4_000  # of one line that are indexed
 _FILE_CHARS = 1 << 30  # of one file that are read: a gzip bomb ends here
@@ -91,12 +94,13 @@ _BREAKS = {c: " " for c in (*range(9), *range(10, 32), 0x7F, 0x85, 0x2028, 0x202
 # What a web event is called for the Sigma scan: the W3C names the rules use.
 _RAW, _TIME = "mulder.raw", "mulder.event_time"
 _SIGMA_FIELDS = (
-    "c-ip", "cs-username", "cs-method", "cs-uri-stem", "cs-uri-query", "cs-uri",
+    "c-ip", "cs-username", "cs-method", "cs-uri-stem", "cs-uri-query",
     "sc-status", "cs-user-agent", "cs-referer", "cs-host",
     _RAW, _TIME, "mulder.source", "mulder.line",
 )  # fmt: skip
-# The names a few of the rules use for the same two values.
-_ALIASES = {"cs-uri": "c-uri", "cs-user-agent": "c-useragent"}
+# Another name rules give the user agent.
+_ALIASES = {"cs-user-agent": "c-useragent"}
+_NOT_A_LOG = "not a log by its name (pass the file itself to read it)"
 _RULES_RAN = re.compile(r"Executing ruleset - (\d+) rules")
 
 
@@ -140,14 +144,16 @@ class _Sigma:
     """Runs the web server rules over web events, a part at a time.
 
     Zircolite holds its events in memory (about 2.6 KB each, measured), so they are
-    handed over 100,000 at a time, as the text is indexed.
+    handed over 100,000 at a time, as the text is indexed, or sooner when their lines
+    are long.
     """
 
     def __init__(self, tmp: Path, evidence_path: str) -> None:
         self.tmp = tmp
         self.evidence_path = evidence_path
         self.events: list[str] = []
-        self.detections: list[dict[str, Any]] = []
+        self.chars = 0  # of the events waiting
+        self.detections: list[str] = []  # as indexed lines: a match repeats its request
         self.by_rule: dict[str, int] = {}
         self.status = ""
         self.rules = self.rules_ran = self.scanned = self.unscanned = self.matches = 0
@@ -161,8 +167,9 @@ class _Sigma:
             "cs-username": row.get("actor"),
             "cs-method": row.get("action"),
             "cs-uri-stem": stem,
-            "cs-uri-query": query,
-            "cs-uri": f"{stem}?{query}" if query else stem,
+            # The whole request target, as a proxy logs it: most of the rules look in
+            # this field for a path ("/cgi-bin/.%2e/"), not only for what follows "?".
+            "cs-uri-query": f"{stem}?{query}" if query else stem,
             "sc-status": row.get("status"),
             "cs-user-agent": row.get("user_agent"),
             "cs-referer": extra.get("referer"),
@@ -173,7 +180,8 @@ class _Sigma:
             "mulder.line": row.get("line"),
         }
         self.events.append(json.dumps({k: v for k, v in event.items() if v not in (None, "")}))
-        if len(self.events) >= _PART_LINES:
+        self.chars += len(self.events[-1])
+        if len(self.events) >= _PART_LINES or self.chars >= _PART_CHARS:
             self.scan()
 
     def _ready(self) -> str:
@@ -189,7 +197,7 @@ class _Sigma:
 
     def scan(self) -> None:
         """Scan the events gathered so far."""
-        events, self.events = self.events, []
+        events, self.events, self.chars = self.events, [], 0
         if not events:
             return
         if not self.status:
@@ -237,12 +245,15 @@ class _Sigma:
                     fields = detection["matched_fields"]
                     detection["timestamp"] = fields.pop(_TIME, "")
                     # The line is in the source the match names; the rest is repetition.
-                    for key in (_RAW, "OriginalLogfile", "row_id", "cs-uri", *_ALIASES.values()):
+                    repeated = (_RAW, "OriginalLogfile", "row_id", "cs-uri-stem")
+                    for key in (*repeated, *_ALIASES.values()):
                         fields.pop(key, None)
                     title = str(detection["rule_title"])
                     self.by_rule[title] = self.by_rule.get(title, 0) + 1
                 self.matches += len(found)
-                self.detections += found[: _MAX_DETECTIONS - len(self.detections)]
+                self.detections += _detection_lines(
+                    found[: _MAX_DETECTIONS - len(self.detections)]
+                )
         except subprocess.TimeoutExpired as exc:
             self.status = f"error: Zircolite timed out after {exc.timeout:.0f} seconds"
         except OSError as exc:
@@ -282,7 +293,7 @@ class _Sigma:
             header += f" Only the first {len(self.detections)} matches are listed."
         source = f"{_WEB}.detections"
         extract_and_index(
-            "\n".join([header, *sorted(_detection_lines(self.detections))]),
+            "\n".join([header, *sorted(self.detections)]),
             source,
             self.evidence_path,
             _EXTRACTOR,
@@ -347,9 +358,11 @@ class _Table:
     tabular: bool
     lines: list[str] = field(default_factory=list)
     rows: list[Row | None] = field(default_factory=list)
+    chars: int = 0  # of the queued lines and row values
     file: str | None = None
     names: list[str] = field(default_factory=list)  # the sources written
     ids: list[int] = field(default_factory=list)  # of those whose rows were loaded
+    examples: list[str] = field(default_factory=list)  # the first files read
     files: int = 0
     total: int = 0
     loaded: int = 0
@@ -365,10 +378,12 @@ class _Table:
         if file != self.file:
             self.file = file
             self.files += 1
+            self.examples += [file][: _NAMED - len(self.examples)]
             self.lines.append(f"{mark}# file: {file}")
         elif not self.lines:  # a part that continues a file names it again
             self.lines.append(f"{mark}# file: {file} (continued)")
         self.lines.append(line)
+        self.chars += len(line)
         self.total += 1
         if row is None:
             self.rows.append(None)
@@ -376,6 +391,17 @@ class _Table:
             row["line"] = len(self.lines)
             row.setdefault("extra", {})["file"] = file
             self.rows.append(row)
+
+    def cut(self, row: Row) -> None:
+        """Cut the values of a queued *row* to what the log table reads of one, and
+        count them: a request can carry 64 KiB in each of several fields."""
+        for values in (row, row["extra"]):
+            for key, value in values.items():
+                if isinstance(value, list | dict) and key != "extra":
+                    value = str(value)  # as the table would read it
+                if isinstance(value, str):
+                    values[key] = value[:_VALUE_CHARS]
+                    self.chars += len(values[key])
 
     @property
     def name(self) -> str:
@@ -389,7 +415,7 @@ class _Table:
         name = self.name
         indexed = extract_and_index("\n".join(self.lines), name, evidence_path, _EXTRACTOR)
         self.names.append(name)
-        rows, self.lines, self.rows = self.rows, [], []
+        rows, self.lines, self.rows, self.chars = self.rows, [], [], 0
         if not self.tabular:
             return
         source_id = int(str(indexed["source_id"]))
@@ -409,6 +435,7 @@ class _Table:
         if len(self.names) > 1:  # a large log is indexed in parts
             entry["sources"] = f"{self.names[0]}, and {self.names[1]} to {self.names[-1]}"
         if not self.tabular:
+            entry["examples"] = self.examples
             entry["note"] = "format not recognised: indexed as text, nothing parsed; use search"
             return entry
         entry.update(log_table=self.source, rows=self.loaded, rows_not_parsed=self.unparsed)
@@ -429,6 +456,7 @@ class _Reader:
         self.stream = stream
         self.budget = self.left = budget
         self.cut = False
+        self.long = 0  # lines read only as far as is parsed
 
     def __iter__(self) -> Iterator[str]:
         while True:
@@ -439,22 +467,25 @@ class _Reader:
             if not line:
                 return
             self.left -= len(line)
-            more = line
+            more, dropped = line, False
             # A line longer than is parsed: the rest of it is read and dropped.
             while len(more) == _READ_CHARS and not more.endswith("\n") and self.left > 0:
                 more = self.stream.readline(_READ_CHARS)
                 self.left -= len(more)
-            yield line.rstrip("\r\n")
+                dropped = dropped or bool(more.strip())
+            self.long += dropped
+            yield line.rstrip("\n")
 
 
 def _open(path: Path) -> IO[str]:
-    """*path* as text. gzip is read through; PowerShell's ">" writes UTF-16."""
+    """*path* as text, a line ending wherever a line feed, a carriage return or both
+    end it. gzip is read through; PowerShell's ">" writes UTF-16."""
     with path.open("rb") as probe:
         magic = probe.read(2)
     if magic == b"\x1f\x8b":
-        return gzip.open(path, "rt", encoding="utf-8", errors="replace", newline="\n")
+        return gzip.open(path, "rt", encoding="utf-8", errors="replace")
     encoding = "utf-16" if magic in (b"\xff\xfe", b"\xfe\xff") else "utf-8-sig"
-    return path.open("r", encoding=encoding, errors="replace", newline="\n")
+    return path.open("r", encoding=encoding, errors="replace")
 
 
 class _Run:
@@ -464,17 +495,20 @@ class _Run:
         self.evidence_path = evidence_path
         self.esxi = esxi
         self.tables: dict[str, _Table] = {}
-        self.not_read: dict[str, list[str]] = {}
+        self.not_read: dict[str, dict[str, Any]] = {}  # reason -> files, examples
         self.left = _CALL_CHARS
-        self.read = self.cut_lines = 0
+        self.read = self.cut_lines = self.long_lines = 0
         self.sigma = _Sigma(tmp, evidence_path)
         self.highlights: list[str] = []
         self.categories: dict[str, int] = {}
 
     def skip(self, reason: str, name: str) -> None:
-        self.not_read.setdefault(reason, []).append(name)
+        """Count a file that is not read, and keep the first few names."""
+        entry = self.not_read.setdefault(reason, {"files": 0, "examples": []})
+        entry["files"] += 1
+        entry["examples"] += [name][: _NAMED - len(entry["examples"])]
 
-    def file(self, path: Path, name: str, mtime: datetime) -> None:
+    def file(self, path: Path, name: str, mtime: datetime | None) -> None:
         """Read one file into its tables."""
         if self.left <= 0:
             self.skip("over the size limit for one call", name)
@@ -506,6 +540,7 @@ class _Run:
         finally:
             if reader is not None:
                 self.left -= reader.budget - reader.left
+                self.long_lines += reader.long
         if lost:
             self.skip(lost, name)
             if table is not None and table.tabular:
@@ -546,7 +581,8 @@ class _Run:
                     # str.split breaks on tabs and every line separator alike.
                     columns = "\t".join(" ".join(str(v or "-").split()) for v in values)
                     self.highlights.append(f"{indexed.partition(chr(9))[0]}\t{columns}")
-        if len(table.lines) >= _PART_LINES:
+            table.cut(row)  # after the Sigma scan was given the whole of each value
+        if len(table.lines) >= _PART_LINES or table.chars >= _PART_CHARS:
             table.flush(self.evidence_path)
         return table
 
@@ -571,36 +607,68 @@ class _Run:
         return {"highlights": total, "by_category": self.categories, "highlights_source": source}
 
 
-def _walk(tops: list[Path], root: Path, run: _Run) -> Iterator[tuple[Path, str, datetime]]:
-    """Every regular file under *tops*, with its name relative to *root* and its
+def _walk(
+    tops: list[Path], root: Path, run: _Run, whole: bool
+) -> Iterator[tuple[Path, str, datetime | None]]:
+    """Every log file under *tops*, with its name relative to *root* and its
     modification time. Symlinks are not followed and nothing but a regular file is
-    opened: a link could point anywhere, and a FIFO would block the read."""
+    opened: a link could point anywhere, and a FIFO would block the read.
+
+    In a log directory every file is a log, and *whole* says that *tops* lie in one or
+    in a bundle. Any other directory may hold a web root or a source tree beside its
+    logs: there only what the classifier takes for a log file is read, and nothing
+    hidden, which is what the planner counted when it listed the directory.
+    """
+
+    def shown(path: object) -> str:
+        return os.path.relpath(str(path), root).translate(_BREAKS)[:300]
+
+    def unlisted(exc: OSError) -> None:  # os.walk would pass over it in silence
+        run.skip(f"directory could not be listed ({type(exc).__name__})", shown(exc.filename))
+
     seen = 0
+    logs: set[str] = set()  # the folders whose every file is read
     for top in tops:
+        single = top.is_file()
         walk: Iterable[tuple[str, list[str], list[str]]] = (
-            [(str(top.parent), [], [top.name])] if top.is_file() else os.walk(top)
+            [(str(top.parent), [], [top.name])] if single else os.walk(top, onerror=unlisted)
         )
         for folder, folders, names in walk:
+            if (
+                whole
+                or single
+                or os.path.dirname(folder) in logs
+                or EvidenceClassifier._is_log_directory(Path(folder))
+            ):
+                logs.add(folder)
+            else:
+                folders[:] = [name for name in folders if not name.startswith(".")]
             folders.sort()
             # os.walk lists a linked directory and does not enter it: say so.
             names += [name for name in folders if os.path.islink(os.path.join(folder, name))]
             for name in sorted(names):
                 path = Path(folder, name)
-                shown = str(path.relative_to(root)).translate(_BREAKS)[:300]
                 try:
                     info = path.lstat()
                 except OSError:
-                    run.skip("unreadable or damaged (OSError)", shown)
+                    run.skip("unreadable or damaged (OSError)", shown(path))
                     continue
                 if not stat.S_ISREG(info.st_mode):
                     kind = "symbolic link" if stat.S_ISLNK(info.st_mode) else "not a regular file"
-                    run.skip(kind, shown)
+                    run.skip(kind, shown(path))
+                    continue
+                if folder not in logs and (name.startswith(".") or not is_loose_log(path)):
+                    run.skip(_NOT_A_LOG, shown(path))
                     continue
                 seen += 1
-                if seen > _MAX_FILES:
-                    run.skip(f"over the limit of {_MAX_FILES} files for one call", shown)
-                    return
-                yield path, shown, datetime.fromtimestamp(info.st_mtime, tz=UTC)
+                if seen > _MAX_FILES:  # counted, so that the result says how many
+                    run.skip(f"over the limit of {_MAX_FILES} files for one call", shown(path))
+                    continue
+                try:
+                    mtime = datetime.fromtimestamp(info.st_mtime, tz=UTC)
+                except (OverflowError, OSError, ValueError):
+                    mtime = None  # a time outside the calendar: the file is read all the same
+                yield path, shown(path), mtime
 
 
 @mcp.tool()
@@ -617,7 +685,8 @@ def run_loose_logs(evidence_path: str, force: bool = False) -> dict[str, object]
     log table of the same name and the rows that could not be parsed. Every line is
     indexed as text behind its UTC time. A file whose format is not recognised is
     indexed as logs.text and nothing in it is parsed; files that were not read at all
-    (binary, symbolic link, over a limit) are counted in files_not_read with the reason.
+    (binary, symbolic link, not a log by its name, over a limit) are counted in
+    files_not_read with the reason.
     For web logs it also runs the SigmaHQ web server rules (logs.web.detections) and
     lists web shell candidates (logs.web.webshell); for ESXi logs it lists logins,
     shell commands, SSH or shell being enabled, virtual machines powered off, the
@@ -625,14 +694,26 @@ def run_loose_logs(evidence_path: str, force: bool = False) -> dict[str, object]
     leads to read, not findings.
 
     Args:
-        evidence_path: A log file, or a directory read recursively. For an ESXi support
-            bundle pass the bundle directory: its var/run/log and var/log are read.
+        evidence_path: A log file, or a directory read recursively: every file of a
+            log directory (named log or logs, or under var/log), and elsewhere the
+            files named as logs (.log, .txt, rotated .log.N, Suricata or Zeek JSON).
+            For an ESXi support bundle pass the bundle directory: its var/run/log and
+            var/log are read.
         force: Re-run even if this path was already indexed.
     """
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
     name = "run_loose_logs"
     params: dict[str, object] = {"evidence_path": evidence_path, "force": force}
+
+    try:
+        root = _resolve_evidence(evidence_path)
+    except PathPolicyError as exc:
+        return error_response(tc_id, name, params, str(exc), error_type="invalid_argument")
+    if not root.exists():
+        return error_response(
+            tc_id, name, params, f"Path not found: {evidence_path}", error_type="file_not_found"
+        )
 
     if not force:
         existing = sources_already_indexed([_PREFIX], evidence_path=evidence_path)
@@ -644,26 +725,19 @@ def run_loose_logs(evidence_path: str, force: bool = False) -> dict[str, object]
             }
             return tool_response(tc_id, name, params, skipped, None, 0.0)
 
-    try:
-        root = _resolve_evidence(evidence_path)
-    except PathPolicyError as exc:
-        return error_response(tc_id, name, params, str(exc), error_type="invalid_argument")
-    if not root.exists():
-        return error_response(
-            tc_id, name, params, f"Path not found: {evidence_path}", error_type="file_not_found"
-        )
-
     bundle = root.is_dir() and is_esxi_bundle(root)
     tops = [root]
     if bundle:
         logs = (root / "var" / "run" / "log", root / "var" / "log")
         tops = [d for d in logs if d.is_dir() and not d.is_symlink()]
-    inside_bundle = bundle or any(is_esxi_bundle(parent) for parent in list(root.parents)[:4])
+    near = (root, *list(root.parents)[:4])
+    inside_bundle = any(is_esxi_bundle(folder) for folder in near)
+    whole = inside_bundle or any(map(EvidenceClassifier._is_log_directory, near))
     base = root if root.is_dir() else root.parent
 
     with tempfile.TemporaryDirectory(prefix="mulder_looselogs_") as tmpdir:
         run = _Run(evidence_path, Path(tmpdir), inside_bundle)
-        for path, shown, mtime in _walk(tops, base, run):
+        for path, shown, mtime in _walk(tops, base, run, whole):
             run.file(path, shown, mtime)
         for table in run.tables.values():
             table.flush(evidence_path)
@@ -687,10 +761,7 @@ def run_loose_logs(evidence_path: str, force: bool = False) -> dict[str, object]
                 "command output and configuration and were not indexed"
             )
         if run.not_read:
-            summary["files_not_read"] = {
-                reason: {"files": len(names), "examples": names[:_NAMED]}
-                for reason, names in sorted(run.not_read.items())
-            }
+            summary["files_not_read"] = dict(sorted(run.not_read.items()))
         summary["sources"] = {
             source: table.summary() for source, table in sorted(run.tables.items())
         }
@@ -712,6 +783,11 @@ def run_loose_logs(evidence_path: str, force: bool = False) -> dict[str, object]
                 f"{run.cut_lines} lines longer than {_LINE_CHARS} characters were cut in "
                 "the indexed text (they were parsed whole, up to 64 KiB)"
             )
+        if run.long_lines:
+            notes.append(
+                f"{run.long_lines} lines are longer than {_READ_CHARS} characters: the "
+                "rest of each was neither parsed nor indexed"
+            )
         if notes:
             summary["notes"] = notes
 
@@ -725,7 +801,11 @@ def run_loose_logs(evidence_path: str, force: bool = False) -> dict[str, object]
             summary["esxi"] = run.esxi_highlights()
         summary["hint"] = (
             "list_log_tables shows each table's fields and time range; count with "
-            "log_top and log_histogram, read events with log_rows."
+            "log_top and log_histogram, read events with log_rows. A row's source and "
+            "line say where its event is indexed: a large log is indexed in parts "
+            "(logs.web, logs.web.2 and so on) and the line counts within the part. "
+            "Search that exact source: a table's name alone also matches its parts and "
+            "the sources derived from it."
         )
 
     return tool_response(tc_id, name, params, summary, None, (time.monotonic() - t0) * 1000)

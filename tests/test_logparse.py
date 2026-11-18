@@ -8,6 +8,7 @@ public sample exists (FortiGate VPN, SonicWall, Cisco ASA).
 from __future__ import annotations
 
 import time
+import tracemalloc
 from datetime import UTC, datetime
 from typing import Any
 
@@ -530,6 +531,33 @@ def test_syslog_takes_its_year_from_the_file_and_says_so() -> None:
     assert _row(blind, line)["event_time"] is None
 
 
+@pytest.mark.parametrize(
+    ("mtime", "line", "expected"),
+    [
+        # A host ahead of UTC writes tomorrow's date: the day's allowance carries over
+        # the end of a month and of a year.
+        (datetime(2024, 1, 31, 23, 30), "Feb  1 00:30:00", "2024-02-01T00:30:00Z"),
+        (datetime(2024, 12, 31, 23, 30), "Jan  1 00:30:00", "2025-01-01T00:30:00Z"),
+        (datetime(2024, 1, 30, 23, 30), "Jan 31 00:30:00", "2024-01-31T00:30:00Z"),
+        (datetime(2024, 1, 30, 23, 30), "Feb  1 00:30:00", "2023-02-01T00:30:00Z"),
+        # 29 February exists only in a leap year: the one before a file written in 2025.
+        (datetime(2025, 3, 5), "Feb 29 10:00:00", "2024-02-29T10:00:00Z"),
+        (datetime(2023, 1, 10), "Feb 29 10:00:00", None),
+        # A modification time at either end of the calendar is not a reason to fail.
+        (datetime(9999, 12, 31), "Jan  1 00:30:00", None),
+        (datetime(1, 1, 1), "Dec 31 00:30:00", None),
+    ],
+)
+def test_the_year_of_a_syslog_line_is_the_latest_that_fits_the_file(
+    mtime: datetime, line: str, expected: str | None
+) -> None:
+    fmt = logparse.Syslog(mtime.replace(tzinfo=UTC))
+
+    row = fmt.parse(f"{line} h sshd[1]: x")
+
+    assert row is not None and normalise_time(row["event_time"]) == expected
+
+
 def test_syslog_with_an_iso_time_and_a_relayed_line() -> None:
     iso = "2024-01-15T10:22:33.123456+01:00 web01 sudo: pam_unix(sudo:session): session opened"
     relayed = (
@@ -680,6 +708,18 @@ def test_which_files_are_taken_for_esxi_logs() -> None:
     assert isinstance(sniff("collected.log", [auth], esxi=True), logparse.Esxi)  # in a bundle
     # The same line in a file of another name is syslog: nothing says ESXi.
     assert isinstance(sniff("collected.log", [f"{auth[:20]} esx1 {auth[21:]}"]), logparse.Syslog)
+    # hostd writes an object over many "-->" lines, and a rotated file can open in the
+    # middle of one: they are not lines that fail to be ESXi's.
+    dump = ["--> (vim.TaskInfo) {", *[f"-->    field{n} = {n}," for n in range(46)], "--> }"]
+    hostd = "2025-05-06T14:00:00.123Z info hostd[2099999] [Originator@6876 sub=Vimsvc] Event 1"
+    assert isinstance(sniff("hostd.log", [hostd, *dump]), logparse.Esxi)
+    assert isinstance(sniff("collected.log", [hostd, *dump], esxi=True), logparse.Esxi)
+    assert isinstance(sniff("collected.log", [hostd, hostd, *dump]), logparse.Esxi)  # by its marks
+    assert isinstance(sniff("hostd.1", dump), logparse.Esxi)
+    assert isinstance(sniff("notes.txt", dump), logparse.Text)
+    # A Linux file of one of those names is still syslog.
+    linux = "Mar  4 12:38:02 web01 sshd[1234]: Accepted password for root from 203.0.113.9"
+    assert isinstance(sniff("auth.log", [linux, linux], _MTIME), logparse.Syslog)
 
 
 def test_unknown_text_is_not_parsed_and_most_lines_decide() -> None:
@@ -694,6 +734,27 @@ def test_unknown_text_is_not_parsed_and_most_lines_decide() -> None:
     assert isinstance(sniff("mail.txt", [_COMBINED, "a", "b", "c"]), logparse.Text)
     # JSON that is neither Suricata nor Zeek stays text.
     assert isinstance(sniff("app.json", ['{"level":"info","msg":"started"}']), logparse.Text)
+
+
+def test_a_long_quoted_field_costs_no_memory_to_match() -> None:
+    """The pattern kept a way back for every character of a quoted field: 17 MB for one
+    request of 60,000 characters, taken and given back for every such line, and a log
+    of them peaked past 1 GB of resident memory on that alone."""
+    pad = "A" * 60_000
+    request = f'203.0.113.9 - - [10/Oct/2023:13:55:36 +0000] "GET /a?x={pad} HTTP/1.1" 200 5'
+    event = f'{_FORTIGATE} msg="{pad}"'
+    web, firewall = sniff("access.log", [request]), sniff("fw.log", [_FORTIGATE], _MTIME)
+    tracemalloc.start()
+    try:
+        rows = _row(web, request), _row(firewall, event)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+    assert rows[0]["query"] == f"x={pad}" and peak < 2_000_000
+    # An escaped quote is still inside the field, and an unclosed one still no request.
+    assert _row(web, request.replace("/a?", '/a\\"b?'))["target"] == '/a\\"b'
+    assert web.parse(request.replace(' HTTP/1.1"', "")) is None
 
 
 def test_hostile_lines_cost_linear_time() -> None:

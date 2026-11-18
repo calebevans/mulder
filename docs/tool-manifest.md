@@ -703,10 +703,10 @@ gzip files are read; nothing is written to the evidence.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| evidence_path | str | yes | A log file, or a directory read recursively. For an ESXi support bundle, the bundle directory: its `var/run/log` and `var/log` are read |
+| evidence_path | str | yes | A log file, or a directory read recursively: every file of a log directory (named `log` or `logs`, or under `var/log`), and elsewhere only the files named as logs (`.log`, `.txt`, rotated `.log.N`, Suricata or Zeek JSON), so that a web root or a source tree beside a log is not indexed. For an ESXi support bundle, the bundle directory: its `var/run/log` and `var/log` are read |
 | force | bool | no | Re-run even if this path was already indexed |
 
-**Returns:** `files_read`, `files_not_read{<reason>: files, examples[]}`, `sources{<source>: files, lines, log_table, rows, rows_not_parsed, rows_without_time, sources, log_table_note}`, `notes[]`, `web{sigma, sigma_events_scanned, sigma_events_not_scanned, detections, rules_matched{}, detections_source, webshell_candidates, webshell_source}`, `esxi{highlights, by_category{}, highlights_source}`, `esxi_bundle`
+**Returns:** `files_read`, `files_not_read{<reason>: files, examples[]}`, `sources{<source>: files, lines, log_table, rows, rows_not_parsed, rows_without_time, sources, log_table_note, examples[]}`, `notes[]`, `web{sigma, sigma_events_scanned, sigma_events_not_scanned, detections, rules_matched{}, detections_source, webshell_candidates, webshell_source}`, `esxi{highlights, by_category{}, highlights_source}`, `esxi_bundle`
 
 | Format | Recognised by | Source and [log table](#log-tables) | Fields beside the time |
 |--------|---------------|-------------------------------------|------------------------|
@@ -724,14 +724,19 @@ gzip files are read; nothing is written to the evidence.
 Every line is indexed, one per line, as the event's UTC time (or `-`), a tab, then the
 original line; a `# file:` line names each file. A row's `line` is its line in that
 source, and its `file` field the file it came from. A source holds at most 100,000
-lines, so a large log becomes `logs.web`, `logs.web.2` and so on, all feeding the one
-table.
+lines (fewer when the lines are long: about 64 MB of text), so a large log becomes
+`logs.web`, `logs.web.2` and so on, all feeding the one table. A row's `source` names
+its part and its `line` counts within it. Search that exact source: the name
+`logs.web` alone also matches its parts and the sources derived from it. `logs.text`
+names the first files it holds in `examples`.
 
 Three sources are derived, and each says in its first line what it is not:
 
 - `logs.web.detections`: matches of the SigmaHQ web server rules (the
   `rules/web/webserver_generic` set and every `category: webserver` rule under
-  `rules-emerging-threats`) over the web requests, through Zircolite. A match is a
+  `rules-emerging-threats`) over the web requests, through Zircolite. The rules'
+  `cs-uri-query` is given the whole request target (path and query string), because
+  most of them look for a path in it, and `cs-uri-stem` the path. A match is a
   request that looked like an attack, not one that worked. `sigma` is `ok`, or says
   why the scan was skipped, stopped or failed; requests are loaded either way.
 - `logs.web.webshell`: paths ending in a script extension (`.php`, `.asp`, `.aspx`,
@@ -750,16 +755,20 @@ Three sources are derived, and each says in its first line what it is not:
 Times: an offset in the log is applied. W3C, Zeek and ESXi times are UTC. A time
 with no offset (syslog, ASA, FortiGate without `tz` or `eventtime`, SonicWall without
 `UTC`) is read as UTC and `notes` names the tables that applies to. Syslog lines
-carry no year: it is taken from the file's modification time (the year before, for
-a date later in the calendar), and `notes` says so. Where a relay put its own
+carry no year: it is taken from the file's modification time (the latest year that
+puts the line no more than a day after it), and `notes` says so; a file with no
+usable modification time gives such lines no time. Where a relay put its own
 year-less header in front of a line that has an ISO time, the ISO time is used.
 
 Limits, each reported when it bites: 64 KiB parsed and 4,000 characters indexed
-per line, 1 GiB of text per file (gzip is read through, and a gzip bomb stops
-there), 5,000 files and 4 GiB of text per call, 30 minutes of Sigma scanning.
-What was cut off counts once in the table's `rows_not_parsed`. Only regular files
-are opened: symbolic links, FIFOs and devices are listed in `files_not_read`, as
-are binary and empty files. The path must lie inside the evidence directory or the
+per line (`notes` counts the lines past either), 1 GiB of text per file (gzip is
+read through, and a gzip bomb stops there), 5,000 files and 4 GiB of text per call
+(every file past the limit is counted), 30 minutes of Sigma scanning.
+What was cut off counts once in the table's `rows_not_parsed`. A line ends at a line
+feed, a carriage return or both. Only regular files are opened: symbolic links,
+FIFOs and devices are listed in `files_not_read`, as are binary and empty files,
+files that are not logs by their name outside a log directory, and directories that
+could not be listed. The path must lie inside the evidence directory or the
 case directory. Overlapping paths are counted once, as for `run_cloud_audit_logs`;
 the text index is not deduplicated.
 

@@ -550,30 +550,57 @@ def _is_hidden(path: Path) -> bool:
 LOOSE_LOG_TYPES = frozenset({"log_file", "log_directory", "esxi_bundle"})
 
 
+def is_loose_log(path: Path) -> bool:
+    """Whether the file at *path* is a loose log to the classifier: by its name or, for
+    JSON, by its first bytes."""
+    found = EvidenceClassifier()._classify_file(path)
+    return found is not None and found.artifact_type == "log_file"
+
+
+def _only_evtx(folder: Path) -> bool:
+    """A directory whose files are all Windows event logs (``winevt/Logs``, or an
+    export): a log directory by its name that holds nothing ``run_loose_logs`` reads."""
+    found = False
+    try:
+        for path in folder.rglob("*"):
+            if path.is_file():
+                if path.suffix.lower() not in _EVTX_EXTS:
+                    return False
+                found = True
+    except OSError:
+        return False
+    return found
+
+
 def loose_log_targets(
     items: Sequence[ClassifiedEvidence], root: Path
 ) -> dict[Path, tuple[str, int]]:
     """The paths to point ``run_loose_logs`` at, each with its artifact type and how
-    many classified items it covers.
+    many log files it covers.
 
-    A log directory or an ESXi bundle is one target. The tool reads a directory
-    recursively, so loose log files are read through their directory only when that is
-    not *root* and holds nothing else that was classified; otherwise each file is its
-    own target, and no run wanders into other evidence.
+    A log directory or an ESXi bundle is one target. Loose log files are read through
+    the highest directory below *root* that holds nothing else that was classified, so
+    a tree with a log in every directory is one run and not one per directory; a file
+    with no such directory is its own target. In such a directory the tool reads the
+    files :func:`is_loose_log` accepts and no others, so no run wanders into other
+    evidence or into what the classifier passed over.
     """
-    held: dict[Path, int] = {}  # directory -> loose log files directly in it
     root = root.resolve()
     mixed = {root, *root.parents}  # directories that hold something else as well
+    held: dict[Path, int] = {}  # directory -> the loose log files under it
     for item in items:
-        direct = item.path.parent if item.artifact_type == "log_file" else None
-        if direct is not None:
-            held[direct] = held.get(direct, 0) + 1
-        mixed.update(parent for parent in item.path.parents if parent != direct)
+        for parent in item.path.parents:
+            if item.artifact_type == "log_file":
+                held[parent] = held.get(parent, 0) + 1
+            else:
+                mixed.add(parent)
     targets: dict[Path, tuple[str, int]] = {}
     for item in items:
-        folder = item.path.parent
-        if item.artifact_type == "log_file" and folder not in mixed:
-            targets[folder] = ("log_file", held[folder])
-        elif item.artifact_type in LOOSE_LOG_TYPES:
+        if item.artifact_type == "log_file":
+            # Nearest first, and what holds a mixed directory is mixed: the last is highest.
+            clean = [parent for parent in item.path.parents if parent not in mixed]
+            target = clean[-1] if clean else item.path
+            targets[target] = ("log_file", held[target] if clean else 1)
+        elif item.artifact_type in LOOSE_LOG_TYPES and not _only_evtx(item.path):
             targets[item.path] = (item.artifact_type, 1)
     return targets

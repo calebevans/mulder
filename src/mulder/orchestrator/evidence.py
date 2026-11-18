@@ -74,6 +74,9 @@ _CI_CLOUD_TYPES: dict[str, tuple[str, str]] = {
 
 _MAX_SIMPLE_SYSTEMS_PER_SESSION: int = 4
 
+#: Paths of one evidence type that the planner is shown: a tree can hold hundreds.
+_MAX_LISTED: int = 25
+
 _MEMORY_EXTENSIONS: frozenset[str] = frozenset(
     (".raw", ".vmem", ".mem", ".img", ".dmp", ".lime", ".001")
 )
@@ -90,11 +93,20 @@ def _is_raw_disk(path: Path) -> bool:
 
 def _is_log(path: Path, root: Path) -> bool:
     """Whether ``run_loose_logs`` reads *path* as it is: a ``.log`` or ``.txt`` file, or
-    any file in a log directory or an ESXi bundle under *root*, a rotated ``.gz``
+    a file in a log directory or an ESXi bundle under *root*, a rotated ``.gz``
     included. Such a file is not an archive to unpack first and, however large, not a
-    memory dump."""
-    if path.suffix.lower() in (".log", ".txt"):
+    memory dump. What the tool cannot read is still what its name says, there as
+    anywhere: a tarball, an archive of another kind (a log rotated with xz or zstd
+    too), a memory or a disk image."""
+    ext = path.suffix.lower()
+    if ext in (".log", ".txt"):
         return True
+    if (
+        ext in _MEMORY_EXTENSIONS
+        or ext in _ARCHIVE_EXTENSIONS - {".gz"}
+        or path.name.lower().endswith((".tar.gz", ".tgz"))
+    ):
+        return False
     for parent in path.parents:
         if parent == root or not parent.is_relative_to(root):
             break
@@ -336,7 +348,9 @@ class EvidenceContext:
             )
 
         lines.extend(collection)
-        return "\n".join(lines)
+        # A path is a name from the evidence: one with a line break in it must not
+        # start a line of its own in the prompt.
+        return "\n".join("".join(c if c.isprintable() else " " for c in line) for line in lines)
 
     @staticmethod
     def _collection_lines() -> list[str]:
@@ -405,11 +419,16 @@ class EvidenceContext:
             if not mine:
                 continue
             lines.append(f'{label} (type "{artifact_type}"):')
-            for path, count in sorted(mine.items()):
+            for path, count in sorted(mine.items())[:_MAX_LISTED]:
                 by_directory = artifact_type in ("cloud_audit_log", "log_file")
                 is_dir = by_directory and Path(path).is_dir()
                 suffix = f"  ({count} files)" if is_dir else ""
                 lines.append(f"  {path}{suffix}")
+            if len(mine) > _MAX_LISTED:
+                lines.append(
+                    f"  ({len(mine) - _MAX_LISTED} more are not listed here: "
+                    "list_directory shows them)"
+                )
             lines.append(f"  {plan}")
         return lines
 
