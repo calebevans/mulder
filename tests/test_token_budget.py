@@ -816,6 +816,9 @@ class TestPipeline:
         self, tmp_path: Path
     ) -> None:
         run = _Run(tmp_path, 10**9, _costs())
+        # Sessions no phase adds up (a planner that returned no plan, say)
+        # stay out of the total, as they always have.
+        run.orch._session.turns_run = 100
         result = await run.run()
         assert result.total_turns == sum(p.turns_used for p in result.phases) == len(_FULL_RUN)
 
@@ -976,8 +979,9 @@ class TestDisplay:
             line.replace("│", " ").split() for line in buf.getvalue().splitlines()
         ]
 
+        # Only after a budget stop: any other run's table is what it was.
         dashboard, buf = _dashboard(self._budget(50_000))
-        dashboard.print_summary(InvestigationResult(phases=phases, total_turns=8, success=True))
+        dashboard.print_summary(InvestigationResult(phases=phases, total_turns=20))
         assert "cut short" not in buf.getvalue()
 
     def test_summary_without_cached_input_or_a_budget_has_no_new_rows(self) -> None:
