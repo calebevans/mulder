@@ -573,6 +573,7 @@ TOOL_SOURCE_PREFIXES: dict[str, list[str]] = {
     "parse_autoruns": ["autoruns."],
     "run_secret_scan": ["secrets."],
     "index_triage_collection": ["triage."],
+    "run_linux_persistence": ["linux.persistence"],
 }
 """Maps extraction tool names to the source prefixes they produce.
 

@@ -465,3 +465,38 @@ class TestSizeLimitAppliesToExtractedBytes:
             content = _extract_and_read_file("/img.dd", "16", 0, max_size_bytes=1024)
 
         assert content == "hello evidence"
+
+
+class TestNamesWithoutATextExtension:
+    """On Linux the name says little: crontab, sshd_config, .bash_history, access.log.1."""
+
+    LINUX_FLS = (
+        "r/r 12:\tetc/crontab\n"
+        "r/r 13:\tetc/ssh/sshd_config\n"
+        "r/r 14:\tetc/apt/sources.list~\n"
+        "r/r 15:\tetc/default/grub.d/50-cloud.cfg\n"
+        "r/r 16:\tvar/log/auth.log.1\n"
+    )
+
+    def test_the_default_extensions_still_leave_them_out(self) -> None:
+        matches = _find_matching_files([self.LINUX_FLS], "etc", _DEFAULT_EXTENSIONS, offset=0)
+
+        assert [m[1] for m in matches] == ["etc/default/grub.d/50-cloud.cfg"]
+
+    def test_a_star_takes_every_name_under_the_pattern(self) -> None:
+        matches = _find_matching_files([self.LINUX_FLS], "etc", frozenset({"*"}), offset=0)
+
+        assert [m[1] for m in matches] == [
+            "etc/crontab",
+            "etc/ssh/sshd_config",
+            "etc/apt/sources.list~",
+            "etc/default/grub.d/50-cloud.cfg",
+        ]
+
+    def test_compressed_content_is_binary_even_without_a_null_byte(self) -> None:
+        """A short rotated log can be all non-zero bytes after its header."""
+        assert _is_binary_content(b"\x1f\x8b\x08\x08" + b"\x55" * 200)
+        assert _is_binary_content(b"BZh91AY&SY" + b"\x55" * 200)
+        assert _is_binary_content(b"\xfd7zXZ\x00" + b"\x55" * 200)
+        assert _is_binary_content(b"\x28\xb5\x2f\xfd" + b"\x55" * 200)
+        assert not _is_binary_content(b"Oct  5 11:00:01 web01 sshd[9]: Accepted password\n")

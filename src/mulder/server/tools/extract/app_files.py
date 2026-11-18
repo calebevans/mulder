@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import fnmatch
 import logging
+import re
 import shutil
 import subprocess
 import time
 from typing import Any
 
 from mulder.dirroot import icat
+from mulder.linuxvol import SECRET_FILES
 from mulder.patterns import fls_file_entries
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
@@ -57,6 +59,10 @@ _DEFAULT_EXTENSIONS: frozenset[str] = frozenset(
 
 _ICAT_TIMEOUT = 30
 _MAX_TEXT_BYTES = 512 * 1024
+_COMPRESSED_MAGIC = (b"\x1f\x8b", b"BZh", b"\xfd7zXZ\x00", b"\x28\xb5\x2f\xfd")
+# On Linux a name says little about content: crontab, sshd_config, .bash_history,
+# access.log.1 and 50-cloud-init have no extension worth listing.
+_LINUX_TREE_RE = re.compile(r"\tetc/passwd$", re.MULTILINE)
 
 
 def _derive_source_name(directory_pattern: str) -> str:
@@ -117,11 +123,9 @@ def _find_matching_files(
             if not fnmatch.fnmatch(rel_lower, glob_pattern):
                 continue
 
+            # "*" takes any name: the content decides, not the extension.
             dot_pos = rel_lower.rfind(".")
-            if dot_pos < 0:
-                continue
-            ext = rel_lower[dot_pos:]
-            if ext not in extensions:
+            if "*" not in extensions and (dot_pos < 0 or rel_lower[dot_pos:] not in extensions):
                 continue
 
             dedup_key = f"{offset}:{inode_str}"
@@ -141,9 +145,11 @@ def _is_binary_content(data: bytes) -> bool:
         data: Raw file content to inspect.
 
     Returns:
-        True if null bytes are found in the first 1024 bytes.
+        True if null bytes are found in the first 1024 bytes, or the data
+        starts as gzip, bzip2, xz or zstd (a short rotated log may hold no
+        null byte at all).
     """
-    return b"\x00" in data[:1024]
+    return b"\x00" in data[:1024] or data.startswith(_COMPRESSED_MAGIC)
 
 
 def _extract_and_read_file(
@@ -223,7 +229,13 @@ def index_app_files(
         extensions: File extensions to include. Defaults to common text
             and config extensions: .ini, .cfg, .conf, .txt, .log, .xml,
             .json, .yaml, .yml, .properties, .csv, .bat, .cmd, .ps1,
-            .reg, .inf, .manifest.
+            .reg, .inf, .manifest. On a Linux file tree (the listing holds
+            etc/passwd) the default is every file whatever its name, since
+            crontab, sshd_config, .bash_history and access.log.1 have no
+            such extension; ["*"] asks for that anywhere. Either way a file
+            that is binary, compressed or over the size limit is skipped,
+            and password hash files and private keys (etc/shadow, SSH and
+            TLS private keys) are withheld and counted in files_withheld.
         max_file_size_kb: Skip files larger than this threshold to avoid
             extracting multi-megabyte logs. Defaults to 512 KB.
         max_files: Maximum number of files to extract per invocation to
@@ -250,7 +262,7 @@ def index_app_files(
     ext_set: frozenset[str]
     if extensions is not None:
         ext_set = frozenset(
-            e.lower() if e.startswith(".") else f".{e.lower()}" for e in extensions
+            e.lower() if e.startswith(".") or e == "*" else f".{e.lower()}" for e in extensions
         )
     else:
         ext_set = _DEFAULT_EXTENSIONS
@@ -265,10 +277,20 @@ def index_app_files(
             error_type="no_filelist",
         )
 
+    if extensions is None and any(
+        _LINUX_TREE_RE.search(chunk) for chunks, _ in chunk_groups for chunk in chunks
+    ):
+        ext_set = frozenset({"*"})
+
     all_matches: list[tuple[str, str, int]] = []
     for chunks, offset in chunk_groups:
         matches = _find_matching_files(chunks, directory_pattern, ext_set, offset)
         all_matches.extend(matches)
+
+    # Every name includes etc/shadow and private keys, which the extension list
+    # kept out: their content is a credential and is not indexed.
+    withheld = [m[1] for m in all_matches if "*" in ext_set and SECRET_FILES.search(m[1])]
+    all_matches = [m for m in all_matches if m[1] not in withheld]
 
     if not all_matches:
         elapsed = (time.monotonic() - t0) * 1000
@@ -280,6 +302,7 @@ def index_app_files(
                 "files_discovered": 0,
                 "files_extracted": 0,
                 "files_indexed": 0,
+                "files_withheld": len(withheld),
                 "pattern": directory_pattern,
                 "message": f"No files matching pattern '{directory_pattern}' "
                 f"with extensions {sorted(ext_set)} were found in the file listing.",
@@ -327,6 +350,7 @@ def index_app_files(
         "files_extracted": files_extracted,
         "files_indexed": files_indexed,
         "files_skipped_binary": skipped_binary,
+        "files_withheld": len(withheld),
         "windows_indexed": total_windows,
         "source_prefix": source_name,
         "sample_files": sample_files,

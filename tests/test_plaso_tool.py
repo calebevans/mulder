@@ -16,7 +16,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from mulder.server.tools.extract.plaso import _failure_detail, run_plaso
+from mulder.server.tools.extract.plaso import PARSER_PRESETS, _failure_detail, run_plaso
 
 _MOD = "mulder.server.tools.extract.plaso"
 
@@ -140,3 +140,74 @@ def test_failure_detail_keeps_tail_of_stdout_and_stderr() -> None:
 def test_failure_detail_is_capped() -> None:
     proc = subprocess.CompletedProcess(["psort"], 1, stdout="", stderr="x" * 5000)
     assert len(_failure_detail("psort", proc)) <= 500 + len("psort exited 1: ")
+
+
+# --- the linux_logs preset ---------------------------------------------------
+
+_UNKNOWN = (
+    "Processing started.\n"
+    'Unknown parser or plugin names in element(s): "text/syslog_traditional,jsonl/'
+    'docker_container_log" of parser filter expression: systemd_journal,utmp\n'
+)
+
+
+class _OldPlaso(_FakePlaso):
+    """A plaso that lacks some parsers: it rejects the run and leaves a stub storage file."""
+
+    def __call__(self, argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if Path(argv[0]).name == "log2timeline" and any(
+            name in _argv_after(argv, "--parsers") for name in ("syslog_traditional", "nosuch")
+        ):
+            self.calls.append({"argv": argv, **kwargs})
+            Path(_argv_after(argv, "--storage_file")).write_bytes(b"stub")
+            return subprocess.CompletedProcess(argv, 1, stdout=_UNKNOWN, stderr="")
+        return super().__call__(argv, **kwargs)
+
+
+def test_linux_logs_names_the_login_and_system_log_parsers(fake_env: MagicMock) -> None:
+    fake = _FakePlaso()
+    with patch(f"{_MOD}.subprocess.run", fake):
+        resp = run_plaso.__wrapped__(  # type: ignore[attr-defined]
+            "/evidence/web01.E01", parsers="linux_logs"
+        )
+
+    assert resp["status"] == "success"
+    parsers = _argv_after(fake.calls[0]["argv"], "--parsers").split(",")
+    assert parsers == PARSER_PRESETS["linux_logs"].split(",")
+    for needed in ("systemd_journal", "utmp", "text/syslog", "text/bash_history", "text/selinux"):
+        assert needed in parsers
+    # Not plaso's own "linux" preset: filestat writes four events for every file.
+    assert "filestat" not in parsers and "linux" not in parsers
+    assert fake.calls[0]["argv"][-1] == "/evidence/web01.E01"
+
+
+def test_parsers_an_older_plaso_lacks_are_dropped_once_and_named(fake_env: MagicMock) -> None:
+    fake = _OldPlaso()
+    with patch(f"{_MOD}.subprocess.run", fake):
+        resp = run_plaso.__wrapped__(  # type: ignore[attr-defined]
+            "/evidence/web01.E01", parsers="linux_logs"
+        )
+
+    assert resp["status"] == "success"
+    first, second = (c["argv"] for c in fake.calls[:2])
+    assert "text/syslog_traditional" in _argv_after(first, "--parsers")
+    retried = _argv_after(second, "--parsers").split(",")
+    assert "text/syslog_traditional" not in retried and "jsonl/docker_container_log" not in retried
+    assert "utmp" in retried and "text/syslog" in retried
+    assert '"parsers_not_in_this_plaso": ["text/syslog_traditional"' in str(resp["preview"])
+
+
+def test_a_parser_name_the_caller_got_wrong_is_an_error_not_an_empty_timeline(
+    fake_env: MagicMock,
+) -> None:
+    """The rejected run leaves a storage file, which used to pass for a result."""
+    fake = _OldPlaso()
+    with patch(f"{_MOD}.subprocess.run", fake):
+        resp = run_plaso.__wrapped__(  # type: ignore[attr-defined]
+            "/evidence/web01.E01", parsers="nosuch,utmp"
+        )
+
+    assert resp["status"] == "error" and resp["error_type"] == "tool_failed"
+    assert "Unknown parser or plugin names" in str(resp["error_message"])
+    assert len(fake.calls) == 1, "only a preset is retried: the caller's own list is the caller's"
+    fake_env.assert_not_called()

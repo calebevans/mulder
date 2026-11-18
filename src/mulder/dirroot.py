@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import unquote
 
+from mulder.linuxvol import EXPORT_MARKER
 from mulder.patterns import EXTRACTION_MARKER
 
 MAX_ENTRIES = 200_000
@@ -48,6 +49,8 @@ LAYOUTS: dict[str, str] = {
     "velociraptor": "Velociraptor offline collection",
     "uac": "UAC collection",
     "windows": "Windows volume directory",
+    "linux": "Linux file tree",
+    "export": "files exported from a disk image",
 }
 
 _HEAD_BYTES = 65536
@@ -92,7 +95,12 @@ class Collection(NamedTuple):
         """Whether the files came from Windows volumes (a Velociraptor drive has a label)."""
         if self.layout == "velociraptor":
             return any(label for label, _ in self.volumes)
-        return self.layout != "uac"
+        return self.layout in ("kape", "windows")
+
+    @property
+    def linux(self) -> bool:
+        """Whether it holds a Unix file tree: the Linux artifact tools apply."""
+        return bool(self.volumes) and not self.windows
 
 
 class DirRoot(NamedTuple):
@@ -190,6 +198,17 @@ def _has_windows_config(volume: Path) -> bool:
     return current is not None
 
 
+def _linux_host(etc: Path | None) -> str | None:
+    """What ``hostname`` in an ``etc`` directory says; None unless it holds ``passwd``."""
+    files = _entries(etc) if etc is not None else {}
+    if _file(files.get("passwd")) is None:
+        return None
+    name = _file(files.get("hostname"))
+    head = read_regular(name, 256) if name is not None else None
+    lines = head[0].decode("ascii", "replace").split() if head is not None else []
+    return _host(lines[0]) if lines else ""
+
+
 def _host(raw: object) -> str:
     """A host name reduced to host-name characters: it is shown to models."""
     return _NOT_HOST_CHARS.sub("", raw)[:64].strip("._-") if isinstance(raw, str) else ""
@@ -242,6 +261,16 @@ def detect_collection(path: Path) -> Collection | None:
     if not entries:
         return None
 
+    if _file(entries.get(EXPORT_MARKER)):
+        # What export_linux_files wrote: a directory per volume, the root volume first.
+        found = sorted(
+            (_linux_host(real_dir(Path(e.path), "etc")) is None, e.name, Path(e.path))
+            for e in entries.values()
+            if _dir(e)
+        )
+        host = _linux_host(real_dir(found[0][2], "etc")) if found else None
+        return Collection(path, "export", host or "", tuple((n, d) for _, n, d in found))
+
     info = _file(entries.get("client_info.json"))
     uploads = _dir(entries.get("uploads"))
     if (info or _file(entries.get("collection_context.json"))) and (
@@ -283,6 +312,9 @@ def detect_collection(path: Path) -> Collection | None:
 
     if _dir(entries.get("windows")) and _has_windows_config(path):
         return Collection(path, "windows", "", (("", path),))
+    host = _linux_host(_dir(entries.get("etc")))
+    if host is not None:
+        return Collection(path, "linux", host, (("", path),))
     return None
 
 
@@ -390,6 +422,11 @@ def dir_root(path: str) -> DirRoot | None:
     if not os.path.isdir(path) or os.path.islink(path.rstrip(os.sep) or path):
         return None
     return _build(path)
+
+
+def refresh() -> None:
+    """Forget the cached listings: mulder itself has written into a directory root."""
+    _build.cache_clear()
 
 
 def not_collected(path: str) -> str | None:

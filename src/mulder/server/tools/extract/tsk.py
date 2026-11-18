@@ -22,6 +22,7 @@ from mulder.dirroot import (
     real_dir,
 )
 from mulder.extractors.optical import probe_optical
+from mulder.linuxvol import probe
 from mulder.patterns import fls_file_entries, parse_mmls_rows
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
@@ -817,6 +818,24 @@ def run_fls(
             return redirect
 
     if proc.returncode != 0:
+        # LVM, XFS, LUKS, btrfs: no offset makes Sleuth Kit read these.
+        unread = probe(image_path)
+        if unread:
+            return error_response(
+                tc_id,
+                "run_fls",
+                params,
+                f"Sleuth Kit cannot read this image: it holds {'; '.join(map(str, unread))}",
+                error_type="unsupported_volume",
+                suggestion=(
+                    f"Call export_linux_files(image_path={image_path!r}): it lists every file "
+                    "through dfVFS and exports the ones the Linux tools read."
+                    if any(v.readable for v in unread)
+                    else "No tool here reads it (an encrypted volume needs its key, a volume "
+                    "group on several disks needs all of them, btrfs is not supported). Report "
+                    "it as not examined; run_bulk_extractor still reads the raw image."
+                ),
+            )
         stderr_hint = stderr_text[:_HINT_CHAR_LIMIT].strip()
         return error_response(
             tc_id,
