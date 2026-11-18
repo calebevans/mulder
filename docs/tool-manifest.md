@@ -594,7 +594,7 @@ Apply Sigma detection rules to Linux logs using Zircolite.
 | sigma_level_filter | Literal['informational', 'low', 'medium', 'high', 'critical'] \| None | no | Minimum Sigma level (default "medium") |
 | force | bool | no | Re-run extraction even if sources already exist |
 
-**Returns:** `total_detections`, `level_counts{}`, `mitre_coverage{}`, `timeline[]`
+**Returns:** `total_detections`, `level_counts{}`, `mitre_coverage{tactics[], techniques[]}`, `timeline[]`
 
 Matched detection records, including rule names and matched fields, are indexed
 in `zircolite.detections`; the response preview may be shorter than the index.
