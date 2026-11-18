@@ -52,7 +52,9 @@ When the evidence includes a DISK IMAGE, always plan:
 - Additional tools based on the detected OS and filesystem:
   Windows: run_evtx_parser, run_hayabusa, run_chainsaw,
     run_registry_parser, run_prefetch_parser, run_amcache_parser,
-    run_shimcache_parser, run_mft_parser
+    run_shimcache_parser, run_mft_parser, run_usn_parser (the change
+    journal: recent renames, overwrites and deletions),
+    run_hayabusa_logon_summary (who logged on, how and from where)
   Linux: run_zircolite (Auditd/Sysmon Sigma) when the audit or Sysmon
     log is available as a file outside the image
   macOS: run_plaso (unified log timeline), parse_plist
@@ -167,6 +169,15 @@ When the investigator briefing mentions specific concerns:
 - "communications", "conspiracy", "contacts": prioritize email and
   chat application configs, chat logs, and contact lists via
   index_app_files.
+- "ransomware", "encrypted files", "ransom note", "extortion": on every
+  Windows image, not only the one the note was found on (the first
+  encrypted host is rarely where the intruder got in), make sure the
+  plan has run_usn_parser and run_mft_parser (the analyst reads the
+  encryption timeline from them), run_fls and the Prefetch, Amcache,
+  ShimCache and registry parsers (remote access tools are found in
+  them), run_hayabusa_logon_summary, and run_vshadow_info (which shadow
+  copies survive). A volume with no change journal or no shadow copies
+  was not thereby wiped: journaling and shadow copies can simply be off.
 
 EVENT LOG RECOVERY:
 run_evtx_recovery brings back event records that survived a log clearing.

@@ -12,10 +12,12 @@ import os
 import re
 import time
 from collections import defaultdict
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from mulder.db import CaseDB
 from mulder.extractors.classifier import ClassifierConfig, EvidenceClassifier
+from mulder.models import Finding, Question
 from mulder.patterns import (
     EMAIL_RE,
     IP_RE,
@@ -25,6 +27,7 @@ from mulder.patterns import (
     classify_ip,
     source_is_cited,
 )
+from mulder.questions import SIGNIFICANT_SEVERITIES, no_incident, open_questions, statuses
 from mulder.server.app import get_cfg, get_ctx, mcp
 from mulder.server.helpers import hash_output, make_tool_call_id
 from mulder.server.tool_access import ANALYSTS, Role, tool_access
@@ -448,7 +451,9 @@ def check_finalize_readiness() -> dict[str, object]:
     sources = ctx.db.get_sources()
     audit_summary = ctx.audit.summary()
 
-    gate_results = _evaluate_finalize_gates(findings, case_metadata, sources, audit_summary)
+    gate_results = _evaluate_finalize_gates(
+        findings, case_metadata, sources, audit_summary, ctx.db.get_questions()
+    )
     all_passed = all(g["passed"] for g in gate_results)
 
     if all_passed:
@@ -550,7 +555,9 @@ def get_investigation_summary() -> dict[str, object]:
     compaction to recover overall investigation state. No prerequisites.
 
     Returns sources indexed, findings by severity, finalize readiness
-    gates, and a remaining_work checklist of outstanding tasks.
+    gates, and a remaining_work checklist of outstanding tasks. When the
+    planners' investigation questions were recorded, also returns how many
+    are resolved and lists the open ones with the ids resolve_question takes.
     """
     ctx = get_ctx()
     tc_id = make_tool_call_id()
@@ -577,8 +584,11 @@ def get_investigation_summary() -> dict[str, object]:
 
     case_metadata = ctx.db.get_case_metadata()
     audit_summary = ctx.audit.summary()
+    questions = ctx.db.get_questions()
 
-    gate_results = _evaluate_finalize_gates(findings, case_metadata, sources, audit_summary)
+    gate_results = _evaluate_finalize_gates(
+        findings, case_metadata, sources, audit_summary, questions
+    )
     all_passed = all(g["passed"] for g in gate_results)
     blockers: list[str] = [f"{g['name']}: {g['detail']}" for g in gate_results if not g["passed"]]
 
@@ -630,7 +640,65 @@ def get_investigation_summary() -> dict[str, object]:
         "finalize_blockers": blockers if blockers else "none",
         "elapsed_ms": round(elapsed, 1),
         **({"invalid_findings": invalid} if invalid else {}),
+        **_question_summary(questions, findings, non_negative, tool_counts),
     }
+
+
+_MAX_OPEN_QUESTIONS_SHOWN = 15
+_MAX_QUESTION_CHARS_SHOWN = 200
+
+
+def _question_summary(
+    questions: Sequence[Question],
+    findings: Sequence[Finding],
+    non_negative: Sequence[Finding],
+    tool_counts: Mapping[str, int],
+) -> dict[str, object]:
+    """The investigation-question part of the summary; empty with no questions.
+
+    Bounded for small context windows: at most ``_MAX_OPEN_QUESTIONS_SHOWN``
+    open questions, each cut to ``_MAX_QUESTION_CHARS_SHOWN`` characters, and
+    the response says when there are more. Resolved ones are only counted.
+    """
+    if not questions:
+        return {}
+    status = statuses(questions, findings)
+    still_open = open_questions(questions, findings)
+    listed: list[dict[str, str]] = []
+    for q in still_open[:_MAX_OPEN_QUESTIONS_SHOWN]:
+        text = q.question
+        if len(text) > _MAX_QUESTION_CHARS_SHOWN:
+            text = text[:_MAX_QUESTION_CHARS_SHOWN] + "... [truncated]"
+        entry = {
+            "question_id": q.question_id,
+            "phase": q.phase,
+            "system": q.system,
+            "question": text,
+        }
+        if q.resolution:
+            entry["note"] = (
+                f"Was {q.resolution}, but the finding(s) it named no longer exist or changed "
+                "kind. Resolve it again."
+            )
+        listed.append(entry)
+    summary: dict[str, object] = {
+        "questions": {
+            "recorded": len(questions),
+            **{s: status.count(s) for s in ("open", "answered", "ruled_out", "undetermined")},
+        },
+        "open_questions": listed,
+        # Findings of activity at medium severity or above: with any of these
+        # the case is not a no-incident one, however its questions resolve.
+        "significant_findings": sum(f.severity in SIGNIFICANT_SEVERITIES for f in non_negative),
+    }
+    if len(still_open) > len(listed):
+        summary["open_questions_note"] = (
+            f"Showing {len(listed)} of {len(still_open)} open questions, oldest first, from "
+            "every phase and system. The others are listed once these are closed."
+        )
+    if no_incident(questions, findings, tool_counts):
+        summary["no_incident"] = True
+    return summary
 
 
 _URL_RE = re.compile(r"https?://[^\s\"'>]+")

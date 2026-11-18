@@ -38,6 +38,11 @@ analyze_execution_timeline, assess_recovery, correlate_pcap_with_host.
 Plan only tools whose input exists in this case (list_sources): when every
 source is network evidence (packet captures, NetFlow), do not plan disk,
 MFT, registry, memory or plaso-timeline tools.
+When ransomware is suspected (encrypted files, ransom notes, the
+briefing), plan find_encryption_activity and find_remote_access_tools
+(each reads every indexed system), find_data_exfiltration_indicators and
+find_file_staging (data is usually taken before it is encrypted), and
+find_defense_evasion (cleared logs, deleted backups).
 For NetFlow evidence, netflow.analysis.* (a completed extraction run) or
 netflow.analysis-partial.* (a run with failed or unstarted sections; its section
 rows say which) indexes what extraction produced (list_sources); have the executor

@@ -36,6 +36,7 @@ Try-it-out instructions for running Mulder, the forensic investigation platform.
     - [How It Works](#how-it-works)
     - [Example](#example)
   - [Artifact Awareness](#artifact-awareness)
+  - [Ransomware Cases](#ransomware-cases)
   - [Cloud Audit Logs](#cloud-audit-logs)
   - [Triage Collections](#triage-collections)
   - [CLI Reference](#cli-reference)
@@ -48,6 +49,7 @@ Try-it-out instructions for running Mulder, the forensic investigation platform.
   - [Understanding the Output](#understanding-the-output)
     - [Case Artifacts](#case-artifacts)
     - [Reports](#reports)
+    - [When No Incident Is Found](#when-no-incident-is-found)
     - [IOC Exports](#ioc-exports)
     - [Logs](#logs)
   - [Building the Image from Source](#building-the-image-from-source)
@@ -103,6 +105,8 @@ mulder setup                     # everything mulder owns - no sudo
 Everything mulder owns, in one run: MITRE ATT&CK data, Sigma rules, the YARA signature-base,
 the Didier Stevens suite, Chainsaw 2.16.0, Hayabusa 3.8.1, Zircolite 2.20.0, zizmor 1.32.0, capa 9.4.0,
 FLOSS 3.1.0, gitleaks 8.30.1, evtx_dump 0.15.1, the six EZ Tools mulder invokes, ALEAPP, iLEAPP, and the Volatility 3 symbol packs.
+It also fetches two small reference data sets for ransomware cases, each pinned to a commit: the LOLRMM remote
+access tool catalog (Apache-2.0) and the ThreatLabz ransom note corpus (MIT).
 About **2.2 GB on disk**; it prints the total and asks before downloading more than 1 GB.
 
 Versions are pinned to match the container image exactly, and a test fails the build if the two
@@ -626,6 +630,26 @@ The extraction planner adapts its tool selection based on what the evidence actu
 
 The analyst receives complementary guidance: when execution artifacts show communication tools were used, the analyst searches indexed application files for contacts, server addresses, and credentials, then cross-references those with network connection data.
 
+## Ransomware Cases
+
+Say so in the briefing ("ransomware", "encrypted files", "ransom note") and the extraction planner adds the change journal, the logon summary and the shadow copy listing to every Windows image, not only the one the note was found on. The tools below work on what is already parsed and need no network.
+
+| Question | Tool | Reads |
+|----------|------|-------|
+| When did encryption start and stop, and where first? | `find_encryption_activity` | the change journal (`run_usn_parser`), else the MFT |
+| Which family? | `ransomware_family_hints`, and the hints inside the result above | Splunk's extension and note-name lists, the ThreatLabz note corpus |
+| Which remote access tool was used, and from where? | `find_remote_access_tools` | the LOLRMM catalog against the file listing, Prefetch, Amcache, ShimCache, registry and DNS; then the tool's own logs |
+| Who logged on, how and from where? | `run_hayabusa_logon_summary` | the extracted event logs |
+| What left before encryption? | `find_data_exfiltration_indicators`, `find_file_staging` | network and filesystem sources |
+
+What each result does and does not establish:
+
+- **A candidate burst is a lead.** It is a run of minutes in which at least 50 files were renamed to one extension, plus a signal: the extension follows several kinds of data file, a known ransom note name appeared in several directories, or the volume never had the extension before. Compression, backup and bulk renames look the same, and neither the journal nor the MFT names the process or the account. All bursts of one extension on a volume are one candidate, so a run that pauses and resumes is reported from its first burst. Ransomware that overwrites files in place or gives each file its own extension is not flagged; the result lists the busiest periods of any kind for that reason.
+- **The change journal is a ring.** It holds only recent changes, attackers delete it, and at most the newest 256 MiB is parsed. When a burst starts where the journal starts, the result says so and gives the earliest change the MFT knows. When the journal holds no candidate the MFT is read as well: that is how encryption older than the journal is found, and ransomware that writes each file under a new name and deletes the original (Dharma, Phobos), which leaves no rename in the journal. Without an indexed MFT neither is flagged.
+- **A family hint is a family to check.** Families share extensions, note names and note templates, and the extension list misses several current families.
+- **Presence of a remote access tool is not abuse.** AnyDesk, TeamViewer and the like are ordinary IT tools. What makes one part of the intrusion is installation or first run inside the incident window, by a compromised account, or a session in its own log from an address the organisation does not use. AnyDesk's `ad.trace` and `ad_svc.trace` carry the peer's IP address; TeamViewer's logs carry only IDs and host names.
+- **The logon summary has counts, not times.** Hayabusa 3.8.1 counts each combination of account, logon type and source over the whole log (`log_period` gives the span the counts cover); search the Security log for when.
+
 ## Cloud Audit Logs
 
 Mulder's agents work offline, so it does not call cloud APIs. Export the audit logs yourself, put the JSON files in the evidence directory, and `run_cloud_audit_logs` indexes every event and applies Sigma rules. JSON arrays, JSON lines and CloudTrail `Records` files are all read, with or without a byte-order mark; the log type is recognised from the events.
@@ -865,6 +889,20 @@ After an investigation completes, all artifacts are written to the cases directo
 All report formats include an executive summary, severity overview, evidence integrity hashes, attack timeline, detailed findings with MITRE ATT&CK mappings, IOC tables, audit metrics, and a sources appendix.
 
 A report that opens with an **INCOMPLETE INVESTIGATION** banner is a partial one, written because the run ended early. See [When a Run Ends Early](#when-a-run-ends-early).
+
+### When No Incident Is Found
+
+An investigation can end with the conclusion that the evidence shows no incident. Each planner writes down the questions it wants answered. They are stored in the case database, and the analysts close each one:
+
+| Resolution | Meaning | What it must rest on |
+|------------|---------|----------------------|
+| Answered | The evidence shows what happened | A finding of activity that cites at least one tool call that extracted, searched or read evidence |
+| Ruled out | The sources examined do not show it | A `[NEGATIVE]` finding that cites at least one such call |
+| Undetermined | The evidence needed is not in the case or could not be read | A stated reason |
+
+A case normally needs three findings before a report is written. A case with fewer passes instead when every recorded question is resolved and both coverage audits have run. If that case also has no finding of medium severity or above, and at least one question was answered or ruled out, the executive summary opens with "No evidence of an incident was found in the evidence examined", then lists what was examined (how many evidence sources there are, how many of them the findings cite, and how many of the tool calls went to tools that extract, search or read evidence, failed calls included) and what was not available: the undetermined questions with their reasons, and any `[COLLECT]` leads.
+
+Read that sentence as written. It is a statement about the sources that were indexed and searched, not proof that nothing happened. A ruled-out question whose finding is later deleted or re-titled is open again, so the conclusion cannot outlive its evidence. The report lists the recorded questions under **Investigation Questions** whichever way the case passed; a case investigated before questions were recorded has none and is reported as before.
 
 ### IOC Exports
 

@@ -605,6 +605,22 @@ Detect threats in EVTX files using 3,700+ Sigma rules via Hayabusa.
 
 **Roles:** `EXTRACT_EXECUTOR`
 
+### run_hayabusa_logon_summary
+
+Summarise successful and failed Windows logons from EVTX files using Hayabusa's `logon-summary` command.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| evtx_dir | str | no | Directory containing .evtx files |
+| image_path | str | no | Disk image path for extraction directory lookup |
+| force | bool | no | Re-run even if the summary is already indexed |
+
+**Returns:** `source` (logon.summary), and for `successful` and `failed`: `logons`, `combinations`, `by_logon_type{}`, `with_source_address[]` (at most 15 rows that name a source address, external addresses first: count, target account, domain and computer, logon type, source computer, source IP, and `external`: true, false, or null when the source is not an address that can be classified; IPv6 and IPv4-mapped addresses are classified), `with_source_address_not_listed`; plus `log_period` (first and last timestamp and the number of event records read) and `note`. The full tables are indexed; when there is no logon row nothing is indexed, so a later call reads the logs again.
+
+Hayabusa 3.8.1 counts each combination of account, logon type and source over the whole log and gives no first or last time per row; `log_period` is the span the counts cover. With `image_path`, only that image's event logs are used (extracted if they are not yet), never another image's. A logon is not a compromise, and no rows is not no logons: the Security log may be cleared, rolled over or absent. The command needs Hayabusa's `rules/config` directory; without it the tool returns `error_type: asset_missing` instead of zero logons.
+
+**Roles:** `EXTRACT_EXECUTOR`
+
 ### run_chainsaw
 
 Analyze Windows artifacts using Chainsaw with Sigma rules.
@@ -728,6 +744,21 @@ Parse the $MFT from a disk image using MFTECmd (EZ Tools).
 | force | bool | no | Re-run extraction even if sources already exist |
 
 **Returns:** `source_name` (ez.mft), `windows_indexed`
+
+**Roles:** `EXTRACT_EXECUTOR`
+
+### run_usn_parser
+
+Parse the NTFS change journal (`$Extend\$UsnJrnl:$J`) from a disk image using MFTECmd (EZ Tools).
+
+The journal records each recent create, rename, overwrite and delete with its time; `find_encryption_activity`, `find_defense_evasion` and `assess_recovery` read it. The stream is located by listing `$Extend` (MFT entry 11) and read with `icat` by its full stream inode. Its leading sparse region is not copied, and at most the newest 256 MiB of records are parsed; `truncated` says when older records were left out.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| image_path | str | yes | Path to the disk image |
+| force | bool | no | Re-run extraction even if sources already exist |
+
+**Returns:** `source_name` (ez.usnjrnl), `windows_indexed`, `journal_bytes_parsed`, `truncated`. A volume without a journal returns `error_type: no_journal`: journaling may be off, or the journal was deleted, which is not evidence that nothing changed.
 
 **Roles:** `EXTRACT_EXECUTOR`
 
@@ -1871,6 +1902,54 @@ Cross-reference PCAP network events with host artifacts.
 
 **Roles:** `CROSS_EXECUTOR`
 
+### find_encryption_activity
+
+Find bursts of file renames to one extension that may be ransomware encryption.
+
+Reads the indexed change journal (`ez.usnjrnl`, from `run_usn_parser`), and the MFT (`ez.mft`) when no journal is indexed or the journal holds no candidate: the journal is a ring, and encryption older than its first record is still in the MFT. A burst is a run of minutes in which at least 50 files (not rename records) were renamed to the same extension, plus the slower minutes up to two minutes either side, which hold a run's first and last seconds. Every burst of an extension on a volume is reported as one candidate (`active_periods` lists them), so a run that pauses on large files is one run and starts where it started. A burst becomes a candidate when it carries a signal: the extension follows three or more kinds of data file on at least half the burst's files (`extension_appended`), a known ransom note name was created in two or more directories (`known_note_name`), or, from the journal only, the MFT shows no file with the extension before the burst and the same file was created in five or more directories (`extension_new_to_volume` with `repeated_file_across_directories`). Thresholds are named constants in `composite/ransomware.py`, set against the journal of a real WannaCry infection in which Windows servicing renamed seven times more files a minute than the ransomware.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| image_path | str | no | Analyse only this image (path or file name, as passed to `run_usn_parser`); empty analyses every indexed volume |
+
+Each indexed volume is analysed on its own rows. With more than three volumes, the three where a candidate begins earliest are returned in full and the rest as one line each (`volumes_in_brief`); every volume is indexed in full.
+
+**Returns:** `results.volumes[]`, each with `evidence`, `basis` (`usn_journal` or `mft`), `records_examined`, `journal_window`, `journal_note` (when a journal is indexed but the candidates come from the MFT), `candidates[]` (at most 3; more are counted in `candidates_not_listed` and named in `candidates_not_listed_first[]`), `busiest_periods[]` (the 3 largest bursts of any kind), counts of bursts found and not examined, and `rows_unparsed`; plus `results.caveats[]` and `missing_sources[]`. A candidate carries `extension`, `first_time`, `last_time`, `duration_seconds`, `files_affected`, `peak_files_per_minute`, `active_periods[]`, `signals[]`, `appended_to_extensions`, `appended_share`, `original_extensions[]`, `related_extensions[]`, `directories_affected`, `top_directories[]`, `first_directories[]`, `note_candidates[]`, `note_excerpt` (at most 1,200 characters, read with a bounded `icat` from up to three copies in the burst's own directories, keeping the one most like a known note) or `note_not_read`, `family_hints[]`, `mft_cross_check`, `starts_at_journal_start`, `older_than_journal` and `inspect_with` (a `search` call that returns rows of the burst). Indexed as `composite.encryption_activity`.
+
+**What it does not establish:** a candidate is a lead. Compression, backup and bulk renames give many files one new extension too, and neither source names the process or the account. No candidate is not no encryption: in-place encryption, a different extension per file and a rate under the threshold are not flagged. The journal pass counts renames, so ransomware that creates each file under its new name and deletes the original (Dharma, Phobos), like activity older than the journal, is found only from the MFT; without an indexed MFT it is not flagged, and it shows only under `busiest_periods`. A slow start or tail more than two minutes from a burst is outside `first_time` and `last_time`.
+
+**Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR` `NARRATIVE_EXECUTOR`
+
+### ransomware_family_hints
+
+Suggest ransomware families for a file extension, a ransom note name or note text, offline.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| extension | str | no | Extension added to encrypted files, e.g. `.lockbit` |
+| note_name | str | no | File name of the ransom note |
+| note_text | str | no | Text of the ransom note |
+
+At least one is required. The extension is looked up in Splunk's `ransomware_extensions_lookup.csv` (vendored under `server/data/ransomware`, Apache-2.0). The note name is checked against Splunk's `ransomware_notes_lookup.csv`, which has no family column and so only says the name is a known ransom note name, and against the file names in the ThreatLabz ransom note corpus (the `ransomware-notes` asset, MIT). The note text is compared to that corpus by word-sequence similarity, best note per family.
+
+**Returns:** `hints[]` (family, basis, score, detail; at most 5), `hints_found`, `known_note_name`, `caveat`, and `corpus` when the corpus is not installed. A score only ranks the hints. Families share extensions, note names and note templates, so a hint is a family to check, never an identification.
+
+**Roles:** `EXTRACT_ANALYST` `CROSS_ANALYST` `NARRATIVE_ANALYST` `CROSS_EXECUTOR`
+
+### find_remote_access_tools
+
+Find remote access and management tools (AnyDesk, TeamViewer, ScreenConnect and several hundred others).
+
+Matches the executable names and domains in the LOLRMM catalog (the `lolrmm` asset, Apache-2.0, pinned to a commit) against the indexed file listing, Prefetch, Amcache, ShimCache, registry, autoruns and DNS/HTTP/TLS sources. Names that are not a tool's own are left out: stems under four characters, names four or more catalog tools share, and a short list of Windows and common-software names; `mstsc.exe` and `quickassist.exe` count only where they ran, not where they sit on disk. A program counts as run from Prefetch only by the `ExecutableName` of its own Prefetch file, not by appearing among the files another program loaded. Logs of AnyDesk (`ad.trace`, `ad_svc.trace`, `connection_trace.txt`), TeamViewer, Splashtop, ScreenConnect and RustDesk found on the image are read (the newest 8 MiB of each) and indexed as `rmm.<tool>.<file>.<inode>`, one source per file, so each user profile's log is searchable. At most 20 log files are listed, the tools taking turns; deleted ones are listed and not read.
+
+*No parameters.*
+
+**Returns:** `results.tools_found`, `results.tools[]` (at most 12: tool, matched names, and per source the evidence path, line count and one sample line), `tools_not_listed[]`, `tool_logs[]` (tool, path, source, bytes indexed, `truncated`, `external_addresses[]` with one sample line each, or `not_read`), `tool_logs_not_read` (log files found beyond those listed), `sources_searched[]`, `what_a_source_establishes{}`, `caveats[]`, `missing_sources[]`. Indexed as `composite.remote_access_tools`.
+
+**What it does not establish:** presence is not abuse; these are common IT tools. Abuse is established by installation or first run inside the incident window, by a compromised account, or by a session in the tool's own log from an address the organisation does not use. A match is a file name or a domain: unrelated software can share a name.
+
+**Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR` `NARRATIVE_EXECUTOR`
+
 ---
 
 ## 13. Memory Query Tools
@@ -2326,6 +2405,21 @@ Generate the final investigation report from all submitted findings.
 
 **Roles:** `REPORT`
 
+### resolve_question
+
+Record how an investigation question was resolved and what the answer rests on. The orchestrator stores each plan's questions in the case database; question ids (`q_1a2b3c4d`) prefix the questions the analyst is given, and `get_investigation_summary` lists the open ones. `answered` must name at least one finding that is not `[NEGATIVE]` or `[COLLECT]`; `ruled_out` must name at least one `[NEGATIVE]` finding. To count, a named finding must exist, be that kind, and cite only logged, successful calls to tools other than the findings tools; at least one of those calls must be to a tool that extracts, searches or reads evidence, so a finding that cites only bookkeeping (`open_case`, `list_sources`, `get_investigation_summary`, `get_ioc_summary`, `get_bookmarks`, the audits, job polling) answers nothing and rules nothing out. Other ids named alongside one that counts are ignored and listed in the response. `undetermined` needs a reason. The id is accepted with or without the square brackets it is displayed in. A resolution holds only while a finding it names still exists and is still that kind; otherwise the question is open again. Calling again replaces the earlier resolution. `ruled_out` records that the sources examined did not show something, not that it did not happen.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| question_id | str | yes | The question to resolve |
+| resolution | str | yes | "answered", "ruled_out" or "undetermined" |
+| finding_ids | list[str] \| None | no | Findings the answer rests on; required for "answered" and "ruled_out", ignored for "undetermined" |
+| reason | str | no | Required for "undetermined": what evidence is missing (kept to 1,000 characters) |
+
+**Returns:** `question_id`, `resolution`, `finding_ids[]` (the findings the resolution was recorded against), `open_questions` (count still open), and `ignored_finding_ids` (the first 10 named ids that did not count, each with the reason) when there are any
+
+**Roles:** `EXTRACT_ANALYST` `CROSS_ANALYST` `NARRATIVE_ANALYST` `REPORT`
+
 ---
 
 ## 18. Review & Audit
@@ -2336,7 +2430,7 @@ Return a compact progress dashboard for the current investigation.
 
 *No parameters.*
 
-**Returns:** `sources_indexed`, `findings_submitted`, `findings_by_severity{}`, `remaining_work[]`, `ready_to_finalize`
+**Returns:** `sources_indexed`, `findings_submitted`, `findings_by_severity{}`, `remaining_work[]`, `ready_to_finalize`. When investigation questions were recorded, also `questions{}` (recorded, open, answered, ruled_out, undetermined), `open_questions[]` (question_id, phase, system, question; the 15 oldest across every phase and system, each cut to 200 characters, with `open_questions_note` when there are more), `significant_findings` (findings of activity at medium severity or above) and `no_incident: true` when every question is resolved and at least one is answered or ruled out, both audits have run, there are fewer than three findings of activity and none is medium or above.
 
 **Roles:** `EXTRACT_ANALYST` `CROSS_PLANNER` `CROSS_ANALYST` `NARRATIVE_PLANNER` `NARRATIVE_ANALYST` `REPORT`
 

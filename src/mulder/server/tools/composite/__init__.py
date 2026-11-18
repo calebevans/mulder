@@ -8,4 +8,7 @@ from mulder.server.tools.composite import (  # noqa: F401
     misc,
     persistence,
     process,
+    ransomware,
+    ransomware_family,
+    remote_access,
 )

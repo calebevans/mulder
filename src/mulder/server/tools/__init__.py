@@ -24,6 +24,7 @@ from mulder.server.tools import (  # noqa: F401  # noqa: F401
     netflow,
     phone,
     plaso,
+    questions,
     review,
     secretscan,
     triage,

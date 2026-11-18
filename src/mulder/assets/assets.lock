@@ -67,6 +67,12 @@
       "bytes": 45415511,
       "generated_at": "2026-08-16T17:15:28Z"
     },
+    "lolrmm:any": {
+      "url": "https://raw.githubusercontent.com/magicsword-io/LOLRMM/0c2d56639673a232ff9d2548e16c6d045d3a1217/website/public/api/rmm_tools.json",
+      "sha256": "607f5195c0a16f8dcc2e382c91557cd1c0d7fe21d07fcd64df4c45dad1731e20",
+      "bytes": 2291837,
+      "generated_at": "2026-11-18T18:11:53Z"
+    },
     "zizmor:amd64": {
       "url": "https://github.com/zizmorcore/zizmor/releases/download/v1.32.0/zizmor-x86_64-unknown-linux-gnu.tar.gz",
       "sha256": "bb110cc765eca9cd7efb2e284a956be5974c60027b0970f16397d86208a9957b",

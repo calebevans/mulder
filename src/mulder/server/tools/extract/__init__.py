@@ -14,5 +14,6 @@ from mulder.server.tools.extract import (  # noqa: F401
     registry,
     registry_query,
     tsk,
+    usn,
     volatility,
 )
