@@ -202,8 +202,9 @@ _CONSOLIDATION_MANDATE: str = (
     "NOTES (each session's last note, under its number. Session N took "
     "question N of the list above, and the last session every question from "
     "its own number on):\n{notes}\n\n"
-    "FINDINGS SAVED TO THE CASE SINCE THEN (a session running at the same "
-    "time for another system may have saved some of them):\n{findings}\n\n"
+    "FINDINGS SAVED TO THE CASE SINCE THE FIRST OF THOSE SESSIONS STARTED (a "
+    "session running at the same time for another system may have saved some "
+    "of them):\n{findings}\n\n"
     "FOLLOW-UP REQUESTS THOSE SESSIONS MADE (none was acted on; only yours "
     "is):\n{requests}"
 )

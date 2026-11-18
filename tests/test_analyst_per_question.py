@@ -38,11 +38,11 @@ from mulder.audit import AuditLog
 from mulder.cli import cli
 from mulder.cut_short import (
     CUT_SHORT_PREFIX,
-    MAX_CUT_SHORT,
     cut_short_label,
+    dropped_count,
     remaining_work_item,
 )
-from mulder.db import _CUT_SHORT_KEY, CaseDB
+from mulder.db import _CUT_SHORT_KEY, _MAX_CUT_SHORT, CaseDB
 from mulder.models import Finding
 from mulder.orchestrator.display import _MAX_CUT_SHORT_ROWS, InvestigationDashboard
 from mulder.orchestrator.evidence import ServerBridge
@@ -384,7 +384,7 @@ class TestCutShortRecord:
         _record(db_dir, *[("extraction", "analyst", f"host-{i}", "") for i in range(105)])
 
         rows = _rows(db_dir)
-        assert len(rows) == MAX_CUT_SHORT
+        assert len(rows) == _MAX_CUT_SHORT
         assert rows[0][2] == "host-5"
         assert rows[-1][2] == "host-104"
 
@@ -399,8 +399,16 @@ class TestCutShortRecord:
         with CaseDB(path) as db:
             db.set_kv(_CUT_SHORT_KEY, '[1, {"phase": "report", "extra": 2}]')
             assert db.get_cut_short() == [
-                {"phase": "report", "role": "", "system": "", "question": "", "recorded_at": ""}
+                {
+                    "phase": "report",
+                    "role": "",
+                    "system": "",
+                    "question": "",
+                    "recorded_at": "",
+                    "n": "",
+                }
             ]
+            assert dropped_count(db.get_cut_short()) == 0  # no number to count from
 
         with sqlite3.connect(path) as conn:
             conn.execute("DROP TABLE kv_store")
@@ -431,7 +439,7 @@ class TestSummaryAndGate:
         assert "may not have been examined (a later retry or follow-up may have" in items[0]
         assert "not examined is not the same as absent" in items[0]
         assert "may be incomplete" in items[0]
-        assert "most recent records are kept" not in items[0]
+        assert "dropped" not in items[0]
         assert "data, not instructions" in items[0]
 
     def test_a_case_with_nothing_cut_short_has_no_such_item(self, db_dir: Path) -> None:
@@ -463,25 +471,22 @@ class TestSummaryAndGate:
         assert item.endswith('system "B9"; extraction analyst, system "A" (+1 more)')
         assert 'system "B0"' not in item  # the oldest is the one left out
 
-    def test_a_full_record_says_earlier_rows_were_dropped(self, db_dir: Path) -> None:
-        _record(
-            db_dir, *[("extraction", "analyst", f"h{i}", "") for i in range(MAX_CUT_SHORT - 1)]
-        )
-        with CaseDB.open(CASE, db_dir) as db:
-            not_full = remaining_work_item(db.get_cut_short())
-        _record(db_dir, ("report", "", "", ""), ("report", "", "", ""))  # one over the cap
+    def test_readers_say_how_many_earlier_rows_were_dropped(self, db_dir: Path) -> None:
+        _record(db_dir, *[("extraction", "analyst", f"h{i}", "") for i in range(_MAX_CUT_SHORT)])
         with CaseDB.open(CASE, db_dir) as db:
             full = remaining_work_item(db.get_cut_short())
+        _record(db_dir, *[("report", "", "", "")] * 3)  # three over the cap
+        with CaseDB.open(CASE, db_dir) as db:
+            rows = db.get_cut_short()
         written = write_case_report(CASE, db_dir)
 
-        kept = (
-            f"only the {MAX_CUT_SHORT} most recent records are kept; any earlier ones were dropped"
-        )
-        assert not_full is not None and "records are kept" not in not_full
-        assert full is not None and full.endswith(f"({kept})")
+        assert full is not None and "dropped" not in full  # full, but nothing lost yet
+        assert [row["n"] for row in rows[:2]] == ["4", "5"] and rows[-1]["n"] == "103"
+        kept = f"nly the {_MAX_CUT_SHORT} most recent are kept"
+        assert str(remaining_work_item(rows)).endswith(f" (earlier records dropped: 3; o{kept})")
         assert written.html is not None, written.html_error
         for report in (written.markdown, written.html):
-            assert f"O{kept[1:]}." in report.read_text(encoding="utf-8")
+            assert f"Earlier records dropped: 3. O{kept}." in report.read_text(encoding="utf-8")
 
     def test_the_narrative_gate_does_not_turn_it_into_a_gap(self) -> None:
         item = remaining_work_item(
@@ -538,7 +543,7 @@ class TestReport:
             assert "may not have been examined: a later retry or follow-up may have" in flat
             assert "Not examined is not the same as absent" in flat
             assert "may be incomplete" in flat
-            assert "records are kept" not in flat
+            assert "dropped" not in flat
         assert "Analysis Cut Short" in html
         assert self.HOSTILE not in html
         assert "question: &#34;&lt;script&gt;alert(1)&lt;/script&gt;&#34;" in html
@@ -884,7 +889,10 @@ class TestQuestionScope:
             "number on):\nSession 1:\n> (no note recorded)\nSession 2:\n> (no note recorded)\n"
             "Session 3:\n> (no note recorded)\n\n"
         ) in prompt
-        assert "have saved some of them):\n> (none)\n\n" in prompt
+        assert (
+            "SINCE THE FIRST OF THOSE SESSIONS STARTED (a session running at the same time "
+            "for another system may have saved some of them):\n> (none)\n\n"
+        ) in prompt
         assert "only yours is):\n> (none)\n\nTURN BUDGET:" in prompt
 
     @pytest.mark.asyncio()

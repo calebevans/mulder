@@ -641,7 +641,7 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
   <div class="card mb-1">
     <div class="card-header">&#9888; Analysis Cut Short</div>
     <div class="card-body" style="font-size:0.88rem;line-height:1.7;">
-      <p style="color:var(--text-muted);margin-bottom:0.75em;">These sessions ended at a turn or context limit and had no continuation left. What each one saved or indexed is in the case. What it had not reached may not have been examined: a later retry or follow-up may have covered it (see the time of each entry). Not examined is not the same as absent, so conclusions about these parts of the investigation may be incomplete.{% if cut_short_full %} Only the {{ cut_short | length }} most recent records are kept; any earlier ones were dropped.{% endif %}</p>
+      <p style="color:var(--text-muted);margin-bottom:0.75em;">These sessions ended at a turn or context limit and had no continuation left. What each one saved or indexed is in the case. What it had not reached may not have been examined: a later retry or follow-up may have covered it (see the time of each entry). Not examined is not the same as absent, so conclusions about these parts of the investigation may be incomplete.{% if cut_short_dropped %} Earlier records dropped: {{ cut_short_dropped }}. Only the {{ cut_short | length }} most recent are kept.{% endif %}</p>
       <ul style="margin-left:1.25rem;">
         {% for c in cut_short %}
         <li>{{ c.label }} <span style="opacity:0.6;">(recorded {{ c.recorded_at }})</span></li>
