@@ -473,6 +473,8 @@ The `EvidenceClassifier` scans evidence directories and categorizes files by typ
 | Phone dump (Android) | Android directory structures | MVT, ALEAPP |
 | Phone dump (iOS) | iOS directory structures | MVT, iLEAPP |
 | Linux logs | `/var/log/*`, journal files | Zircolite, native parsing |
+| Loose logs | `.log`, `.txt` and rotated `.log.N` files, Suricata and Zeek JSON, a directory named `log` or `logs` or under `var/log` | `run_loose_logs` (native parsers; Zircolite for the web server Sigma rules) |
+| ESXi support bundle | a directory with `commands/`, `etc/vmware` and `var/run/log` or `var/log` | `run_loose_logs` |
 | Archive | `.zip`, `.7z`, `.tar`, `.gz` | Internal extraction |
 
 `.raw` and `.001` are written by disk imagers and memory acquisition tools

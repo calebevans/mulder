@@ -17,11 +17,14 @@ from typing import Any
 
 from mulder import collect as collector
 from mulder.extractors.classifier import (
+    LOOSE_LOG_TYPES,
     RAW_CONTAINER_EXTS,
     EvidenceClassifier,
     _dir_has_named_nfcapd,
     has_disk_signature,
+    is_esxi_bundle,
     is_nfcapd,
+    loose_log_targets,
 )
 from mulder.extractors.optical import probe_optical
 from mulder.orchestrator.types import PhaseResult, extract_catalog_result
@@ -52,6 +55,21 @@ _CI_CLOUD_TYPES: dict[str, tuple[str, str]] = {
         'Plan one run_secret_scan(evidence_path=<directory>) task, group "foundation", '
         "for each directory above.",
     ),
+    "log_directory": (
+        "Log directories",
+        'Plan one run_loose_logs(evidence_path=<directory>) task, group "foundation", '
+        "for each directory above.",
+    ),
+    "log_file": (
+        "Loose log files",
+        'Plan one run_loose_logs(evidence_path=<path>) task, group "foundation", '
+        "for each path above.",
+    ),
+    "esxi_bundle": (
+        "ESXi support bundles",
+        'Plan one run_loose_logs(evidence_path=<directory>) task, group "foundation", '
+        "for each bundle above: it reads the bundle's logs.",
+    ),
 }
 
 _MAX_SIMPLE_SYSTEMS_PER_SESSION: int = 4
@@ -68,6 +86,21 @@ _ARCHIVE_EXTENSIONS: frozenset[str] = frozenset(
 def _is_raw_disk(path: Path) -> bool:
     """A ``.raw``/``.001`` file whose first bytes show a disk, not a memory dump."""
     return path.suffix.lower() in RAW_CONTAINER_EXTS and has_disk_signature(path)
+
+
+def _is_log(path: Path, root: Path) -> bool:
+    """Whether ``run_loose_logs`` reads *path* as it is: a ``.log`` or ``.txt`` file, or
+    any file in a log directory or an ESXi bundle under *root*, a rotated ``.gz``
+    included. Such a file is not an archive to unpack first and, however large, not a
+    memory dump."""
+    if path.suffix.lower() in (".log", ".txt"):
+        return True
+    for parent in path.parents:
+        if parent == root or not parent.is_relative_to(root):
+            break
+        if EvidenceClassifier._is_log_directory(parent) or is_esxi_bundle(parent):
+            return True
+    return False
 
 
 class EvidenceContext:
@@ -166,14 +199,14 @@ class EvidenceContext:
                 if ext in _MEMORY_EXTENSIONS:
                     if not _is_raw_disk(f):
                         memory_dumps.append(str(f))
-                elif ext in _ARCHIVE_EXTENSIONS:
+                elif ext in _ARCHIVE_EXTENSIONS and not _is_log(f, evidence_path):
                     nested_archives.append(str(f))
 
         if extracted_dir.is_dir():
             for subdir in extracted_dir.iterdir():
                 if subdir.is_dir() and sys_lower in subdir.name.lower():
                     for f in subdir.rglob("*"):
-                        if not f.is_file():
+                        if not f.is_file() or _is_log(f, extracted_dir):
                             continue
                         ext = f.suffix.lower()
                         if ext in _ARCHIVE_EXTENSIONS:
@@ -322,7 +355,8 @@ class EvidenceContext:
         return lines
 
     def _ci_cloud_lines(self, sys_lower: str) -> list[str]:
-        """Planner lines for cloud audit logs, repository checkouts and CI run logs.
+        """Planner lines for cloud audit logs, repository checkouts, CI run logs and
+        loose logs (log directories, log files, ESXi support bundles).
 
         These are evidence of a kind the planner cannot recognise from a file
         listing, so each is named with its type, its path and the tool to plan.
@@ -338,8 +372,12 @@ class EvidenceContext:
         for root in roots:
             if not root.is_dir():
                 continue
-            for item in EvidenceClassifier().classify(root):
-                if item.artifact_type not in found:
+            items = EvidenceClassifier().classify(root)
+            # Loose logs are planned per run_loose_logs target, not per classified file.
+            for log_path, (kind, count) in loose_log_targets(items, root).items():
+                found[kind][str(log_path)] = count
+            for item in items:
+                if item.artifact_type not in found or item.artifact_type in LOOSE_LOG_TYPES:
                     continue
                 # Loose audit log files are planned once, by their directory.
                 # One at the top of the evidence is planned by itself: its
@@ -368,7 +406,8 @@ class EvidenceContext:
                 continue
             lines.append(f'{label} (type "{artifact_type}"):')
             for path, count in sorted(mine.items()):
-                is_dir = artifact_type == "cloud_audit_log" and Path(path).is_dir()
+                by_directory = artifact_type in ("cloud_audit_log", "log_file")
+                is_dir = by_directory and Path(path).is_dir()
                 suffix = f"  ({count} files)" if is_dir else ""
                 lines.append(f"  {path}{suffix}")
             lines.append(f"  {plan}")

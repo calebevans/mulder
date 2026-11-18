@@ -176,6 +176,42 @@ def logtable_smoke(work: Path) -> None:
     print("PASS log table queries on SQLite", sqlite3.sqlite_version, flush=True)
 
 
+def loose_logs_smoke(work: Path) -> None:
+    """Run run_loose_logs on an access log with the image's own Zircolite, pySigma and
+    SigmaHQ tree. Most generic web rules are keyword lists that the tool rewrites so
+    Zircolite can convert them: a pySigma or Sigma update that breaks that fails here."""
+    from unittest.mock import MagicMock
+
+    from mulder.audit import AuditLog
+    from mulder.db import CaseDB
+    from mulder.server import app
+    from mulder.server.tools.looselogs import run_loose_logs
+
+    logs = work / "weblogs"
+    logs.mkdir()
+    request = '203.0.113.9 - - [10/Oct/2023:13:55:36 +0000] "GET {} HTTP/1.1" 200 12 "-" "Mozilla"'
+    (logs / "access.log").write_text(
+        "\n".join(request.format(uri) for uri in ("/", "/item.php?id=1%20UNION%20SELECT%201"))
+    )
+    db_dir = work / "looselogs-db"
+    with CaseDB.create("looselogs-smoke", str(logs), db_dir) as db:
+        app._cfg = app.ServerConfig(db_dir=db_dir)
+        app._ctx = app.ServerContext(
+            case_id="looselogs-smoke",
+            db=db,
+            correlator=MagicMock(),
+            audit=AuditLog(db_dir / "looselogs-smoke.audit.jsonl"),
+        )
+        try:
+            result = run_loose_logs.__wrapped__(str(logs))  # type: ignore[attr-defined]
+        finally:
+            app._ctx = app._cfg = None
+    web = result["results"]["web"]
+    assert web["sigma"].startswith("ok"), web
+    assert web["rules_matched"].get("SQL Injection Strings In URI") == 1, web
+    print("PASS SigmaHQ web server rules over an access log:", web["sigma"], flush=True)
+
+
 def main() -> None:
     assert os.getuid() != 0, "Run through the image entrypoint as mulder"
     assert Path.home() == Path("/home/mulder"), "Unexpected HOME"
@@ -334,6 +370,7 @@ def main() -> None:
 
         netflow_smoke(work)
         logtable_smoke(work)
+        loose_logs_smoke(work)
 
         evidence = work / "email.raw"
         original = (b"Contact smoke@example.org for the smoke test.\n" * 100).ljust(8192, b"\0")

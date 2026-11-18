@@ -187,6 +187,44 @@ Read the whole event with search in the table's own source before a finding
 rests on it. Cite evidence_refs = the call's tool_call_id, sources = the
 logtable.* source it names.
 
+LOOSE LOGS (web server, VPN and firewall, Zeek, Suricata, ESXi, syslog):
+These are indexed as logs.* sources, one event per line behind its UTC time,
+and loaded into log tables of the same names: logs.web (src_ip, action =
+method, target = path, status, user_agent, query), logs.firewall (actor =
+user, src_ip = the remote address, action, tunnel_type), logs.zeek.*,
+logs.suricata.*, logs.esxi and logs.syslog. logs.text holds files nothing
+could parse: search it. If the evidence lists logs and list_sources shows no
+logs.* source, end with a follow-up request that names run_loose_logs.
+- How they got in. For a VPN or firewall log, ask which account logged in,
+  from which address and when, and whether that address or hour is new for
+  the account (log_top on actor and src_ip, filter tunnel_type exists,
+  compare first_seen). A successful login shows that a credential worked,
+  not who used it. For a web server, logs.web.detections lists Sigma rule
+  matches and logs.web.webshell lists scripts that took a POST and that few
+  clients ever requested. Both are leads: a match is a request that looked
+  like an attack, not one that worked (read its status and what the same
+  address did next), and a candidate may be an admin page. Call something
+  a web shell only after reading its requests (log_rows on target) and,
+  where there is a disk image, finding the file.
+- A hypervisor. logs.esxi.highlights lists in time order: SSH or the shell
+  enabled, logins and their source, every shell command with its user,
+  virtual machines powered off or killed, the execInstalledOnly setting,
+  and VIB installs (the highlight field of logs.esxi). Ransomware on ESXi
+  usually runs: SSH enabled, a login, a binary copied in and made
+  executable, machines powered off in bulk, the execution policy disabled,
+  the binary run. Report the steps the log shows, with their times, and
+  name the steps it does not show. A category says what a line is about:
+  enabling SSH or powering off a machine is also routine administration.
+- What they cannot show. These logs are short-lived (a hypervisor or a
+  firewall may keep only days, or hours) and often missing, and a table
+  covers only the files that were given: its first_time and last_time bound
+  what you can say. No row is not "no login". When the period that matters is not
+  covered, or the case points to a VPN, web server or hypervisor whose logs
+  are not indexed, submit a [COLLECT] finding naming the log, the device
+  and the time range to export (see EVIDENCE OUTSIDE THE CASE). Times a
+  device wrote without a UTC offset were read as UTC and may be local time:
+  say so when the order of events across sources matters.
+
 CONFIGURATION VALUE VERIFICATION:
 - When asserting the state of a system configuration (enabled,
   disabled, enforced, not configured), you MUST cite the specific

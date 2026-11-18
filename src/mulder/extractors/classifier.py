@@ -6,6 +6,7 @@ import fnmatch
 import functools
 import logging
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -33,6 +34,7 @@ _EVTX_EXTS = {".evtx"}
 _YARA_RULE_EXTS = {".yar", ".yara"}
 _BROWSER_HISTORY_NAMES = {"index.dat"}
 _LOG_FILE_EXTS = {".log", ".txt"}
+_ROTATED_LOG_RE = re.compile(r"\.log[.-]\d+$")  # access.log.1, auth.log-20240115
 _LOG_DIR_NAMES = {"logs", "log"}
 _PHONE_DUMP_EXTS = {".bin"}
 _PHONE_DUMP_MIN_SIZE = 50_000_000
@@ -251,6 +253,29 @@ def is_cloud_audit_log(path: Path) -> bool:
     )
 
 
+def is_network_json_log(path: Path) -> bool:
+    """Sniff the head of a JSON file for the keys of Suricata ``eve.json`` or a Zeek log."""
+    try:
+        if not path.is_file():  # a FIFO named x.json would block the open
+            return False
+        with path.open("rb") as f:
+            head = f.read(65536)
+    except OSError:
+        return False
+    return (b'"event_type"' in head and b'"timestamp"' in head) or (
+        b'"ts"' in head and (b'"id.orig_h"' in head or b'"_path"' in head)
+    )
+
+
+def is_esxi_bundle(path: Path) -> bool:
+    """A directory unpacked from an ESXi ``vm-support`` bundle."""
+    return (
+        (path / "commands").is_dir()
+        and (path / "etc" / "vmware").is_dir()
+        and ((path / "var" / "run" / "log").is_dir() or (path / "var" / "log").is_dir())
+    )
+
+
 def has_nfdump_magic(path: Path) -> bool:
     """4-byte header check; empty, short, unreadable and symlinked files fail."""
     try:
@@ -337,6 +362,8 @@ class EvidenceClassifier:
         if evidence_root.is_file():
             result = self._classify_file(evidence_root)
             return [result] if result else []
+        if is_esxi_bundle(evidence_root):  # the evidence directory is the bundle itself
+            return [ClassifiedEvidence(path=evidence_root, artifact_type="esxi_bundle")]
 
         results: list[ClassifiedEvidence] = []
         seen_log_dirs: set[Path] = set()
@@ -395,7 +422,14 @@ class EvidenceClassifier:
                 results.append(ClassifiedEvidence(path=item, artifact_type="ci_run_logs"))
                 seen_log_dirs.add(item)
                 return
-            if self._is_log_directory(item) and item not in seen_log_dirs:
+            # A log directory, or an ESXi support bundle, is one item, and so is
+            # everything under it: /var/log/nginx is not a second log directory.
+            if any(item.is_relative_to(d) for d in seen_log_dirs):
+                return
+            if is_esxi_bundle(item):
+                results.append(ClassifiedEvidence(path=item, artifact_type="esxi_bundle"))
+                seen_log_dirs.add(item)
+            elif self._is_log_directory(item):
                 results.append(ClassifiedEvidence(path=item, artifact_type="log_directory"))
                 seen_log_dirs.add(item)
             return
@@ -421,6 +455,10 @@ class EvidenceClassifier:
         # Likewise for JSON, which is otherwise skipped as project clutter.
         if ext in JSON_LOG_EXTS and is_cloud_audit_log(path):
             return ClassifiedEvidence(path=path, artifact_type="cloud_audit_log")
+
+        # And for Suricata's eve.json and Zeek logs written as JSON.
+        if ext in JSON_LOG_EXTS and is_network_json_log(path):
+            return ClassifiedEvidence(path=path, artifact_type="log_file")
 
         if name in _SKIP_FILENAMES or ext in _SKIP_EXTENSIONS:
             return None
@@ -468,7 +506,7 @@ class EvidenceClassifier:
         if ext in _SQLITE_EXTS:
             return ClassifiedEvidence(path=path, artifact_type="sqlite_database")
 
-        if ext in _LOG_FILE_EXTS:
+        if ext in _LOG_FILE_EXTS or _ROTATED_LOG_RE.search(name):
             if _is_evidence_sidecar(path):
                 return None
             return ClassifiedEvidence(path=path, artifact_type="log_file")
@@ -506,3 +544,36 @@ def _is_hidden(path: Path) -> bool:
     (``~/.cache/case/evidence``) says nothing about what is inside it.
     """
     return any(part.startswith(".") for part in path.parts if part != ".")
+
+
+#: The artifact types ``run_loose_logs`` reads.
+LOOSE_LOG_TYPES = frozenset({"log_file", "log_directory", "esxi_bundle"})
+
+
+def loose_log_targets(
+    items: Sequence[ClassifiedEvidence], root: Path
+) -> dict[Path, tuple[str, int]]:
+    """The paths to point ``run_loose_logs`` at, each with its artifact type and how
+    many classified items it covers.
+
+    A log directory or an ESXi bundle is one target. The tool reads a directory
+    recursively, so loose log files are read through their directory only when that is
+    not *root* and holds nothing else that was classified; otherwise each file is its
+    own target, and no run wanders into other evidence.
+    """
+    held: dict[Path, int] = {}  # directory -> loose log files directly in it
+    root = root.resolve()
+    mixed = {root, *root.parents}  # directories that hold something else as well
+    for item in items:
+        direct = item.path.parent if item.artifact_type == "log_file" else None
+        if direct is not None:
+            held[direct] = held.get(direct, 0) + 1
+        mixed.update(parent for parent in item.path.parents if parent != direct)
+    targets: dict[Path, tuple[str, int]] = {}
+    for item in items:
+        folder = item.path.parent
+        if item.artifact_type == "log_file" and folder not in mixed:
+            targets[folder] = ("log_file", held[folder])
+        elif item.artifact_type in LOOSE_LOG_TYPES:
+            targets[item.path] = (item.artifact_type, 1)
+    return targets

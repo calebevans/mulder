@@ -15,7 +15,13 @@ from collections import defaultdict
 from pathlib import Path
 
 from mulder.db import CaseDB
-from mulder.extractors.classifier import ClassifierConfig, EvidenceClassifier
+from mulder.extractors.classifier import (
+    LOOSE_LOG_TYPES,
+    ClassifiedEvidence,
+    ClassifierConfig,
+    EvidenceClassifier,
+    loose_log_targets,
+)
 from mulder.patterns import (
     EMAIL_RE,
     IP_RE,
@@ -64,6 +70,15 @@ _EVIDENCE_TOOL_MAP: dict[str, list[str]] = {
     "ci_run_logs": [
         "run_secret_scan",
     ],
+    "log_file": [
+        "run_loose_logs",
+    ],
+    "log_directory": [
+        "run_loose_logs",
+    ],
+    "esxi_bundle": [
+        "run_loose_logs",
+    ],
     "evtx": [
         "run_evtx_parser",
         "run_hayabusa",
@@ -101,6 +116,7 @@ _EVIDENCE_INPUT_PARAMS: dict[str, tuple[str, ...]] = {
     "run_cloud_audit_logs": ("evidence_path",),
     "run_secret_scan": ("evidence_path",),
     "run_workflow_audit": ("evidence_path",),
+    "run_loose_logs": ("evidence_path",),
     "run_volatility": ("memory_path",),
     "run_volatility_batch": ("memory_path",),
     "run_fls": ("image_path",),
@@ -291,6 +307,7 @@ def audit_tool_coverage() -> dict[str, object]:
 
     classifier = EvidenceClassifier(ClassifierConfig())
     classified = classifier.classify(evidence_root)
+    loose = loose_log_targets(classified, evidence_root)
     # Evidence delivered inside an archive is audited where it was unpacked.
     # Only the types that arrive that way and are run on the unpacked copy.
     try:
@@ -298,11 +315,15 @@ def audit_tool_coverage() -> dict[str, object]:
     except RuntimeError:  # no server config: nothing was extracted through it
         extracted = None
     if extracted is not None and extracted.is_dir():
-        classified += [
-            ev
-            for ev in classifier.classify(extracted)
-            if ev.artifact_type in _UNPACKED_EVIDENCE_TYPES
-        ]
+        unpacked = classifier.classify(extracted)
+        loose.update(loose_log_targets(unpacked, extracted))
+        classified += [ev for ev in unpacked if ev.artifact_type in _UNPACKED_EVIDENCE_TYPES]
+    # Loose logs are audited as run_loose_logs is pointed at them: a directory of log
+    # files is one item, not one per file.
+    classified = [ev for ev in classified if ev.artifact_type not in LOOSE_LOG_TYPES]
+    classified += [
+        ClassifiedEvidence(path=p, artifact_type=kind) for p, (kind, _) in loose.items()
+    ]
 
     evidence = [
         form
@@ -374,6 +395,8 @@ def audit_tool_coverage() -> dict[str, object]:
             )
             run = list(applicable) if covered else []
         else:
+            if loose.get(ev.path, ("", 1))[1] > 1:
+                files = loose[ev.path][1]
             forms = _path_forms(ev.path)
             run = [
                 t

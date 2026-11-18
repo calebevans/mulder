@@ -91,6 +91,22 @@ exactly as listed, group "foundation":
 If the briefing or a directory listing shows such evidence that the context
 did not list, plan the same tools on it.
 
+When the evidence context lists LOG DIRECTORIES, LOOSE LOG FILES or ESXI
+SUPPORT BUNDLES, plan run_loose_logs(evidence_path=<path as listed>) once
+per listed path, group "foundation". It recognises web server, VPN and
+firewall, Zeek, Suricata, ESXi and syslog files by their content, indexes
+them and loads them into log tables. One call reads a whole directory: do
+not plan it again for a file or directory inside a listed path. Add to
+investigation_questions what these logs can answer: for a VPN or firewall
+log, which account logged in, from which address and when; for a web
+server log, which requests reached a script that few clients use; for an
+ESXi bundle, when SSH or the shell was enabled, who logged in from where,
+which commands ran, when virtual machines were powered off and whether the
+execution policy was changed. If the briefing describes an intrusion
+through a VPN, a web application or a hypervisor and no such logs are
+listed, ask in investigation_questions which logs would show the way in
+and whether they are in the evidence.
+
 When the evidence includes MOBILE DATA, plan:
 - run_aleapp (Android, 300+ artifacts) or run_ileapp (iOS, 200+)
 - run_mvt_android/ios (spyware detection)

@@ -21,6 +21,7 @@ from mulder.server.tools import (  # noqa: F401  # noqa: F401
     hindsight,
     jobs,
     logtables,
+    looselogs,
     mvt,
     netflow,
     phone,

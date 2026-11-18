@@ -692,6 +692,86 @@ does. A window already collected is not fetched again.
 
 **Roles:** `EXTRACT_EXECUTOR`
 
+### run_loose_logs
+
+Index loose log files and load their events into log tables.
+
+For evidence of type `log_file`, `log_directory` and `esxi_bundle`: the logs that
+say how an intruder got in and what was done on a hypervisor. The format of each
+file is recognised from its first lines, never from its name alone. Plain and
+gzip files are read; nothing is written to the evidence.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| evidence_path | str | yes | A log file, or a directory read recursively. For an ESXi support bundle, the bundle directory: its `var/run/log` and `var/log` are read |
+| force | bool | no | Re-run even if this path was already indexed |
+
+**Returns:** `files_read`, `files_not_read{<reason>: files, examples[]}`, `sources{<source>: files, lines, log_table, rows, rows_not_parsed, rows_without_time, sources, log_table_note}`, `notes[]`, `web{sigma, sigma_events_scanned, sigma_events_not_scanned, detections, rules_matched{}, detections_source, webshell_candidates, webshell_source}`, `esxi{highlights, by_category{}, highlights_source}`, `esxi_bundle`
+
+| Format | Recognised by | Source and [log table](#log-tables) | Fields beside the time |
+|--------|---------------|-------------------------------------|------------------------|
+| Apache and nginx access logs (common, combined, with or without a leading virtual host) | the line shape | `logs.web` | `src_ip`, `actor` (the authenticated user), `action` (method), `target` (path), `status`, `bytes`, `user_agent`, `query`, `referer`, `host` |
+| IIS W3C extended | a `#Fields:` directive naming `c-ip` and a method or URI column | `logs.web` | the same, from whichever columns the directive names |
+| Zeek, tab-separated (`#fields`) or JSON | the header, or JSON with `ts` and a Zeek key | `logs.zeek.conn`, `.http`, `.dns`, `.ssl`, `.files`, `.notice`; any other log in `logs.zeek.other` | `src_ip` (originator), `target`, `session_id` (uid) and per log: connection state and bytes; method, path, status, host; query, type, answers; server name and certificate; file name, hashes; notice type |
+| Suricata `eve.json` | JSON with `event_type` and `timestamp` | `logs.suricata.alert`, `.http`, `.dns`, `.tls`, `.flow`; any other event type in `logs.suricata.other` | `src_ip`, `target`, `session_id` (flow id) and per type: signature and whether it was blocked; method, path, status; name, type, answers (both DNS record shapes); SNI and certificate; state and bytes |
+| FortiGate key=value | `date=` `time=` with `logid`, `devid` or `devname` | `logs.firewall` | `actor` (`user`), `src_ip` (`remip`, `srcip`, or the address in `ui`), `action`, `target` (`dstip`), `status`, `bytes`, `tunnel_type`, `assigned_ip`, `reason`, `log_type`, `message_id`, `device`, `message` |
+| SonicWall key=value | `id=firewall sn=` | `logs.firewall` | `actor` (`usr`), `src_ip`, `action` (the message), `target`, `tunnel_type` (`sess`), `message_id`, `device` |
+| Cisco ASA | `%ASA-n-nnnnnn:` | `logs.firewall` | For the VPN session messages 113039, 113019, 113038, 722051 and 722055: `actor`, `src_ip`, `action`, `tunnel_type`, `group`, `assigned_ip`, `bytes`, `reason`, `user_agent` (the client). Every other message: `message_id`, `level`, `device`, `message` |
+| ESXi (`hostd`, `vobd`, `shell`, `auth`, `vmkernel`, `vmkwarning`, `syslog`, `esxupdate`, `rhttpproxy`, `vpxa`), as a host writes them or as a syslog server received them | lines that open with a UTC `...Z` time and name an ESXi program, or a file of one of those names, or any such file in a bundle | `logs.esxi` | `program`, `message`, and on highlighted lines `highlight`, `actor`, `src_ip`, `action` (a shell command), `status` (of a login) |
+| Syslog | time, host, `program[pid]:` | `logs.syslog` | `host`, `program`, `message` |
+| Anything else that is text | | `logs.text` | none: indexed for `search`, nothing parsed, no table |
+
+Every line is indexed, one per line, as the event's UTC time (or `-`), a tab, then the
+original line; a `# file:` line names each file. A row's `line` is its line in that
+source, and its `file` field the file it came from. A source holds at most 100,000
+lines, so a large log becomes `logs.web`, `logs.web.2` and so on, all feeding the one
+table.
+
+Three sources are derived, and each says in its first line what it is not:
+
+- `logs.web.detections`: matches of the SigmaHQ web server rules (the
+  `rules/web/webserver_generic` set and every `category: webserver` rule under
+  `rules-emerging-threats`) over the web requests, through Zircolite. A match is a
+  request that looked like an attack, not one that worked. `sigma` is `ok`, or says
+  why the scan was skipped, stopped or failed; requests are loaded either way.
+- `logs.web.webshell`: paths ending in a script extension (`.php`, `.asp`, `.aspx`,
+  `.jsp` and the like) that answered at least one POST with a 2xx status and that at
+  most three client addresses requested in all. A lead: an admin page looks the
+  same, and a shell only ever fetched with GET is not listed.
+- `logs.esxi.highlights`: the ESXi lines about SSH or the shell being enabled or
+  disabled (`ssh_shell_access`), logins and their source (`login`), every shell
+  command with its user (`shell_command`), virtual machines powered off or killed
+  (`vm_power`), the execInstalledOnly setting (`exec_policy`) and VIB or image
+  profile installs (`vib_install`), in time order. The same category is the
+  `highlight` field of `logs.esxi`. These are pattern matches on known messages: a
+  category says what a line is about (reading a setting matches too), and a line
+  that is not listed may still be in the log.
+
+Times: an offset in the log is applied. W3C, Zeek and ESXi times are UTC. A time
+with no offset (syslog, ASA, FortiGate without `tz` or `eventtime`, SonicWall without
+`UTC`) is read as UTC and `notes` names the tables that applies to. Syslog lines
+carry no year: it is taken from the file's modification time (the year before, for
+a date later in the calendar), and `notes` says so. Where a relay put its own
+year-less header in front of a line that has an ISO time, the ISO time is used.
+
+Limits, each reported when it bites: 64 KiB parsed and 4,000 characters indexed
+per line, 1 GiB of text per file (gzip is read through, and a gzip bomb stops
+there), 5,000 files and 4 GiB of text per call, 30 minutes of Sigma scanning.
+What was cut off counts once in the table's `rows_not_parsed`. Only regular files
+are opened: symbolic links, FIFOs and devices are listed in `files_not_read`, as
+are binary and empty files. The path must lie inside the evidence directory or the
+case directory. Overlapping paths are counted once, as for `run_cloud_audit_logs`;
+the text index is not deduplicated.
+
+Not parsed: Palo Alto CSV (it has no header to recognise), Citrix NetScaler and
+Ivanti Connect Secure logs (Ivanti's binary `.vc0` files are a job for
+`run_plaso(parsers="ivanti_vc0")`), FortiGate CEF or CSV exports, Windows firewall
+logs, journald's binary journal, and JSON application logs. Text among these lands in
+`logs.text`. In a file that mixes formats, the lines of the minority format are
+counted as not parsed.
+
+**Roles:** `EXTRACT_EXECUTOR`
+
 ---
 
 ## 5. Extraction: Network
@@ -1477,8 +1557,9 @@ Retrieve IOC data carved by bulk_extractor from the case database.
 ### Log tables
 
 `search` finds text in a log; it cannot count. Logs that an extractor also loads as rows
-(today `run_cloud_audit_logs`: `cloudlog.github`, `cloudlog.gcp`, `cloudlog.aws`) can be
-counted with the four tools below. A row has a UTC time, the fields `actor`, `src_ip`,
+(today `run_cloud_audit_logs`: `cloudlog.github`, `cloudlog.gcp`, `cloudlog.aws`; and
+`run_loose_logs`: `logs.web`, `logs.firewall`, `logs.zeek.*`, `logs.suricata.*`,
+`logs.esxi`, `logs.syslog`) can be counted with the four tools below. A row has a UTC time, the fields `actor`, `src_ip`,
 `action`, `target`, `status`, `user_agent`, `session_id` and `bytes` where the log has
 them, and a few log-specific fields (`list_log_tables` names them per table).
 
