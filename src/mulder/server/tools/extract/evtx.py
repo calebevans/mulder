@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 from typing import cast
 
+from mulder.dirroot import detect_collection, icat
 from mulder.patterns import fls_file_entries
 from mulder.server.app import get_cfg, get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
@@ -80,12 +81,8 @@ def _extract_evtx_from_image(image_path: str, dest_dir: str) -> list[Path]:
                 seen.add(dedup_key)
                 safe_name = entry.path.replace("/", "_").replace("\\", "_")
                 out_path = Path(dest_dir) / safe_name
-                cmd = ["icat"]
-                if offset > 0:
-                    cmd.extend(["-o", str(offset)])
-                cmd.extend([image_path, inode_str])
                 try:
-                    proc = subprocess.run(cmd, capture_output=True, timeout=30, check=False)
+                    proc = icat(image_path, offset, inode_str)
                     if proc.returncode == 0 and proc.stdout:
                         out_path.write_bytes(proc.stdout)
                         extracted.append(out_path)
@@ -284,6 +281,9 @@ def run_evtx_parser(evtx_path: str, force: bool = False) -> dict[str, object]:
     for Security/System/PowerShell/Sysmon). Follow up with
     index_evtx_file on HIGH priority files first.
 
+    A triage collection directory is handled like a disk image: its
+    .evtx files are listed, and index_evtx_file parses the ones chosen.
+
     Args:
         evtx_path: Path to an EVTX file, directory, or disk image.
         force: Re-run extraction even if sources already exist.
@@ -313,6 +313,9 @@ def run_evtx_parser(evtx_path: str, force: bool = False) -> dict[str, object]:
         return error_response(tc_id, "run_evtx_parser", params, f"Path not found: {evtx_path}")
 
     is_image = target.suffix.lower() in (".e01", ".dd", ".img", ".raw", ".001")
+    # A triage collection is handled like an image: a manifest first, so its
+    # logs are not all parsed in one call. Any other directory is parsed now.
+    is_image = is_image or (target.is_dir() and detect_collection(target) is not None)
 
     if is_image:
         extract_dir = tempfile.mkdtemp(prefix="mulder_evtx_extract_")

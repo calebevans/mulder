@@ -16,6 +16,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from mulder.assets.paths import asset_candidates, asset_search_summary, register_cache_clear
+from mulder.dirroot import icat, not_collected
 from mulder.server.app import mcp
 from mulder.server.extract_helpers import extract_and_index, mount_disk_image
 from mulder.server.helpers import (
@@ -242,7 +243,8 @@ def run_prefetch_parser(image_path: str, force: bool = False) -> dict[str, objec
     extraction is unavailable.
 
     Args:
-        image_path: Path to the disk image (E01, dd, img).
+        image_path: Path to the disk image (E01, dd, img), or a triage
+            collection directory.
         force: Re-run extraction even if sources already exist.
     """
     tc_id = make_tool_call_id()
@@ -315,6 +317,7 @@ def run_prefetch_parser(image_path: str, force: bool = False) -> dict[str, objec
         params,
         "No Prefetch files found via TSK extraction or mount",
         (time.monotonic() - t0) * 1000,
+        suggestion=not_collected(image_path),
     )
 
 
@@ -327,7 +330,7 @@ def run_amcache_parser(image_path: str, force: bool = False) -> dict[str, object
     timestamps.  Extracts via TSK first, falls back to mount.
 
     Args:
-        image_path: Path to the disk image.
+        image_path: Path to the disk image, or a triage collection directory.
         force: Re-run extraction even if sources already exist.
     """
     tc_id = make_tool_call_id()
@@ -398,6 +401,7 @@ def run_amcache_parser(image_path: str, force: bool = False) -> dict[str, object
         params,
         "Amcache.hve not found via TSK extraction or mount",
         (time.monotonic() - t0) * 1000,
+        suggestion=not_collected(image_path),
     )
 
 
@@ -410,7 +414,7 @@ def run_shimcache_parser(image_path: str, force: bool = False) -> dict[str, obje
     hive via TSK first, falls back to mount.
 
     Args:
-        image_path: Path to the disk image.
+        image_path: Path to the disk image, or a triage collection directory.
         force: Re-run extraction even if sources already exist.
     """
     tc_id = make_tool_call_id()
@@ -494,6 +498,7 @@ def run_shimcache_parser(image_path: str, force: bool = False) -> dict[str, obje
         params,
         "SYSTEM hive not found via TSK extraction or mount",
         (time.monotonic() - t0) * 1000,
+        suggestion=not_collected(image_path),
     )
 
 
@@ -508,7 +513,8 @@ def run_mft_parser(image_path: str, force: bool = False) -> dict[str, object]:
     TSK icat (inode 0) first, falls back to mount.
 
     Args:
-        image_path: Path to the disk image.
+        image_path: Path to the disk image, or a triage collection directory
+            that holds a collected ``$MFT``.
         force: Re-run extraction even if sources already exist.
     """
     tc_id = make_tool_call_id()
@@ -550,12 +556,8 @@ def run_mft_parser(image_path: str, force: bool = False) -> dict[str, object]:
     if require_binary("icat"):
         with tempfile.TemporaryDirectory(prefix="mulder_mft_") as tmpdir:
             mft_dest = Path(tmpdir) / "$MFT"
-            cmd = ["icat"]
-            if offset > 0:
-                cmd.extend(["-o", str(offset)])
-            cmd.extend([image_path, "0"])
             try:
-                proc = subprocess.run(cmd, capture_output=True, timeout=TOOL_TIMEOUT, check=False)
+                proc = icat(image_path, offset, "0", TOOL_TIMEOUT)
             except subprocess.TimeoutExpired:
                 logger.warning("icat timed out extracting $MFT from %s; trying mount", image_path)
                 proc = None
@@ -612,6 +614,7 @@ def run_mft_parser(image_path: str, force: bool = False) -> dict[str, object]:
         params,
         "$MFT not found via TSK icat or mount",
         (time.monotonic() - t0) * 1000,
+        suggestion=not_collected(image_path),
     )
 
 

@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from mulder.dirroot import icat
 from mulder.patterns import fls_file_entries
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
@@ -111,18 +112,8 @@ def _extract_pcap_via_icat(
     Returns:
         True if extraction succeeded with non-empty output.
     """
-    cmd = ["icat"]
-    if offset > 0:
-        cmd.extend(["-o", str(offset)])
-    cmd.extend([image_path, inode_str])
-
     try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            timeout=_ICAT_TIMEOUT,
-            check=False,
-        )
+        proc = icat(image_path, offset, inode_str, _ICAT_TIMEOUT)
     except (subprocess.TimeoutExpired, OSError) as exc:
         logger.warning("icat extraction failed for inode %s: %s", inode_str, exc)
         return False
