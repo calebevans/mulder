@@ -70,14 +70,16 @@ def resolve_question(
       least one finding of activity (not [NEGATIVE], not [COLLECT]).
     - "ruled_out": the sources examined were searched for it and do not
       show it. finding_ids must name at least one [NEGATIVE] finding that
-      cites those tool calls. A finding that cites only calls that examine
-      no evidence (open_case, list_sources, get_investigation_summary, the
-      audits and the like) does not count. If none exists, submit one
-      first; if you cannot submit findings, use "undetermined". This
-      records that the evidence examined did not show it, not that it did
-      not happen.
+      cites those tool calls. If none exists, submit one first; if you
+      cannot submit findings, use "undetermined". This records that the
+      evidence examined did not show it, not that it did not happen.
     - "undetermined": the evidence needed to answer is not in the case or
       could not be read. Give the reason. This is not for work you skipped.
+
+    For "answered" and "ruled_out", a finding that cites only calls that
+    examine no evidence (open_case, list_sources, get_investigation_summary,
+    get_ioc_summary, get_bookmarks, the audits and the like) does not count:
+    it must cite at least one call that extracted, searched or read evidence.
 
     A resolution holds only while the findings it names exist: if one is
     deleted or stops being the right kind, the question is open again.
@@ -138,10 +140,10 @@ def resolve_question(
             elif uncitable := _uncitable_refs(audit, finding.evidence_refs):
                 shown = [ref[:_MAX_ID_CHARS] for ref in uncitable[:_MAX_IDS_SHOWN]]
                 why = f"cites {shown}, not successful calls to an evidence tool"
-            # A [NEGATIVE] finding may cite any successful call, bookkeeping
-            # included. Ruling a question out on it takes more: something
-            # has to have looked.
-            elif resolution == "ruled_out" and not any(
+            # A finding may cite any successful call, bookkeeping included.
+            # Resting a question on it takes more: something has to have
+            # looked.
+            elif not any(
                 _is_citable(audit, ref, refused=NO_EVIDENCE_TOOLS) for ref in finding.evidence_refs
             ):
                 why = "cites no call that extracted, searched or read evidence"
@@ -158,7 +160,8 @@ def resolve_question(
                 "none exists, submit one first, or use 'undetermined' if you cannot submit "
                 "findings)"
                 if resolution == "ruled_out"
-                else f"a finding of activity (not {NEGATIVE_PREFIX} or [COLLECT])"
+                else f"a finding of activity (not {NEGATIVE_PREFIX} or [COLLECT]) that cites a "
+                "tool call that extracted, searched or read evidence"
             )
             return _refused(
                 f"'{resolution}' must name at least one finding_id: {needed}."

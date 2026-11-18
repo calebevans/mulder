@@ -25,11 +25,12 @@ AUDIT_TOOLS = ("audit_evidence_coverage", "audit_tool_coverage")
 SIGNIFICANT_SEVERITIES = ("critical", "high", "medium")
 
 # Tools whose calls examine no evidence: case, job and progress bookkeeping,
-# the audits, reference lookups and the findings tools. A [NEGATIVE] finding
-# that cites only these looked at nothing, so it cannot rule a question out,
-# and the report does not count these calls as examination. A tool missing
-# from this set counts as an evidence tool, which is how every tool was
-# treated before the set existed.
+# the audits, reference lookups, the findings tools, and the tools that read
+# back what the investigation itself wrote. A finding that cites only these
+# looked at nothing, so it cannot answer a question or rule one out, and the
+# report does not count these calls as examination. A tool missing from this
+# set counts as an evidence tool, which is how every tool was treated before
+# the set existed.
 NO_EVIDENCE_TOOLS = frozenset(
     {
         "open_case",
@@ -49,6 +50,12 @@ NO_EVIDENCE_TOOLS = frozenset(
         "wait_all",
         "get_tool_guide",
         "lookup_attack_technique",
+        "enrich_iocs",  # asks outside services about an indicator
+        "verify_evidence_integrity",  # re-hashes the index; reports no content
+        # Bookmarks are windows another call already returned, and there may
+        # be none. The IOC summary is drawn from the findings' own text.
+        "get_bookmarks",
+        "get_ioc_summary",
         # server/tools/findings.py _FINDING_TOOLS
         "submit_finding",
         "update_finding",

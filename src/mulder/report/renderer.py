@@ -808,9 +808,11 @@ def _build_no_incident_summary(
     States the outcome as a claim about the evidence examined, then what was
     examined, then what was not available: questions left undetermined, with
     their reasons, and evidence known to exist outside the case. It says how
-    many evidence sources the findings cite and how many tool calls touched
-    evidence, because a negative conclusion reaches no further than the
-    sources someone read.
+    many evidence sources the findings cite and how many tool calls went to
+    tools that touch evidence, because a negative conclusion reaches no
+    further than the sources someone read. The audit summary counts calls
+    by tool name whatever their status, so the line says failed calls are
+    in that figure.
 
     ``evidence_sources`` and ``cited_sources`` are the citation gate's
     figures: one row per distinct evidence-bearing source name, and how many
@@ -827,7 +829,8 @@ def _build_no_incident_summary(
         f"{len(evidence_sources)} evidence sources"
         + (f" ({', '.join(kinds)})" if kinds else "")
         + f", {cited_sources} of them cited by a finding; {total_tool_calls} tool calls, "
-        f"{evidence_tool_calls} of them extracting, searching or reading evidence; "
+        f"{evidence_tool_calls} of them to tools that extract, search or read evidence "
+        "(failed calls included); "
         f"{_format_duration(total_duration_ms)}. "
         f"{len(resolved)} investigation questions: {resolved.count('ruled_out')} ruled out, "
         f"{resolved.count('answered')} answered, {resolved.count('undetermined')} undetermined."

@@ -13,7 +13,7 @@ import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
@@ -27,7 +27,9 @@ from mulder.models import AuditSummary, CaseMetadataRow, Finding, Question, Sour
 from mulder.orchestrator import prompts
 from mulder.orchestrator.evidence import ServerBridge
 from mulder.orchestrator.gates import GateResult, validate_cross_system
+from mulder.orchestrator.models import ModelConfig
 from mulder.orchestrator.phases import EXTRACTION
+from mulder.orchestrator.roles import RoleRunner
 from mulder.orchestrator.runner import Orchestrator
 from mulder.orchestrator.types import ExecutionResults, PhaseResult, Plan
 from mulder.questions import MAX_QUESTION_CHARS, clean, no_incident, resolved_path, statuses
@@ -810,6 +812,33 @@ async def test_the_analyst_is_given_recorded_questions_with_their_ids(case: _Cas
     assert f"[{question.question_id}] Was any persistence mechanism installed?" in analyst_prompt
 
 
+@pytest.mark.asyncio()
+async def test_a_continued_analyst_is_given_its_questions_again() -> None:
+    """Its prompt says only the questions in the user message are its own."""
+    continuations: list[str] = []
+
+    async def execute(**kwargs: Any) -> PhaseResult:
+        first = not kwargs["prompt"].startswith("CONTINUATION")
+        if not first:
+            continuations.append(kwargs["prompt"])
+        return PhaseResult(phase_name="query", turns_used=1, context_exhausted=first)
+
+    session = MagicMock()
+    session.execute = execute
+    roles = RoleRunner(session, MagicMock(), ModelConfig(), "clean", {}, "/tmp", 1)
+    labelled = "[q_1a2b3c4d] Was any persistence mechanism installed?"
+
+    for questions in ([labelled], []):
+        plan = Plan("p", [], questions, [], "plan", 1)
+        await roles.run_analyst(EXTRACTION, plan, ExecutionResults("p", [], 1, False))
+
+    with_questions, without = continuations
+    assert labelled in with_questions and "resolve_question" in with_questions
+    # A plan with no questions is continued with the prompt it always was.
+    assert with_questions.startswith(without)
+    assert without.endswith("Do NOT re-submit existing findings.")
+
+
 # ---------------------------------------------------------------------------
 # Roles and guidance
 # ---------------------------------------------------------------------------
@@ -869,9 +898,14 @@ def _resolve(question_id: str, resolution: str, *finding_ids: str) -> dict[str, 
         ("get_investigation_summary", {}),
         ("check_finalize_readiness", {}),
         ("audit_tool_coverage", {}),
+        # They return notes and findings the investigation wrote, and nothing
+        # at all when it wrote none.
+        ("get_bookmarks", {}),
+        ("get_ioc_summary", {}),
+        ("verify_evidence_integrity", {}),
     ],
 )
-def test_a_negative_finding_that_examined_no_evidence_cannot_rule_a_question_out(
+def test_a_finding_that_examined_no_evidence_cannot_answer_or_rule_out_a_question(
     case: _Case, tool: str, kwargs: dict[str, Any]
 ) -> None:
     """A bookkeeping call is a real, successful call, and it looked at nothing."""
@@ -883,9 +917,15 @@ def test_a_negative_finding_that_examined_no_evidence_cannot_rule_a_question_out
         "tc_batch", "run_parallel", {}, "hash", sub_calls=[bookkeeping]
     )
     batched = case.finding("[NEGATIVE] Nothing found in a batch", "tc_batch", "evtx.security")
+    # A positive answer is held to the same standard as a negative one.
+    ordinary = case.finding("Workstation looks ordinary", bookkeeping, "evtx.security")
 
-    for finding_id in (hollow, batched):
-        refused = _resolve(question_id, "ruled_out", finding_id)
+    for resolution, finding_id in (
+        ("ruled_out", hollow),
+        ("ruled_out", batched),
+        ("answered", ordinary),
+    ):
+        refused = _resolve(question_id, resolution, finding_id)
 
         assert refused["status"] == "error"
         assert (
@@ -913,6 +953,8 @@ def test_one_call_that_examined_evidence_is_what_a_ruled_out_answer_needs(case: 
 def test_the_tools_that_examine_no_evidence_are_real_and_include_the_findings_tools() -> None:
     assert set(_tool_dispatch_sync) >= rules.NO_EVIDENCE_TOOLS
     assert _FINDING_TOOLS <= rules.NO_EVIDENCE_TOOLS
+    # A lookup against outside services; it reads nothing in the case.
+    assert "enrich_iocs" in rules.NO_EVIDENCE_TOOLS
     assert not {"search", "get_raw_output", "run_fls", "run_parallel"} & rules.NO_EVIDENCE_TOOLS
 
 
@@ -1012,6 +1054,7 @@ def test_the_examined_line_counts_what_the_citation_gate_counts(case: _Case) -> 
     extract_and_index("line\n", "evtx.system", second_device, "test")  # never cited
     # A blank entry is a prefix of every source name.
     case.finding("[NEGATIVE] No log clearing", case.searched("1102"), "")
+    server_app.get_ctx().audit.log_tool_call("tc_failed", "run_hayabusa", {}, "h", status="error")
 
     gates = _tool("check_finalize_readiness")["gates"]
     citation = next(g for g in gates if g["name"] == "evidence_citation_coverage")
@@ -1023,9 +1066,12 @@ def test_the_examined_line_counts_what_the_citation_gate_counts(case: _Case) -> 
     assert examined.group(1).startswith(
         "4 evidence sources (1 disk, 3 other), 3 of them cited by a finding; "
     )
-    # clean_case searched three times and this test once; the audits, the
+    # clean_case searched three times and this test once, and one extraction
+    # failed: the count is of calls made, and says so. The audits, the
     # findings and the resolutions examined nothing.
     calls = re.search(
-        r"(\d+) tool calls, (\d+) of them extracting, searching or reading", markdown
+        r"(\d+) tool calls, (\d+) of them to tools that extract, search or read evidence "
+        r"\(failed calls included\)",
+        markdown,
     )
-    assert calls and int(calls.group(2)) == 4 < int(calls.group(1))
+    assert calls and int(calls.group(2)) == 5 < int(calls.group(1))
