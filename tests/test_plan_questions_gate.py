@@ -116,9 +116,9 @@ class _Script:
             return PhaseResult(
                 "query", messages=[message], turns_used=3, session_id=self.session_id
             )
-        if kind == "resume" and isinstance(self.resume, Exception):
-            raise self.resume
         if kind == "resume" and self.resume is not None:
+            if isinstance(self.resume, Exception):
+                raise self.resume
             return self.resume
         # A resume that took reports the session it resumed.
         return PhaseResult(

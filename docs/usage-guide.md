@@ -404,7 +404,7 @@ A resumed session sends its whole conversation again on every turn, as any sessi
 
 ### When Analysis Is Cut Short
 
-A role session that is still unfinished after every continuation `--max-compactions` allows, and after its wrap-up, is cut short: the phase goes on without the rest of that session's work. Mulder records each one in the case database with its phase, role, system and, when the session had one of its own, its investigation question. The dashboard shows `Cut short, no continuation left: extraction analyst, system DC01`.
+A role session that is still unfinished after every continuation `--max-compactions` allows, and after its wrap-up, is cut short: the phase goes on without the rest of that session's work. Mulder records each one in the case database with its phase, role, system and, when the session had one of its own, its investigation question. A planner that runs out of turns and still has no plan after it was asked to write one is recorded the same way. The dashboard shows `Cut short, no continuation left: extraction analyst, system "DC01"`.
 
 You will see the record in four places:
 
@@ -413,7 +413,7 @@ You will see the record in four places:
 - `get_investigation_summary`, as one `remaining_work` item, so the later phases know which earlier analysis was not finished;
 - the case database itself (`kv_store`, key `cut_short_sessions`).
 
-Read it for what it says. What the session saved is in the findings. What it had not reached was not examined, which is not the same as absent, so conclusions about that system or question may be incomplete. The record does not say the session found nothing, and it is not removed when a later session covers the same ground: each entry carries the time it was recorded, and a second run of the same case adds to the list.
+Read it for what it says. What the session saved or indexed is in the case. What it had not reached may not have been examined, and not examined is not the same as absent, so conclusions about that system or question may be incomplete. The record does not say the session found nothing, and it is not removed when a later retry, follow-up or second run covers the same ground: each entry carries the time it was recorded, so compare it with what ran afterwards. The list keeps the 100 most recent entries and says how many earlier ones were dropped.
 
 To give sessions more room, raise `--max-compactions`.
 

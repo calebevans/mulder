@@ -20,7 +20,7 @@ import markdown
 from markdown.extensions import Extension
 from markdown.treeprocessors import Treeprocessor
 
-from mulder.cut_short import cut_short_label
+from mulder.cut_short import cut_short_label, dropped_count
 from mulder.models import AuditSummary, CaseMetadataRow, Finding, SourceRow
 from mulder.patterns import (
     EMAIL_RE,
@@ -1249,6 +1249,7 @@ class ReportRenderer:
                 {"label": cut_short_label(row), "recorded_at": row["recorded_at"]}
                 for row in cut_short
             ],
+            "cut_short_dropped": dropped_count(cut_short),
             "model_token_breakdown": self._load_model_usage(
                 Path(audit_log_path).parent, case_metadata.case_id
             ),

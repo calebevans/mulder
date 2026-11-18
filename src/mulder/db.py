@@ -37,6 +37,7 @@ from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import DatabaseError, OperationalError
 from sqlalchemy.pool import NullPool
 
+from mulder.cut_short import dropped_count
 from mulder.models import CaseMetadataRow, Finding, SourceRow, WindowRow
 
 _T = TypeVar("_T")
@@ -370,7 +371,7 @@ _QueueItem = tuple[
 ]
 
 _CUT_SHORT_KEY = "cut_short_sessions"
-_CUT_SHORT_FIELDS = ("phase", "role", "system", "question", "recorded_at")
+_CUT_SHORT_FIELDS = ("phase", "role", "system", "question", "recorded_at", "n")
 _MAX_CUT_SHORT = 100
 
 
@@ -1495,6 +1496,9 @@ class CaseDB:
                 "system": system,
                 "question": question,
                 "recorded_at": datetime.now(UTC).isoformat(timespec="seconds"),
+                # Its number in the case: readers work out from the first
+                # row kept how many earlier ones the cap dropped.
+                "n": str(dropped_count(rows) + len(rows) + 1),
             }
         )
         self.set_kv(_CUT_SHORT_KEY, json.dumps(rows[-_MAX_CUT_SHORT:]))
