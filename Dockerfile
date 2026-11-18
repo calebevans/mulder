@@ -333,6 +333,26 @@ RUN case "${TARGETARCH}" in \
         | tar xz -C /opt/zizmor \
     && chmod +x /opt/zizmor/zizmor
 
+# evtx_dump: download pre-built binary (amd64: static musl; arm64: gnu, needs GLIBC 2.18)
+FROM ubuntu:22.04 AS evtx-dump-fetch
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG TARGETARCH
+ARG EVTX_DUMP_VERSION=0.15.1
+RUN case "${TARGETARCH}" in \
+        arm64) EVTX_DUMP_TARGET="aarch64-unknown-linux-gnu" ;; \
+        *)     EVTX_DUMP_TARGET="x86_64-unknown-linux-musl" ;; \
+    esac \
+    && mkdir -p /opt/evtx-dump \
+    && curl -fsSL "https://github.com/omerbenamram/evtx/releases/download/v${EVTX_DUMP_VERSION}/evtx_dump-v${EVTX_DUMP_VERSION}-${EVTX_DUMP_TARGET}" \
+        -o /opt/evtx-dump/evtx_dump \
+    && chmod +x /opt/evtx-dump/evtx_dump
+
 # Chainsaw: download pre-built binary (multi-arch), Sigma rules, and mappings
 FROM ubuntu:22.04 AS chainsaw-fetch
 
@@ -549,6 +569,8 @@ COPY --from=gitleaks-fetch /opt/gitleaks/ /opt/gitleaks/
 RUN ln -sf /opt/gitleaks/gitleaks /usr/local/bin/gitleaks
 COPY --from=zizmor-fetch /opt/zizmor/ /opt/zizmor/
 RUN ln -sf /opt/zizmor/zizmor /usr/local/bin/zizmor
+COPY --from=evtx-dump-fetch /opt/evtx-dump/ /opt/evtx-dump/
+RUN ln -sf /opt/evtx-dump/evtx_dump /usr/local/bin/evtx_dump
 COPY --from=chainsaw-fetch /opt/chainsaw/ /opt/chainsaw/
 RUN ln -sf /opt/chainsaw/chainsaw /usr/local/bin/chainsaw
 COPY --from=chainsaw-fetch /opt/sigma-rules/ /opt/sigma-rules/

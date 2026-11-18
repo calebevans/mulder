@@ -572,6 +572,7 @@ TOOL_SOURCE_PREFIXES: dict[str, list[str]] = {
     "run_workflow_audit": ["workflow."],
     "parse_autoruns": ["autoruns."],
     "run_secret_scan": ["secrets."],
+    "run_evtx_recovery": ["evtx_recovered."],
 }
 """Maps extraction tool names to the source prefixes they produce.
 

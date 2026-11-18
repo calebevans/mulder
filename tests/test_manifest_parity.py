@@ -27,6 +27,7 @@ _ARGS = {
     "gitleaks": "GITLEAKS_VERSION",
     "sigma-rules": "SIGMA_VERSION",
     "zizmor": "ZIZMOR_VERSION",
+    "evtx-dump": "EVTX_DUMP_VERSION",
 }
 
 

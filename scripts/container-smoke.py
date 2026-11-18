@@ -188,6 +188,7 @@ def main() -> None:
         ("fuse2fs", "-V"),
         ("clamscan", "--version"),
         ("nfdump", "-V"),
+        ("evtx_dump", "--version"),
     ):
         run(*command)
     # The unprivileged mulder user can only mount NTFS through the source-built

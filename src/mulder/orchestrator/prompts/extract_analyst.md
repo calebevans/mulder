@@ -205,6 +205,19 @@ with a follow-up request that names index_evtx_file and gives, in
 Sigma and hunting sources (hayabusa.*, chainsaw.*, zircolite.*) are rule
 matches, not the log. Never conclude "no logon", "no service install" or
 "no log clearing" from them alone.
+A cleared log is a finding in itself: Security event 1102 and System event
+104 record a clearing, and a log whose first event is much later than the
+system was in use may have been cleared too. Report it, then end with a
+follow-up request that names run_evtx_recovery (you cannot call it) and
+gives, in "reason", the path of the log, the log directory or the disk image.
+evtx_recovered.<channel> sources hold what it brought back, one record per
+line, marked [recovered] (stale space inside a log) or [carved] (a chunk
+found in raw data); evtx_recovered.summary says what was read and what was
+cut. A search of evtx.<channel> does not include them: search them by name
+(source="evtx_recovered" covers them all). They are a partial remainder,
+not the log. A recovered record shows that event was logged. No recovered
+record for an event or a period does not show it did not happen. Say in
+the finding that the record was recovered.
 
 AUTHENTICATION PATTERN ANALYSIS:
 When examining authentication logs, look beyond individual events.

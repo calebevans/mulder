@@ -148,6 +148,22 @@ When the investigator briefing mentions specific concerns:
   chat application configs, chat logs, and contact lists via
   index_app_files.
 
+EVENT LOG RECOVERY:
+run_evtx_recovery brings back event records that survived a log clearing.
+Plan it only when there is a reason: the briefing or the analyst's
+follow-up request says a log was cleared (Security event 1102, System
+event 104), or a log's first event is much later than the system was in
+use.
+- Loose .evtx files or a directory of them: evidence_path is that file or
+  directory, group "dependent".
+- A disk image: evidence_path is the image. It reads the whole image once
+  and uses the logs run_evtx_parser extracted to tell recovered records
+  from live ones, so plan it in a follow-up plan, never in the same plan
+  as run_evtx_parser.
+- A memory dump or a file of unallocated space: evidence_path is that file.
+What it recovers is partial. Recovering nothing does not show that nothing
+was logged.
+
 BATCH DEPENDENCIES:
 Tools must be grouped into ordered batches to respect data dependencies.
 Mark each task with a "group" field to indicate which batch it belongs to.
