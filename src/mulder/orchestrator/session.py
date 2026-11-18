@@ -236,6 +236,18 @@ def _is_turns_exhausted(message: object) -> bool:
     return getattr(message, "subtype", None) == _MAX_TURNS_SUBTYPE
 
 
+#: Times one session is resumed after ending on a turn with no text and no
+#: tool call (the answer stayed in the reasoning, #199). Once: Claude Code
+#: 2.1.327 already re-asks once inside the session before it ends.
+_MAX_NUDGES: int = 1
+
+_NUDGE_PROMPT: str = (
+    "Your last turn ended with no text and no tool call, so nothing was "
+    "recorded. Do not repeat your reasoning. Either call the next tool you "
+    "need, or write your final answer now in the format the task asked for."
+)
+
+
 def _is_payment_required(message: object) -> bool:
     """Return True when a ResultMessage or SDK error reports HTTP 402.
 
@@ -475,6 +487,7 @@ class SessionExecutor:
         using_proxy: bool = False,
         no_thinking: bool = False,
         show_cli_stderr: bool = False,
+        wrapup: bool = True,
     ) -> None:
         """Initialize the session executor.
 
@@ -488,6 +501,8 @@ class SessionExecutor:
                 per-message token tracking to avoid double counting).
             no_thinking: Disable extended thinking for phase and utility queries.
             show_cli_stderr: Stream agent CLI diagnostics to the dashboard and log.
+            wrapup: Resume a session that ended on a turn with no text and
+                no tool call (``--no-wrapup`` turns it off).
         """
         self._dashboard = dashboard
         self._model_config = model_config
@@ -500,6 +515,7 @@ class SessionExecutor:
         self._proxy_settings: dict[str, ModelSettings] = {}
         self._no_thinking = no_thinking
         self._show_cli_stderr = show_cli_stderr
+        self._wrapup = wrapup
         #: The "Query error" text of the most recent session, empty when it
         #: had none. A partial report quotes it next to a failed gate, which
         #: otherwise names only the symptom (``orchestrator/fallback.py``).
@@ -627,6 +643,8 @@ class SessionExecutor:
         max_turns: int,
         log_prefix: str = "",
         task_system: str = "",
+        resume: str = "",
+        nudges: int = _MAX_NUDGES,
     ) -> PhaseResult:
         """Execute a single SDK query session.
 
@@ -645,6 +663,12 @@ class SessionExecutor:
             log_prefix: Optional prefix for dashboard log lines.
             task_system: When non-empty, tool use blocks update the
                 dashboard task panel for this system name.
+            resume: Session id to resume, with its conversation intact,
+                instead of starting a new session. *prompt* is then the
+                next user message. A resume that fails returns a result
+                with no ``session_id``.
+            nudges: Times this session may still be resumed after ending
+                on a turn with no text and no tool call.
 
         Returns:
             PhaseResult with collected messages and usage information.
@@ -653,6 +677,7 @@ class SessionExecutor:
             system_prompt=system_prompt,
             model=model,
             max_turns=max_turns,
+            resume=resume or None,
             effort=None if self._no_thinking else self._effort,
             thinking={"type": "disabled"} if self._no_thinking else None,
             stderr=self._stderr_callback(log_prefix or task_system or model),
@@ -668,9 +693,10 @@ class SessionExecutor:
         session_id = ""
 
         logger.info(
-            "Starting query (model=%s, max_turns=%d)",
+            "Starting query (model=%s, max_turns=%d%s)",
             model,
             max_turns,
+            f", resume={resume}" if resume else "",
         )
 
         tool_count = 0
@@ -686,10 +712,12 @@ class SessionExecutor:
         turn_id: str | None = None
         turn_has_output = False
         last_silent = False
+        silent_end = False
         got_result = False
         hit_context_limit = False
         hit_turn_limit = False
-        self.last_query_error = ""
+        if not resume:
+            self.last_query_error = ""
 
         for connect_attempt in range(1, _MCP_CONNECT_ATTEMPTS + 1):
             mcp_problem = ""
@@ -739,6 +767,7 @@ class SessionExecutor:
                         if _is_turns_exhausted(message):
                             hit_turn_limit = True
                         last_silent = turn_id is not None and not turn_has_output
+                        silent_end = last_silent and not message.is_error
                         if last_silent:
                             self._log_silent_turn(log_prefix)
                         (
@@ -771,6 +800,7 @@ class SessionExecutor:
             except Exception as exc:
                 exc_msg = str(exc)
                 exc_lower = exc_msg.lower()
+                silent_end = False
 
                 category, _ = _classify_fatal_error(exc_msg)
                 if category == "auth":
@@ -794,6 +824,9 @@ class SessionExecutor:
                     # The CLI already yielded the error_max_turns result; the
                     # trailing exception is its deliberate non-zero exit.
                     hit_turn_limit = True
+                    # The id is what a wrap-up resumes; the SDK's error carries
+                    # it when no result message came first.
+                    session_id = session_id or getattr(exc, "session_id", None) or ""
                     self._dashboard.log_info(f"Turn limit reached ({max_turns}); will continue")
                     logger.warning("Turn limit reached (max_turns=%d): %s", max_turns, exc_msg)
                 elif _is_context_exhausted(exc_msg):
@@ -802,6 +835,12 @@ class SessionExecutor:
                     hit_context_limit = True
                 elif "error result: success" in exc_lower:
                     self._dashboard.log_info("Query completed (SDK reported success as error)")
+                elif resume:
+                    # A wrap-up or nudge is an extra; its caller falls back to
+                    # what happened before there was one. Not the reason a run
+                    # stopped, so ``last_query_error`` is left alone.
+                    self._dashboard.log_info(f"Resumed session failed: {exc_msg}")
+                    logger.warning("Resumed session %s failed: %s", resume, exc_msg)
                 else:
                     self._dashboard.log_gate_fail(f"Query error: {exc_msg}")
                     logger.error("Query error: %s", exc_msg)
@@ -830,7 +869,7 @@ class SessionExecutor:
                 phase_out_tokens,
             )
 
-        return PhaseResult(
+        result = PhaseResult(
             phase_name="query",
             success=False,
             messages=messages,
@@ -841,6 +880,38 @@ class SessionExecutor:
             turns_exhausted=hit_turn_limit,
             batch_ids=collected_batch_ids,
         )
+        if self._wrapup and silent_end and session_id and nudges > 0 and not hit_context_limit:
+            # The answer stayed in the reasoning (#199). Resume with the same
+            # tools and turn limit, which is right whether the CLI counts
+            # turns per invocation or over the whole session.
+            pfx = f"[{log_prefix}] " if log_prefix else ""
+            self._dashboard.log_info(
+                f"{pfx}Last turn had no text and no tool call; asking the session to act or answer"
+            )
+            follow = await self.execute(
+                system_prompt,
+                _NUDGE_PROMPT,
+                model,
+                allowed_tools,
+                disallowed_tools,
+                max_turns,
+                log_prefix,
+                task_system,
+                resume=session_id,
+                nudges=nudges - 1,
+            )
+            if follow.session_id:
+                result.messages.extend(follow.messages)
+                result.tool_names.extend(follow.tool_names)
+                result.turns_used += follow.turns_used
+                result.session_id = follow.session_id
+                result.context_exhausted = follow.context_exhausted
+                result.turns_exhausted = follow.turns_exhausted
+                result.batch_ids.update(follow.batch_ids)
+            else:
+                # Left as it ended, which is what happened before the nudge.
+                logger.warning("%scould not resume session %s to nudge it", pfx, session_id)
+        return result
 
     def _process_assistant_message(
         self,

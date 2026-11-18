@@ -12,6 +12,7 @@ Contains two collaborators extracted from the Orchestrator:
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -632,3 +633,40 @@ class ServerBridge:
             "consolidated and for contradictions that need resolution."
         )
         return "\n".join(report_lines)
+
+    def get_progress_notes(self, system_name: str, since: datetime) -> list[str]:
+        """Return the ``track_progress`` notes recorded for a system since a time.
+
+        The notes are what a session that ran out of turns left for the one
+        that continues its work. They are model-written text; the caller
+        sanitises them before they reach a prompt.
+
+        Args:
+            system_name: The label the notes were recorded under. Case and
+                whitespace differences are ignored.
+            since: Timezone-aware lower bound on when a note was recorded.
+
+        Returns:
+            Non-empty notes, oldest first; empty on any failure.
+        """
+        try:
+            self.ensure_context()
+            from mulder.server.app import get_ctx
+
+            records = get_ctx().db.get_all_progress()
+        except Exception:
+            logger.warning("get_progress_notes failed", exc_info=True)
+            return []
+
+        wanted = " ".join(system_name.split()).casefold()
+        notes: list[str] = []
+        for record in records:
+            note = (record["notes"] or "").strip()
+            if not note or " ".join(record["system_name"].split()).casefold() != wanted:
+                continue
+            try:
+                if datetime.fromisoformat(record["recorded_at"]) >= since:
+                    notes.append(note)
+            except (TypeError, ValueError):  # not a timestamp, or not timezone-aware
+                continue
+        return notes

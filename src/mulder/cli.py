@@ -365,6 +365,15 @@ def report(case_id: str, db_dir: str) -> None:
     "(env: MULDER_MAX_COMPACTIONS).",
 )
 @click.option(
+    "--wrapup/--no-wrapup",
+    default=True,
+    envvar="MULDER_WRAPUP",
+    show_default=True,
+    help="At a turn limit, resume the session briefly to save its findings and "
+    "record a handoff note for the session that continues; --no-wrapup "
+    "restarts cold (env: MULDER_WRAPUP=0).",
+)
+@click.option(
     "--proxy-config",
     default=None,
     type=click.Path(exists=True),
@@ -388,6 +397,7 @@ def investigate(
     cwd: str,
     workers: int,
     max_compactions: int,
+    wrapup: bool,
     proxy_config: str | None,
     no_thinking: bool,
     show_cli_stderr: bool,
@@ -484,6 +494,7 @@ def investigate(
         no_thinking=no_thinking,
         show_cli_stderr=show_cli_stderr,
         max_compactions=max_compactions,
+        wrapup=wrapup,
     )
 
     from mulder.orchestrator.errors import (

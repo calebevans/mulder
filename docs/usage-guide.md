@@ -383,6 +383,16 @@ Each phase passes through a quality gate before proceeding. The investigation ru
 
 Read a partial report for what it is. Its findings were saved before the run stopped and it has not passed the finalize gates. Evidence the run never reached was not examined, so a finding that is absent is not a clean result.
 
+### When a Session Runs Out of Turns
+
+Each role session has a turn limit. When an analyst, executor, catalog or report session reaches it, Mulder resumes that session for a few more turns with only its saving tools, so it can save the findings it had already established and record a handoff note. The session that continues the work starts fresh and is given that note and the original task, instead of being told to review the case from the start. The dashboard shows `Analyst ran out of turns; saving and handing off`, then `Analyst ran out of turns; continuing (#1/3)`.
+
+The wrap-up does not use up a continuation. `--max-compactions` counts fresh sessions only, and with `--max-compactions 0` a session that runs out of turns still saves and records its note.
+
+A handoff note is a model's own account of what it did. The continuation is told to treat it as a record, not as verified fact: "ruled out" means ruled out in what that session examined, and anything the note does not mention is to be treated as not examined.
+
+If a session cannot be resumed, Mulder logs why in `orchestrator.log` and continues the way it did before. To compare the two behaviours, run with `--no-wrapup` (or `MULDER_WRAPUP=0`): no session is resumed, continuations get the generic prompt, and analysts and executors are not told their turn budget.
+
 A partial report never replaces a finished one. A report that was finalized during the same run is left alone and no partial report is written. A report left by an earlier run of the same case is kept as well: the partial report is then written beside it as `{case_id}.partial.report.md` and `{case_id}.partial.report.html`, and its banner says so. Only an earlier partial report is replaced.
 
 The case database and audit log are kept either way.
@@ -694,6 +704,7 @@ Runs a full multi-phase forensic investigation.
 | `--no-thinking` | off | Disable extended thinking for all queries; overrides `--effort` |
 | `--workers` | `3` | Max concurrent extraction sessions |
 | `--max-compactions` | `3` | Continuation sessions allowed per role session after context exhaustion; `0` disables. Also settable via `MULDER_MAX_COMPACTIONS` (the flag wins) |
+| `--wrapup` / `--no-wrapup` | on | At a turn limit, resume the session briefly to save its findings and record a handoff note for the session that continues. `--no-wrapup` restarts cold. Also settable via `MULDER_WRAPUP=0` (the flag wins). See [When a Session Runs Out of Turns](#when-a-session-runs-out-of-turns) |
 | `--db-dir` | `~/.mulder/cases` | Case database directory |
 | `--cwd` | `~/.mulder/workspace` | Working directory for agent sessions. Also settable via `MULDER_CWD`; the container sets it to `/mulder-investigation`. Created on first use, along with a default `.mcp.json` |
 | `--proxy-config` | None | LiteLLM config YAML for custom model routing |
