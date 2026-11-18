@@ -354,7 +354,10 @@ def mount_disk_image(image_path: str) -> Iterator[str]:
     share a single mount.  The image is unmounted and the temp directory
     cleaned up when the last caller exits.
 
-    Raises ``RuntimeError`` if the image cannot be mounted.
+    Raises ``RuntimeError`` if the image cannot be mounted.  A directory is
+    refused at once: it is a triage collection the caller has already searched.
     """
+    if os.path.isdir(image_path):
+        raise RuntimeError(f"Not a disk image, nothing to mount: {image_path}")
     with _mount_cache.acquire(image_path) as mount_point:
         yield mount_point

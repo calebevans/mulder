@@ -108,6 +108,10 @@ jobs:
           python3 -m zipfile -l dist/*.whl | grep -q 'mulder/py.typed'
           # Without the lock, `mulder setup` refuses every digest-pinned asset.
           python3 -m zipfile -l dist/*.whl | grep -q 'mulder/assets/assets.lock'
+          # ransomware_family_hints reads its lookup tables from package data.
+          tar tzf dist/*.tar.gz | grep -q 'mulder/server/data/ransomware/ransomware_extensions_lookup.csv'
+          python3 -m zipfile -l dist/*.whl | grep -q 'mulder/server/data/ransomware/ransomware_extensions_lookup.csv'
+          python3 -m zipfile -l dist/*.whl | grep -q 'mulder/server/data/ransomware/ransomware_notes_lookup.csv'
           # Without these, Microsoft 365 audit logs are scanned with two rules, not ten.
           tar tzf dist/*.tar.gz | grep -q 'mulder/server/data/sigma/m365/m365_inbox_rule_changed.yml'
           python3 -m zipfile -l dist/*.whl | grep -q 'mulder/server/data/sigma/m365/m365_inbox_rule_changed.yml'

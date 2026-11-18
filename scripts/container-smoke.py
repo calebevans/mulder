@@ -240,6 +240,16 @@ def main() -> None:
     shadowed = [asset for asset in report["assets"] if asset["shadowed_by"]]
     assert not shadowed, shadowed
     assert report["exit"] == 0, report["exit"]
+    # Ransomware reference data, read through the code that uses it, and the
+    # Hayabusa rules config its logon summary cannot read events without.
+    from mulder.server.tools.composite import ransomware_family, remote_access
+
+    catalog = remote_access._catalog()
+    assert catalog is not None and "anydesk.exe" in catalog.exes, "LOLRMM catalog unreadable"
+    assert "Apache License" in Path("/opt/lolrmm/LICENSE").read_text(), "LOLRMM licence missing"
+    assert len(ransomware_family._corpus()) > 300, "ransom note corpus missing or empty"
+    assert Path("/opt/hayabusa/rules/config/eventkey_alias.txt").is_file()
+
     for name in ("pyewf", "pysqlcipher3.dbapi2", "volatility3", "plaso", "mvt", "oletools"):
         importlib.import_module(name)
     from pysqlcipher3 import dbapi2
@@ -277,6 +287,8 @@ def main() -> None:
         ("fuse2fs", "-V"),
         ("clamscan", "--version"),
         ("nfdump", "-V"),
+        # By path: "evtx_dump" on PATH is python-evtx's script, another program.
+        ("/opt/evtx-dump/evtx_dump", "--version"),
     ):
         run(*command)
     # The unprivileged mulder user can only mount NTFS through the source-built

@@ -15,6 +15,7 @@ from typing import Any
 
 from Registry import Registry
 
+from mulder.dirroot import not_collected
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
@@ -195,7 +196,8 @@ def query_registry_value(
 
     Args:
         case_id: Active case identifier.
-        image_path: Path to the disk image containing the registry hive.
+        image_path: Path to the disk image containing the registry hive,
+            or a triage collection directory.
         hive: Target hive name: one of "system", "software", "sam",
             "security", "ntuser", "usrclass" (case-insensitive, so
             "SYSTEM" and "System" are accepted).
@@ -254,6 +256,7 @@ def query_registry_value(
                 f"Could not locate {hive} hive in image {image_path}. "
                 f"Ensure run_fls has been executed on this image.",
                 error_type="hive_not_found",
+                suggestion=not_collected(image_path),
             )
 
         try:

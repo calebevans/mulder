@@ -41,3 +41,16 @@ class ModelNotAvailableError(Exception):
         super().__init__(message)
         self.model = model
         self.alternative = alternative
+
+
+class OutOfCreditError(Exception):
+    """The API account has no credit or quota left. Not retryable.
+
+    Distinct from rate limiting: waiting a minute does not help, so every
+    further session would fail at once.
+    """
+
+
+#: Errors that end the investigation at once: no retry, no continuation, no
+#: further phase.
+FATAL_ERRORS = (AuthenticationError, ModelNotAvailableError, OutOfCreditError)

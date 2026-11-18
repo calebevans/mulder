@@ -22,6 +22,8 @@ Try-it-out instructions for running Mulder, the forensic investigation platform.
     - [Using Google Cloud Vertex AI](#using-google-cloud-vertex-ai)
     - [Using Amazon Bedrock](#using-amazon-bedrock)
   - [Starting an Investigation](#starting-an-investigation)
+    - [When a Run Ends Early](#when-a-run-ends-early)
+    - [Limiting Token Use](#limiting-token-use)
   - [Using Non-Anthropic Models via LiteLLM](#using-non-anthropic-models-via-litellm)
     - [Provider Prefixes](#provider-prefixes)
     - [Mixing Providers Across Roles](#mixing-providers-across-roles)
@@ -34,8 +36,10 @@ Try-it-out instructions for running Mulder, the forensic investigation platform.
     - [How It Works](#how-it-works)
     - [Example](#example)
   - [Artifact Awareness](#artifact-awareness)
+  - [Ransomware Cases](#ransomware-cases)
   - [Cloud Audit Logs](#cloud-audit-logs)
   - [Counting Over Logs](#counting-over-logs)
+  - [Triage Collections](#triage-collections)
   - [CLI Reference](#cli-reference)
     - [`mulder investigate`](#mulder-investigate)
     - [`mulder setup`](#mulder-setup)
@@ -46,6 +50,7 @@ Try-it-out instructions for running Mulder, the forensic investigation platform.
   - [Understanding the Output](#understanding-the-output)
     - [Case Artifacts](#case-artifacts)
     - [Reports](#reports)
+    - [When No Incident Is Found](#when-no-incident-is-found)
     - [IOC Exports](#ioc-exports)
     - [Logs](#logs)
   - [Building the Image from Source](#building-the-image-from-source)
@@ -100,7 +105,9 @@ mulder setup                     # everything mulder owns - no sudo
 
 Everything mulder owns, in one run: MITRE ATT&CK data, Sigma rules, the YARA signature-base,
 the Didier Stevens suite, Chainsaw 2.16.0, Hayabusa 3.8.1, Zircolite 2.20.0, zizmor 1.32.0, capa 9.4.0,
-FLOSS 3.1.0, gitleaks 8.30.1, the six EZ Tools mulder invokes, ALEAPP, iLEAPP, and the Volatility 3 symbol packs.
+FLOSS 3.1.0, gitleaks 8.30.1, evtx_dump 0.15.1, the six EZ Tools mulder invokes, ALEAPP, iLEAPP, and the Volatility 3 symbol packs.
+It also fetches two small reference data sets for ransomware cases, each pinned to a commit: the LOLRMM remote
+access tool catalog (Apache-2.0) and the ThreatLabz ransom note corpus (MIT).
 About **2.2 GB on disk**; it prints the total and asks before downloading more than 1 GB.
 
 Versions are pinned to match the container image exactly, and a test fails the build if the two
@@ -367,6 +374,52 @@ The orchestrator runs five phases in sequence:
 
 Each phase passes through a quality gate before proceeding. The investigation runs unattended from start to finish.
 
+### When a Run Ends Early
+
+`mulder investigate` exits non-zero whenever it does not finish, and it still leaves a report.
+
+| Exit status | Meaning |
+|-------------|---------|
+| `0` | Every phase passed its gate and the report was finalized |
+| `1` | A phase failed its gate after every retry, the run was interrupted (Ctrl-C, or SIGTERM as sent by `docker stop`), it crashed, or it reached its [token budget](#limiting-token-use) |
+| `2` | The run could not continue: authentication failed, the model is not available, or the API account is out of credit |
+
+**Out of credit.** If the provider reports that the account has no credit left or has reached a hard spending limit (for example Anthropic's "credit balance is too low", OpenAI's `insufficient_quota`, HTTP 402, or a LiteLLM budget), the investigation stops at once. No further phases, retries or continuations are started, because each would fail the same way. Ordinary rate limiting (requests or tokens per minute, HTTP 429 "too many requests") is not treated this way and is handled as before.
+
+**Partial report.** When a run ends without a finalized report and the case database already holds at least one indexed source or finding, Mulder renders `{case_id}.report.md` and `{case_id}.report.html` from the database, the way `mulder report` does, and prints where they are. Both open with an **INCOMPLETE INVESTIGATION** banner naming the phase the run stopped in, the reason, and the phases and systems that were not completed (the first ten unfinished systems by name, the rest as a count). When a gate failed and the last session ended on a provider error, such as an ordinary HTTP 429, the reason quotes that error too.
+
+Read a partial report for what it is. Its findings were saved before the run stopped and it has not passed the finalize gates. Evidence the run never reached was not examined, so a finding that is absent is not a clean result.
+
+A partial report never replaces a finished one. A report that was finalized during the same run is left alone and no partial report is written. A report left by an earlier run of the same case is kept as well: the partial report is then written beside it as `{case_id}.partial.report.md` and `{case_id}.partial.report.html`, and its banner says so. Only an earlier partial report is replaced.
+
+The case database and audit log are kept either way.
+
+### Limiting Token Use
+
+`--max-tokens N` (or `MULDER_MAX_TOKENS=N`) caps what one run may use. Without it there is no limit and nothing in this section applies.
+
+```bash
+mulder investigate /evidence my-case --max-tokens 20000000
+```
+
+**What is counted.** Every token that every session reports when it ends: uncached input, output, cache-write input and cache-read input, summed over all sessions (planner, executor and analyst sessions, continuations, retries and the short utility queries) and over all models. The four kinds are added with equal weight. On Claude models most of the count is cache-read input, because each turn re-reads the conversation so far. A provider behind the LiteLLM proxy may report that replayed context as input or as cache-read input; the sum is the same. Either way the number is how much text the models processed. As a guide, the published GLM-5 runs of the single-host NDLC case used about 9 million tokens counted this way.
+
+**Why tokens and not dollars.** Every provider reports token counts. The dollar figure Claude Code computes is priced from its own table of Claude models and is wrong for any other model, which is why Mulder has no dollar cap.
+
+**What happens when it is reached.** Part of the budget is held back for the report: 15% of it, at least 750,000 tokens, and never more than half. Once what remains is down to that reserve, no new catalog, extraction, cross-system or alternative-narrative session is started, and whatever was left of those phases is skipped. The run goes straight to the report phase, which may spend the reserve. Its prompt says the budget was reached and lists the systems and phases that were not completed, so that the narrative says the investigation is incomplete. If the report phase cannot finalize a report, or the budget is fully spent before it starts, the [partial report](#when-a-run-ends-early) is written instead, with the reason "token budget reached".
+
+Two stops run no report phase at all. A stop during the catalog ends the run there, since nothing was analysed. A stop that leaves the case with fewer findings than `finalize_report` requires also skips it: a report session cannot add findings, so it would spend the reserve and still be refused. The partial report is written in both cases, provided the case holds at least one indexed source or one finding; a case with neither gets no report.
+
+Either way the run exits with status `1` and the end-of-run summary has a `Token budget` line marked REACHED. The one exception is a run that was already complete: if every phase passed and the report was finalized, and only a continuation of that last report session was refused, the run exits `0`. While the run is going, the bottom border of the dashboard header shows `Budget: used / limit`.
+
+After a budget stop the summary's `Turns` counts every session that ran. The phase that was cut short has no row of its own in the phase table; the turns of its sessions are listed there as `(cut short)`.
+
+**The cap can be overshot.** The budget is checked when a session starts. A session that is running is never interrupted, because stopping it would lose its work and its usage report. The final total can therefore end above `--max-tokens` by the sessions that were running when the line was crossed: one in most phases, up to `--workers` during extraction. A long analyst session can use more than a million tokens, so leave headroom.
+
+**What it cannot see.** The count is only what providers report. A session that is killed or crashes before it ends reports nothing. Some proxy routes under-report: in the published Kimi K3 runs LiteLLM reported almost no input tokens, so for such a model the count is close to output tokens only and the budget has to be set with that in mind.
+
+`{case_id}.model_usage.json` and the token table in the report list cache-write and cache-read input beside the input and output counts. "Total tokens" there is still input plus output, as before.
+
 ## Using Non-Anthropic Models via LiteLLM
 
 Mulder includes a built-in LiteLLM proxy that enables any LiteLLM-supported model provider. No manual proxy setup is required.
@@ -578,6 +631,26 @@ The extraction planner adapts its tool selection based on what the evidence actu
 
 The analyst receives complementary guidance: when execution artifacts show communication tools were used, the analyst searches indexed application files for contacts, server addresses, and credentials, then cross-references those with network connection data.
 
+## Ransomware Cases
+
+Say so in the briefing ("ransomware", "encrypted files", "ransom note") and the extraction planner adds the change journal, the logon summary and the shadow copy listing to every Windows image, not only the one the note was found on. The tools below work on what is already parsed and need no network.
+
+| Question | Tool | Reads |
+|----------|------|-------|
+| When did encryption start and stop, and where first? | `find_encryption_activity` | the change journal (`run_usn_parser`), else the MFT |
+| Which family? | `ransomware_family_hints`, and the hints inside the result above | Splunk's extension and note-name lists, the ThreatLabz note corpus |
+| Which remote access tool was used, and from where? | `find_remote_access_tools` | the LOLRMM catalog against the file listing, Prefetch, Amcache, ShimCache, registry and DNS; then the tool's own logs |
+| Who logged on, how and from where? | `run_hayabusa_logon_summary` | the extracted event logs |
+| What left before encryption? | `find_data_exfiltration_indicators`, `find_file_staging` | network and filesystem sources |
+
+What each result does and does not establish:
+
+- **A candidate burst is a lead.** It is a run of minutes in which at least 50 files were renamed to one extension, plus a signal: the extension follows several kinds of data file, a known ransom note name appeared in several directories, or the volume never had the extension before. Compression, backup and bulk renames look the same, and neither the journal nor the MFT names the process or the account. All bursts of one extension on a volume are one candidate, so a run that pauses and resumes is reported from its first burst. Ransomware that overwrites files in place or gives each file its own extension is not flagged; the result lists the busiest periods of any kind for that reason.
+- **The change journal is a ring.** It holds only recent changes, attackers delete it, and at most the newest 256 MiB is parsed. When a burst starts where the journal starts, the result says so and gives the earliest change the MFT knows. When the journal holds no candidate the MFT is read as well: that is how encryption older than the journal is found, and ransomware that writes each file under a new name and deletes the original (Dharma, Phobos), which leaves no rename in the journal. Without an indexed MFT neither is flagged.
+- **A family hint is a family to check.** Families share extensions, note names and note templates, and the extension list misses several current families.
+- **Presence of a remote access tool is not abuse.** AnyDesk, TeamViewer and the like are ordinary IT tools. What makes one part of the intrusion is installation or first run inside the incident window, by a compromised account, or a session in its own log from an address the organisation does not use. AnyDesk's `ad.trace` and `ad_svc.trace` carry the peer's IP address; TeamViewer's logs carry only IDs and host names.
+- **The logon summary has counts, not times.** Hayabusa 3.8.1 counts each combination of account, logon type and source over the whole log (`log_period` gives the span the counts cover); search the Security log for when.
+
 ## Cloud Audit Logs
 
 Mulder's agents work offline, so it does not call cloud APIs. Export the audit logs yourself, put the files in the evidence directory, and `run_cloud_audit_logs` indexes every event and applies Sigma rules. JSON arrays, JSON lines and CloudTrail `Records` files are all read, with or without a byte-order mark; the log type is recognised from the events. For Microsoft 365 and Entra ID, including the CSV export of the unified audit log, see [Microsoft 365 and Entra ID](#microsoft-365-and-entra-id).
@@ -726,6 +799,35 @@ What a count does and does not tell you:
 - Cloud audit logs are loaded once per evidence path. A path inside one that is already loaded (a subdirectory, or one file of it) adds no rows, a directory replaces the rows of paths inside it, and a forced re-run or another spelling of the same path replaces its rows. The one exception is a file that a directory run does not read (it has no `.json`, `.jsonl` or `.ndjson` suffix and is not a unified audit log `.csv`) and that was run by itself: it keeps its own rows. Copies of a file in two separate directories are still two sets of rows; `list_log_tables` shows each path and its rows under `loaded_from`.
 - A stored value is one line of at most 512 characters (a longer one ends in `…`), and times are kept to the second. A time before 1990 or after 2100 (a zeroed or forged timestamp) is kept as no time and counted under `rows_without_time`. The whole event is in the text index: `log_rows` gives its source and line.
 
+## Triage Collections
+
+A triage collection is the set of files a collector copied off a live system. Mulder reads one where it would read a disk image: put the collection in the evidence directory, as a directory or as the archive the collector wrote, and the Windows artifact tools (registry, Prefetch, Amcache, ShimCache, `$MFT`, event logs, application files, browser history) run on the collected files.
+
+| Collection | How it is recognised | What mulder also indexes |
+|------------|----------------------|--------------------------|
+| KAPE target output | a `C`, `D`, ... (or `VSS<n>`) directory beside KAPE's `..._CopyLog.csv` / `..._ConsoleLog.txt` | the copy log (original path, SHA-1 and timestamps of every file) and the skip log |
+| Velociraptor offline collection | `uploads/` or `results/` beside `client_info.json` or `collection_context.json` | each `results/<Artifact>.json` as a searchable source |
+| UAC output | `uac.log` beside `[root]`, `live_response` or `bodyfile` | the `live_response` command output per category, and a timeline from the body file (`run_mactime`) |
+| A Windows volume directory | it holds `Windows/System32/config` | nothing more: only the files |
+
+```
+evidence/
+  dc01.E01                              a disk image, as before
+  ws-042/                               KAPE --tdest: C/, 2026-..._CopyLog.csv, ...
+  Collection-WS-077-2026-11-12.zip      Velociraptor offline collector output
+  uac-web01-linux-20261112093000.tar.gz UAC output
+```
+
+Each collection is one system, named after the host the collection states (KAPE's console log, Velociraptor's `client_info.json`, the name UAC gives its archive) or else after its directory. Keep other evidence beside a collection's directory rather than inside it: apart from disk images, memory dumps, captures and archives left at its top level, files inside a collection are treated as collected files. Memory and crash dumps the collector copied (`MEMORY.DMP`, `*.dmp`) are still listed as memory dumps for Volatility. The files inside a collection are not hashed into the evidence registry one by one; `scan_evidence` says so, and KAPE's copy log carries the SHA-1 of each file as it was on the system.
+
+`index_triage_collection` writes `triage.summary`, which records which kinds of artifact the collection holds and which it does not. That matters for reading the report:
+
+- **A collection is not a disk.** There is no unallocated space and there are no deleted files, so carving, `bulk_extractor` and deleted-file listing are not run on it. A statement that something was not found means it was not found in what was collected.
+- **The timestamps on the copies are not evidence.** Original file times come from `$MFT` when it was collected, from KAPE's copy log, or from Velociraptor's upload metadata.
+- **The host name is the collector's own record** of it.
+
+A KAPE `.vhd` or `.vhdx` container is read as a disk image (Sleuth Kit opens both). Paths inside it start with the drive letter, and the container's own file system describes the copies, not the original system. CyLR output is not recognised by name; a tree that holds `C/Windows/System32/config` is treated as a Windows volume directory.
+
 ## CLI Reference
 
 ### `mulder investigate`
@@ -747,6 +849,7 @@ Runs a full multi-phase forensic investigation.
 | `--no-thinking` | off | Disable extended thinking for all queries; overrides `--effort` |
 | `--workers` | `3` | Max concurrent extraction sessions |
 | `--max-compactions` | `3` | Continuation sessions allowed per role session after context exhaustion; `0` disables. Also settable via `MULDER_MAX_COMPACTIONS` (the flag wins) |
+| `--max-tokens` | None | Token budget for the whole run: input, output, cache-write and cache-read tokens of every session and model. Unset means no limit. Also settable via `MULDER_MAX_TOKENS` (the flag wins). See [Limiting Token Use](#limiting-token-use) |
 | `--db-dir` | `~/.mulder/cases` | Case database directory |
 | `--cwd` | `~/.mulder/workspace` | Working directory for agent sessions. Also settable via `MULDER_CWD`; the container sets it to `/mulder-investigation`. Created on first use, along with a default `.mcp.json` |
 | `--proxy-config` | None | LiteLLM config YAML for custom model routing |
@@ -847,6 +950,7 @@ After an investigation completes, all artifacts are written to the cases directo
 |------|-------------|
 | `{case_id}.db` | SQLite database with all indexed evidence, findings, and metadata |
 | `{case_id}.audit.jsonl` | Append-only audit log recording every tool invocation with parameters and timestamps |
+| `{case_id}.model_usage.json` | Tokens each model reported during `mulder investigate`: input, output, cache-write input and cache-read input |
 
 ### Reports
 
@@ -857,6 +961,22 @@ After an investigation completes, all artifacts are written to the cases directo
 | `{case_id}.report.pdf` | PDF report for formal distribution |
 
 All report formats include an executive summary, severity overview, evidence integrity hashes, attack timeline, detailed findings with MITRE ATT&CK mappings, IOC tables, audit metrics, and a sources appendix.
+
+A report that opens with an **INCOMPLETE INVESTIGATION** banner is a partial one, written because the run ended early. See [When a Run Ends Early](#when-a-run-ends-early).
+
+### When No Incident Is Found
+
+An investigation can end with the conclusion that the evidence shows no incident. Each planner writes down the questions it wants answered. They are stored in the case database, and the analysts close each one:
+
+| Resolution | Meaning | What it must rest on |
+|------------|---------|----------------------|
+| Answered | The evidence shows what happened | A finding of activity that cites at least one tool call that extracted, searched or read evidence |
+| Ruled out | The sources examined do not show it | A `[NEGATIVE]` finding that cites at least one such call |
+| Undetermined | The evidence needed is not in the case or could not be read | A stated reason |
+
+A case normally needs three findings before a report is written. A case with fewer passes instead when every recorded question is resolved and both coverage audits have run. If that case also has no finding of medium severity or above, and at least one question was answered or ruled out, the executive summary opens with "No evidence of an incident was found in the evidence examined", then lists what was examined (how many evidence sources there are, how many of them the findings cite, and how many of the tool calls went to tools that extract, search or read evidence, failed calls included) and what was not available: the undetermined questions with their reasons, and any `[COLLECT]` leads.
+
+Read that sentence as written. It is a statement about the sources that were indexed and searched, not proof that nothing happened. A ruled-out question whose finding is later deleted or re-titled is open again, so the conclusion cannot outlive its evidence. The report lists the recorded questions under **Investigation Questions** whichever way the case passed; a case investigated before questions were recorded has none and is reported as before.
 
 ### IOC Exports
 
