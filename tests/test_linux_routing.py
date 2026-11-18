@@ -133,6 +133,28 @@ def test_other_volumes_are_told_apart_by_their_first_bytes(
     assert (found.sector, found.kind, found.readable) == (64, kind, readable)
 
 
+@pytest.mark.parametrize(
+    ("offset", "magic"),
+    [
+        (0, b"XFSB"),
+        (0, b"LUKS\xba\xbe"),
+        (0x10040, b"_BHRfS_M"),
+        (SECTOR, b"LABELONE" + b"\0" * 16 + b"LVM2 001"),
+    ],
+)
+def test_a_raw_file_that_is_such_a_volume_is_a_disk_not_a_memory_dump(
+    offset: int, magic: bytes, tmp_path: Path
+) -> None:
+    """A .raw without a known disk signature is a memory dump: Volatility was planned on LVM."""
+    disk = bytearray(140 * SECTOR)
+    disk[offset : offset + len(magic)] = magic
+    write(tmp_path, {"web01.raw": bytes(disk), "ram.raw": b"\0" * (140 * SECTOR)})
+
+    types = {c.path.name: c.artifact_type for c in EvidenceClassifier().classify(tmp_path)}
+
+    assert types == {"web01.raw": "disk_image", "ram.raw": "memory_dump"}
+
+
 def test_an_image_sleuth_kit_reads_or_a_tool_that_is_missing_finds_nothing() -> None:
     ext = bytearray(1024 * SECTOR)
     ext[1080:1082] = b"\x53\xef"

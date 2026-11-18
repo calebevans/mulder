@@ -73,6 +73,29 @@ class Volume(NamedTuple):
         return text
 
 
+def _lvm_label(head: bytes) -> int | None:
+    """Where the LVM2 label is: it sits in one of a physical volume's first four sectors."""
+    return next(
+        (
+            i
+            for i in range(0, 4 * _SECTOR, _SECTOR)
+            if head[i : i + 8] == b"LABELONE" and head[i + 24 : i + 32] == b"LVM2 001"
+        ),
+        None,
+    )
+
+
+def volume_kind(head: bytes) -> str | None:
+    """Which of ``_KINDS`` a volume is, from its first 66 KiB; None for anything else."""
+    if _lvm_label(head) is not None:
+        return "lvm"
+    if head[:4] == b"XFSB":
+        return "xfs"
+    if head[:6] == b"LUKS\xba\xbe":
+        return "luks"
+    return "btrfs" if head[0x10040:0x10048] == b"_BHRfS_M" else None
+
+
 def export_dir(extract_root: Path, image_path: str) -> Path:
     """Where export_linux_files puts the files of *image_path*.
 
@@ -133,24 +156,13 @@ def probe(image_path: str) -> tuple[Volume, ...]:
     found: list[Volume] = []
     for start in starts:
         head = _sectors(image_path, start, _HEAD_SECTORS) or _sectors(image_path, start, 4)
-        label = next(
-            (
-                i
-                for i in range(0, 4 * _SECTOR, _SECTOR)
-                if head[i : i + 8] == b"LABELONE" and head[i + 24 : i + 32] == b"LVM2 001"
-            ),
-            None,
-        )
+        label, kind = _lvm_label(head), volume_kind(head)
         if label is not None:
-            # The label is in one of its volume's first four sectors and says which,
-            # so a row that starts just before the volume does not count it twice.
+            # The label says which sector of its volume it is in, so a row that
+            # starts just before the volume does not count it a second time.
             first = start + label // _SECTOR - struct.unpack_from("<Q", head, label + 8)[0]
             if first >= 0 and all(v.sector != first for v in found):
                 found.append(_lvm(image_path, first))
-        elif head[:4] == b"XFSB":
-            found.append(Volume(start, "xfs"))
-        elif head[:6] == b"LUKS\xba\xbe":
-            found.append(Volume(start, "luks"))
-        elif head[0x10040:0x10048] == b"_BHRfS_M":
-            found.append(Volume(start, "btrfs"))
+        elif kind is not None:
+            found.append(Volume(start, kind))
     return tuple(found)

@@ -443,8 +443,8 @@ The `EvidenceClassifier` scans evidence directories and categorizes files by typ
 | Linux file tree (a triage collection) | A directory that holds `etc/passwd` | `run_linux_persistence`, `run_plaso` with `linux_logs`, `index_app_files` |
 
 `.raw` and `.001` are written by disk imagers and memory acquisition tools
-alike, so their first bytes decide: a partition table, filesystem, BitLocker
-or optical volume signature makes a disk image. A plain physical-memory
+alike, so their first bytes decide: a partition table, filesystem, BitLocker,
+LVM, LUKS or optical volume signature makes a disk image. A plain physical-memory
 dump has no header, so without such a signature they are memory dumps.
 
 Each extractor normalizes output into `WindowRow` objects (source_id, line_start, line_end, event_time, raw_text) for uniform database storage and FTS indexing.
