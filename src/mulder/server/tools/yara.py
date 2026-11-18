@@ -63,6 +63,11 @@ _SRC_FILE_SCAN = "yara.file_scan"
 _SRC_MEMORY_SCAN = "yara.memory_scan"
 _SRC_VOL_SCAN = "yara.volatility_scan"
 
+_ERR_NO_CUSTOM_RULES = (
+    "No custom YARA rules are configured. The investigator supplies them by setting "
+    "MULDER_YARA_RULES to a rule file or directory (in the container: mount a "
+    "directory at /rules/yara). Use the default ruleset instead."
+)
 _ERR_NO_RULES = (
     "No YARA rules available (built-in rules missing and none provided). "
     "Run 'mulder setup --minimal' to install the signature-base rule set."
@@ -130,16 +135,51 @@ def _collect_signature_base() -> list[str]:
     return sorted(str(p) for p in base.rglob("*.yar"))
 
 
-_VALID_RULESETS = ("builtin", "standard", "full")
+# Where the investigator's own rules are: files or directories, separated
+# like PATH. The container image points it at /rules/yara, so mounting a
+# directory there is all it takes.
+ENV_YARA_RULES = "MULDER_YARA_RULES"
+_RULE_SUFFIXES = (".yar", ".yara")
+
+
+def _collect_custom_rules() -> list[str]:
+    """Return the rule files the investigator supplied, in a stable order.
+
+    Only this setting is read. Rule files found among the evidence are never
+    loaded: evidence is not a source of detection logic.
+    """
+    files: list[str] = []
+    for entry in os.environ.get(ENV_YARA_RULES, "").split(os.pathsep):
+        if not entry.strip():
+            continue
+        root = Path(entry.strip()).expanduser()
+        if root.is_file():
+            files.append(str(root))
+        elif root.is_dir():
+            files.extend(
+                sorted(
+                    str(p)
+                    for p in root.rglob("*")
+                    if p.suffix.lower() in _RULE_SUFFIXES and p.is_file()
+                )
+            )
+    return list(dict.fromkeys(files))
+
+
+_VALID_RULESETS = ("builtin", "standard", "full", "custom")
 
 
 def _collect_rules_for_ruleset(ruleset: str) -> list[str]:
-    """Collect rule file paths for the requested ruleset level.
+    """Collect rule file paths for the requested ruleset.
 
-    All levels now resolve to Neo23x0/signature-base (~4,000 rules).
-    The ``ruleset`` parameter is preserved for API compatibility.
+    "custom" is the investigator's own rules alone. Every other value is
+    Neo23x0/signature-base (~4,000 rules) plus the investigator's rules;
+    the three names are kept for API compatibility.
     """
-    return _collect_signature_base()
+    custom = _collect_custom_rules()
+    if ruleset == "custom":
+        return custom
+    return _collect_signature_base() + custom
 
 
 _valid_rules_cache: dict[int, list[str]] = {}
@@ -625,9 +665,11 @@ def yara_scan_files(
 ) -> dict[str, object]:
     """Scan a mounted filesystem or extracted directory for malware using YARA rules.
 
-    Call after extracting files from a disk image or archive. Uses the
-    Neo23x0/signature-base ruleset (~4,000 rules) by default, or provide
-    custom rules via the rules parameter. Requires ``yara`` on PATH.
+    Call after extracting files from a disk image or archive. By default
+    uses the Neo23x0/signature-base ruleset (~4,000 rules) plus any rules
+    the investigator supplied for this deployment. Pass ruleset="custom" to
+    scan with the investigator's rules alone, or provide rules via the
+    rules parameter. Requires ``yara`` on PATH.
 
     Indexes matches as ``yara.files``; use search(source='yara.files') to
     review match details. Rule names alone do not confirm malware; inspect
@@ -640,6 +682,9 @@ def yara_scan_files(
         "target_path": target_path,
         "rules": rules is not None,
         "ruleset": ruleset,
+        # How many of the investigator's own rule files were in play, so the
+        # audit log shows whether a scan used them.
+        "custom_rule_files": len(_collect_custom_rules()) if rules is None else 0,
     }
 
     if ruleset not in _VALID_RULESETS:
@@ -664,7 +709,7 @@ def yara_scan_files(
             "yara_scan_files",
             audit_params,
             _SRC_FILE_SCAN,
-            _ERR_NO_RULES,
+            _ERR_NO_CUSTOM_RULES if rules is None and ruleset == "custom" else _ERR_NO_RULES,
             t0,
         )
 
@@ -693,8 +738,10 @@ def yara_scan_memory(
     """Scan the memory dump with YARA rules for malware signatures.
 
     Call after run_volatility_batch has indexed memory sources (the memory
-    path is resolved automatically from Volatility source metadata). Uses
-    signature-base (~4,000 rules) by default. Requires ``yara`` on PATH.
+    path is resolved automatically from Volatility source metadata). By
+    default uses signature-base (~4,000 rules) plus any rules the
+    investigator supplied; ruleset="custom" uses the investigator's alone.
+    Requires ``yara`` on PATH.
 
     Indexes matches as ``yara.memory``; use search(source='yara.memory')
     to review.
@@ -713,7 +760,13 @@ def yara_scan_memory(
     ctx = get_ctx()
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
-    audit_params: dict[str, object] = {"rules": rules is not None, "ruleset": ruleset}
+    audit_params: dict[str, object] = {
+        "rules": rules is not None,
+        "ruleset": ruleset,
+        # How many of the investigator's own rule files were in play, so the
+        # audit log shows whether a scan used them.
+        "custom_rule_files": len(_collect_custom_rules()) if rules is None else 0,
+    }
 
     if ruleset not in _VALID_RULESETS:
         ruleset = "builtin"
@@ -750,7 +803,7 @@ def yara_scan_memory(
             "yara_scan_memory",
             audit_params,
             _SRC_MEMORY_SCAN,
-            _ERR_NO_RULES,
+            _ERR_NO_CUSTOM_RULES if rules is None and ruleset == "custom" else _ERR_NO_RULES,
             t0,
         )
 
@@ -789,7 +842,13 @@ def yara_scan_with_volatility(
     ctx = get_ctx()
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
-    audit_params: dict[str, object] = {"pid": pid, "rules": rules is not None}
+    audit_params: dict[str, object] = {
+        "pid": pid,
+        "rules": rules is not None,
+        # How many of the investigator's own rule files were in play, so the
+        # audit log shows whether a scan used them.
+        "custom_rule_files": len(_collect_custom_rules()) if rules is None else 0,
+    }
 
     try:
         vol_cmd = _find_vol_binary()

@@ -324,6 +324,28 @@ Model IDs are passed through to the SDK exactly as specified, with no automatic 
 
 If you prefer file-based credentials, mount your whole `~/.aws` directory read-write at `/home/mulder/.aws` (as in the example above) instead of passing keys. This works for both static profiles in `~/.aws/credentials` and `aws login` sessions from AWS CLI 2.36+: the login token cache lives under `~/.aws/login/cache`, so the mount must be writable for the container to refresh it. The same mount serves `bedrock/` models routed through the LiteLLM proxy (see [Using Non-Anthropic Models via LiteLLM](#using-non-anthropic-models-via-litellm)).
 
+### Using Your Own YARA Rules
+
+Mulder scans with the [signature-base](https://github.com/Neo23x0/signature-base) rules by default. To add your own, point `MULDER_YARA_RULES` at a rule file or a directory of `.yar` / `.yara` files (several paths can be given, separated like `PATH`). Directories are searched recursively.
+
+In the container that variable is already set to `/rules/yara`, so mounting a directory there is enough:
+
+```bash
+docker run ... \
+  -v /path/to/my-yara-rules:/rules/yara:ro \
+  ghcr.io/calebevans/mulder ...
+```
+
+On a native install, set the variable before running mulder:
+
+```bash
+export MULDER_YARA_RULES=~/rules/yara:/srv/team-rules/apt.yar
+```
+
+Your rules are then used alongside signature-base in every YARA scan (files, memory, and per-process with Volatility), and the agent can scan with yours alone by choosing the `custom` ruleset. A rule file that does not compile is left out rather than failing the scan; the others still run. The audit log records how many of your rule files each scan used.
+
+Rule files that happen to be in the evidence directory are never loaded.
+
 ## Starting an Investigation
 
 Once the container is running, launch a full autonomous investigation with `mulder investigate`. The command takes two positional arguments: the evidence path and a case ID:

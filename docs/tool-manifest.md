@@ -1156,7 +1156,9 @@ Scan a mounted filesystem or extracted directory for malware using YARA rules.
 |-----------|------|----------|-------------|
 | target_path | str | yes | Path to scan (file or directory) |
 | rules | str \| None | no | Custom YARA rule source (file, directory, or inline) |
-| ruleset | str | no | "builtin" (default), "standard", or "full" |
+| ruleset | str | no | "builtin" (default): signature-base plus the investigator's own rules. "custom": the investigator's rules alone. "standard" and "full" are aliases of "builtin". |
+
+The investigator's own rules come from `MULDER_YARA_RULES` (see the [usage guide](usage-guide.md#using-your-own-yara-rules)).
 
 **Returns:** `source` (yara.files), `result_count`, `hit_metadata{}`
 
@@ -1169,7 +1171,7 @@ Scan the memory dump with YARA rules for malware signatures.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | rules | str \| None | no | Custom YARA rule source |
-| ruleset | str | no | "builtin" (default), "standard", or "full" |
+| ruleset | str | no | "builtin" (default): signature-base plus the investigator's own rules. "custom": the investigator's rules alone. |
 
 **Returns:** `source` (yara.memory), `result_count`, `hit_metadata{}`
 
