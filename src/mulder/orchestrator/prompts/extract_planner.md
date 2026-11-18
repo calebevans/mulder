@@ -52,7 +52,9 @@ When the evidence includes a DISK IMAGE, always plan:
 - Additional tools based on the detected OS and filesystem:
   Windows: run_evtx_parser, run_hayabusa, run_chainsaw,
     run_registry_parser, run_prefetch_parser, run_amcache_parser,
-    run_shimcache_parser, run_mft_parser
+    run_shimcache_parser, run_mft_parser, run_usn_parser (the change
+    journal: recent renames, overwrites and deletions),
+    run_hayabusa_logon_summary (who logged on, how and from where)
   Linux: run_zircolite (Auditd/Sysmon Sigma) when the audit or Sysmon
     log is available as a file outside the image
   macOS: run_plaso (unified log timeline), parse_plist
@@ -90,6 +92,26 @@ exactly as listed, group "foundation":
   and source trees (types "ci_run_logs" and "repository").
 If the briefing or a directory listing shows such evidence that the context
 did not list, plan the same tools on it.
+
+When the evidence context lists TRIAGE COLLECTIONS (type "triage_collection":
+KAPE target output, a Velociraptor offline collection, UAC output or a Windows
+volume directory), each is a directory of files copied from a live system, not
+a disk. Plan the tools named under the heading, with the directory spelled
+exactly as listed:
+- index_triage_collection, group "foundation": it indexes the list of
+  collected files and the collector's own records about them.
+- The Windows artifact tools take the directory as image_path, as they would
+  take a disk image; put them in group "dependent". A parser whose artifact
+  was not collected reports it as not found, which means "not collected".
+- Do NOT plan run_mmls, run_fsstat, run_bulk_extractor, run_foremost,
+  run_scalpel, run_photorec or detect_masquerading on a collection: it has no
+  partition table, no unallocated space and no deleted files.
+- The collected files are ordinary files, so the file and directory scanners
+  below can be pointed at the directory.
+A .vhd or .vhdx that KAPE wrote is planned as a disk image, with two
+differences: paths inside begin with the drive letter (C/Windows/...), and the
+container's own file system ($MFT, file times, deleted entries) describes the
+copies, not the system they came from.
 
 When the evidence includes MOBILE DATA, plan:
 - run_aleapp (Android, 300+ artifacts) or run_ileapp (iOS, 200+)
@@ -147,6 +169,15 @@ When the investigator briefing mentions specific concerns:
 - "communications", "conspiracy", "contacts": prioritize email and
   chat application configs, chat logs, and contact lists via
   index_app_files.
+- "ransomware", "encrypted files", "ransom note", "extortion": on every
+  Windows image, not only the one the note was found on (the first
+  encrypted host is rarely where the intruder got in), make sure the
+  plan has run_usn_parser and run_mft_parser (the analyst reads the
+  encryption timeline from them), run_fls and the Prefetch, Amcache,
+  ShimCache and registry parsers (remote access tools are found in
+  them), run_hayabusa_logon_summary, and run_vshadow_info (which shadow
+  copies survive). A volume with no change journal or no shadow copies
+  was not thereby wiped: journaling and shadow copies can simply be off.
 
 BATCH DEPENDENCIES:
 Tools must be grouped into ordered batches to respect data dependencies.

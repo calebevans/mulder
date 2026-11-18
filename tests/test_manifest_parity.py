@@ -25,6 +25,8 @@ _ARGS = {
     "capa": "CAPA_VERSION",
     "floss": "FLOSS_VERSION",
     "gitleaks": "GITLEAKS_VERSION",
+    "lolrmm": "LOLRMM_VERSION",
+    "ransomware-notes": "RANSOMWARE_NOTES_VERSION",
     "sigma-rules": "SIGMA_VERSION",
     "zizmor": "ZIZMOR_VERSION",
 }
@@ -52,6 +54,30 @@ def test_zircolite_tag_matches_the_dockerfile_clone(dockerfile: str) -> None:
 
     assert match is not None
     assert ASSETS_BY_KEY["zircolite"].version == match.group(1)
+
+
+def test_the_lolrmm_checksum_is_the_same_in_the_dockerfile_and_the_lock(dockerfile: str) -> None:
+    """An arch-independent pinned asset: its one digest must serve every architecture.
+
+    ``mulder setup`` looked digests up by architecture only, so an ``ANY_ARCH``
+    pinned row failed planning with "No SHA-256 in assets.lock".
+    """
+    match = re.search(r"^ARG LOLRMM_SHA256=([0-9a-f]{64})$", dockerfile, re.MULTILINE)
+    lolrmm = ASSETS_BY_KEY["lolrmm"]
+
+    assert match is not None
+    assert lolrmm.pinnable and set(lolrmm.digests) == {ANY_ARCH}
+    assert lolrmm.digest_for("amd64") == lolrmm.digest_for("arm64") == match.group(1)
+    assert ASSETS_BY_KEY["chainsaw"].digest_for("arm64") != ASSETS_BY_KEY["chainsaw"].digest_for(
+        "amd64"
+    )
+    assert ASSETS_BY_KEY["ransomware-notes"].digest_for("amd64") is None
+    # Apache-2.0: the licence text travels with the catalog, from the same
+    # commit, whether the image or ``mulder setup`` installed it.
+    ((name, url),) = lolrmm.siblings
+    assert name == "LICENSE"
+    assert url.replace(lolrmm.version, "${LOLRMM_VERSION}") in dockerfile
+    assert "-o /opt/lolrmm/LICENSE" in dockerfile
 
 
 def test_every_manifest_url_host_appears_in_the_dockerfile(dockerfile: str) -> None:

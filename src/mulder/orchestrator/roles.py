@@ -571,7 +571,9 @@ class RoleRunner:
                 f"Investigation questions:\n{context['investigation_questions']}"
             )
 
-        return await self._analyst_session(phase, prompt, model, log_prefix, task_system)
+        return await self._analyst_session(
+            phase, prompt, model, log_prefix, task_system, plan.investigation_questions
+        )
 
     async def run_remediation(
         self,
@@ -623,8 +625,28 @@ class RoleRunner:
         model: str,
         log_prefix: str,
         task_system: str,
+        questions: list[str] | None = None,
     ) -> AnalystResult:
-        """Run one analyst session plus its continuation loop."""
+        """Run one analyst session plus its continuation loop.
+
+        A continuation session starts from a fixed prompt, so *questions*
+        (the plan's, as the first prompt gave them) are repeated in it: the
+        analyst is told that only the questions in its user message are its
+        own to resolve.
+        """
+        continuation_prompt = (
+            "CONTINUATION: The previous analyst session ended before it "
+            "finished (context window or turn limit). All submitted "
+            "findings are saved. Review the investigation summary and "
+            "continue analysis. Submit any remaining findings. Do NOT "
+            "re-submit existing findings."
+        )
+        if questions:
+            continuation_prompt += (
+                f"\n\nInvestigation questions:\n{json.dumps(questions)}\n"
+                "These are yours. Close each one that get_investigation_summary "
+                "still lists as open with resolve_question."
+            )
         if self._wrapup:
             prompt += _ANALYST_TURN_BUDGET.format(
                 max_turns=phase.analyst_max_turns,
@@ -649,13 +671,7 @@ class RoleRunner:
             allowed_tools=phase.analyst_allowed_tools,
             disallowed_tools=phase.disallowed_tools,
             max_turns=phase.analyst_max_turns,
-            continuation_prompt=(
-                "CONTINUATION: The previous analyst session ended before it "
-                "finished (context window or turn limit). All submitted "
-                "findings are saved. Review the investigation summary and "
-                "continue analysis. Submit any remaining findings. Do NOT "
-                "re-submit existing findings."
-            ),
+            continuation_prompt=continuation_prompt,
             role_label="Analyst",
             log_prefix=log_prefix,
             task_prompt=prompt,

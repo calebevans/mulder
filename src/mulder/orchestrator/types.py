@@ -20,6 +20,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from mulder.orchestrator.budget import TokenBudgetReached
+
 logger = logging.getLogger(__name__)
 
 EffortLevel = Literal["low", "medium", "high", "xhigh", "max"]
@@ -157,11 +159,14 @@ class InvestigationResult:
         phases: Results from each completed phase.
         total_turns: Sum of turns across all phases.
         success: Whether the full investigation succeeded.
+        budget_stop: The refusal that ended the run early because its token
+            budget was used up, or None. ``success`` is False when set.
     """
 
     phases: list[PhaseResult] = field(default_factory=list)
     total_turns: int = 0
     success: bool = False
+    budget_stop: TokenBudgetReached | None = None
 
 
 def extract_json_plan(messages: list[str], allow_empty: bool = False) -> dict[str, Any] | None:

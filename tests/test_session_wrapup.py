@@ -176,7 +176,11 @@ def _reported(session: SessionExecutor) -> tuple[int, int, dict[str, dict[str, i
     report show whenever they exist.
     """
     dashboard = session._dashboard
-    return dashboard.input_tokens, dashboard.output_tokens, dashboard.model_tokens
+    by_model = {
+        name: {kind: counts[kind] for kind in ("input", "output")}
+        for name, counts in session._budget.by_model.items()
+    }
+    return dashboard.input_tokens, dashboard.output_tokens, by_model
 
 
 class TestResume:
@@ -292,6 +296,24 @@ class TestUsageOfAResumedSession:
         assert _reported(session) == (900, 90, {"m": {"input": 900, "output": 90}})
         dashboard: Any = session._dashboard
         assert dashboard._effective_total_tokens() == 990  # what was sent, once
+
+    @pytest.mark.asyncio()
+    async def test_the_token_budget_counts_a_resume_once_cache_tokens_included(self) -> None:
+        session = _session()
+
+        def total(tok_in: int, cached: int) -> ResultMessage:
+            usage = {
+                "m": {"inputTokens": tok_in, "outputTokens": 0, "cacheReadInputTokens": cached}
+            }
+            return _result(model_usage=usage)
+
+        first = await _execute(session, _Query([_tool_turn(1), total(100, 1000)]))
+        fake = _Query([_tool_turn(2), total(250, 3000)])
+        await _execute(session, fake, resume=first.session_id)
+
+        counts = session._budget.by_model["m"]
+        assert (counts["input"], counts["cache_read"]) == (250, 3000)
+        assert session._budget.used == 3250
 
     @pytest.mark.asyncio()
     async def test_without_usage_the_fallback_is_the_share_too(self) -> None:
@@ -1129,6 +1151,9 @@ class TestSwitchOff:
                 "findings are saved. Review the investigation summary and "
                 "continue analysis. Submit any remaining findings. Do NOT "
                 "re-submit existing findings."
+                '\n\nInvestigation questions:\n["q1"]\n'
+                "These are yours. Close each one that get_investigation_summary "
+                "still lists as open with resolve_question."
             ]
             * 2
         )

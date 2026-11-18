@@ -9,6 +9,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from mulder.dirroot import MAX_ENTRIES, detect_collection, walk_files
 from mulder.extractors.optical import SECTOR, signature_from_vrs
 from mulder.patterns import DISK_IMAGE_EXTS
 
@@ -67,6 +68,13 @@ _SQLITE_EXTS = {".sqlite", ".sqlitedb", ".db"}
 _AUTO_EXCLUDE_DIRS = {"precooked", "baseline-memory", "baseline"}
 
 _AUTORUNS_CSV_PATTERNS: tuple[str, ...] = ("autorunsc", "autoruns")
+
+# Evidence that is never a collector's own output, wherever it was left.
+_CONTAINER_TYPES = frozenset(
+    {"memory_dump", "disk_image", "network_capture", "compressed_archive"}
+)
+# What a memory or crash dump copied into a collection is named.
+_COLLECTED_DUMP_EXTS = (".dmp", ".mem", ".vmem", ".raw")
 
 _SKIP_FILENAMES: set[str] = {
     "readme",
@@ -338,6 +346,9 @@ class EvidenceClassifier:
             result = self._classify_file(evidence_root)
             return [result] if result else []
 
+        if detect_collection(evidence_root) is not None:
+            return self._collection_items(evidence_root)
+
         results: list[ClassifiedEvidence] = []
         seen_log_dirs: set[Path] = set()
         excluded_dirs: set[Path] = set()
@@ -359,6 +370,10 @@ class EvidenceClassifier:
                 logger.debug("Auto-excluding directory: %s", item)
                 excluded_dirs.add(item)
                 continue
+            if item.is_dir() and not item.is_symlink() and detect_collection(item) is not None:
+                results.extend(self._collection_items(item))
+                excluded_dirs.add(item)
+                continue
             try:
                 self._process_item(item, results, seen_log_dirs)
             except (PermissionError, OSError) as exc:
@@ -366,6 +381,31 @@ class EvidenceClassifier:
                 continue
 
         return results
+
+    def _collection_items(self, path: Path) -> list[ClassifiedEvidence]:
+        """The triage collection at *path* as one item, whatever it holds.
+
+        Images, memory dumps, captures and archives left at its top level are
+        not part of what the collector wrote, and stay items of their own. So
+        do the memory and crash dumps the collector copied (KAPE takes
+        ``MEMORY.DMP`` and ``*.dmp``): Volatility reads those, wherever they are.
+        """
+        items = [ClassifiedEvidence(path=path, artifact_type="triage_collection")]
+        try:
+            children = sorted(p for p in path.iterdir() if p.is_file() and not p.is_symlink())
+        except OSError:
+            return items
+        for child in children:
+            found = None if child.name.startswith(".") else self._classify_file(child)
+            if found is not None and found.artifact_type in _CONTAINER_TYPES:
+                items.append(found)
+        for rel, stored in sorted(walk_files(path, [MAX_ENTRIES])):
+            if "/" not in rel or not rel.lower().endswith(_COLLECTED_DUMP_EXTS):
+                continue  # at the top level (seen above), or not named as a dump
+            found = self._classify_file(Path(stored))
+            if found is not None and found.artifact_type == "memory_dump":
+                items.append(found)
+        return items
 
     def _is_excluded(self, item: Path, evidence_root: Path) -> bool:
         """Check user-supplied --exclude glob patterns."""

@@ -125,7 +125,19 @@ These hypotheses were explicitly tested and no supporting evidence was found.
 {% for f in negative_findings %}
 - **{{ f.title | replace("[NEGATIVE] ", "") }}** : {{ f.description | truncate(200) }}
 {% endfor %}
-{% endif %}
+{% endif %}{% if questions %}
+
+---
+
+## Investigation Questions
+
+Each question the investigation asked, how it was resolved, and the findings the answer rests on. "Ruled out" means the sources examined did not show it, not that it did not happen. "Undetermined" means the evidence needed was not available.
+
+{% for q in questions %}
+- **{{ q.label }}** ({{ q.asked_in }}): {{ q.question }}
+{% for f in q.findings %}  - {{ f.title }} (`{{ f.finding_id }}`)
+{% endfor %}{% if q.reason %}  - Reason: {{ q.reason }}
+{% endif %}{% endfor %}{% endif %}
 
 ---
 
@@ -217,7 +229,9 @@ These hypotheses were explicitly tested and no supporting evidence was found.
 {% if model_token_breakdown %}| Input tokens | {{ model_token_breakdown | sum(attribute='input') | tokformat }} |
 | Output tokens | {{ model_token_breakdown | sum(attribute='output') | tokformat }} |
 | Total tokens | {{ (model_token_breakdown | sum(attribute='input') + model_token_breakdown | sum(attribute='output')) | tokformat }} |
-{% elif estimated_input_tokens %}| Estimated input tokens | {{ estimated_input_tokens | tokformat }} |
+{% if model_token_breakdown | sum(attribute='cache_creation') or model_token_breakdown | sum(attribute='cache_read') %}| Cache-write input tokens (not in total) | {{ model_token_breakdown | sum(attribute='cache_creation') | tokformat }} |
+| Cache-read input tokens (not in total) | {{ model_token_breakdown | sum(attribute='cache_read') | tokformat }} |
+{% endif %}{% elif estimated_input_tokens %}| Estimated input tokens | {{ estimated_input_tokens | tokformat }} |
 | Estimated output tokens | {{ estimated_output_tokens | tokformat }} |
 {% endif %}| Audit log | {{ audit_log_path }} |
 
