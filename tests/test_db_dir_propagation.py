@@ -64,7 +64,12 @@ class TestOrchestratorHonoursDbDir:
 
     def test_the_model_usage_sidecar_lands_in_it(self, tmp_path: Path) -> None:
         orch = self._make(tmp_path)
-        orch.dashboard._model_tokens = {"claude-x": {"input": 10, "output": 20}}
+        orch.budget.by_model["claude-x"] = {
+            "input": 10,
+            "output": 20,
+            "cache_creation": 0,
+            "cache_read": 0,
+        }
         orch._write_model_usage()
 
         written = tmp_path / "case-1.model_usage.json"

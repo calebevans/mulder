@@ -205,6 +205,10 @@ return run_cli_tool(
 )
 ```
 
+### Reading a file out of the evidence
+
+A tool that needs a file from inside a disk image should take `image_path`, find the file with `_collect_fls_chunks(image_path)` (`tools/extract/tsk.py`) and read it with `icat(image_path, offset, inode)` from `mulder.dirroot`, rather than running `icat` itself. The same two calls then work on a triage collection directory (KAPE, Velociraptor, UAC), where the listing and the bytes come from the collected files. Write what you read to a temporary directory; never hand a parser a path inside the evidence.
+
 ## 4. Register the Module Import
 
 After writing the tool module, import it in the appropriate `__init__.py` so the tool is registered at server startup.

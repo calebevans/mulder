@@ -434,6 +434,23 @@ def validate_narrative(
     )
 
 
+def report_written(report_path: Path, since: float) -> bool:
+    """Return True when the Markdown report was written at or after *since*.
+
+    ``finalize_report`` writes it only after every readiness gate passes, so
+    a report this fresh is a finalized one.
+
+    Args:
+        report_path: ``<db_dir>/<case_id>.report.md``.
+        since: A ``time.time()`` value; an older report is a leftover.
+
+    Returns:
+        True if the file exists and is not older than *since*.
+    """
+    # 1s slack for filesystems with whole-second mtimes.
+    return report_path.is_file() and report_path.stat().st_mtime >= since - 1.0
+
+
 def validate_report(
     tool_names: list[str],
     report_path: Path,
@@ -459,8 +476,7 @@ def validate_report(
     Returns:
         GateResult indicating whether the report exists.
     """
-    # 1s slack for filesystems with whole-second mtimes.
-    written = report_path.is_file() and report_path.stat().st_mtime >= started_at - 1.0
+    written = report_written(report_path, started_at)
     invoked = "finalize_report" in tool_names
 
     if written:
