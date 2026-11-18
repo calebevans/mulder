@@ -231,10 +231,17 @@ def test_a_host_name_is_reduced_to_host_name_characters(tmp_path: Path) -> None:
 
 
 def test_unreadable_host_records_leave_the_host_empty(tmp_path: Path) -> None:
-    for name, content in {"a": "[1, 2]", "b": "{not json", "c": "{" + '"k": 1,' * 40000}.items():
+    records = {
+        "list": "[1, 2]",
+        "damaged": "{not json",
+        "huge": "{" + '"k": 1,' * 40000,  # cut at the read limit
+        "deep": "[" * 60000,  # exhausts the JSON parser's stack
+        "number": '{"Hostname": 7}',
+    }
+    for name, content in records.items():
         root = write(tmp_path / name, {"client_info.json": content, "uploads/auto/x": "1"})
         collection = detect_collection(root)
-        assert collection is not None and collection.host == ""
+        assert collection is not None and collection.host == "", name
 
 
 def test_the_walk_is_capped_and_says_so(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

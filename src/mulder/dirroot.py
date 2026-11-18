@@ -143,14 +143,28 @@ def _entries(directory: Path) -> dict[str, os.DirEntry[str]]:
         return {}
 
 
+def _kind(entry: os.DirEntry[str]) -> str:
+    """``"dir"`` or ``"file"`` for a real directory or regular file, else ``""``.
+
+    A symlink is neither. Where the filesystem makes this cost a stat (some
+    network and FUSE mounts), a stat that fails makes the entry neither too.
+    """
+    try:
+        if entry.is_dir(follow_symlinks=False):
+            return "dir"
+        return "file" if entry.is_file(follow_symlinks=False) else ""
+    except OSError:
+        return ""
+
+
 def _dir(entry: os.DirEntry[str] | None) -> Path | None:
     """The entry's path when it is a directory and not a symlink to one."""
-    return Path(entry.path) if entry is not None and entry.is_dir(follow_symlinks=False) else None
+    return Path(entry.path) if entry is not None and _kind(entry) == "dir" else None
 
 
 def _file(entry: os.DirEntry[str] | None) -> Path | None:
     """The entry's path when it is a regular file and not a symlink to one."""
-    return Path(entry.path) if entry is not None and entry.is_file(follow_symlinks=False) else None
+    return Path(entry.path) if entry is not None and _kind(entry) == "file" else None
 
 
 def real_dir(parent: Path, name: str) -> Path | None:
@@ -221,8 +235,8 @@ def detect_collection(path: Path) -> Collection | None:
             try:
                 fields = {str(k).lower(): v for k, v in json.loads(head[0]).items()}
                 host = _host(fields.get("hostname") or fields.get("fqdn"))
-            except (ValueError, AttributeError):
-                pass
+            except (ValueError, AttributeError, RecursionError):  # not JSON, not an object, or
+                pass  # nested deep enough to exhaust the parser's stack
         volumes = _velociraptor_volumes(uploads) if uploads else []
         return Collection(path, "velociraptor", host, _system_first(volumes))
 
@@ -290,9 +304,10 @@ def walk_files(top: Path, budget: list[int]) -> list[tuple[str, str]]:
                 break
             budget[0] -= 1
             child = f"{rel}/{entry.name}" if rel else entry.name
-            if entry.is_dir(follow_symlinks=False):
+            kind = _kind(entry)
+            if kind == "dir":
                 stack.append((child, entry.path))
-            elif entry.is_file(follow_symlinks=False):
+            elif kind == "file":
                 found.append((child, entry.path))
     return found
 
