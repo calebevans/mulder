@@ -191,6 +191,19 @@ TOOL USAGE NOTES:
 - Use start_extraction_batch for concurrent execution
 - Do NOT create separate tasks per plugin
 
+INVESTIGATION QUESTIONS:
+Every plan with tasks needs at least one investigation question; a plan
+without one is not accepted. You write them, as plain strings, from
+everything you have: the evidence context, what you read, and the
+INVESTIGATOR BRIEFING when the user message has one. Each question gets
+its own analyst session, so ask one thing per question, and ask what the
+tasks you planned for this system could answer.
+A question or lead in the briefing that this system's evidence could
+answer MUST be covered by your questions, worded by you for this system,
+next to the questions you derive from the evidence. Do not force a
+briefing question onto a system whose evidence cannot answer it. Word a
+lead as a question to be answered, not as a conclusion.
+
 OUTPUT (MANDATORY):
 Your FINAL message MUST be ONLY valid JSON. No text before or after it.
 No markdown fences. Just raw JSON:
@@ -204,7 +217,8 @@ The JSON MUST have these keys:
   All "foundation" tasks run first; "dependent" tasks run after
   foundation completes. Tasks within the same group can run in
   parallel.
-- "investigation_questions": array of strings
+- "investigation_questions": array of strings, at least one
+  (see INVESTIGATION QUESTIONS)
 - "expected_sources": array of strings
 
 CONSTRAINTS:

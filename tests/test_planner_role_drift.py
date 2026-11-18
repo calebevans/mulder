@@ -46,7 +46,10 @@ PLANNER_VARS = {
     "consistency_report": "",
 }
 
-PLAN = '{"tasks": [{"tool": "search", "args": {"query": "x"}, "purpose": "p"}]}'
+PLAN = (
+    '{"tasks": [{"tool": "search", "args": {"query": "x"}, "purpose": "p"}],'
+    ' "investigation_questions": ["q"]}'
+)
 
 
 def _advertised(phase: PhaseConfig) -> set[str]:

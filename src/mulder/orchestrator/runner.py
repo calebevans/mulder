@@ -85,7 +85,6 @@ class Orchestrator:
         show_cli_stderr: bool = False,
         max_compactions: int = DEFAULT_MAX_COMPACTIONS,
         wrapup: bool = True,
-        question_sessions: bool = False,
     ) -> None:
         """Initialize the orchestrator.
 
@@ -115,10 +114,6 @@ class Orchestrator:
                 notes and saved findings, tell analysts and executors
                 their turn budget, and nudge a session that ended on a
                 silent turn. False restores the cold restart.
-            question_sessions: Run the extraction analyst as one session
-                per investigation question plus a consolidation session
-                (``--analyst-scope question``). False is one session per
-                system.
         """
         self.evidence_path = evidence_path
         self.cwd = str(cwd)
@@ -173,7 +168,6 @@ class Orchestrator:
             max_compactions=max_compactions,
             wrapup=wrapup,
             server=self._server,
-            question_sessions=question_sessions,
         )
         self._evidence = EvidenceContext(
             evidence_path=evidence_path,
