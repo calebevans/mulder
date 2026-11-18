@@ -931,7 +931,26 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
       </ul>
     </div>
   </div>
-  {% endif %}
+  {% endif %}{% if questions %}
+  <div class="card mt-2">
+    <div class="card-header">Investigation Questions</div>
+    <div class="card-body">
+      <p style="opacity:0.7;margin-bottom:1em;">Each question the investigation asked, how it was resolved, and the findings the answer rests on. &ldquo;Ruled out&rdquo; means the sources examined did not show it, not that it did not happen. &ldquo;Undetermined&rdquo; means the evidence needed was not available.</p>
+      <table class="data-table">
+        <thead><tr><th>Question</th><th>Asked in</th><th>Resolution</th><th>Rests on</th></tr></thead>
+        <tbody>
+          {% for q in questions %}
+          <tr>
+            <td>{{ q.question }}</td>
+            <td>{{ q.asked_in }}</td>
+            <td>{{ q.label }}</td>
+            <td>{% for f in q.findings %}<div>{{ f.title }} <span class="mono">{{ f.finding_id }}</span></div>{% endfor %}{% if q.reason %}<div>{{ q.reason }}</div>{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>{% endif %}
 </div>
 
 <!-- ==================== ATT&CK ==================== -->

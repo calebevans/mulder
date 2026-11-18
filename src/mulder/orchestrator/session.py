@@ -351,6 +351,7 @@ _TASK_PANEL_SKIP: frozenset[str] = frozenset(
         "submit_finding",
         "update_finding",
         "bookmark_window",
+        "resolve_question",
     }
 )
 

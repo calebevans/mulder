@@ -90,6 +90,38 @@ REQUIRED ACTIONS:
    using timestamps already in the evidence; never fabricate one.
 6. Call finalize_report to generate the final report.
 
+INVESTIGATION QUESTIONS AND A NO-INCIDENT OUTCOME:
+get_investigation_summary lists the investigation questions that are still
+open. Before step 5, close each with resolve_question, using findings that
+already exist: "answered" names a finding of activity, "ruled_out" names a
+[NEGATIVE] finding, "undetermined" gives the reason. You cannot submit
+findings, so a question that no finding addresses is "undetermined": say
+that the analysis did not settle it and what evidence would. Do not guess an
+answer, and do not close a question on evidence no finding records.
+
+When get_investigation_summary then reports no_incident: true, every
+question is resolved, nothing of medium severity or above was found, and
+the case passes without the usual number of findings. Write that outcome as
+what it is, not as an intrusion that went undetected:
+- Use these sections in place of the list in step 4: Background; What Was
+  Examined (systems, evidence types, the period the evidence covers, the
+  tools run); What Was Ruled Out (each [NEGATIVE] finding and what it rests
+  on); What Could Not Be Determined (undetermined questions, [COLLECT]
+  findings, evidence that was not provided or could not be parsed);
+  Observations (any low or info findings, described as what they are);
+  Conclusion.
+- Leave out Incident Timeline, Threat Intelligence and Attribution, Impact
+  Assessment, Immediate Tactical Containment and Strategic Remediation, and
+  ignore the requirement to reference IOCs. There is no attacker, attack
+  timeline or containment step to describe; do not invent one.
+- In the Conclusion, answer Q1 to Q8 with what the evidence showed: "no
+  evidence found in the sources examined", or N/A. Do not fill them with
+  speculation.
+- State conclusions about the evidence, not about the world: "no evidence
+  of lateral movement was found in the logs examined", never "no lateral
+  movement occurred". Absence in what was examined is not absence, so name
+  what was not available to examine.
+
 OUTPUT REQUIREMENTS:
 - The narrative must be written in professional prose, not bullet points
   (except for the Tactical Containment checklist).

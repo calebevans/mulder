@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -24,8 +25,9 @@ from uuid import uuid4
 from pydantic import ValidationError
 
 from mulder.audit import AuditLog
-from mulder.models import AuditSummary, CaseMetadataRow, Finding, SourceRow
+from mulder.models import AuditSummary, CaseMetadataRow, Finding, Question, SourceRow
 from mulder.patterns import SEVERITY_ORDER, source_is_cited
+from mulder.questions import MIN_NON_NEGATIVE_FINDINGS, open_questions, resolved_path
 from mulder.report.renderer import ReportRenderer
 from mulder.server.app import get_ctx, get_job_store, mcp
 from mulder.server.helpers import error_response, hash_output, make_tool_call_id
@@ -35,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 _MIDNIGHT_RE = re.compile(r"T00:00:00(?:Z|[+-]00:?00)?$")
 
-_MIN_NON_NEGATIVE_FINDINGS = 3
+_MIN_NON_NEGATIVE_FINDINGS = MIN_NON_NEGATIVE_FINDINGS
 
 # evidence_citation_coverage: below _CITATION_ADVISORY_PCT the gate still
 # passes but carries an advisory; below _MIN_CITED_SOURCES distinct cited
@@ -52,9 +54,9 @@ _AUXILIARY_SOURCES = frozenset(
 _AUXILIARY_PREFIXES = ("registry.query.",)
 _AUXILIARY_SUFFIXES = (".stats", ".manifest", ".manifest.json")
 
-# This module's own tools: their output is the investigation's bookkeeping, not
-# evidence, and citing one (even a rejected submission) would let a finding
-# vouch for itself.
+# This module's own tools, and resolve_question, which closes a question on a
+# finding: their output is the investigation's bookkeeping, not evidence, and
+# citing one (even a rejected submission) would let a finding vouch for itself.
 _FINDING_TOOLS = frozenset(
     {
         "submit_finding",
@@ -64,6 +66,7 @@ _FINDING_TOOLS = frozenset(
         "submit_narrative",
         "finalize_report",
         "deduplicate_findings",
+        "resolve_question",
     }
 )
 
@@ -123,6 +126,7 @@ def _evaluate_finalize_gates(
     case_metadata: CaseMetadataRow,
     sources: list[SourceRow],
     audit_summary: AuditSummary,
+    questions: Sequence[Question] = (),
 ) -> list[dict[str, object]]:
     """Evaluate all finalize_report hard gates and return per-gate results.
 
@@ -130,22 +134,46 @@ def _evaluate_finalize_gates(
     describing the gate status.  Called by both ``finalize_report``
     (which blocks on the first failure) and ``check_finalize_readiness``
     (which reports all gates).
+
+    ``questions`` are the recorded investigation questions. With none, every
+    gate behaves as it did before questions existed.
     """
     gates: list[dict[str, object]] = []
     non_negative = [f for f in findings if not f.title.startswith(_NON_EVENT_PREFIXES)]
 
-    # Gate 1: Minimum non-negative finding count
+    # Gate 1: Minimum non-negative finding count, or, for a case where the
+    # evidence shows no incident, every recorded question resolved. The
+    # second path exists so a clean case is not pushed to manufacture findings.
     count = len(non_negative)
-    passed = count >= _MIN_NON_NEGATIVE_FINDINGS
+    by_count = count >= _MIN_NON_NEGATIVE_FINDINGS
+    passed = by_count or resolved_path(questions, findings, audit_summary.tool_call_counts)
     detail: str
-    if passed:
+    if by_count:
         detail = f"{count} non-negative findings submitted (minimum {_MIN_NON_NEGATIVE_FINDINGS})"
+    elif passed:
+        detail = (
+            f"Passed on resolved questions, not on the finding count: all {len(questions)} "
+            f"recorded investigation question(s) are resolved and both coverage audits were "
+            f"run ({count} non-negative finding(s), minimum {_MIN_NON_NEGATIVE_FINDINGS})"
+        )
     else:
         detail = (
             f"Only {count} non-negative findings submitted, "
             f"need at least {_MIN_NON_NEGATIVE_FINDINGS}. "
             f"Submit more findings with submit_finding before finalizing."
         )
+        if questions:
+            still_open = [q.question_id for q in open_questions(questions, findings)]
+            detail += (
+                " If the evidence examined shows no incident, do not submit findings it does "
+                "not support: this gate also passes once every recorded investigation "
+                f"question is resolved with resolve_question ({len(still_open)} of "
+                f"{len(questions)} open"
+                + (f": {', '.join(still_open[:10])}" if still_open else "")
+                + ") and both audit_evidence_coverage and audit_tool_coverage have been run. "
+                f"A ruled_out resolution names a {_NEGATIVE_PREFIX} finding; submit one that "
+                "cites the tool calls you ran if none exists."
+            )
     gates.append({"name": "minimum_findings", "passed": passed, "detail": detail})
 
     # Gate 2: Timestamp coverage on non-negative findings
@@ -628,7 +656,9 @@ def submit_narrative(narrative: str) -> dict[str, object]:
     sections: Background, Incident Timeline, Key Findings, Impact
     Assessment, Recommendations, and Conclusion.  Use full paragraphs,
     not bullet points.  This becomes the "Report" page in the final
-    output.
+    output.  When get_investigation_summary reports no_incident there is
+    no incident to narrate: write what was examined, what was ruled out
+    and what could not be determined instead.
 
     Can be called multiple times; each call replaces the previous
     narrative.
@@ -752,8 +782,11 @@ def finalize_report() -> dict[str, object]:
     case_metadata = ctx.db.get_case_metadata()
     audit_summary = ctx.audit.summary()
     sources_list = ctx.db.get_sources()
+    questions = ctx.db.get_questions()
 
-    gate_results = _evaluate_finalize_gates(findings, case_metadata, sources_list, audit_summary)
+    gate_results = _evaluate_finalize_gates(
+        findings, case_metadata, sources_list, audit_summary, questions
+    )
     for gate in gate_results:
         if not gate["passed"]:
             return {
@@ -803,6 +836,7 @@ def finalize_report() -> dict[str, object]:
             source_windows=source_windows,
             generate_pdf=False,
             enrichment_windows=enrichment_windows,
+            questions=questions,
         )
     except Exception as exc:
         logger.warning(
@@ -816,6 +850,7 @@ def finalize_report() -> dict[str, object]:
             sources_list=sources_list,
             evidence_integrity=evidence_integrity,
             enrichment_windows=enrichment_windows,
+            questions=questions,
         )
         html_text = ""
         html_warning: str | None = f"HTML report generation failed: {exc}"
@@ -1215,6 +1250,9 @@ def deduplicate_findings(
             )
             for fid in delete_ids:
                 ctx.db.delete_finding(fid)
+            # A merge keeps everything the report is built from, and that
+            # includes which finding each resolved question rests on.
+            ctx.db.repoint_question_findings(dict.fromkeys(delete_ids, representative.finding_id))
             merged_count += len(delete_ids)
 
     if not dry_run:

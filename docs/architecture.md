@@ -81,6 +81,7 @@ flowchart LR
         submitNarrative["submit_narrative"]
         finalizeReport["finalize_report"]
         checkReadiness["check_finalize_readiness"]
+        resolveQuestion["resolve_question"]
         auditCoverage["audit_evidence_coverage\naudit_tool_coverage"]
     end
 ```
@@ -233,6 +234,32 @@ When a gate fails, the orchestrator retries the phase with:
 - Up to 2 retries per phase (configurable)
 - Consecutive failure tracking prevents indefinite silent auto-passes
 
+### Investigation Questions and the No-Incident Outcome
+
+The count-based gates assume something happened. A case where nothing did has a second, explicit way to pass, so it is not pushed to manufacture findings.
+
+Each planner's `investigation_questions` are stored in the `investigation_questions` table, with the phase and system, just before the analyst runs. The orchestrator writes them through `ServerBridge.record_questions` with no LLM call and hands them to the analyst prefixed with their ids (`[q_1a2b3c4d] ...`). Analysts and the report role close a question with `resolve_question`:
+
+| Resolution | Must name | Checked on the server |
+|------------|-----------|-----------------------|
+| `answered` | one or more findings of activity | each exists, is not `[NEGATIVE]` or `[COLLECT]`, and cites successful calls to evidence tools |
+| `ruled_out` | one or more `[NEGATIVE]` findings | each exists, is `[NEGATIVE]`, and cites successful calls to evidence tools |
+| `undetermined` | a reason | the reason is not empty |
+
+A resolution holds only while one of the findings it names still exists and is still the right kind (`mulder/questions.py`). Deleting the finding, or re-titling a `[NEGATIVE]` one because the hypothesis turned out true, reopens the question. `deduplicate_findings` repoints questions from an absorbed finding to its survivor.
+
+The gates then accept either path:
+
+- `minimum_findings` passes on three non-negative findings, or when at least one question is recorded, none is open, and both coverage audits have been called. Its detail says which.
+- The cross-system gate's finding and MITRE checks also pass when at least one question is recorded, none is open, and no finding of activity is of medium severity or above. The audits are not required here: only the narrative and report roles can run them.
+- `timestamp_coverage`, `narrative_submitted`, `audit_tools_called` and `evidence_citation_coverage` are unchanged, so a clean case still has to cite at least three distinct sources across its findings, negative ones included.
+
+A case with no recorded questions gets the same gate results and the same `get_investigation_summary` output as before questions were recorded.
+
+The report lists every question with its resolution and the findings behind it. When the case passed on resolved questions (fewer than three findings of activity), none of its findings is medium or above, and at least one question was answered or ruled out, the executive summary states that no evidence of an incident was found in the evidence examined, then what was examined (including how many of the indexed sources the findings cite) and what was not available. A case that passed on resolved questions but holds a medium or higher finding, or in which every question is undetermined, keeps the standard summary: the first has found something, and the second has not found that nothing happened.
+
+What the server cannot check is whether an `undetermined` reason is honest, or whether a `[NEGATIVE]` finding's searches were adequate. The report shows every undetermined question with its reason for that purpose.
+
 ## Tool Access Control
 
 Tools self-declare which pipeline roles may invoke them via the `@tool_access` decorator (`src/mulder/server/tool_access.py`). At import time, `phases.py` calls `get_tools_for_role(Role.EXTRACT_EXECUTOR)` (and similar) to build allowlists dynamically, eliminating manual tool list maintenance.
@@ -368,6 +395,17 @@ erDiagram
         text updated_at
     }
 
+    investigationQuestions {
+        text question_id PK
+        text phase
+        text system
+        text question
+        text resolution
+        text finding_ids
+        text reason
+        text recorded_at
+    }
+
     caseMetadata ||--o{ sources : "has"
     sources ||--o{ windows : "contains"
     windows ||--|| windowsFts : "indexed by"
@@ -385,6 +423,7 @@ erDiagram
 - **bookmarks**: Agent-flagged windows of interest for later review
 - **progress**: Per-system records of tools executed and questions addressed
 - **kv_store**: General-purpose key-value persistence for cross-tool state sharing. Stores TSK partition offsets (`tsk_partition_offset:<image>`), EVTX extraction directory paths, and other data that must survive server restarts and context compaction
+- **investigation_questions**: The questions each planner asked, with phase and system, and how each was resolved (`answered`, `ruled_out`, `undetermined`, or NULL while open) with the finding ids or reason behind it. Written by the orchestrator, resolved by `resolve_question`
 
 ### Write Safety
 
@@ -629,6 +668,7 @@ The `ReportRenderer` uses Jinja2 templates to produce Markdown and HTML reports:
 4. Convert finding descriptions from markdown to HTML
 5. Generate executive summary from severity distribution
 6. Render template with all case data, narrative, findings, audit metrics, and source listings
+7. List each recorded investigation question with its resolution and the findings behind it, and replace the executive summary with the no-incident statement when the case qualifies (see [Investigation Questions and the No-Incident Outcome](#investigation-questions-and-the-no-incident-outcome))
 
 ### Output Formats
 

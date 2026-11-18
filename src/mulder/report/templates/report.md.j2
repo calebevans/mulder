@@ -109,7 +109,19 @@ These hypotheses were explicitly tested and no supporting evidence was found.
 {% for f in negative_findings %}
 - **{{ f.title | replace("[NEGATIVE] ", "") }}** : {{ f.description | truncate(200) }}
 {% endfor %}
-{% endif %}
+{% endif %}{% if questions %}
+
+---
+
+## Investigation Questions
+
+Each question the investigation asked, how it was resolved, and the findings the answer rests on. "Ruled out" means the sources examined did not show it, not that it did not happen. "Undetermined" means the evidence needed was not available.
+
+{% for q in questions %}
+- **{{ q.label }}** ({{ q.asked_in }}): {{ q.question }}
+{% for f in q.findings %}  - {{ f.title }} (`{{ f.finding_id }}`)
+{% endfor %}{% if q.reason %}  - Reason: {{ q.reason }}
+{% endif %}{% endfor %}{% endif %}
 
 ---
 

@@ -249,6 +249,7 @@ def report(case_id: str, db_dir: str) -> None:
         findings = case_db.get_findings()
         sources_list = case_db.get_sources()
         evidence_integrity = case_db.get_evidence_registry()
+        questions = case_db.get_questions()
 
         audit = AuditLog(audit_path)
         audit_summary = audit.summary()
@@ -265,6 +266,7 @@ def report(case_id: str, db_dir: str) -> None:
             audit_log_path=audit_path,
             sources_list=sources_list,
             evidence_integrity=evidence_integrity,
+            questions=questions,
         )
         md_path.write_text(md_text, encoding="utf-8")
         click.echo(f"  Markdown: {md_path}")
@@ -296,6 +298,7 @@ def report(case_id: str, db_dir: str) -> None:
                 sources_list=sources_list,
                 evidence_integrity=evidence_integrity,
                 source_windows=source_windows,
+                questions=questions,
             )
             html_path.write_text(html_text, encoding="utf-8")
             click.echo(f"  HTML:     {html_path}")
