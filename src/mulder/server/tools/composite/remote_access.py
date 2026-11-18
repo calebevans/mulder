@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import fnmatch
 import functools
+import itertools
 import json
 import re
 import time
@@ -195,18 +196,23 @@ _TOOL_LOGS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
 _MAX_TOOLS = 12
 _MAX_NEEDLES = 5
 _SAMPLE_CHARS = 160
+# Log files listed in the result, read or not; more are counted only.
 _MAX_LOG_FILES = 20
 # Bytes of one log read and indexed. AnyDesk traces grow to tens of megabytes;
-# what is beyond this (the newest lines) is not indexed and the result says so.
+# the newest lines are kept, because a recent intrusion is at the end, and the
+# result says when older ones were left out.
 _LOG_READ_BYTES = 8 * 1024 * 1024
 _MAX_ADDRESSES = 8
 
 # Characters that cannot be part of a file name, or that separate fields.
 _NAME_BREAK_RE = re.compile(r"[\\/:*?\"<>|\t,;=]")
 _MAX_NAME_CHARS = 64
-# What follows the name in a Prefetch file's own name (ANYDESK.EXE-1A2B3C4D.pf).
-# A Prefetch record also lists every file the program loaded; those are skipped.
-_PF_SUFFIX_RE = re.compile(r"-[0-9a-f]{8}\.pf")
+# The start of a PECmd row: Note, SourceFilename (X.EXE-1A2B3C4D.pf), three
+# timestamps, then ExecutableName, the program the Prefetch file belongs to.
+# The name is not taken from the file name: extraction flattens the path into
+# it (Windows_Prefetch_X.EXE-1A2B3C4D.pf) and program names hold underscores
+# too. The files the program loaded come later in the row and are not matched.
+_PF_OWN_RE = re.compile(r"[^,]*,[^,]*-[0-9a-f]{8}\.pf,(?:[^,]*,){3}([^,]+),")
 _HOST_RE = re.compile(r"[a-z0-9_-]+(?:\.[a-z0-9_-]+)+")
 _CATALOG_HOST_RE = re.compile(r"[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,24}")
 _WILDCARD_RE = re.compile(r"[*?<>\[\]%]")
@@ -237,6 +243,17 @@ class _Catalog:
 
     def __post_init__(self) -> None:
         self.domain_labels = max((d.count(".") + 1 for d in self.domains), default=0)
+
+
+@dataclass
+class _Log:
+    """One tool log file named in a file listing."""
+
+    listing: SourceRow
+    tool: str
+    inode: str
+    path: str
+    deleted: bool
 
 
 @dataclass
@@ -351,9 +368,14 @@ def _scan_source(
     prefix: str,
     catalog: _Catalog,
     hits: dict[str, _Hit],
-    logs: list[tuple[SourceRow, str, str, str]],
-) -> None:
-    """Match one source's lines against the catalog; collect tool log files from listings."""
+    logs: dict[str, list[_Log]],
+) -> int:
+    """Match one source's lines against the catalog; collect tool log files from listings.
+
+    Returns the number of tool log files the listing names; at most
+    ``_MAX_LOG_FILES`` per tool are kept in *logs*.
+    """
+    logs_found = 0
     network = prefix in _NETWORK_SOURCES
     listing = prefix == _FILELIST
     prefetch = prefix == _PREFETCH
@@ -379,55 +401,74 @@ def _scan_source(
                             _record(catalog.domains[domain], domain, line, *match.span())
                             break
                 continue
-            if listing and len(logs) < _MAX_LOG_FILES:
+            if prefetch:
+                own = _PF_OWN_RE.match(low)
+                names = catalog.exes.get(own.group(1).strip()) if own else None
+                if own and names:
+                    _record(names, own.group(1).strip(), line, *own.span(1))
+                continue
+            if listing:
                 for tool_key, display, patterns in _TOOL_LOGS:
                     if tool_key not in low:
                         continue
                     for entry in fls_file_entries(line):
                         path = entry.path.lower().replace("\\", "/")
-                        if not entry.deleted and any(fnmatch.fnmatch(path, p) for p in patterns):
-                            logs.append((source, display, entry.base_inode, entry.path))
+                        if any(fnmatch.fnmatch(path, p) for p in patterns):
+                            logs_found += 1
+                            kept = logs.setdefault(display, [])
+                            if len(kept) < _MAX_LOG_FILES:
+                                found = (source, display, entry.base_inode, entry.path)
+                                kept.append(_Log(*found, entry.deleted))
             if ".exe" not in low:
                 continue
             for whole, start, end in _exe_names(low):
-                if prefetch and not _PF_SUFFIX_RE.match(low, end):
-                    continue
                 # A catalog name can hold spaces; in free text only the last word is the name.
                 for exe in {whole, whole.rsplit(" ", 1)[-1]}:
                     names = catalog.exes.get(exe)
-                    if names and (prefetch or exe not in _SHIPS_WITH_WINDOWS):
+                    if names and exe not in _SHIPS_WITH_WINDOWS:
                         _record(names, exe, line, start, end)
+    return logs_found
 
 
-def _index_logs(logs: list[tuple[SourceRow, str, str, str]]) -> list[dict[str, object]]:
-    """Read each tool log from its image (bounded), index it, and list external addresses."""
+def _index_logs(logs: dict[str, list[_Log]]) -> list[dict[str, object]]:
+    """Read each tool log from its image (bounded), index it, and list external addresses.
+
+    The tools take turns, so one tool's rotated logs do not crowd out another's.
+    """
     ctx = get_ctx()
     indexed = {(s.source_name, s.source_path) for s in ctx.db.get_sources()}
     out: list[dict[str, object]] = []
-    for listing, display, inode, path in logs:
-        image = listing.source_path
-        entry: dict[str, object] = {"tool": display, "path": _clean(path), "evidence": image}
+    turns = itertools.chain.from_iterable(itertools.zip_longest(*logs.values()))
+    for log in [log for log in turns if log][:_MAX_LOG_FILES]:
+        image = log.listing.source_path
+        entry: dict[str, object] = {"tool": log.tool, "path": _clean(log.path), "evidence": image}
         out.append(entry)
+        if log.deleted:
+            entry["not_read"] = "deleted entry, not read"
+            continue
         if not Path(image).is_file():
             entry["not_read"] = "the evidence is not a disk image a file can be read from"
             continue
-        stored = ctx.db.get_kv(f"{_KV_SOURCE_OFFSET_PREFIX}{listing.source_name}:{image}")
+        stored = ctx.db.get_kv(f"{_KV_SOURCE_OFFSET_PREFIX}{log.listing.source_name}:{image}")
         offset = int(stored) if stored and stored.isdigit() else _resolve_partition_offset(image)
-        read = read_image_file(image, inode, offset, _LOG_READ_BYTES)
+        read = read_image_file(image, log.inode, offset, _LOG_READ_BYTES, tail=True)
         text = decode_evidence_text(read[0]) if read else None
+        if read and read[1] and text:
+            text = text.partition("\n")[2]  # the cut fell inside a line
         if not read or not text or not text.strip():
             entry["not_read"] = "the file is empty, binary or could not be extracted"
             continue
-        file_slug = _SLUG_RE.sub("_", path.replace("\\", "/").rsplit("/", 1)[-1].lower())
-        name = f"rmm.{display.lower()}.{file_slug}"
+        # The inode keeps same-named logs apart: every user profile has its own ad.trace.
+        file_slug = _SLUG_RE.sub("_", log.path.replace("\\", "/").rsplit("/", 1)[-1].lower())
+        name = f"rmm.{log.tool.lower()}.{file_slug}.{log.inode}"
         if (name, image) not in indexed:
-            extract_and_index(f"=== {path} ===\n{text}", name, image, "icat")
+            extract_and_index(f"=== {log.path} ===\n{text}", name, image, "icat")
             indexed.add((name, image))
         entry["source"] = name
         entry["bytes_indexed"] = len(read[0])
         if read[1]:
             entry["truncated"] = (
-                f"Only the first {_LOG_READ_BYTES} bytes (the oldest lines) were indexed."
+                f"Only the last {_LOG_READ_BYTES} bytes (the newest lines) were indexed."
             )
         addresses: Counter[str] = Counter()
         samples: dict[str, str] = {}
@@ -459,8 +500,8 @@ def find_remote_access_tools() -> dict[str, object]:
     DNS/HTTP/TLS sources, and returns each tool with the sources it was found
     in, line counts and sample lines. Logs of AnyDesk, TeamViewer, Splashtop,
     ScreenConnect and RustDesk found on the image are indexed as
-    ``rmm.<tool>.<file>`` with the external addresses in them. Presence is not
-    abuse: these are common IT tools. Indexed as
+    ``rmm.<tool>.<file>.<inode>`` with the external addresses in them.
+    Presence is not abuse: these are common IT tools. Indexed as
     ``composite.remote_access_tools``.
     """
     ctx = get_ctx()
@@ -481,7 +522,8 @@ def find_remote_access_tools() -> dict[str, object]:
         )
 
     hits: dict[str, _Hit] = {}
-    logs: list[tuple[SourceRow, str, str, str]] = []
+    logs: dict[str, list[_Log]] = {}
+    logs_found = 0
     searched: set[str] = set()
     for source in ctx.db.get_sources():
         prefix = next(
@@ -494,7 +536,7 @@ def find_remote_access_tools() -> dict[str, object]:
         )
         if prefix and source.line_count:
             searched.add(source.source_name)
-            _scan_source(source, prefix, catalog, hits, logs)
+            logs_found += _scan_source(source, prefix, catalog, hits, logs)
 
     ranked = sorted(
         hits.items(),
@@ -516,10 +558,11 @@ def find_remote_access_tools() -> dict[str, object]:
         for label, hit in ranked[:_MAX_TOOLS]
     ]
     found_in = {source for hit in hits.values() for source, _evidence in hit.lines}
+    tool_logs = _index_logs(logs)
     results: dict[str, object] = {
         "tools_found": len(hits),
         "tools": tools,
-        "tool_logs": _index_logs(logs),
+        "tool_logs": tool_logs,
         "sources_searched": sorted(searched),
         "what_a_source_establishes": {
             prefix: meaning
@@ -531,6 +574,8 @@ def find_remote_access_tools() -> dict[str, object]:
     }
     if len(hits) > _MAX_TOOLS:
         results["tools_not_listed"] = [label for label, _hit in ranked[_MAX_TOOLS:]][:20]
+    if logs_found > len(tool_logs):
+        results["tool_logs_not_read"] = logs_found - len(tool_logs)
     if not searched:
         results["not_examined"] = (
             "None of the sources this tool reads is indexed, so nothing was examined. "

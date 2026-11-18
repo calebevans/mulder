@@ -68,16 +68,44 @@ LISTING = "\n".join(
         "d/d 2002-144-1:\tProgramData/AnyDesk",
     ]
 )
+
+
+def prefetch_row(name: str, pf_hash: str, loaded: str = "") -> str:
+    """One row as run_prefetch_parser indexes it (PECmd 1.5 on a real image).
+
+    The Prefetch file is extracted through The Sleuth Kit, which flattens its
+    path into the file name, so SourceFilename is not ``...\\Prefetch\\X.pf``.
+    """
+    stamp = "2026-11-18 20:10:46"
+    return (
+        f",/tmp/mulder_tsk_extract_iwxr6lk7/Windows_Prefetch_{name}-{pf_hash}.pf,"
+        f"{stamp},{stamp},{stamp},{name},\\DEVICE\\HARDDISKVOLUME2\\PROGRAM FILES\\X\\{name},"
+        f"True,{pf_hash},26254,Windows 10 or Windows 11,3,2026-03-01 10:00:00,,,,,,,,"
+        "\\DEVICE\\HARDDISKVOLUME2,CA0C7A48,2015-03-25 11:08:36,,,,"
+        '"\\DEVICE\\HARDDISKVOLUME2\\X",'
+        f'"{loaded}",'
+    )
+
+
 PREFETCH = "\n".join(
     [
-        "SourceFilename,ExecutableName,RunCount,LastRun",
-        "C:\\Windows\\Prefetch\\MSTSC.EXE-11111111.pf,MSTSC.EXE,3,2026-03-01 09:00:00",
-        "C:\\Windows\\Prefetch\\ANYDESK.EXE-22222222.pf,ANYDESK.EXE,9,2026-03-01 10:00:00",
-        "C:\\Windows\\Prefetch\\MESHAGENT.EXE-33333333.pf,MESHAGENT.EXE,1,2026-03-01 10:05:00",
-        # Another program's record: the files it loaded are not programs that ran.
-        "C:\\Windows\\Prefetch\\EXPLORER.EXE-44444444.pf,EXPLORER.EXE,50,2026-03-01 08:00:00,"
-        '"\\VOLUME{1}\\PROGRAM FILES (X86)\\ANYDESK\\ANYDESK.EXE, '
-        '\\VOLUME{1}\\WINDOWS\\SYSTEM32\\EN-US\\MESHAGENT.EXE.MUI"',
+        "Note,SourceFilename,SourceCreated,SourceModified,SourceAccessed,ExecutableName,"
+        "FullPath,PathValidated,Hash,Size,Version,RunCount,LastRun,PreviousRun0,PreviousRun1,"
+        "PreviousRun2,PreviousRun3,PreviousRun4,PreviousRun5,PreviousRun6,Volume0Name,"
+        "Volume0Serial,Volume0Created,Volume1Name,Volume1Serial,Volume1Created,Directories,"
+        "FilesLoaded,ParsingError",
+        prefetch_row("MSTSC.EXE", "11111111"),
+        prefetch_row("ANYDESK.EXE", "22222222"),
+        prefetch_row("MESHAGENT.EXE", "33333333"),
+        # Another program's record: the files it loaded are not programs that ran,
+        # not even a Prefetch file among them followed by a bare program name.
+        prefetch_row(
+            "EXPLORER.EXE",
+            "44444444",
+            "\\VOLUME{1}\\PROGRAM FILES (X86)\\ANYDESK\\ANYDESK.EXE, "
+            "\\VOLUME{1}\\WINDOWS\\SYSTEM32\\EN-US\\MESHAGENT.EXE.MUI, "
+            "\\VOLUME{1}\\WINDOWS\\PREFETCH\\X.EXE-55555555.PF,a,b,c,MESHAGENT.EXE,",
+        ),
     ]
 )
 SHIMCACHE = "\n".join(
@@ -170,7 +198,7 @@ def test_each_tool_is_reported_with_the_sources_it_was_found_in(
     assert anydesk["tsk.filelist"]["lines"] == 2
     # Its own Prefetch file counts; being loaded by Explorer does not.
     assert anydesk["ez.prefetch"]["lines"] == 1
-    assert "ANYDESK.EXE-22222222.pf" in anydesk["ez.prefetch"]["sample"]
+    assert "Windows_Prefetch_ANYDESK.EXE-22222222.pf" in anydesk["ez.prefetch"]["sample"]
     assert anydesk["tsk.filelist"]["evidence"] == image
     assert anydesk["tsk.filelist"]["sample"].endswith("Program Files (x86)/AnyDesk/AnyDesk.exe")
     assert anydesk["pcap.dns"]["sample"] == DNS.splitlines()[0]
@@ -228,11 +256,14 @@ def test_the_tool_s_own_logs_are_read_bounded_indexed_once_and_summarised(
     case: CaseDB, catalog: Path, image: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     index_host(image)
-    reads: list[tuple[str, str, int, int]] = []
+    reads: list[tuple[str, str, int, int, bool]] = []
 
-    def fake_read(path: str, inode: str, offset: int, limit: int) -> tuple[bytes, bool]:
-        reads.append((path, inode, offset, limit))
-        return TRACE.encode(), True
+    def fake_read(
+        path: str, inode: str, offset: int, limit: int, *, tail: bool = False
+    ) -> tuple[bytes, bool]:
+        reads.append((path, inode, offset, limit, tail))
+        # The file is larger than the limit: the cut fell inside the first line.
+        return b"n 9.9.9.9:1\n" + TRACE.encode(), True
 
     monkeypatch.setattr(remote_access, "read_image_file", fake_read)
     monkeypatch.setattr(remote_access, "_resolve_partition_offset", lambda _image: 2048)
@@ -240,12 +271,13 @@ def test_the_tool_s_own_logs_are_read_bounded_indexed_once_and_summarised(
     first = run()["results"]["tool_logs"]
     second = run()["results"]["tool_logs"]
 
-    # The deleted ad.trace is not read; the service trace is, with a byte limit.
-    assert reads == [(image, "2000", 2048, 8 * 1024 * 1024)] * 2
-    (log,) = first
+    # The service trace is read from its end with a byte limit; the deleted
+    # ad.trace is listed, because a deleted remote access log is a lead, and not read.
+    assert reads == [(image, "2000", 2048, 8 * 1024 * 1024, True)] * 2
+    log, deleted = first
     assert log["tool"] == "AnyDesk" and log["path"] == "ProgramData/AnyDesk/ad_svc.trace"
-    assert log["source"] == "rmm.anydesk.ad_svc.trace"
-    assert "oldest lines" in log["truncated"]
+    assert log["source"] == "rmm.anydesk.ad_svc.trace.2000"
+    assert "newest lines" in log["truncated"]
     assert log["external_addresses"] == [
         {
             "address": "45.33.32.156",
@@ -254,11 +286,66 @@ def test_the_tool_s_own_logs_are_read_bounded_indexed_once_and_summarised(
             "Logged in from 45.33.32.156:59562",
         }
     ]
+    assert deleted == {
+        "tool": "AnyDesk",
+        "path": "Users/bob/AppData/Roaming/AnyDesk/ad.trace",
+        "evidence": image,
+        "not_read": "deleted entry, not read",
+    }
     assert second == first
-    sources = [s for s in case.get_sources() if s.source_name == "rmm.anydesk.ad_svc.trace"]
-    assert len(sources) == 1 and sources[0].source_path == image
-    text = case.get_windows_by_source("rmm.anydesk.ad_svc.trace")[0].raw_text
-    assert text.startswith("=== ProgramData/AnyDesk/ad_svc.trace ===\n")
+    sources = [s for s in case.get_sources() if s.source_name.startswith("rmm.")]
+    assert [(s.source_name, s.source_path) for s in sources] == [
+        ("rmm.anydesk.ad_svc.trace.2000", image)
+    ]
+    text = case.get_windows_by_source("rmm.anydesk.ad_svc.trace.2000")[0].raw_text
+    # The half line the cut left behind is dropped.
+    assert text.startswith("=== ProgramData/AnyDesk/ad_svc.trace ===\ninfo 2026-03-01 10:00:11")
+
+
+def test_logs_that_share_a_name_are_each_indexed_under_their_own_source(
+    case: CaseDB, catalog: Path, image: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every user profile has its own ad.trace; one must not stand in for the others."""
+    users = {"3001": "alice", "3002": "bob"}
+    listing = "\n".join(
+        f"r/r {inode}-128-3:\tUsers/{user}/AppData/Roaming/AnyDesk/ad.trace"
+        for inode, user in users.items()
+    )
+    extract_and_index(listing, "tsk.filelist", image, "sleuthkit")
+
+    def fake_read(_path: str, inode: str, *_a: object, **_k: object) -> tuple[bytes, bool]:
+        return f"session of {users[inode]} from 45.33.32.{inode[-1]}:7070\n".encode(), False
+
+    monkeypatch.setattr(remote_access, "read_image_file", fake_read)
+    monkeypatch.setattr(remote_access, "_resolve_partition_offset", lambda _image: 0)
+
+    logs = run()["results"]["tool_logs"]
+
+    assert [log["source"] for log in logs] == [
+        "rmm.anydesk.ad.trace.3001",
+        "rmm.anydesk.ad.trace.3002",
+    ]
+    for log, user in zip(logs, users.values(), strict=True):
+        text = "".join(w.raw_text for w in case.get_windows_by_source(log["source"]))
+        assert f"session of {user}" in text
+        assert log["bytes_indexed"] == len(text.split("\n", 1)[1])
+
+
+def test_log_files_beyond_the_bound_are_counted_and_no_tool_crowds_out_another(
+    case: CaseDB, catalog: Path, image: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Thirty rotated RustDesk logs come first in the listing; the AnyDesk trace is still read."""
+    rotated = [f"r/r {4000 + i}-128-1:\tUsers/x/RustDesk/log/server_{i}.log" for i in range(30)]
+    trace = "r/r 5000-128-1:\tProgramData/AnyDesk/ad_svc.trace"
+    extract_and_index("\n".join([*rotated, trace]), "tsk.filelist", image, "sleuthkit")
+    monkeypatch.setattr(remote_access, "read_image_file", lambda *_a, **_k: (b"line\n", False))
+    monkeypatch.setattr(remote_access, "_resolve_partition_offset", lambda _image: 0)
+
+    results = run()["results"]
+
+    assert len(results["tool_logs"]) == 20
+    assert results["tool_logs_not_read"] == 11
+    assert [log["tool"] for log in results["tool_logs"][:2]] == ["RustDesk", "AnyDesk"]
 
 
 def test_a_log_that_cannot_be_read_is_listed_as_not_read(
@@ -266,14 +353,18 @@ def test_a_log_that_cannot_be_read_is_listed_as_not_read(
 ) -> None:
     extract_and_index(LISTING, "tsk.filelist", "/evidence/triage-folder", "sleuthkit")
     extract_and_index(LISTING, "tsk.filelist", image, "sleuthkit")
-    monkeypatch.setattr(remote_access, "read_image_file", lambda *_a: (b"\x00\x01binary", False))
+    monkeypatch.setattr(
+        remote_access, "read_image_file", lambda *_a, **_k: (b"\x00\x01binary", False)
+    )
     monkeypatch.setattr(remote_access, "_resolve_partition_offset", lambda _image: 0)
 
-    logs = run()["results"]["tool_logs"]
+    results = run()["results"]
 
+    logs = [log for log in results["tool_logs"] if "deleted" not in log["not_read"]]
     assert [log["evidence"] for log in logs] == ["/evidence/triage-folder", image]
     assert "not a disk image" in logs[0]["not_read"]
     assert "binary" in logs[1]["not_read"]
+    assert "tool_logs_not_read" not in results, "all four are listed"
     assert not [s for s in case.get_sources() if s.source_name.startswith("rmm.")]
 
 

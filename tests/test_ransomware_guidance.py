@@ -175,6 +175,11 @@ class _FakeIcat:
     def kill(self) -> None:
         self.killed = True
 
+    def wait(self) -> int:
+        return self.returncode
+
+    returncode = 0
+
 
 def test_a_file_of_any_size_on_the_image_costs_the_limit(monkeypatch: pytest.MonkeyPatch) -> None:
     icat = _FakeIcat(b"A" * 100_000)
@@ -194,6 +199,27 @@ def test_a_file_of_any_size_on_the_image_costs_the_limit(monkeypatch: pytest.Mon
         ["icat", "/evidence/a.E01", "5"],
     ]
     assert icat.killed
+
+
+def test_the_end_of_a_file_is_read_through_a_window_of_the_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A log's newest lines are at its end; reading them must not hold the whole file."""
+    content = b"old " * 1_000_000 + b"newest line\n"
+    icat = _FakeIcat(content)
+    monkeypatch.setattr(core, "require_binary", lambda _name: "/usr/bin/icat")
+    monkeypatch.setattr("mulder.server.tools.composite.core.subprocess.Popen", icat)
+    monkeypatch.setattr(core, "_ICAT_CHUNK", 4096)
+
+    cut = read_image_file("/evidence/a.E01", "5", 0, 10_000, tail=True)
+    whole = read_image_file("/evidence/a.E01", "5", 0, len(content), tail=True)
+    icat.returncode = -9  # killed by the timer: the end was never reached
+    unfinished = read_image_file("/evidence/a.E01", "5", 0, 10_000, tail=True)
+
+    assert cut == (content[-10_000:], True)
+    assert whole == (content, False)
+    assert unfinished is None
+    assert set(icat.asked) == {4096}, "read in chunks, never the file at once"
 
 
 @pytest.mark.parametrize("inode", ["", "12; rm -rf /", "-o", "12-128", "../3", "１２"])

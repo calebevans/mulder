@@ -13,6 +13,7 @@ import re
 import subprocess
 import threading
 import time
+from collections import deque
 from collections.abc import Iterator
 from datetime import datetime
 from typing import Any
@@ -424,17 +425,21 @@ def iter_source_text(source: SourceRow, page: int = 500) -> Iterator[str]:
 
 _INODE_RE = re.compile(r"[0-9]+(?:-[0-9]+-[0-9]+)?")  # ASCII digits only; \d takes any script
 _ICAT_TIMEOUT = 60
+_ICAT_CHUNK = 1024 * 1024
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 
 
 def read_image_file(
-    image_path: str, inode: str, offset: int, limit: int
+    image_path: str, inode: str, offset: int, limit: int, *, tail: bool = False
 ) -> tuple[bytes, bool] | None:
-    """The first *limit* bytes of a file inside a disk image, and whether more followed.
+    """The first *limit* bytes of a file inside a disk image, and whether it held more.
 
-    ``icat`` is killed once the limit is reached or after ``_ICAT_TIMEOUT``
-    seconds, so a file of any size on the image costs *limit* bytes of memory.
-    Returns None when nothing could be read.
+    With *tail*, the last *limit* bytes instead (a log's newest lines): the
+    whole file is streamed through a window of that size. ``icat`` is killed
+    once the limit is reached (head) or after ``_ICAT_TIMEOUT`` seconds, so a
+    file of any size on the image costs about *limit* bytes of memory.
+    Returns None when nothing could be read, or when the end of the file was
+    not reached in time.
     """
     if not _INODE_RE.fullmatch(inode) or not require_binary("icat"):
         return None
@@ -444,13 +449,22 @@ def read_image_file(
             timer = threading.Timer(_ICAT_TIMEOUT, proc.kill)
             timer.start()
             try:
-                data = proc.stdout.read(limit + 1) if proc.stdout else b""
+                if not tail:
+                    data = proc.stdout.read(limit + 1) if proc.stdout else b""
+                    return (data[:limit], len(data) > limit) if data else None
+                window: deque[bytes] = deque(maxlen=limit // _ICAT_CHUNK + 2)
+                total = 0
+                while proc.stdout and (chunk := proc.stdout.read(_ICAT_CHUNK)):
+                    window.append(chunk)
+                    total += len(chunk)
+                if proc.wait() != 0 or not total:
+                    return None
+                return b"".join(window)[-limit:], total > limit
             finally:
                 timer.cancel()
                 proc.kill()
     except OSError:
         return None
-    return (data[:limit], len(data) > limit) if data else None
 
 
 def decode_evidence_text(data: bytes) -> str | None:
