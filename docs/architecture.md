@@ -463,6 +463,7 @@ The `EvidenceClassifier` scans evidence directories and categorizes files by typ
 | Phone dump (iOS) | iOS directory structures | MVT, iLEAPP |
 | Linux logs | `/var/log/*`, journal files | Zircolite, native parsing |
 | Archive | `.zip`, `.7z`, `.tar`, `.gz` | Internal extraction |
+| Triage collection | A directory laid out as KAPE target output, a Velociraptor offline collection or UAC output, or a Windows volume directory | The disk artifact tools on the directory, `index_triage_collection` |
 
 `.raw` and `.001` are written by disk imagers and memory acquisition tools
 alike, so their first bytes decide: a partition table, filesystem, BitLocker
@@ -495,6 +496,20 @@ For single-partition tools that need a sector offset, `_parse_partition_offset` 
 ### Partition Offset Persistence
 
 Resolved partition offsets are stored in the database `kv_store` table under the key prefix `tsk_partition_offset:<image_path>`. This allows tools invoked later in the pipeline (e.g., `extract_file_by_inode`, `index_evtx_file`) to retrieve the correct offset without re-running `mmls`. The kv_store pattern is also used for EVTX extraction directory paths that must survive server restarts and context compaction.
+
+### Directories as Evidence Roots
+
+A tool that reads a file out of a disk image finds it in the `fls` listing and reads its inode with `icat`. A directory can answer both, so the same tools accept one where they accept an image (`src/mulder/dirroot.py`):
+
+- `dir_root(path)` returns the directory's files as `(original path, stored path)` pairs and renders them as `fls -r -p` rows. The inode of a row is its position; `$MFT`, when present, is row 0, which is the record `run_mft_parser` asks for.
+- `icat(image_path, offset, inode)` is the one place a file is read: the `icat` binary for an image, the stored file for a directory. Callers copy the bytes to a temporary directory exactly as they do for an image, so no parser is ever pointed at the evidence itself.
+- `_collect_fls_chunks` returns the directory's listing for a directory and leaves directory listings out when the target is an image, because their inode column holds row numbers.
+
+The pairs are what make this general. For a plain directory the two paths are the same. For a triage collection the layout decides: KAPE stores `$UsnJrnl:$J` as `$Extend/$J`, Velociraptor percent-encodes names and splits one drive across accessor directories, UAC keeps the files under `[root]`. `detect_collection` recognises the layout, the host name the collection states, and its volumes; files of a second volume are listed under its label. Rows are ordered as `fls` orders them (by directory, names compared without case) with the system volume first, because several tools read the first file that matches: `Windows/...` must come before `Windows.old/...` and before a shadow copy.
+
+Evidence is hostile, so the walk never follows a symlink (a root that is one is refused), lists only regular files, is capped at 200,000 entries (breadth-first across the volumes, so a cut listing keeps the top of each), and prints control characters in names as `^` so that a file name cannot forge a listing row. A decoded name is a label only: the file that is opened is the one the walk found, with `O_NOFOLLOW`.
+
+A triage collection has no unallocated space and no deleted files. `mount_disk_image` refuses a directory, `run_mactime` works only on the body file a UAC collection carries, and `triage.summary` records which artifact kinds were and were not collected so that absence is reported as "not collected".
 
 ### Registry Hive Parsing
 
