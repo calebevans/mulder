@@ -20,7 +20,7 @@ import tarfile
 import zipfile
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from mulder.assets.fetch import FetchError, FetchResult
@@ -503,7 +503,7 @@ def _provision_one(
         arch=plan.arch if asset.arch_only or len(asset.urls) > 1 else ANY_ARCH,
         dest=str(dest),
         bytes=fetched.size,
-        fetched_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        fetched_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         status="installed",
         shims=list(asset.shims),
     )
@@ -927,7 +927,7 @@ def _provision_eztools(
         arch=ANY_ARCH,
         dest=str(dest),
         bytes=total,
-        fetched_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        fetched_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         status="installed",
     )
     detail = f"fetched {', '.join(wanted)}"

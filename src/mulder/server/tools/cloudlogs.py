@@ -13,7 +13,7 @@ import re
 import subprocess
 import tempfile
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -94,7 +94,7 @@ def _iso(value: object) -> str:
         return value
     seconds = value / 1000 if value > 1e11 else value  # GitHub logs epoch milliseconds
     try:
-        return datetime.fromtimestamp(seconds, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return datetime.fromtimestamp(seconds, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     except (OverflowError, OSError, ValueError):
         return ""
 

@@ -7,7 +7,7 @@ import logging
 import re
 import subprocess
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -46,8 +46,8 @@ _CAPA_BINARY = "/usr/local/bin/capa"
 _FLOSS_BINARY = "/usr/local/bin/floss"
 _DIEC_BINARY = "/usr/local/bin/diec"
 
-_EPOCH_START = datetime(1990, 1, 1, tzinfo=timezone.utc)
-_FUTURE_THRESHOLD = datetime(2030, 1, 1, tzinfo=timezone.utc)
+_EPOCH_START = datetime(1990, 1, 1, tzinfo=UTC)
+_FUTURE_THRESHOLD = datetime(2030, 1, 1, tzinfo=UTC)
 
 SUSPICIOUS_API_CATEGORIES: dict[str, list[str]] = {
     "process_injection": [
@@ -429,12 +429,12 @@ def _parse_rabin2_timestamp(raw_ts: str) -> datetime | None:
 
     if text.lstrip("-").isdigit():
         try:
-            return datetime.fromtimestamp(int(text), tz=timezone.utc)
+            return datetime.fromtimestamp(int(text), tz=UTC)
         except (ValueError, OSError, OverflowError):
             return None
 
     try:
-        return datetime.strptime(text, _RABIN2_CTIME_FORMAT).replace(tzinfo=timezone.utc)
+        return datetime.strptime(text, _RABIN2_CTIME_FORMAT).replace(tzinfo=UTC)
     except ValueError:
         return None
 

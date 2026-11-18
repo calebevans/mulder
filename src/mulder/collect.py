@@ -24,7 +24,7 @@ import re
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -107,13 +107,13 @@ def window(start: str | None, end: str | None, days: int) -> tuple[datetime, dat
             moment = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
         except ValueError as exc:
             raise CollectError(f"Not an ISO 8601 date or time: {value!r}") from exc
-        return moment.replace(tzinfo=timezone.utc) if moment.tzinfo is None else moment
+        return moment.replace(tzinfo=UTC) if moment.tzinfo is None else moment
 
-    until = parse(end) if end else datetime.now(timezone.utc)
+    until = parse(end) if end else datetime.now(UTC)
     since = parse(start) if start else until - timedelta(days=days)
     if since >= until:
         raise CollectError(f"The window is empty: {since.isoformat()} to {until.isoformat()}")
-    return since.astimezone(timezone.utc), until.astimezone(timezone.utc)
+    return since.astimezone(UTC), until.astimezone(UTC)
 
 
 def _iso(moment: datetime) -> str:
@@ -333,7 +333,7 @@ def collect(
     dest_dir.mkdir(parents=True, exist_ok=True)
     out = dest_dir / f"{name}-{stamp}.jsonl"
     result = Collection(provider, scope, _iso(since), _iso(until), str(out))
-    result.collected_at = _iso(datetime.now(timezone.utc))
+    result.collected_at = _iso(datetime.now(UTC))
     digest = hashlib.sha256()
     owned = client is None
     client = client or httpx.Client()

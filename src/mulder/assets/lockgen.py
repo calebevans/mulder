@@ -14,7 +14,7 @@ import argparse
 import json
 import sys
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from mulder.assets.fetch import HttpFetcher
@@ -27,7 +27,7 @@ def generate(keys: set[str] | None = None) -> dict[str, dict[str, object]]:
     """Download every pinnable asset for every architecture and hash it."""
     fetcher = HttpFetcher(timeout=300.0)
     entries: dict[str, dict[str, object]] = {}
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     for asset in ASSETS:
         if not asset.pinnable or (keys and asset.key not in keys):

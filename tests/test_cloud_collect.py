@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -26,8 +26,8 @@ from mulder.server import app
 from mulder.server.tools.collect import collect_cloud_audit_logs
 
 _TOKEN = "ghp_not-a-real-token"
-_SINCE = datetime(2026, 11, 1, tzinfo=timezone.utc)
-_UNTIL = datetime(2026, 11, 10, tzinfo=timezone.utc)
+_SINCE = datetime(2026, 11, 1, tzinfo=UTC)
+_UNTIL = datetime(2026, 11, 10, tzinfo=UTC)
 _EVENTS = [
     {"@timestamp": 1731800000000, "action": "org.create_actions_secret", "actor": "mallory"},
     {"@timestamp": 1731800060000, "action": "repo.remove_self_hosted_runner", "actor": "mallory"},

@@ -9,7 +9,7 @@ import re
 import subprocess
 import tempfile
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from email.errors import HeaderParseError
 from email.header import decode_header, make_header
 from email.utils import getaddresses, parsedate_to_datetime
@@ -316,7 +316,7 @@ def _message_date(raw: str | None) -> datetime | None:
     if parsed is None:
         return None
     if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
+        return parsed.replace(tzinfo=UTC)
     return parsed
 
 

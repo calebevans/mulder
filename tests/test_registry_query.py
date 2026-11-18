@@ -6,7 +6,7 @@ key/value enumeration, and error handling paths.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -22,8 +22,8 @@ class TestTryDecodeFiletime:
 
     def test_valid_filetime_returns_iso_timestamp(self) -> None:
         """Known FILETIME for 2023-06-15T12:00:00Z decodes correctly."""
-        dt = datetime(2023, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
-        epoch = datetime(1601, 1, 1, tzinfo=timezone.utc)
+        dt = datetime(2023, 6, 15, 12, 0, 0, tzinfo=UTC)
+        epoch = datetime(1601, 1, 1, tzinfo=UTC)
         ticks = int((dt - epoch).total_seconds() * 10_000_000)
         raw = ticks.to_bytes(8, "little")
         result = _try_decode_filetime(raw)
@@ -37,8 +37,8 @@ class TestTryDecodeFiletime:
 
     def test_out_of_range_value_returns_none(self) -> None:
         """Timestamps before 1980 should be rejected."""
-        dt = datetime(1970, 1, 1, tzinfo=timezone.utc)
-        epoch = datetime(1601, 1, 1, tzinfo=timezone.utc)
+        dt = datetime(1970, 1, 1, tzinfo=UTC)
+        epoch = datetime(1601, 1, 1, tzinfo=UTC)
         ticks = int((dt - epoch).total_seconds() * 10_000_000)
         raw = ticks.to_bytes(8, "little")
         assert _try_decode_filetime(raw) is None
@@ -104,8 +104,8 @@ class TestDecodeRegistryValue:
         """8-byte REG_BINARY matching FILETIME range includes decoded field."""
         from Registry import Registry
 
-        dt = datetime(2023, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
-        epoch = datetime(1601, 1, 1, tzinfo=timezone.utc)
+        dt = datetime(2023, 6, 15, 12, 0, 0, tzinfo=UTC)
+        epoch = datetime(1601, 1, 1, tzinfo=UTC)
         ticks = int((dt - epoch).total_seconds() * 10_000_000)
         raw = ticks.to_bytes(8, "little")
 
@@ -240,6 +240,36 @@ class TestQueryRegistryValueTool:
         )
         assert result["status"] == "error"
         assert result["error_type"] == "hive_not_found"
+
+    @patch("mulder.server.tools.extract.registry_query._cleanup_tsk_extract_dir")
+    @patch("mulder.server.tools.extract.registry_query.extract_and_index")
+    @patch("mulder.server.tools.extract.registry_query._extract_hive")
+    @patch("mulder.server.tools.extract.registry_query.get_ctx")
+    def test_unreadable_hive_returns_error(
+        self,
+        mock_ctx: MagicMock,
+        mock_extract: MagicMock,
+        mock_index: MagicMock,
+        mock_cleanup: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """A file that is not a registry hive is an error result, not a crash."""
+        fn = self._get_sync_fn()
+        mock_ctx.return_value = MagicMock(case_id="test-case")
+        junk = tmp_path / "SYSTEM"
+        junk.write_bytes(b"not a hive" * 512)
+        mock_extract.return_value = (junk, str(tmp_path))
+
+        result = fn(
+            case_id="test-case",
+            image_path="/images/disk.dd",
+            hive="system",
+            key_path="ControlSet001\\Control\\Windows",
+            value_name=None,
+            username=None,
+        )
+        assert result["status"] == "error"
+        assert result["error_type"] == "hive_unreadable"
 
     @patch("mulder.server.tools.extract.registry_query._cleanup_tsk_extract_dir")
     @patch("mulder.server.tools.extract.registry_query.extract_and_index")
@@ -379,7 +409,7 @@ class TestQueryRegistryValueTool:
         mock_key = MagicMock()
         mock_key.values.return_value = [mock_val1, mock_val2, mock_val3]
         mock_key.subkeys.return_value = [mock_subkey]
-        mock_key.timestamp.return_value = datetime(2023, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+        mock_key.timestamp.return_value = datetime(2023, 6, 15, 12, 0, 0, tzinfo=UTC)
 
         mock_reg = MagicMock()
         mock_reg.open.return_value = mock_key
@@ -434,7 +464,7 @@ class TestQueryRegistryValueTool:
         mock_key = MagicMock()
         mock_key.values.return_value = [mock_val]
         mock_key.subkeys.return_value = []
-        mock_key.timestamp.return_value = datetime(2023, 1, 1, tzinfo=timezone.utc)
+        mock_key.timestamp.return_value = datetime(2023, 1, 1, tzinfo=UTC)
         mock_key.value.return_value = mock_val
 
         mock_reg = MagicMock()
@@ -491,7 +521,7 @@ class TestQueryRegistryValueTool:
         mock_key = MagicMock()
         mock_key.values.return_value = [mock_val]
         mock_key.subkeys.return_value = []
-        mock_key.timestamp.return_value = datetime(2023, 1, 1, tzinfo=timezone.utc)
+        mock_key.timestamp.return_value = datetime(2023, 1, 1, tzinfo=UTC)
 
         mock_reg = MagicMock()
         mock_reg.open.return_value = mock_key

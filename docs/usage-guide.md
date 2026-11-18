@@ -84,7 +84,7 @@ pipx install "mulder-dfir[forensics]"
 mulder setup                     # everything mulder owns - no sudo
 ```
 
-- **Python 3.10 or newer**, plus [`pipx`](https://pipx.pypa.io/) (or `uv`).
+- **Python 3.11 or newer**, plus [`pipx`](https://pipx.pypa.io/) (or `uv`).
 - **`git`.** `mulder setup` clones six of its assets, and the YARA signature-base needs a real
   `.git` so mulder can keep the rules current.
 - **An Anthropic credential** - `ANTHROPIC_API_KEY`, `claude /login`, or the Bedrock / Vertex

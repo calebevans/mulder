@@ -11,6 +11,7 @@ import csv
 import io
 import json
 import logging
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 
@@ -190,9 +191,9 @@ def _build_stix_bundle_manual(
         STIX bundle as dict.
     """
     import uuid
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     identity_id = f"identity--{uuid.uuid4()}"
 
     identity: dict[str, Any] = {

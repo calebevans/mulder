@@ -21,7 +21,7 @@ import time
 import uuid
 import zipfile
 from collections.abc import Iterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from mulder.extractors.classifier import ClassifiedEvidence
@@ -871,7 +871,7 @@ def _mark_extraction_complete(dest: Path, archive: Path, file_count: int) -> Non
                 {
                     "archive": str(archive),
                     "file_count": file_count,
-                    "completed_utc": datetime.now(timezone.utc).isoformat(),
+                    "completed_utc": datetime.now(UTC).isoformat(),
                 },
                 indent=2,
             )
