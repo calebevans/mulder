@@ -15,6 +15,7 @@ import json
 import re
 import time
 from collections import Counter
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -200,12 +201,13 @@ _MAX_LOG_FILES = 20
 _LOG_READ_BYTES = 8 * 1024 * 1024
 _MAX_ADDRESSES = 8
 
-# A name ending in .exe; x.exe.mui and x.exe.config are other files.
-_EXE_RE = re.compile(r"[^\\/:*?\"<>|\t,;=]{1,64}\.exe(?![.\w])", re.IGNORECASE)
+# Characters that cannot be part of a file name, or that separate fields.
+_NAME_BREAK_RE = re.compile(r"[\\/:*?\"<>|\t,;=]")
+_MAX_NAME_CHARS = 64
 # What follows the name in a Prefetch file's own name (ANYDESK.EXE-1A2B3C4D.pf).
 # A Prefetch record also lists every file the program loaded; those are skipped.
 _PF_SUFFIX_RE = re.compile(r"-[0-9a-f]{8}\.pf")
-_HOST_RE = re.compile(r"(?:[a-z0-9_][a-z0-9_-]{0,62}\.)+[a-z]{2,24}")
+_HOST_RE = re.compile(r"[a-z0-9_-]+(?:\.[a-z0-9_-]+)+")
 _CATALOG_HOST_RE = re.compile(r"[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,24}")
 _WILDCARD_RE = re.compile(r"[*?<>\[\]%]")
 _CLEAN_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
@@ -232,6 +234,9 @@ class _Catalog:
     tools: int
     exes: dict[str, tuple[str, ...]]  # executable name -> tool names
     domains: dict[str, tuple[str, ...]]  # domain -> tool names
+
+    def __post_init__(self) -> None:
+        self.domain_labels = max((d.count(".") + 1 for d in self.domains), default=0)
 
 
 @dataclass
@@ -322,6 +327,25 @@ def _sample(line: str, start: int, end: int) -> str:
     return _clean(line[:80]) + " ... " + _clean(line[max(0, start - 60) : end + 40])
 
 
+def _exe_names(low: str) -> Iterator[tuple[str, int, int]]:
+    """Each ``<name>.exe`` in a lower-cased line, with its span.
+
+    ``x.exe.mui`` and ``x.exe.config`` are other files, so the name must end
+    at ``.exe``. Found by position rather than by one regular expression: a
+    line is evidence, and its cost has to stay linear in its length.
+    """
+    end = 0
+    while (dot := low.find(".exe", end)) != -1:
+        end = dot + 4
+        following = low[end : end + 1]
+        if following == "." or following == "_" or following.isalnum():
+            continue
+        start = max(0, dot - _MAX_NAME_CHARS)
+        stem = _NAME_BREAK_RE.split(low[start:dot])[-1]
+        if stem.strip():
+            yield stem.strip() + ".exe", dot - len(stem), end
+
+
 def _scan_source(
     source: SourceRow,
     prefix: str,
@@ -348,10 +372,11 @@ def _scan_source(
             if network:
                 for match in _HOST_RE.finditer(low):
                     labels = match.group().split(".")
-                    for i in range(len(labels) - 1):
-                        names = catalog.domains.get(".".join(labels[i:]))
-                        if names:
-                            _record(names, ".".join(labels[i:]), line, match.start(), match.end())
+                    # The longest catalog domain the host is, or is under.
+                    for n in range(min(len(labels), catalog.domain_labels), 1, -1):
+                        domain = ".".join(labels[-n:])
+                        if domain in catalog.domains:
+                            _record(catalog.domains[domain], domain, line, *match.span())
                             break
                 continue
             if listing and len(logs) < _MAX_LOG_FILES:
@@ -364,14 +389,14 @@ def _scan_source(
                             logs.append((source, display, entry.base_inode, entry.path))
             if ".exe" not in low:
                 continue
-            for match in _EXE_RE.finditer(low):
-                if prefetch and not _PF_SUFFIX_RE.match(low, match.end()):
+            for whole, start, end in _exe_names(low):
+                if prefetch and not _PF_SUFFIX_RE.match(low, end):
                     continue
-                whole = match.group().strip()
+                # A catalog name can hold spaces; in free text only the last word is the name.
                 for exe in {whole, whole.rsplit(" ", 1)[-1]}:
                     names = catalog.exes.get(exe)
                     if names and (prefetch or exe not in _SHIPS_WITH_WINDOWS):
-                        _record(names, exe, line, match.start(), match.end())
+                        _record(names, exe, line, start, end)
 
 
 def _index_logs(logs: list[tuple[SourceRow, str, str, str]]) -> list[dict[str, object]]:

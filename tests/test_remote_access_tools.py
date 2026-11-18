@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -303,6 +304,36 @@ def test_nothing_indexed_is_not_a_negative_finding(case: CaseDB, catalog: Path) 
     assert result["results"]["tools"] == []
     assert "not a negative finding" in result["results"]["not_examined"]
     assert {m["source"] for m in result["missing_sources"]} >= {"tsk.filelist", "ez.prefetch"}
+
+
+def test_a_long_hostile_line_costs_time_in_proportion_to_its_length(
+    case: CaseDB, catalog: Path, image: str
+) -> None:
+    """Evidence chooses the line; matching it must not be quadratic in its length."""
+    dotted = "a." * 1900 + "x.net.anydesk.com."
+    dotless = "x" * 3900 + ".exe.exe.exe.exe; ran anydesk.exe"
+    extract_and_index("\n".join([dotted] * 300), "pcap.dns", "/evidence/c.pcap", "tshark")
+    extract_and_index("\n".join([dotless] * 300), "ez.shimcache", image, "eztools")
+    lookups = 0
+
+    class Counting(dict[str, tuple[str, ...]]):
+        def __contains__(self, key: object) -> bool:
+            nonlocal lookups
+            lookups += 1
+            return super().__contains__(key)
+
+    loaded = remote_access._catalog()
+    assert loaded is not None
+    loaded.domains = Counting(loaded.domains)
+
+    started = time.monotonic()
+    found = by_tool(run())["AnyDesk"]
+
+    assert time.monotonic() - started < 5, "about 0.1 s when linear"
+    # A host of 1,900 labels is looked up once per label a catalog domain can have.
+    assert lookups <= 300 * loaded.domain_labels
+    assert found["pcap.dns"]["lines"] == found["ez.shimcache"]["lines"] == 300
+    assert found["ez.shimcache"]["sample"].endswith("ran anydesk.exe")
 
 
 def test_hostile_lines_are_cleaned_and_the_result_stays_bounded(
