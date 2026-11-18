@@ -13,9 +13,12 @@ value, limit and JSON path is a bound parameter.
 from __future__ import annotations
 
 import json
+import os
 import re
+import threading
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text
@@ -50,7 +53,7 @@ HISTOGRAM_ORDERS = ("time", "count")
 
 _ROW_KEYS = frozenset({*COLUMNS, "event_time", "bytes", "line", "extra"})
 # Names a result row uses for something else; an ``extra`` key may not take them.
-_RESERVED = _ROW_KEYS | {"time", "source", "count", "first_seen", "last_seen"}
+_RESERVED = _ROW_KEYS | {"time", "source", "source_path", "count", "first_seen", "last_seen"}
 _COLUMN_SQL = {name: name for name in (*COLUMNS, "bytes")}
 _TABLE_RE = re.compile(r"[a-z][a-z0-9_.-]{0,63}")
 _KEY_RE = re.compile(r"[a-z][a-z0-9_]{0,31}")
@@ -60,8 +63,12 @@ _SCAN_CHARS = 4 * MAX_VALUE_CHARS
 _MAX_FILTERS = 10
 _MAX_IN_VALUES = 50
 _SPLIT_VALUES = 5
-_MIN_TIME = datetime(1970, 1, 1, tzinfo=UTC)
+_MIN_TIME = datetime(1990, 1, 1, tzinfo=UTC)
 _MAX_TIME = datetime(2100, 1, 1, tzinfo=UTC)
+# ponytail: one ingest at a time, so an ingest cannot replace one that is still loading
+# (two overlapping paths planned in one batch). The write queue serialises the inserts
+# anyway; a lock per table if ingests of different tables ever need to interleave.
+_INGEST_LOCK = threading.Lock()
 
 _INSERT = text(
     "INSERT INTO log_events (log_table, source_id, line, event_time, actor, src_ip, action,"
@@ -72,14 +79,15 @@ _INSERT = text(
 _UPDATE = text(
     "UPDATE log_tables SET complete = :complete, row_count = :rows, rows_no_time = :no_time,"
     " rows_unparsed = :unparsed, first_time = :first, last_time = :last,"
-    " field_counts = :fields WHERE source_id = :sid"
+    " field_counts = :fields WHERE source_id = :sid AND log_table = :t"
 )
-# The earlier ingests of one table from a source of the same name and evidence path: a
-# forced re-run of the extractor replaces them, so its events are not counted twice.
-_SAME_SOURCE = (
-    " WHERE log_table = :t AND source_id IN (SELECT old.source_id FROM sources old"
+# The ingests of one table from a source of the same name as this one, itself included,
+# with their evidence paths: the ones this ingest may replace or be covered by.
+_EARLIER = text(
+    "SELECT t.source_id, t.complete, old.source_path AS path, new.source_path AS mine"
+    " FROM log_tables t JOIN sources old ON old.source_id = t.source_id"
     " JOIN sources new ON new.source_id = :sid AND old.source_name = new.source_name"
-    " AND old.source_path = new.source_path)"
+    " WHERE t.log_table = :t"
 )
 
 
@@ -96,8 +104,9 @@ def normalise_time(value: object) -> str | None:
     """Return *value* as ``YYYY-MM-DDTHH:MM:SSZ``, or None when it is not a usable time.
 
     Reads ISO 8601 text (an offset is converted to UTC; none is taken as UTC), epoch
-    seconds or milliseconds, and datetimes. A time outside 1970..2100 is refused: one
-    forged far-future event would otherwise become every "last seen".
+    seconds or milliseconds, and datetimes. A time outside 1990..2100 is refused: one
+    forged far-future event would otherwise become every "last seen", and a zeroed time
+    or a compact date read as an epoch ("20240501" is a day in 1970) every "first seen".
     """
     if isinstance(value, str):
         value = value.strip()
@@ -138,6 +147,11 @@ def _text(value: object) -> str | None:
     if len(line) > MAX_VALUE_CHARS:
         line = line[: MAX_VALUE_CHARS - 1] + "…"
     return line or None
+
+
+def _inside(path: str, root: str) -> bool:
+    """Whether evidence path *path* is *root* or lies under it, however each is spelled."""
+    return Path(os.path.realpath(path)).is_relative_to(os.path.realpath(root))
 
 
 def _int(value: object) -> int | None:
@@ -195,16 +209,20 @@ def ingest(
     table: str,
     source_id: int,
     rows: Iterable[Mapping[str, object] | None],
-) -> dict[str, int]:
+    *,
+    nested: bool = False,
+) -> dict[str, Any]:
     """Load *rows* into log table *table* and return how many were stored and how many not.
 
     Call it after indexing the same events as text, with the ``source_id`` that
-    ``extract_and_index`` returned. Each row is a mapping with any of ``event_time``,
-    ``actor``, ``src_ip``, ``action``, ``target``, ``status``, ``user_agent``,
-    ``session_id``, ``bytes``, ``line`` (the event's 1-based line in the indexed text)
-    and ``extra`` (a mapping of further fields worth counting on, keyed by constants
-    matching ``[a-z][a-z0-9_]*``). Yield ``None`` for a record that could not be parsed:
-    it is counted, and every query result reports the count.
+    ``extract_and_index`` returned: once per source and table, with every row in the one
+    iterable (a second call replaces the first). Each row is a mapping with any of
+    ``event_time``, ``actor``, ``src_ip``, ``action``, ``target``, ``status``,
+    ``user_agent``, ``session_id``, ``bytes``, ``line`` (the event's 1-based line in the
+    indexed text) and ``extra`` (a mapping of further fields worth counting on, keyed by
+    constants matching ``[a-z][a-z0-9_]*``). Yield ``None`` for a record that could not
+    be parsed, or for a damaged stretch of the input: it is counted, and every query
+    result reports the count.
 
     *rows* may be a generator; it is consumed in batches, so memory stays flat, and a
     run that dies part-way leaves the table marked incomplete with what it stored. Values
@@ -213,8 +231,15 @@ def ingest(
     ingest of *table* from a source of the same name and evidence path (a forced
     re-run) is replaced.
 
+    Pass ``nested=True`` when the extractor reads a directory recursively, so that one
+    evidence path can contain another and then holds the same events. An earlier ingest
+    from a path inside this source's (or the same path spelled differently) is replaced
+    as well; and when a completed earlier ingest's path contains this source's, nothing
+    is loaded, *rows* is not read and the result names that path as ``covered_by``.
+
     Returns:
-        ``{"rows", "rows_no_time", "rows_unparsed"}``.
+        ``{"rows", "rows_no_time", "rows_unparsed"}``, and ``covered_by`` when nothing
+        was loaded because the events are already in the table.
 
     Raises:
         ValueError: A malformed table name, row key or ``extra`` key. These are
@@ -224,9 +249,19 @@ def ingest(
         raise ValueError(f"log table name {table!r} must match [a-z][a-z0-9_.-]*")
     scope = {"t": table, "sid": source_id}
 
-    def _start(conn: Connection) -> None:
-        conn.execute(text("DELETE FROM log_events" + _SAME_SOURCE), scope)
-        conn.execute(text("DELETE FROM log_tables" + _SAME_SOURCE), scope)
+    def _start(conn: Connection) -> str | None:
+        replaced = []
+        for old in conn.execute(_EARLIER, scope).fetchall():
+            if old.path == old.mine or (nested and _inside(old.path, old.mine)):
+                replaced.append(old.source_id)
+            elif nested and old.complete and _inside(old.mine, old.path):
+                return str(old.path)
+        for old_id in replaced:
+            gone = {"t": table, "old": old_id}
+            for name in ("log_events", "log_tables"):
+                conn.execute(
+                    text(f"DELETE FROM {name} WHERE log_table = :t AND source_id = :old"), gone
+                )
         conn.execute(
             text(
                 "INSERT INTO log_tables (source_id, log_table, complete, row_count,"
@@ -234,8 +269,20 @@ def ingest(
             ),
             scope,
         )
+        return None
 
-    db.write(_start)
+    with _INGEST_LOCK:
+        covered_by = db.write(_start)
+        if covered_by is not None:
+            return {"rows": 0, "rows_no_time": 0, "rows_unparsed": 0, "covered_by": covered_by}
+        return _load(db, table, source_id, rows)
+
+
+def _load(
+    db: CaseDB, table: str, source_id: int, rows: Iterable[Mapping[str, object] | None]
+) -> dict[str, Any]:
+    """Store *rows* for the ingest that :func:`ingest` has just registered."""
+    scope = {"t": table, "sid": source_id}
     counts: dict[str, int] = {}
     stored = no_time = unparsed = 0
     first = last = None
@@ -256,7 +303,7 @@ def ingest(
                 "first": first,
                 "last": last,
                 "fields": json.dumps(counts, sort_keys=True),
-                "sid": source_id,
+                **scope,
             },
         )
 
@@ -488,8 +535,10 @@ def top(
         "last_seen": f"{k + 3} DESC",
         "bytes": f"{k + 4} DESC",
     }[order]
+    # TOTAL sums as a float: SUM raises "integer overflow" once forged byte counts pass
+    # 2**63. A sum above 2**53 bytes (8 PiB) is therefore approximate.
     found = query.run(
-        f"SELECT {', '.join(keys)}, COUNT(*), MIN(event_time), MAX(event_time), SUM(bytes),"
+        f"SELECT {', '.join(keys)}, COUNT(*), MIN(event_time), MAX(event_time), TOTAL(bytes),"
         f" COUNT(*) OVER (), SUM(COUNT(*)) OVER () FROM log_events WHERE {query.where}"
         f" GROUP BY {ordinals} ORDER BY {by}, {ordinals} LIMIT :n",
         n=n,
@@ -500,7 +549,7 @@ def top(
         entry = dict(zip(fields, row[:k], strict=True))
         entry.update(count=row[k], first_seen=row[k + 1], last_seen=row[k + 2])
         if has_bytes:
-            entry["bytes"] = row[k + 3] or 0
+            entry["bytes"] = int(row[k + 3])
         out.append(entry)
     groups = found[0][k + 4] if found else 0
     return {
@@ -601,7 +650,8 @@ def rows(
     """One page of the matching events in time order; events without a time come last.
 
     Each row carries its non-empty fields, plus ``source`` and ``line``: where the whole
-    event is in the indexed text.
+    event is in the indexed text. When the table was loaded from more than one evidence
+    path those sources share a name, so each row also carries its ``source_path``.
     """
     query = _Query(db, table, filters, t_start, t_end)
     matched = query.run(f"SELECT COUNT(*) FROM log_events WHERE {query.where}")[0][0]
@@ -614,13 +664,19 @@ def rows(
         n=limit,
         skip=offset,
     )
-    names = {s.source_id: s.source_name for s in db.get_sources()}
+    sources = {s.source_id: s for s in db.get_sources()}
+    several = len(query.state["ingests"]) > 1
     out: list[dict[str, Any]] = []
     for row in found:
         entry: dict[str, Any] = {"time": row.event_time}
         entry.update({name: getattr(row, name) for name in _COLUMN_SQL})
         entry.update(json.loads(row.extra) if row.extra else {})
-        entry.update(source=names.get(row.source_id), line=row.line)
+        source = sources.get(row.source_id)
+        entry.update(
+            source=getattr(source, "source_name", None),
+            source_path=getattr(source, "source_path", None) if several else None,
+            line=row.line,
+        )
         out.append({key: value for key, value in entry.items() if value is not None})
     return {
         **query.base,

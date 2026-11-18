@@ -14,6 +14,7 @@ import subprocess
 import tempfile
 import time
 from datetime import UTC, datetime
+from itertools import chain, repeat
 from operator import itemgetter
 from pathlib import Path
 from typing import Any, Literal
@@ -204,17 +205,20 @@ def _log_row(log_type: str, event: dict[str, Any], line: int) -> dict[str, objec
     return row
 
 
-def _events_in(value: object) -> list[dict[str, Any]]:
-    """The events in one decoded JSON value: a dict, a list of them, or CloudTrail Records."""
+def _events_in(value: object) -> list[dict[str, Any] | None]:
+    """The events in one decoded JSON value: a dict, a list of them, or CloudTrail Records.
+
+    None stands for a record that is not an object, so that it can be counted.
+    """
     if isinstance(value, list):
         return [event for item in value for event in _events_in(item)]
     if isinstance(value, dict):
         records = value.get("Records")
         return _events_in(records) if isinstance(records, list) else [value]
-    return []
+    return [None]
 
 
-def _read_events(path: Path) -> tuple[list[dict[str, Any]], bool]:
+def _read_events(path: Path) -> tuple[list[dict[str, Any]], int]:
     """Read every event in an export, whatever its framing.
 
     Decodes one JSON value after another, which covers a single array, JSON
@@ -223,8 +227,10 @@ def _read_events(path: Path) -> tuple[list[dict[str, Any]], bool]:
     read element by element, so a truncated export keeps every complete event.
 
     Returns:
-        (events, damaged). *damaged* is True when part of the file was not
-        valid JSON and was skipped.
+        (events, skipped). *skipped* counts what was not read: each stretch that
+        was not valid JSON, an array that truncation left open, and each record
+        that is not an object. It is zero for a whole file, and a lower bound on
+        the events lost otherwise.
     """
     raw = path.read_bytes()
     # PowerShell's ">" writes UTF-16; several exporters prepend a UTF-8 BOM.
@@ -232,7 +238,7 @@ def _read_events(path: Path) -> tuple[list[dict[str, Any]], bool]:
     text = raw.decode("utf-16" if utf16 else "utf-8-sig", errors="replace")
     decoder = json.JSONDecoder()
     events: list[dict[str, Any]] = []
-    damaged = False
+    skipped = 0
     pos, end = 0, len(text)
 
     def resync(at: int) -> int:
@@ -246,7 +252,7 @@ def _read_events(path: Path) -> tuple[list[dict[str, Any]], bool]:
         while pos < end and (text[pos].isspace() or (in_array and text[pos] == ",")):
             pos += 1
         if pos >= end:
-            return events, damaged or in_array
+            return events, skipped + in_array
         if in_array and text[pos] == "]":
             in_array = False
             pos += 1
@@ -260,10 +266,12 @@ def _read_events(path: Path) -> tuple[list[dict[str, Any]], bool]:
             # RecursionError: nesting deeper than the decoder allows.
             value, pos = decoder.raw_decode(text, pos)
         except (ValueError, RecursionError):
-            damaged, in_array = True, False
+            skipped, in_array = skipped + 1, False
             pos = resync(pos)
             continue
-        events.extend(_events_in(value))
+        found = _events_in(value)
+        events.extend(event for event in found if event is not None)
+        skipped += found.count(None)
 
 
 def _flatten(event: dict[str, Any]) -> dict[str, object]:
@@ -389,7 +397,8 @@ def run_cloud_audit_logs(
     cloudlog.generic and scanned only when ruleset_path is given. Files that
     were damaged, truncated or held no events are named in files_with_problems.
     GitHub, GCP and AWS events are also loaded as rows into a log table of the
-    source's name, which log_top, log_histogram and log_rows count over.
+    source's name, which log_top, log_histogram and log_rows count over. A path
+    inside one that was already loaded adds no rows (log_table_note says so).
 
     Args:
         evidence_path: A JSON log file, or a directory searched recursively for
@@ -446,18 +455,27 @@ def run_cloud_audit_logs(
     # ponytail: every event is held in memory; stream per file if exports outgrow RAM.
     by_type: dict[str, list[dict[str, Any]]] = {}
     problems: dict[str, str] = {}
+    # What was not read, per log type of the file it was in ("" when the file shows
+    # none): the log tables report it, so a count over a damaged export says so.
+    lost: dict[str, int] = {}
     for file in files:
         try:
-            events, damaged = _read_events(file)
+            events, unread = _read_events(file)
         except (OSError, MemoryError) as exc:
             problems[str(file)] = f"unreadable: {exc}"
-            continue
-        if damaged:
-            problems[str(file)] = f"damaged or truncated JSON; {len(events)} events recovered"
-        elif not events:
-            problems[str(file)] = "no events"
+            events, unread = [], 1
+        else:
+            if unread:
+                problems[str(file)] = f"damaged or truncated JSON; {len(events)} events recovered"
+            elif not events:
+                problems[str(file)] = "no events"
+        kinds = set()
         for event in events:
-            by_type.setdefault(_log_type(event), []).append(event)
+            kind = _log_type(event)
+            kinds.add(kind)
+            by_type.setdefault(kind, []).append(event)
+        for kind in kinds or {""}:
+            lost[kind] = lost.get(kind, 0) + unread
 
     if not by_type:
         return error_response(
@@ -484,14 +502,26 @@ def run_cloud_audit_logs(
         entry: dict[str, object] = {"events": len(events), "source": source}
         if log_type != "generic":
             # The same events as rows, so log_top and log_histogram can count them. A
-            # generic event has a time and nothing else to count on.
-            logtable.ingest(
+            # generic event has a time and nothing else to count on. What a file of this
+            # type, or of no recognisable type, lost is passed as records not parsed.
+            loaded = logtable.ingest(
                 get_ctx().db,
                 source,
                 int(str(indexed["source_id"])),
-                (_log_row(log_type, e, n) for n, (_, e) in enumerate(ordered, 1)),
+                chain(
+                    (_log_row(log_type, e, n) for n, (_, e) in enumerate(ordered, 1)),
+                    repeat(None, lost.get(log_type, 0) + lost.get("", 0)),
+                ),
+                # The directory is read recursively, so a path can lie inside one that
+                # was already loaded; its events are then in the table once, not twice.
+                nested=True,
             )
             entry["log_table"] = source
+            if "covered_by" in loaded:
+                entry["log_table_note"] = (
+                    "no rows added: these events are already in the table from "
+                    f"{loaded['covered_by']}, which contains this path"
+                )
 
         status, parsed = _sigma_scan(
             log_type, events, evidence_path, ruleset_path, sigma_level_filter

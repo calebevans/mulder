@@ -186,7 +186,10 @@ logtable.ingest(get_ctx().db, "mylog.access", int(str(indexed["source_id"])), ro
 - Name the table after the text source, so `list_sources` and `list_log_tables` agree.
 - `extra` keys are constants you choose (`[a-z][a-z0-9_]*`), never names read from the evidence: they become fields the model may filter and group on. Keep them to a handful that answer counting questions.
 - `rows` may be a generator; it is consumed in batches. Values are stored as one printable line of at most 512 characters, and a time `ingest()` cannot read is stored as no time and counted. A time without an offset is taken as UTC, so convert a local time or attach its offset first.
-- `ingest()` returns `{"rows", "rows_no_time", "rows_unparsed"}`. Running it again for a source of the same name and evidence path replaces the earlier rows.
+- Call `ingest()` once per source and table, with every row in the one iterable. It returns `{"rows", "rows_no_time", "rows_unparsed"}`. Running it again for a source of the same name and evidence path replaces the earlier rows. One source may feed more than one table.
+- Yield `None` for whatever was not read: a record that did not parse, or a damaged or truncated stretch of the file. Every query result repeats the count, which is how the analyst learns that a count is over an incomplete log.
+- If the tool reads a directory recursively, pass `nested=True`: one evidence path can then contain another, with the same events. A path inside one already loaded is not loaded again (the result carries `covered_by`, and `rows` is not read), and a directory replaces the rows of paths inside it. Without it, two overlapping paths are counted twice.
+- A time before 1990 or after 2100 is stored as no time, so a zeroed or forged timestamp cannot become a first or last seen.
 
 ### `tool_response()` vs `@audited_tool()`
 

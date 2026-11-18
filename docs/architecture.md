@@ -388,7 +388,7 @@ erDiagram
 
     logTables {
         int source_id PK
-        text log_table
+        text log_table PK
         int complete
         int row_count
         int rows_no_time
@@ -403,7 +403,7 @@ erDiagram
     windows ||--|| windowsFts : "indexed by"
     windows ||--o{ bookmarks : "flagged by"
     sources ||--o{ logEvents : "also loaded as"
-    sources ||--o| logTables : "ingest record"
+    sources ||--o{ logTables : "ingest record"
 ```
 
 ### Key Tables
@@ -417,7 +417,7 @@ erDiagram
 - **bookmarks**: Agent-flagged windows of interest for later review
 - **progress**: Per-system records of tools executed and questions addressed
 - **log_events**: One normalised row per log event, for logs an extractor loads through `mulder.logtable.ingest` as well as indexing as text. `event_time` is fixed-width UTC (`YYYY-MM-DDTHH:MM:SSZ`), `source_id` and `line` point back at the indexed text, and `extra` is a JSON object of further fields. Indexed on `(log_table, event_time)`. Read only through `log_top`, `log_histogram` and `log_rows`, which bind every value and never take SQL
-- **log_tables**: One row per ingest: how many rows were stored, how many had no usable time, how many records could not be parsed, the time range, which fields have values, and whether the ingest completed
+- **log_tables**: One row per ingest (a source and the table it fed): how many rows were stored, how many had no usable time, how many records could not be parsed, the time range, which fields have values, and whether the ingest completed. `verify_evidence_integrity` does not cover `log_events`: it re-hashes the text windows, including each indexed `logtable.*` query result, but there is no hash of the rows a count is computed from
 - **kv_store**: General-purpose key-value persistence for cross-tool state sharing. Stores TSK partition offsets (`tsk_partition_offset:<image>`), EVTX extraction directory paths, and other data that must survive server restarts and context compaction
 
 ### Write Safety

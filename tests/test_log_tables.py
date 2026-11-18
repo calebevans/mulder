@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import inspect
 import json
+import sqlite3
+import threading
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
@@ -11,6 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 
 from mulder import logtable
 from mulder.audit import AuditLog
@@ -86,9 +89,10 @@ def _load(
     rows: Any = _ROWS,
     table: str = _TABLE,
     path: str = "/evidence/access.log",
-) -> dict[str, int]:
+    nested: bool = False,
+) -> dict[str, Any]:
     source_id = db.register_source(table, path, "blake2b:test", "test", 5)
-    return logtable.ingest(db, table, source_id, rows)
+    return logtable.ingest(db, table, source_id, rows, nested=nested)
 
 
 def _call(tool: Any, *args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -124,6 +128,11 @@ def _source_lines(db: CaseDB, source: str) -> list[str]:
         ("9999-12-31T23:59:59Z", None),
         ("0001-01-01T00:00:00+14:00", None),
         (-5, None),
+        # A zeroed time, and a compact date read as epoch seconds, land in 1970.
+        (0, None),
+        ("0", None),
+        ("20240501", None),
+        ("1970-01-01T00:00:00Z", None),
         (float("nan"), None),
         (float("inf"), None),
         ("2" * 5000, None),
@@ -213,6 +222,89 @@ def test_a_forced_rerun_replaces_its_rows_and_other_evidence_adds_to_them(case: 
         "/evidence/other/access.log",
     ]
     assert _counts(_call(log_top, _TABLE, "actor"), "actor") == {"alice": 6, "bob": 4}
+    # Two text sources now share the name: a row says which one its line is in.
+    assert {(row["source_path"], row["line"]) for row in _call(log_rows, _TABLE)["rows"]} == {
+        (path, line)
+        for path in ("/evidence/access.log", "/evidence/other/access.log")
+        for line in range(1, 6)
+    }
+
+
+def test_a_recursive_extractor_does_not_load_a_path_twice(case: CaseDB) -> None:
+    """``nested=True``: one evidence path can contain another, and holds the same events."""
+    whole = {"alice": 3, "bob": 2}
+    _load(case, path="/evidence/logs/2024", nested=True)
+    assert _load(case, path="/evidence/logs/2025", nested=True)["rows"] == 5  # beside, not inside
+
+    # The directory above both replaces them, however it is spelled.
+    assert _load(case, path="/evidence/logs/2024/..", nested=True)["rows"] == 5
+    assert _counts(_call(log_top, _TABLE, "actor"), "actor") == whole
+
+    # A path inside it adds nothing; the same path spelled differently replaces it.
+    inside = _load(case, [*_ROWS, None], path="/evidence/logs/2024/a.log", nested=True)
+    assert inside == {
+        "rows": 0,
+        "rows_no_time": 0,
+        "rows_unparsed": 0,
+        "covered_by": "/evidence/logs/2024/..",
+    }
+    assert _load(case, path="/evidence/logs/", nested=True)["rows"] == 5
+    (table,) = _call(list_log_tables)["tables"]
+    assert table["loaded_from"] == [{"source_path": "/evidence/logs/", "rows": 5}]
+    assert (table["rows"], table["rows_not_parsed"]) == (5, 0)
+
+    # An extractor that does not recurse keeps both: the inner path holds other events.
+    assert _load(case, path="/evidence/logs/2024")["rows"] == 5
+    assert _call(log_top, _TABLE, "actor")["rows_in_table"] == 10
+
+
+def test_overlapping_paths_loaded_at_the_same_time_are_still_counted_once(case: CaseDB) -> None:
+    """The planner lists a directory and one inside it; a batch runs both at once."""
+    started, release = threading.Event(), threading.Event()
+
+    def slow() -> Iterator[dict[str, object]]:
+        yield from _ROWS[:2]
+        started.set()
+        release.wait(10)
+        yield from _ROWS[2:]
+
+    inner = threading.Thread(
+        target=_load, args=(case, slow(), _TABLE, "/evidence/logs/2024", True)
+    )
+    outer = threading.Thread(target=_load, args=(case, _ROWS, _TABLE, "/evidence/logs", True))
+    inner.start()
+    assert started.wait(10)
+    outer.start()
+    outer.join(0.3)  # it must wait: replacing an ingest that is still loading orphans its rows
+    release.set()
+    inner.join()
+    outer.join()
+
+    result = _call(log_top, _TABLE, "actor")
+    assert (result["rows_matched"], result["rows_in_table"]) == (5, 5)
+    assert "ingest_incomplete" not in result
+
+
+def test_one_source_can_feed_two_tables(case: CaseDB) -> None:
+    source_id = case.register_source("weblog", "/evidence/web.log", "blake2b:test", "test", 5)
+
+    logtable.ingest(case, "weblog.access", source_id, _ROWS[:3])
+    logtable.ingest(case, "weblog.error", source_id, _ROWS[3:])
+
+    listed = {t["table"]: t["rows"] for t in _call(list_log_tables)["tables"]}
+    assert listed == {"weblog.access": 3, "weblog.error": 2}
+    assert _call(log_top, "weblog.error", "actor")["rows_matched"] == 2
+
+
+def test_the_table_listing_stays_small_however_many_paths_fed_a_table(case: CaseDB) -> None:
+    for day in range(25):
+        _load(case, _ROWS[: 1 + day % 3], path=f"/evidence/day-{day:02d}/access.log")
+
+    (table,) = _call(list_log_tables)["tables"]
+
+    assert table["rows"] == 49
+    assert len(table["loaded_from"]) == 20 and table["loaded_from"][0]["rows"] == 3
+    assert "20 largest of 25" in table["loaded_from_note"]
 
 
 def test_an_ingest_that_was_cut_short_is_reported_not_passed_off_as_whole(
@@ -541,6 +633,37 @@ def test_an_identical_query_is_indexed_once_unless_forced_or_the_table_changed(
     assert len(names) == len(set(names)) == 4
 
 
+def test_paging_names_the_next_offset_and_says_when_the_offset_is_capped(
+    case: CaseDB, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _load(case)
+
+    first = _call(log_rows, _TABLE, limit=2)
+    assert any("next page: offset=2" in note for note in first["notes"])
+
+    monkeypatch.setattr(logtables, "_MAX_OFFSET", 3)
+    capped = _call(log_rows, _TABLE, limit=1, offset=50)
+    assert (capped["offset"], capped["truncated"]) == (3, True)
+    assert any("capped at 3" in note for note in capped["notes"])
+    assert not any("next page" in note for note in capped["notes"])
+
+
+def test_a_database_error_is_an_audited_error_response(
+    case: CaseDB, tmp_audit_log: AuditLog, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(*_: object, **__: object) -> dict[str, Any]:
+        raise OperationalError("SELECT 1", {}, sqlite3.OperationalError("disk I/O error"))
+
+    _load(case)
+    monkeypatch.setattr(logtable, "top", broken)
+
+    result = _call(log_top, _TABLE, "actor")
+
+    assert (result["status"], result["error_type"]) == ("error", "tool_failed")
+    assert "disk I/O error" in result["error_message"] and "SELECT" not in result["error_message"]
+    assert tmp_audit_log.has_tool_call(result["tool_call_id"])
+
+
 # --- hostile input --------------------------------------------------------------------
 
 _INJECTIONS = [
@@ -605,6 +728,7 @@ def test_invalid_arguments_say_what_would_be_valid(case: CaseDB) -> None:
     assert "unknown field 'target'" in _call(log_top, _TABLE, "target")["error_message"]
     cases: list[dict[str, Any]] = [
         {"t_start": "last tuesday"},
+        {"t_start": "20240101"},
         {"n": "many"},
         {"fields": ["actor", "actor"]},
         {"fields": ["bytes"]},
@@ -637,6 +761,22 @@ def test_values_read_from_evidence_cannot_forge_a_row_in_the_indexed_result(
     lines = _source_lines(case, result["source"])
     assert len(lines) == 2  # the header and the one real group
     assert json.loads(lines[1].split(" logtable top ", 1)[1])["count"] == 1
+
+
+def test_byte_counts_at_the_integer_limit_are_summed_not_an_error(case: CaseDB) -> None:
+    """Two forged byte counts whose sum does not fit SQLite's 64-bit integer."""
+    huge = 2**63 - 1
+    _load(
+        case,
+        [{"actor": "a", "bytes": huge}, {"actor": "a", "bytes": huge}, {"actor": "b", "bytes": 7}],
+    )
+
+    result = _call(log_top, _TABLE, "actor", order="bytes")
+
+    assert result["status"] == "success"
+    assert [row["actor"] for row in result["rows"]] == ["a", "b"]
+    assert result["rows"][0]["bytes"] == pytest.approx(2 * huge)
+    assert result["rows"][1]["bytes"] == 7 and isinstance(result["rows"][0]["bytes"], int)
 
 
 def test_long_values_cannot_make_a_response_large(case: CaseDB) -> None:
@@ -792,6 +932,66 @@ def test_a_forced_cloud_log_rerun_does_not_double_the_counts(case: CaseDB, cloud
 
     assert result["rows_in_table"] == 3
     assert _counts(result, "src_ip") == {"203.0.113.9": 2, "198.51.100.7": 1}
+
+
+def _run(path: Path | str) -> dict[str, Any]:
+    with patch.object(cloudlogs, "_zircolite_script", return_value=None):
+        found: dict[str, Any] = _call(run_cloud_audit_logs, str(path))["results"]["log_types"]
+    return found
+
+
+@pytest.mark.parametrize(
+    ("first", "second", "second_is_covered"),
+    [
+        ("aws", "aws/2024-05", True),  # what the planner lists: a directory and one inside it
+        ("aws/2024-05", "aws", False),
+        ("aws", "aws/2024-05/trail-b.json", True),
+        ("aws/2024-05/trail-b.json", "aws", False),
+        ("aws", "aws/", False),
+        ("aws", "aws/2024-05/..", False),
+    ],
+)
+def test_cloud_logs_reached_through_overlapping_paths_are_counted_once(
+    case: CaseDB, tmp_path: Path, first: str, second: str, second_is_covered: bool
+) -> None:
+    records = _CLOUDTRAIL["Records"]
+    inner = tmp_path / "aws" / "2024-05"
+    inner.mkdir(parents=True)
+    (tmp_path / "aws" / "trail-a.json").write_text(json.dumps({"Records": records[:2]}))
+    (inner / "trail-b.json").write_text(json.dumps({"Records": records[2:]}))
+
+    _run(f"{tmp_path}/{first}")
+    again = _run(f"{tmp_path}/{second}")["aws"]
+
+    assert again["log_table"] == "cloudlog.aws"
+    assert ("log_table_note" in again) is second_is_covered
+    if second_is_covered:
+        assert f"{tmp_path}/{first}" in again["log_table_note"]
+    result = _call(log_top, "cloudlog.aws", "src_ip")
+    assert (result["rows_in_table"], result["rows_matched"]) == (3, 3)
+    assert _counts(result, "src_ip") == {"203.0.113.9": 2, "198.51.100.7": 1}
+    (table,) = _call(list_log_tables)["tables"]
+    assert len(table["loaded_from"]) == 1
+
+
+def test_damaged_cloud_log_files_and_records_that_are_no_event_count_as_not_parsed(
+    case: CaseDB, tmp_path: Path
+) -> None:
+    one, two, three = _CLOUDTRAIL["Records"]
+    (tmp_path / "odd.json").write_text(json.dumps({"Records": [one, "not an event", 7, None]}))
+    (tmp_path / "cut.json").write_text(json.dumps([two, three])[:-40])
+    # Nothing of this one can be read, so its log type is unknown: every table says so.
+    (tmp_path / "gone.json").write_text(json.dumps(_CLOUDTRAIL)[:-40])
+    (tmp_path / "github.json").write_text(json.dumps([_GITHUB]))
+
+    _run(tmp_path)
+
+    listed = {t["table"]: t for t in _call(list_log_tables)["tables"]}
+    assert (listed["cloudlog.aws"]["rows"], listed["cloudlog.aws"]["rows_not_parsed"]) == (2, 5)
+    assert listed["cloudlog.github"]["rows_not_parsed"] == 1
+    result = _call(log_top, "cloudlog.aws", "actor")
+    assert result["rows_not_parsed"] == 5
+    assert any("at least 5 records" in note for note in result["notes"])
 
 
 # --- registration and guidance --------------------------------------------------------

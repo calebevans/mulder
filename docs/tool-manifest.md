@@ -618,7 +618,7 @@ event. Any other JSON is indexed as `cloudlog.generic` and scanned only when
 | sigma_level_filter | Literal['informational', 'low', 'medium', 'high', 'critical'] \| None | no | Minimum Sigma level (default "low") |
 | force | bool | no | Re-run even if these logs were already indexed |
 
-**Returns:** `files_read`, `files_with_problems{}`, `log_types{<type>: events, source, log_table, sigma, detections, level_counts{}, rules_matched{}, mitre_coverage{}}`
+**Returns:** `files_read`, `files_with_problems{}`, `log_types{<type>: events, source, log_table, log_table_note, sigma, detections, level_counts{}, rules_matched{}, mitre_coverage{}}`
 
 Events are indexed one per line in `cloudlog.<type>` (time, actor, action,
 source IP, target, raw event) and Sigma matches in `cloudlog.<type>.detections`.
@@ -640,7 +640,16 @@ target of the text line (for AWS the target is the region), plus:
 | GitHub | `user_agent`, `session_id` (`hashed_token`), `event_id` (`_document_id`), `country` |
 
 `cloudlog.generic` gets no table: such an event has a time and nothing to count on.
-A forced re-run replaces the rows it loaded before.
+A forced re-run replaces the rows it loaded before. Because a directory is read
+recursively, evidence paths can overlap, and the table holds each path's events once:
+a path inside one already loaded adds no rows (`log_table_note` names the path that
+contains it), and a directory replaces the rows of paths inside it. The text index
+is not deduplicated: both runs are indexed as `cloudlog.<type>` sources.
+
+What could not be read is counted as the table's `rows_not_parsed`: each damaged
+stretch of a file, a file that could not be read, and each record that is not a
+JSON object. A file whose log type cannot be told (nothing in it was readable)
+counts against every table the run loaded. It is a lower bound on the events lost.
 
 A file that was damaged or truncated, or that held no events, is named in
 `files_with_problems`; complete events before the damage are kept. Events are
@@ -1485,8 +1494,9 @@ against the table's own fields and every value is a bound parameter. A field the
 has no values for is refused with the list of fields it does have.
 
 Every result states `filter_applied` (as understood), `rows_matched`, `rows_in_table`,
-`rows_not_parsed` (records the extractor could not read: they are in no count),
-`rows_without_time`, `truncated`, and `notes[]` saying in words what was left out. The
+`rows_not_parsed` (records or damaged stretches the extractor could not read: they are
+in no count, and the number is a lower bound), `rows_without_time` (no time, or one
+outside 1990..2100), `truncated`, and `notes[]` saying in words what was left out. The
 rows are indexed as source `logtable.<kind>.<id>`, whose first line is a header with the
 `tool_call_id`, the filter and the counts; cite the call's `tool_call_id` and that source.
 At most about 12,000 characters of rows are returned inline; the rest are in the source.
@@ -1494,7 +1504,8 @@ An identical query over an unchanged table is not indexed twice: it returns
 `status: "skipped"` with the existing source and the same rows. `force=True` indexes it
 again as `<name>-r<k>`. Stored values are one line of at most 512 characters; a longer
 one ends in `…`. A count is of the records in the table: it says nothing about periods
-or systems the log does not cover.
+or systems the log does not cover. A failure in the case database is returned, and
+audited, as an error like any other.
 
 ### list_log_tables
 
@@ -1502,7 +1513,7 @@ List the log tables of this case: logs loaded as rows that can be counted.
 
 *No parameters.*
 
-**Returns:** `tables[]` (table, rows, rows_without_time, rows_not_parsed, first_time, last_time, fields{name: rows with a value}, loaded_from[] (source_path, rows), ingest_incomplete when loading was cut short)
+**Returns:** `tables[]` (table, rows, rows_without_time, rows_not_parsed, first_time, last_time, fields{name: rows with a value}, loaded_from[] (source_path, rows; the 20 largest, with loaded_from_note, when there are more), ingest_incomplete when loading was cut short)
 
 **Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR`
 
@@ -1524,6 +1535,7 @@ Count log events by the values of one to three fields, with first and last seen.
 **Returns:** `rows[]` (the field values, count, first_seen, last_seen, bytes where the table has byte counts), `groups_total`, `row_count`, and the common fields above (source logtable.top.&lt;id&gt;)
 
 Rows without a value form their own group (`null`), so the counts add up to `rows_matched`.
+A byte sum above 2^53 (8 PiB) is approximate.
 
 **Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR`
 
@@ -1562,14 +1574,17 @@ Read log events that match a filter, one page at a time, in time order.
 | t_start | str \| None | no | Only events at or after this UTC time |
 | t_end | str \| None | no | Only events at or before this UTC time |
 | limit | int | no | Rows to return (default 25, 1..200) |
-| offset | int | no | Rows to skip, for the next page (default 0, 0..100000) |
+| offset | int | no | Rows to skip, for the next page (default 0, 0..100000; a larger one is read as 100000) |
 | newest_first | bool | no | Latest events first (default False) |
 | force | bool | no | Index the result again (default False) |
 
-**Returns:** `rows[]` (time, the fields that have a value, source, line), `offset`, `row_count`, and the common fields above (source logtable.rows.&lt;id&gt;)
+**Returns:** `rows[]` (time, the fields that have a value, source, source_path, line), `offset`, `row_count`, and the common fields above (source logtable.rows.&lt;id&gt;)
 
-`source` and `line` say where the whole event is in the indexed text. Events without a
-time come last. When `truncated`, the next page is `offset + row_count`.
+`source` and `line` say where the whole event is in the indexed text; `source_path` is
+added when the table was loaded from several evidence paths, whose sources share a name.
+Events without a time come last. When `truncated`, `notes` gives the next page's offset
+(`offset + row_count`), or says that the offset cap was reached and the filter or time
+window must be narrowed to read further.
 
 **Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR`
 

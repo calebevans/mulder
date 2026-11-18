@@ -17,6 +17,8 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from mulder import logtable
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
@@ -36,6 +38,8 @@ __all__ = ["list_log_tables", "log_histogram", "log_rows", "log_top"]
 # cross-system executor running a plan.
 _ROLES = Role.EXTRACT_ANALYST | Role.CROSS_EXECUTOR
 _MAX_ROWS = 200
+_MAX_OFFSET = 100_000
+_MAX_PATHS = 20  # evidence paths list_log_tables names per table
 _INLINE_CHARS = 12_000  # about 3,000 tokens of rows in one response
 # ponytail: one lock for every log-table query, so identical concurrent calls cannot both
 # register the same source name; per-name locks if the queries ever get slow.
@@ -77,6 +81,17 @@ def _answer(
             error_type="invalid_argument",
             suggestion="list_log_tables shows each table's fields and time range",
         )
+    except SQLAlchemyError as exc:
+        # Reported, and so audited, like any other failed call. The driver's own message
+        # is given, not SQLAlchemy's, which appends the statement and its parameters.
+        return error_response(
+            tc_id,
+            tool,
+            params,
+            f"the case database could not answer this query: {getattr(exc, 'orig', exc)}"[:300],
+            (time.monotonic() - t0) * 1000,
+            error_type="tool_failed",
+        )
     rows: list[dict[str, Any]] = result.pop("rows")
     table = str(result["table"])
     # The table's ingests are part of the identity: a table that has since been loaded
@@ -116,14 +131,24 @@ def _answer(
             "left out here to keep the response small"
         )
     if result["truncated"]:
-        notes.append(
-            "truncated: more matched than was returned; narrow the filter or the time "
-            "window, or raise the row limit"
-        )
+        following = result.get("offset", 0) + len(rows)
+        if kind != "rows":
+            notes.append(
+                "truncated: more matched than was returned; narrow the filter or the time "
+                "window, or raise the row limit"
+            )
+        elif following <= _MAX_OFFSET:
+            notes.append(f"truncated: more rows matched; next page: offset={following}")
+        else:
+            notes.append(
+                f"truncated: more rows matched, but offset is capped at {_MAX_OFFSET} (this "
+                f"page starts at offset {result['offset']}); narrow the filter or the time "
+                "window to read further"
+            )
     if result["rows_not_parsed"]:
         notes.append(
-            f"{result['rows_not_parsed']} records of this log could not be parsed and are "
-            "in no count"
+            f"at least {result['rows_not_parsed']} records of this log could not be parsed "
+            "(damaged or truncated input) and are in no count: the table is incomplete"
         )
     if result.get("ingest_incomplete"):
         notes.append("loading this table was cut short: the counts cover only what was stored")
@@ -158,11 +183,19 @@ def list_log_tables() -> dict[str, object]:
 
     Returns per table: rows, rows_without_time, rows_not_parsed (records the parser could
     not read: they are in no count), first_time and last_time (UTC), fields (field name
-    to the number of rows that have a value) and loaded_from (evidence path and rows).
+    to the number of rows that have a value) and loaded_from (evidence path and rows;
+    the 20 largest when there are more, with loaded_from_note saying so).
     """
     found = logtable.tables(get_ctx().db)
     for entry in found:
         del entry["ingests"]
+        paths = entry["loaded_from"]
+        if len(paths) > _MAX_PATHS:
+            entry["loaded_from"] = sorted(paths, key=lambda part: -part["rows"])[:_MAX_PATHS]
+            entry["loaded_from_note"] = (
+                f"the {_MAX_PATHS} largest of {len(paths)} evidence paths this table was "
+                "loaded from"
+            )
     result: dict[str, object] = {"status": "success", "tables": found}
     if not found:
         result["message"] = (
@@ -302,9 +335,10 @@ def log_rows(
     Use a filter or a time window: paging through a whole table is what log_top is for.
 
     Returns up to limit rows (time, the fields that have a value, and source and line:
-    where the whole event is in the indexed text) with rows_matched, rows_in_table,
+    where the whole event is in the indexed text, with source_path when the table was
+    loaded from several evidence paths) with rows_matched, rows_in_table,
     rows_not_parsed, filter_applied and truncated; indexed as source
-    logtable.rows.<id>. When truncated, the next page is offset + row_count. Values
+    logtable.rows.<id>. When truncated, notes names the next page's offset. Values
     longer than 512 characters end in "…"; search the source for the whole event.
 
     Args:
@@ -316,7 +350,8 @@ def log_rows(
         t_start: Only events at or after this UTC time, e.g. "2026-01-31T13:00:00Z".
         t_end: Only events at or before this UTC time.
         limit: Rows to return (1..200).
-        offset: Rows to skip, for the next page (0..100000).
+        offset: Rows to skip, for the next page (0..100000; a larger one is read as
+            100000, so narrow the filter or the time window to read further).
         newest_first: Latest events first instead of earliest first.
         force: Index the result again even if this exact page was already indexed.
     """
@@ -326,7 +361,7 @@ def log_rows(
     }  # fmt: skip
 
     def query() -> tuple[dict[str, object], dict[str, Any]]:
-        page, skip = clamp(limit, 1, _MAX_ROWS), clamp(offset, 0, 100_000)
+        page, skip = clamp(limit, 1, _MAX_ROWS), clamp(offset, 0, _MAX_OFFSET)
         result = logtable.rows(
             get_ctx().db, table, filters=filters, t_start=t_start, t_end=t_end,
             limit=page, offset=skip, newest_first=bool(newest_first),

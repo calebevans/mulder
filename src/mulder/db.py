@@ -165,7 +165,7 @@ _LOG_TABLES_CREATE = (
     ")",
     "CREATE INDEX IF NOT EXISTS ix_log_events_table_time ON log_events (log_table, event_time)",
     "CREATE TABLE IF NOT EXISTS log_tables ("
-    "  source_id INTEGER PRIMARY KEY,"
+    "  source_id INTEGER NOT NULL,"
     "  log_table TEXT NOT NULL,"
     "  complete INTEGER NOT NULL,"
     "  row_count INTEGER NOT NULL,"
@@ -173,7 +173,8 @@ _LOG_TABLES_CREATE = (
     "  rows_unparsed INTEGER NOT NULL,"
     "  first_time TEXT,"
     "  last_time TEXT,"
-    "  field_counts TEXT NOT NULL"
+    "  field_counts TEXT NOT NULL,"
+    "  PRIMARY KEY (source_id, log_table)"
     ")",
 )
 
