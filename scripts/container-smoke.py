@@ -157,6 +157,7 @@ def main() -> None:
 
     catalog = remote_access._catalog()
     assert catalog is not None and "anydesk.exe" in catalog.exes, "LOLRMM catalog unreadable"
+    assert "Apache License" in Path("/opt/lolrmm/LICENSE").read_text(), "LOLRMM licence missing"
     assert len(ransomware_family._corpus()) > 300, "ransom note corpus missing or empty"
     assert Path("/opt/hayabusa/rules/config/eventkey_alias.txt").is_file()
 

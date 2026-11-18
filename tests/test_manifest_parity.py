@@ -72,6 +72,12 @@ def test_the_lolrmm_checksum_is_the_same_in_the_dockerfile_and_the_lock(dockerfi
         "amd64"
     )
     assert ASSETS_BY_KEY["ransomware-notes"].digest_for("amd64") is None
+    # Apache-2.0: the licence text travels with the catalog, from the same
+    # commit, whether the image or ``mulder setup`` installed it.
+    ((name, url),) = lolrmm.siblings
+    assert name == "LICENSE"
+    assert url.replace(lolrmm.version, "${LOLRMM_VERSION}") in dockerfile
+    assert "-o /opt/lolrmm/LICENSE" in dockerfile
 
 
 def test_every_manifest_url_host_appears_in_the_dockerfile(dockerfile: str) -> None:

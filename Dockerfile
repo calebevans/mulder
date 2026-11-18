@@ -244,6 +244,8 @@ RUN mkdir -p /opt/lolrmm /opt/ransomware-notes \
     && curl -fsSL "https://raw.githubusercontent.com/magicsword-io/LOLRMM/${LOLRMM_VERSION}/website/public/api/rmm_tools.json" \
         -o /opt/lolrmm/rmm_tools.json \
     && echo "${LOLRMM_SHA256}  /opt/lolrmm/rmm_tools.json" | sha256sum -c - \
+    && curl -fsSL "https://raw.githubusercontent.com/magicsword-io/LOLRMM/${LOLRMM_VERSION}/LICENSE" \
+        -o /opt/lolrmm/LICENSE \
     && curl -fsSL "https://github.com/ThreatLabz/ransomware_notes/archive/${RANSOMWARE_NOTES_VERSION}.tar.gz" \
         | tar xz -C /opt/ransomware-notes --strip-components=1
 

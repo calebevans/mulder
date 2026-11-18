@@ -363,6 +363,13 @@ _ASSETS: tuple[Asset, ...] = (
             )
         },
         filename="rmm_tools.json",
+        # Apache-2.0 asks for a copy of the licence beside what is redistributed.
+        siblings=(
+            (
+                "LICENSE",
+                f"https://raw.githubusercontent.com/magicsword-io/LOLRMM/{LOLRMM_VERSION}/LICENSE",
+            ),
+        ),
         dest=("lolrmm",),
         sentinel=("rmm_tools.json",),
         pinnable=True,

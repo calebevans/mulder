@@ -659,8 +659,8 @@ def _fetch_asset(
 def _check_digest(asset: Asset, arch: str, result: FetchResult, *, primary: bool) -> None:
     """Compare a download against ``assets.lock``.
 
-    Only the primary URL of a pinnable row is locked; the siblings (ICS ATT&CK)
-    belong to unpinnable rows by construction.
+    Only the primary URL of a pinnable row is locked; a sibling (ICS ATT&CK,
+    a licence text) is not.
     """
     if not (asset.pinnable and primary):
         return
@@ -992,8 +992,8 @@ def capability_gaps(outcomes: Iterable[Outcome]) -> list[str]:
     if absent("eztools"):
         gaps.append(
             "zimmermantools missing -> run_prefetch_parser / run_amcache_parser / "
-            "run_shimcache_parser / run_mft_parser / run_evtx_parser / run_registry_parser "
-            "unavailable"
+            "run_shimcache_parser / run_mft_parser / run_usn_parser / run_evtx_parser / "
+            "run_registry_parser unavailable"
         )
     if absent("sigma-rules"):
         gaps.append("sigma-rules missing -> run_chainsaw hunt mode has no rules to apply")
