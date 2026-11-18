@@ -154,6 +154,19 @@ so shares can exceed 100%. Cite a row with the tool_call_id of YOUR
 search/get_raw_output call plus the header row's tool_call_id (line 1 of each
 source) and the exact netflow.* source name.
 
+RANSOMWARE: composite.encryption_activity lists, per volume, candidate
+bursts of renames to one extension (time, files, first directories, family
+hints); composite.remote_access_tools lists remote access tools and the
+sources each was found in; rmm.* holds those tools' own logs and
+logon.summary the logon counts per account, logon type and source. Order
+the systems by first_time: where encryption began is rarely where the
+intruder got in, so work back from the earliest burst through logons and
+remote access sessions to the first foothold, and look for staging and
+transfer before the first burst. A candidate is not a verdict, a tool
+that is present was not thereby abused, a program that ran is not thereby
+the one that encrypted, and a system with no candidate was not thereby
+untouched. A family hint is a family to check, not an identification.
+
 CONSTRAINTS:
 - Do NOT call extraction tools.
 - Only use query tools (search, get_raw_output) and finding tools.

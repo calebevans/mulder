@@ -190,6 +190,7 @@ RUN mkdir -p /opt/hayabusa \
             | sh -s -- -y --default-toolchain stable --profile minimal \
         && export PATH="/root/.cargo/bin:${PATH}" \
         && git clone --depth 1 --branch v${HAYABUSA_VERSION} \
+            --recurse-submodules --shallow-submodules \
             https://github.com/Yamato-Security/hayabusa.git /tmp/hayabusa-src \
         && cd /tmp/hayabusa-src \
         && cargo build --release \
@@ -225,6 +226,28 @@ RUN mkdir -p /opt/attack \
         -o /opt/attack/enterprise-attack.json \
     && curl -fsSL https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/ics-attack/ics-attack.json \
         -o /opt/attack/ics-attack.json
+
+# Ransomware reference data (data-only; pin to build platform to avoid QEMU):
+# the LOLRMM remote access tool catalog and the ThreatLabz ransom note corpus.
+# Neither repository tags releases, so both are pinned to a commit.
+FROM --platform=$BUILDPLATFORM ubuntu:22.04 AS ransomware-data-fetch
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG LOLRMM_VERSION=0c2d56639673a232ff9d2548e16c6d045d3a1217
+ARG LOLRMM_SHA256=607f5195c0a16f8dcc2e382c91557cd1c0d7fe21d07fcd64df4c45dad1731e20
+ARG RANSOMWARE_NOTES_VERSION=8765d0b53dc09571b217a3fa3365730c46be9dee
+RUN mkdir -p /opt/lolrmm /opt/ransomware-notes \
+    && curl -fsSL "https://raw.githubusercontent.com/magicsword-io/LOLRMM/${LOLRMM_VERSION}/website/public/api/rmm_tools.json" \
+        -o /opt/lolrmm/rmm_tools.json \
+    && echo "${LOLRMM_SHA256}  /opt/lolrmm/rmm_tools.json" | sha256sum -c - \
+    && curl -fsSL "https://raw.githubusercontent.com/magicsword-io/LOLRMM/${LOLRMM_VERSION}/LICENSE" \
+        -o /opt/lolrmm/LICENSE \
+    && curl -fsSL "https://github.com/ThreatLabz/ransomware_notes/archive/${RANSOMWARE_NOTES_VERSION}.tar.gz" \
+        | tar xz -C /opt/ransomware-notes --strip-components=1
 
 # stegdetect: build from source
 FROM ubuntu:22.04 AS stegdetect-builder
@@ -537,6 +560,8 @@ COPY --from=stegdetect-builder /opt/stegdetect/bin/stegbreak /usr/local/bin/steg
 COPY --from=yara-fetch /opt/signature-base /opt/signature-base
 COPY --from=attack-fetch /opt/attack/enterprise-attack.json /opt/attack/enterprise-attack.json
 COPY --from=attack-fetch /opt/attack/ics-attack.json /opt/attack/ics-attack.json
+COPY --from=ransomware-data-fetch /opt/lolrmm/ /opt/lolrmm/
+COPY --from=ransomware-data-fetch /opt/ransomware-notes/ /opt/ransomware-notes/
 COPY --from=hayabusa-fetch /opt/hayabusa /opt/hayabusa
 # Keep capa where the asset manifest says it lives, then link it onto PATH --
 # same shape as chainsaw below. Copying only the binary to /usr/local/bin

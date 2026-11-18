@@ -36,6 +36,7 @@ Try-it-out instructions for running Mulder, the forensic investigation platform.
     - [How It Works](#how-it-works)
     - [Example](#example)
   - [Artifact Awareness](#artifact-awareness)
+  - [Ransomware Cases](#ransomware-cases)
   - [Cloud Audit Logs](#cloud-audit-logs)
   - [Triage Collections](#triage-collections)
   - [CLI Reference](#cli-reference)
@@ -103,6 +104,8 @@ mulder setup                     # everything mulder owns - no sudo
 Everything mulder owns, in one run: MITRE ATT&CK data, Sigma rules, the YARA signature-base,
 the Didier Stevens suite, Chainsaw 2.16.0, Hayabusa 3.8.1, Zircolite 2.20.0, zizmor 1.32.0, capa 9.4.0,
 FLOSS 3.1.0, gitleaks 8.30.1, the six EZ Tools mulder invokes, ALEAPP, iLEAPP, and the Volatility 3 symbol packs.
+It also fetches two small reference data sets for ransomware cases, each pinned to a commit: the LOLRMM remote
+access tool catalog (Apache-2.0) and the ThreatLabz ransom note corpus (MIT).
 About **2.2 GB on disk**; it prints the total and asks before downloading more than 1 GB.
 
 Versions are pinned to match the container image exactly, and a test fails the build if the two
@@ -625,6 +628,26 @@ The extraction planner adapts its tool selection based on what the evidence actu
 **Investigator briefing keywords** also influence tool selection. Briefings mentioning hacking or intrusion trigger searches for exploit tool configs and PCAPs. Briefings about insider threats or data theft prioritize USB history and cloud storage artifacts. Briefings about communications prioritize email and chat application data.
 
 The analyst receives complementary guidance: when execution artifacts show communication tools were used, the analyst searches indexed application files for contacts, server addresses, and credentials, then cross-references those with network connection data.
+
+## Ransomware Cases
+
+Say so in the briefing ("ransomware", "encrypted files", "ransom note") and the extraction planner adds the change journal, the logon summary and the shadow copy listing to every Windows image, not only the one the note was found on. The tools below work on what is already parsed and need no network.
+
+| Question | Tool | Reads |
+|----------|------|-------|
+| When did encryption start and stop, and where first? | `find_encryption_activity` | the change journal (`run_usn_parser`), else the MFT |
+| Which family? | `ransomware_family_hints`, and the hints inside the result above | Splunk's extension and note-name lists, the ThreatLabz note corpus |
+| Which remote access tool was used, and from where? | `find_remote_access_tools` | the LOLRMM catalog against the file listing, Prefetch, Amcache, ShimCache, registry and DNS; then the tool's own logs |
+| Who logged on, how and from where? | `run_hayabusa_logon_summary` | the extracted event logs |
+| What left before encryption? | `find_data_exfiltration_indicators`, `find_file_staging` | network and filesystem sources |
+
+What each result does and does not establish:
+
+- **A candidate burst is a lead.** It is a run of minutes in which at least 50 files were renamed to one extension, plus a signal: the extension follows several kinds of data file, a known ransom note name appeared in several directories, or the volume never had the extension before. Compression, backup and bulk renames look the same, and neither the journal nor the MFT names the process or the account. All bursts of one extension on a volume are one candidate, so a run that pauses and resumes is reported from its first burst. Ransomware that overwrites files in place or gives each file its own extension is not flagged; the result lists the busiest periods of any kind for that reason.
+- **The change journal is a ring.** It holds only recent changes, attackers delete it, and at most the newest 256 MiB is parsed. When a burst starts where the journal starts, the result says so and gives the earliest change the MFT knows. When the journal holds no candidate the MFT is read as well: that is how encryption older than the journal is found, and ransomware that writes each file under a new name and deletes the original (Dharma, Phobos), which leaves no rename in the journal. Without an indexed MFT neither is flagged.
+- **A family hint is a family to check.** Families share extensions, note names and note templates, and the extension list misses several current families.
+- **Presence of a remote access tool is not abuse.** AnyDesk, TeamViewer and the like are ordinary IT tools. What makes one part of the intrusion is installation or first run inside the incident window, by a compromised account, or a session in its own log from an address the organisation does not use. AnyDesk's `ad.trace` and `ad_svc.trace` carry the peer's IP address; TeamViewer's logs carry only IDs and host names.
+- **The logon summary has counts, not times.** Hayabusa 3.8.1 counts each combination of account, logon type and source over the whole log (`log_period` gives the span the counts cover); search the Security log for when.
 
 ## Cloud Audit Logs
 
