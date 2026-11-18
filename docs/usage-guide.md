@@ -35,6 +35,7 @@ Try-it-out instructions for running Mulder, the forensic investigation platform.
     - [Example](#example)
   - [Artifact Awareness](#artifact-awareness)
   - [Cloud Audit Logs](#cloud-audit-logs)
+  - [Triage Collections](#triage-collections)
   - [CLI Reference](#cli-reference)
     - [`mulder investigate`](#mulder-investigate)
     - [`mulder setup`](#mulder-setup)
@@ -651,6 +652,35 @@ GitHub keeps audit events for about six months and Git events for seven days, so
 ### Evidence that was not provided
 
 When the evidence shows that more evidence exists elsewhere, for example a host image whose user ran a cloud CLI, and the corresponding logs are not in the case, the analyst records it as a `[COLLECT]` finding citing where it saw the trace. These are not counted as findings. The report lists them under **Evidence To Collect**, with the account or project and the time range worth exporting, so you can add the export and run again.
+
+## Triage Collections
+
+A triage collection is the set of files a collector copied off a live system. Mulder reads one where it would read a disk image: put the collection in the evidence directory, as a directory or as the archive the collector wrote, and the Windows artifact tools (registry, Prefetch, Amcache, ShimCache, `$MFT`, event logs, application files, browser history) run on the collected files.
+
+| Collection | How it is recognised | What mulder also indexes |
+|------------|----------------------|--------------------------|
+| KAPE target output | a `C`, `D`, ... (or `VSS<n>`) directory beside KAPE's `..._CopyLog.csv` / `..._ConsoleLog.txt` | the copy log (original path, SHA-1 and timestamps of every file) and the skip log |
+| Velociraptor offline collection | `uploads/` or `results/` beside `client_info.json` or `collection_context.json` | each `results/<Artifact>.json` as a searchable source |
+| UAC output | `uac.log` beside `[root]`, `live_response` or `bodyfile` | the `live_response` command output per category, and a timeline from the body file (`run_mactime`) |
+| A Windows volume directory | it holds `Windows/System32/config` | nothing more: only the files |
+
+```
+evidence/
+  dc01.E01                              a disk image, as before
+  ws-042/                               KAPE --tdest: C/, 2026-..._CopyLog.csv, ...
+  Collection-WS-077-2026-11-12.zip      Velociraptor offline collector output
+  uac-web01-linux-20261112093000.tar.gz UAC output
+```
+
+Each collection is one system, named after the host the collection states (KAPE's console log, Velociraptor's `client_info.json`, the name UAC gives its archive) or else after its directory. Keep other evidence beside a collection's directory rather than inside it: apart from disk images, memory dumps, captures and archives left at its top level, files inside a collection are treated as collected files.
+
+`index_triage_collection` writes `triage.summary`, which records which kinds of artifact the collection holds and which it does not. That matters for reading the report:
+
+- **A collection is not a disk.** There is no unallocated space and there are no deleted files, so carving, `bulk_extractor` and deleted-file listing are not run on it. A statement that something was not found means it was not found in what was collected.
+- **The timestamps on the copies are not evidence.** Original file times come from `$MFT` when it was collected, from KAPE's copy log, or from Velociraptor's upload metadata.
+- **The host name is the collector's own record** of it.
+
+A KAPE `.vhd` or `.vhdx` container is read as a disk image (Sleuth Kit opens both). Paths inside it start with the drive letter, and the container's own file system describes the copies, not the original system. CyLR output is not recognised by name; a tree that holds `C/Windows/System32/config` is treated as a Windows volume directory.
 
 ## CLI Reference
 

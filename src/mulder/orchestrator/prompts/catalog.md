@@ -54,6 +54,15 @@ OUTPUT REQUIREMENTS:
   top of the evidence directory, the file name without its extension), so
   later phases can find it. Say which organization, project, account or
   repository it covers in "description".
+- A triage collection (type "triage_collection": KAPE target output, a
+  Velociraptor offline collection, UAC output or a Windows volume directory,
+  as scan_evidence and extract_archive label it) is the files copied from ONE
+  live system. Give it one system, however many files it holds, with
+  "triage_collection" in "evidence". Its "name" MUST be the host name shown
+  after "host" in its label when there is one, otherwise the name of the
+  collection's directory exactly as it appears in the path. "type" is Windows
+  for KAPE and for a Windows volume directory; for Velociraptor and UAC use
+  the platform the paths and names show, or Unknown.
 
 FINAL OUTPUT (MANDATORY):
 Your FINAL message MUST be ONLY valid JSON. No text before or after it.

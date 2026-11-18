@@ -24,6 +24,7 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
+from mulder.dirroot import detect_collection
 from mulder.extractors.classifier import ClassifiedEvidence
 from mulder.extractors.optical import probe_optical
 from mulder.path_policy import PathPolicyError, resolve_allowed_path
@@ -263,6 +264,11 @@ def _manifest_entry(item: ClassifiedEvidence) -> dict[str, object]:
         if media is not None:
             entry["media"] = f"optical ({media})"
             entry["note"] = "CD/DVD image: use run_optical_listing, not run_fls/run_mmls"
+    if item.artifact_type == "triage_collection":
+        collection = detect_collection(item.path)
+        if collection is not None:
+            entry["collection"] = collection.description
+            entry["note"] = "Files copied from one live system, not a disk image"
     return entry
 
 
@@ -297,6 +303,8 @@ def _scan_evidence_inner(ev_path: Path, case_id: str, replace: bool) -> dict[str
         atype = mi["artifact_type"]
         if "media" in mi:
             atype = f"{atype}, {mi['media']}"
+        if "collection" in mi:
+            atype = f"{atype}, {mi['collection']}"
         tree_lines.append(f"{indent}{name}  [{atype}] {size_label}")
 
     result = create_case(case_id, str(ev_path), replace=replace)
@@ -1089,6 +1097,11 @@ def extract_archive(
             "or run extraction tools directly on the evidence files."
         ),
     }
+    # An archive that held a triage collection: the catalog needs its path and
+    # the host it states to name the system.
+    collections = [mi for mi in manifest if mi["artifact_type"] == "triage_collection"]
+    if collections:
+        result["triage_collections"] = collections
 
     elapsed = (time.monotonic() - t0) * 1000
     if has_ctx():

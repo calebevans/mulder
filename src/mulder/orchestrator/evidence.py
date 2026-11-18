@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from mulder import collect as collector
+from mulder.dirroot import Collection, detect_collection
 from mulder.extractors.classifier import (
     RAW_CONTAINER_EXTS,
     EvidenceClassifier,
@@ -137,10 +138,20 @@ class EvidenceContext:
 
         sys_lower = system_name.lower()
 
+        # A file below a triage collection's top level is one of the collected
+        # files, not a loose image, dump or archive: the collection is listed
+        # as a whole further down.
+        collections = self._collections()
+
+        def collected(f: Path) -> bool:
+            return any(c.root in f.parents and f.parent != c.root for c in collections)
+
         disk_images: list[str] = []
         if evidence_path.is_dir():
             for f in evidence_path.rglob("*"):
                 if not f.is_file() or f.suffix.lower() not in DISK_IMAGE_EXTS:
+                    continue
+                if collected(f):
                     continue
                 try:
                     rel = str(f.relative_to(evidence_path)).lower()
@@ -155,6 +166,8 @@ class EvidenceContext:
         if evidence_path.is_dir():
             for f in evidence_path.rglob("*"):
                 if not f.is_file():
+                    continue
+                if collected(f):
                     continue
                 try:
                     rel = str(f.relative_to(evidence_path)).lower()
@@ -175,11 +188,14 @@ class EvidenceContext:
                     for f in subdir.rglob("*"):
                         if not f.is_file():
                             continue
+                        if collected(f):
+                            continue
                         ext = f.suffix.lower()
                         if ext in _ARCHIVE_EXTENSIONS:
                             nested_archives.append(str(f))
-                        elif _is_raw_disk(f):
-                            # A disk unpacked from an archive, not a memory dump.
+                        elif _is_raw_disk(f) or ext in (".vhd", ".vhdx"):
+                            # A disk unpacked from an archive, not a memory dump
+                            # (KAPE zips the VHD or VHDX it writes).
                             disk_images.append(str(f))
                         elif (
                             ext in _MEMORY_EXTENSIONS or f.stat().st_size > 100 * 1024 * 1024
@@ -242,6 +258,7 @@ class EvidenceContext:
         shown = mine if mine else (unclaimed if catalog_says_netflow else {})
 
         ci_cloud = self._ci_cloud_lines(sys_lower)
+        triage = self._triage_lines(sys_lower, collections)
 
         lines: list[str] = [f"System: {system_name}"]
         if disk_images:
@@ -287,6 +304,7 @@ class EvidenceContext:
             )
 
         lines.extend(ci_cloud)
+        lines.extend(triage)
         # Not evidence paths, so they do not stand in for the fallback below.
         collection = self._collection_lines()
 
@@ -296,6 +314,7 @@ class EvidenceContext:
             and not nested_archives
             and not shown
             and not ci_cloud
+            and not triage
         ):
             lines.append(
                 "(No pre-populated paths available. "
@@ -372,6 +391,79 @@ class EvidenceContext:
                 suffix = f"  ({count} files)" if is_dir else ""
                 lines.append(f"  {path}{suffix}")
             lines.append(f"  {plan}")
+        return lines
+
+    def _collections(self) -> list[Collection]:
+        """Triage collections in the evidence directory and in unpacked archives.
+
+        Each keeps the spelling of the directory it was found under, as the
+        other paths the planner is given do.
+        """
+        found: list[Collection] = []
+        for base in (Path(self.evidence_path), self.extracted_dir):
+            if not base.is_dir():
+                continue
+            resolved = base.resolve()
+            for item in EvidenceClassifier().classify(base):
+                if item.artifact_type != "triage_collection":
+                    continue
+                collection = detect_collection(base / item.path.relative_to(resolved))
+                if collection is not None:
+                    found.append(collection)
+        return found
+
+    def _triage_lines(self, sys_lower: str, found: list[Collection]) -> list[str]:
+        """Planner lines for triage collections: where each is and how to pass it.
+
+        A collection belongs to this system when the system's name appears in
+        its path or matches the host name the collection states. Failing that,
+        as for cloud evidence, when the catalog assigned the type to the system
+        and no other system's name claims the collection.
+        """
+
+        def claims(name: str, collection: Collection) -> bool:
+            host = collection.host.lower()
+            return name in str(collection.root).lower() or bool(
+                host and (name in host or host in name)
+            )
+
+        mine = [c for c in found if claims(sys_lower, c)]
+        catalog_ev = self._catalog_systems.get(sys_lower, {}).get("evidence", [])
+        if not mine and isinstance(catalog_ev, list) and "triage_collection" in catalog_ev:
+            others = [n for n in self._catalog_systems if n and n != sys_lower]
+            mine = [c for c in found if not any(claims(o, c) for o in others)]
+        if not mine:
+            return []
+
+        lines = [
+            'Triage collections (type "triage_collection": files copied from a live system, '
+            "not a disk image):"
+        ]
+        lines += [
+            f"  {c.root}  ({c.description})" for c in sorted(mine, key=lambda c: str(c.root))
+        ]
+        lines.append(
+            "  Plan index_triage_collection(evidence_path=<directory>), group "
+            '"foundation", for each directory above.'
+        )
+        if any(c.windows for c in mine):
+            lines.append(
+                "  Windows files: plan the Windows artifact tools with the same directory as "
+                "image_path (run_registry_parser, run_prefetch_parser, run_amcache_parser, "
+                "run_shimcache_parser, run_mft_parser, query_registry_value), as evtx_path of "
+                "run_evtx_parser, as evtx_dir of run_hayabusa and as evidence_path of "
+                "run_chainsaw."
+            )
+        if any(c.layout == "uac" for c in mine):
+            lines.append(
+                "  UAC: plan run_mactime(image_path=<directory>) for a timeline from the body "
+                "file the collector wrote."
+            )
+        lines.append(
+            "  Do not plan run_mmls, run_bulk_extractor, carving tools or detect_masquerading "
+            "on a collection: it has no partition table, no unallocated space and no deleted "
+            "files."
+        )
         return lines
 
     def identify_systems(

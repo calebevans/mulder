@@ -144,6 +144,33 @@ lists files that could not be examined. These describe what was possible,
 not what happened. Pair a weakness with evidence that it was
 exercised (a run, a log line, an audit event) before calling it the way in.
 
+TRIAGE COLLECTIONS:
+A triage collection (KAPE, Velociraptor, UAC, or a Windows volume directory)
+is a set of files copied from a live system, not a disk. triage.summary names
+the collector, the host name it states, and which kinds of artifact were
+collected and which were not; tsk.filelist lists every collected file (its
+inode column is a row number).
+- Nothing in a collection shows a deleted file, unallocated space or a carved
+  fragment. A file or artifact that is not in it was not collected, which
+  does not show it was absent from the system: write "not collected" or "not
+  found in the collected <artifact>", never "not present".
+- The timestamps on the collected copies are those of the copy. Take file
+  times from ez.mft when $MFT was collected, from triage.kape.copylog
+  (created, modified and accessed times and SHA-1 of each file as it was on
+  the system), or from the Velociraptor upload and file metadata results
+  among the triage.velociraptor.* sources.
+- triage.velociraptor.<artifact> holds the rows a query returned on the live
+  system and triage.uac.<category> the output of commands run on it. They
+  record what the system reported when it was collected: something listed
+  was there then; something not listed may have ended earlier or been hidden
+  from the tool that listed it.
+- A collected file is an ordinary file: read_evidence_file, triage_binary,
+  run_capa and run_exiftool take its path directly. That path is the volume
+  directory given in triage.summary followed by the path in tsk.filelist
+  (Velociraptor keeps unusual characters percent-encoded on disk). Nothing
+  needs extracting first, and get_file_metadata does not apply.
+- The host name is the collector's own record of it, not a verified fact.
+
 EVIDENCE OUTSIDE THE CASE:
 Evidence often shows that more evidence exists somewhere this investigation
 cannot reach: a host that used a cloud or source-hosting account (CLI
