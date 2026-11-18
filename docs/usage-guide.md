@@ -374,14 +374,16 @@ Each phase passes through a quality gate before proceeding. The investigation ru
 | Exit status | Meaning |
 |-------------|---------|
 | `0` | Every phase passed its gate and the report was finalized |
-| `1` | A phase failed its gate after every retry, the run was interrupted (Ctrl-C), or it crashed |
+| `1` | A phase failed its gate after every retry, the run was interrupted (Ctrl-C, or SIGTERM as sent by `docker stop`), or it crashed |
 | `2` | The run could not continue: authentication failed, the model is not available, or the API account is out of credit |
 
 **Out of credit.** If the provider reports that the account has no credit left or has reached a hard spending limit (for example Anthropic's "credit balance is too low", OpenAI's `insufficient_quota`, HTTP 402, or a LiteLLM budget), the investigation stops at once. No further phases, retries or continuations are started, because each would fail the same way. Ordinary rate limiting (requests or tokens per minute, HTTP 429 "too many requests") is not treated this way and is handled as before.
 
-**Partial report.** When a run ends without a finalized report and the case database already holds at least one indexed source or finding, Mulder renders `{case_id}.report.md` and `{case_id}.report.html` from the database, the way `mulder report` does, and prints where they are. Both open with an **INCOMPLETE INVESTIGATION** banner naming the phase the run stopped in, the reason, and the phases and systems that were not completed.
+**Partial report.** When a run ends without a finalized report and the case database already holds at least one indexed source or finding, Mulder renders `{case_id}.report.md` and `{case_id}.report.html` from the database, the way `mulder report` does, and prints where they are. Both open with an **INCOMPLETE INVESTIGATION** banner naming the phase the run stopped in, the reason, and the phases and systems that were not completed (the first ten unfinished systems by name, the rest as a count). When a gate failed and the last session ended on a provider error, such as an ordinary HTTP 429, the reason quotes that error too.
 
-Read a partial report for what it is. Its findings were saved before the run stopped and it has not passed the finalize gates. Evidence the run never reached was not examined, so a finding that is absent is not a clean result. A report that was finalized during the same run is never overwritten; a report left by an earlier run of the same case is replaced.
+Read a partial report for what it is. Its findings were saved before the run stopped and it has not passed the finalize gates. Evidence the run never reached was not examined, so a finding that is absent is not a clean result.
+
+A partial report never replaces a finished one. A report that was finalized during the same run is left alone and no partial report is written. A report left by an earlier run of the same case is kept as well: the partial report is then written beside it as `{case_id}.partial.report.md` and `{case_id}.partial.report.html`, and its banner says so. Only an earlier partial report is replaced.
 
 The case database and audit log are kept either way.
 

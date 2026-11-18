@@ -28,7 +28,9 @@ class WrittenReport(NamedTuple):
     sources: int
 
 
-def write_case_report(case_id: str, db_dir: Path, incomplete: Sequence[str] = ()) -> WrittenReport:
+def write_case_report(
+    case_id: str, db_dir: Path, incomplete: Sequence[str] = (), stem: str = ""
+) -> WrittenReport:
     """Write ``<case_id>.report.md`` and ``.report.html`` beside the case database.
 
     Args:
@@ -37,6 +39,8 @@ def write_case_report(case_id: str, db_dir: Path, incomplete: Sequence[str] = ()
         db_dir: Directory holding the case database and audit log.
         incomplete: Lines saying where and why the investigation stopped.
             When non-empty both reports open with an INCOMPLETE banner.
+        stem: Name the two files ``<stem>.report.md`` and ``.report.html``
+            instead of after the case, to leave an existing report alone.
 
     Returns:
         The paths written and the counts rendered. ``html`` is None, with
@@ -44,6 +48,7 @@ def write_case_report(case_id: str, db_dir: Path, incomplete: Sequence[str] = ()
         rendered.
     """
     audit_path = db_dir / f"{case_id}.audit.jsonl"
+    stem = stem or case_id
 
     with CaseDB(db_dir / f"{case_id}.db") as case_db:
         case_metadata = case_db.get_case_metadata()
@@ -54,7 +59,7 @@ def write_case_report(case_id: str, db_dir: Path, incomplete: Sequence[str] = ()
 
         renderer = ReportRenderer()
 
-        md_path = db_dir / f"{case_id}.report.md"
+        md_path = db_dir / f"{stem}.report.md"
         md_text = renderer.render(
             case_metadata=case_metadata,
             findings=findings,
@@ -82,7 +87,7 @@ def write_case_report(case_id: str, db_dir: Path, incomplete: Sequence[str] = ()
                 for w in windows
             ]
 
-        html_path = db_dir / f"{case_id}.report.html"
+        html_path = db_dir / f"{stem}.report.html"
         html_error = ""
         try:
             html_text = renderer.render_html(

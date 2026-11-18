@@ -61,6 +61,7 @@ _CREDIT_TEXTS = [
     "Error code: 402 - Insufficient Balance",
     "Budget has been exceeded! Current cost: 10.2, Max budget: 10.0",
     "ExceededBudget: User=default over budget. Spend=11.0, Budget=10.0",
+    "LiteLLM End User: default, exceeded budget for model=deepseek-chat",
     "402 Payment Required",
 ]
 
@@ -118,12 +119,43 @@ def _result(status: int | None, text: str = "API Error") -> ResultMessage:
     )
 
 
-def _result_error(status: int, text: str) -> ResultError:
+def _result_error(status: int | None, text: str, reason: str | None = None) -> ResultError:
     return ResultError(
         f"Claude Code returned an error result: {text}",
-        data={"subtype": "success", "result": text, "api_error_status": status},
+        data={
+            "subtype": "success",
+            "result": text,
+            "api_error_status": status,
+            "terminal_reason": reason,
+        },
         exit_code=1,
     )
+
+
+class _Stream:
+    """A message stream that yields *items* and records being closed."""
+
+    def __init__(self, *items: object, close_error: Exception | None = None) -> None:
+        self._items = iter(items)
+        self._close_error = close_error
+        self.closed = False
+
+    def __call__(self, **_kwargs: object) -> _Stream:
+        return self
+
+    def __aiter__(self) -> _Stream:
+        return self
+
+    async def __anext__(self) -> object:
+        try:
+            return next(self._items)
+        except StopIteration:
+            raise StopAsyncIteration from None
+
+    async def aclose(self) -> None:
+        self.closed = True
+        if self._close_error:
+            raise self._close_error
 
 
 def _query(*items: object) -> Any:
@@ -195,6 +227,7 @@ class TestSessionRaises:
             Exception(_ANTHROPIC_LOW_CREDIT),
             _result_error(402, "API Error: 402"),
             _result_error(429, _OPENAI_NO_QUOTA),
+            _result_error(None, _ANTHROPIC_LOW_CREDIT, reason="api_error"),
         ],
         ids=[
             "billing-flag",
@@ -205,6 +238,7 @@ class TestSessionRaises:
             "exception-text",
             "result-error-402",
             "result-error-429-no-quota-text",
+            "result-error-api-failure-without-status",
         ],
     )
     async def test_out_of_credit_raises(self, run: Any, item: object) -> None:
@@ -235,6 +269,23 @@ class TestSessionRaises:
             await _execute(session)
         session._dashboard.add_tokens.assert_called_once_with(700, 30)  # type: ignore[attr-defined]
 
+    @pytest.mark.asyncio()
+    @pytest.mark.parametrize("run", [_execute, _utility])
+    @pytest.mark.parametrize("close_error", [None, RuntimeError("cancel scope")])
+    async def test_the_sdk_stream_is_closed_before_the_error_leaves(
+        self, run: Any, close_error: Exception | None
+    ) -> None:
+        """Left open, asyncio closes it at loop shutdown and logs a traceback."""
+        stream = _Stream(
+            _assistant("Credit balance is too low", error="billing_error"), close_error=close_error
+        )
+        with (
+            patch("mulder.orchestrator.session.query", stream),
+            pytest.raises(OutOfCreditError),  # not whatever closing raised
+        ):
+            await run(_make_session())
+        assert stream.closed
+
 
 class TestSessionDoesNotRaise:
     """Rate limits stay transient, and model prose is never classified."""
@@ -246,6 +297,36 @@ class TestSessionDoesNotRaise:
         prose = f"The stolen API key was drained; the proxy log on the host shows: {text}"
         with patch("mulder.orchestrator.session.query", _query(_assistant(prose))):
             await run(_make_session())
+
+    @pytest.mark.asyncio()
+    @pytest.mark.parametrize("run", [_execute, _utility])
+    @pytest.mark.parametrize("text", _CREDIT_TEXTS)
+    async def test_prose_that_ends_an_error_result_which_is_not_an_api_failure(
+        self, run: Any, text: str
+    ) -> None:
+        """The SDK builds that ``ResultError`` message from the result frame's text."""
+        prose = f"The stolen API key was drained; the proxy log on the host shows: {text}"
+        session = _make_session()
+        with patch(
+            "mulder.orchestrator.session.query",
+            _query(_assistant(prose), _result_error(None, prose)),
+        ):
+            result = await run(session)
+        if isinstance(result, PhaseResult):
+            assert text in session.last_query_error  # an ordinary query error
+
+    @pytest.mark.asyncio()
+    async def test_a_query_error_is_remembered_until_the_next_session(self) -> None:
+        """The partial report quotes it beside the gate that failed."""
+        session = _make_session()
+        failing = _query(_result_error(429, _ANTHROPIC_RATE_LIMIT))
+        with patch("mulder.orchestrator.session.query", failing):
+            await _execute(session)
+        assert "rate_limit_error" in session.last_query_error
+
+        with patch("mulder.orchestrator.session.query", _query(_assistant("done"))):
+            await _execute(session)
+        assert session.last_query_error == ""
 
     @pytest.mark.asyncio()
     @pytest.mark.parametrize("run", [_execute, _utility])

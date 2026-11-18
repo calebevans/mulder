@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -164,9 +165,39 @@ class TestNotice:
             "Stopped in phase: extraction",
             "Reason: the API account is out of credit or over its quota: "
             "Credit balance is too low",
-            "Not completed: extraction (systems: host-b); cross_system; "
+            "Not completed: extraction (1 of 2 systems: host-b); cross_system; "
             "alternative_narrative; report",
         ]
+
+    def test_many_unfinished_systems_do_not_push_the_phases_out(self, tmp_path: Path) -> None:
+        orch = _orchestrator(tmp_path)
+        orch.systems_done = {f"workstation-{i:03d}.corp.example": i < 19 for i in range(60)}
+        not_completed = incomplete_notice(orch, OutOfCreditError("x"))[2]
+
+        assert not_completed.startswith(
+            "Not completed: extraction (41 of 60 systems: workstation-019.corp.example, "
+        )
+        assert not_completed.endswith(
+            "workstation-028.corp.example, +31 more); cross_system; alternative_narrative; report"
+        )
+
+    def test_gate_failure_also_quotes_the_last_session_error(self, tmp_path: Path) -> None:
+        """An ordinary 429 is not fatal; the gate it trips names only the symptom."""
+        orch = _orchestrator(tmp_path)
+        gate = GateResult(passed=False, phase_name="extraction", gaps=["no findings " * 60])
+        orch.result.phases.append(
+            PhaseResult(phase_name="extraction", success=False, gate_result=gate)
+        )
+        orch._session.last_query_error = "API Error: 429 rate_limit_error\n" + "x" * 500
+
+        reason = incomplete_notice(orch, None)[1]
+        assert reason.startswith("Reason: its gate failed after every retry: no findings no ")
+        assert "...; last session error: API Error: 429 rate_limit_error x" in reason
+        assert reason.isprintable()
+        assert len(reason) < 550
+        # The error that ended the run is the reason; an older session error is not added.
+        fatal = incomplete_notice(orch, OutOfCreditError("Credit balance is too low"))[1]
+        assert "last session error" not in fatal
 
     def test_gate_failure_quotes_the_gaps_of_the_last_phase(self, tmp_path: Path) -> None:
         orch = _orchestrator(tmp_path)
@@ -199,7 +230,7 @@ class TestNotice:
     @pytest.mark.parametrize(
         ("error", "reason"),
         [
-            (KeyboardInterrupt(), "Reason: interrupted by the operator"),
+            (KeyboardInterrupt(), "Reason: interrupted (Ctrl-C or SIGTERM)"),
             (
                 ModelNotAvailableError("model not found"),
                 "Reason: the configured model is not available: model not found",
@@ -240,7 +271,7 @@ class TestWriteFallback:
             assert BANNER in text
             assert "Stopped in phase: extraction" in text
             assert "out of credit or over its quota: Credit too low" in text
-            assert "extraction (systems: host-b)" in text
+            assert "extraction (1 of 2 systems: host-b)" in text
             assert "Suspicious process spinlock.exe" in text  # the saved finding
 
     def test_token_usage_so_far_reaches_the_report(self, tmp_path: Path) -> None:
@@ -267,16 +298,46 @@ class TestWriteFallback:
         assert md.read_text() == "FINALIZED MARKDOWN"
         assert html.read_text() == "FINALIZED HTML"
 
-    def test_replaces_a_report_left_by_an_earlier_run(self, tmp_path: Path) -> None:
+    def test_keeps_a_report_left_by_an_earlier_run(self, tmp_path: Path) -> None:
+        """A re-run that fails must not cost the earlier run its deliverable."""
         _make_case(tmp_path)
+        md, html = _reports(tmp_path)
+        # A finding title can say anything; only the fixed opening counts.
+        md.write_text("# Mulder Investigation Report\n\n**Case:** x\n> **INCOMPLETE INVESTIGATION")
+        html.write_text("FINALIZED HTML FROM LAST WEEK")
+        finalized = md.read_text()
+        for path in (md, html):
+            os.utime(path, (time.time() - 3600, time.time() - 3600))
+
+        written = write_fallback_report(
+            _orchestrator(tmp_path), CASE, tmp_path, time.time(), AuthenticationError("Bad key")
+        )
+
+        partial = tmp_path / f"{CASE}.partial.report.md", tmp_path / f"{CASE}.partial.report.html"
+        assert written is not None
+        assert (written.markdown, written.html) == partial
+        assert md.read_text() == finalized
+        assert html.read_text() == "FINALIZED HTML FROM LAST WEEK"
+        for text in (partial[0].read_text(), partial[1].read_text()):
+            assert BANNER in text
+            assert "authentication failed: Bad key" in text
+            assert f"Earlier report: {CASE}.report.md is from an earlier run" in text
+
+    def test_replaces_a_partial_report_left_by_an_earlier_run(self, tmp_path: Path) -> None:
+        """Out of credit twice: the second partial report replaces the first."""
+        _make_case(tmp_path)
+        orch = _orchestrator(tmp_path)
         md, _ = _reports(tmp_path)
-        md.write_text("REPORT FROM LAST WEEK")
+        write_fallback_report(orch, CASE, tmp_path, time.time(), OutOfCreditError("first"))
         os.utime(md, (time.time() - 3600, time.time() - 3600))
 
-        written = write_fallback_report(_orchestrator(tmp_path), CASE, tmp_path, time.time(), None)
+        written = write_fallback_report(orch, CASE, tmp_path, time.time(), RuntimeError("second"))
 
         assert written is not None
-        assert BANNER in md.read_text()
+        assert written.markdown == md
+        assert "unexpected RuntimeError: second" in md.read_text()
+        assert "Earlier report" not in md.read_text()
+        assert not list(tmp_path.glob("*.partial.*"))
 
     def test_no_case_database_writes_nothing(self, tmp_path: Path) -> None:
         orch = _orchestrator(tmp_path)
@@ -315,8 +376,8 @@ class TestWriteFallback:
 def _invoke(db_dir: Path, outcome: object) -> Any:
     """Run ``mulder investigate`` with the pipeline replaced by *outcome*.
 
-    *outcome* is the ``InvestigationResult`` the pipeline returns, or the
-    exception it raises.
+    *outcome* is the ``InvestigationResult`` the pipeline returns, the
+    exception it raises, or a function to run in its place.
     """
     orch = SimpleNamespace(
         result=InvestigationResult(phases=[PhaseResult(phase_name="catalog", success=True)]),
@@ -325,9 +386,10 @@ def _invoke(db_dir: Path, outcome: object) -> Any:
         dashboard=MagicMock(),
         run=MagicMock(),
         _write_model_usage=MagicMock(),
+        _session=SimpleNamespace(last_query_error=""),
     )
     pipeline = MagicMock(return_value=outcome)
-    if isinstance(outcome, BaseException):
+    if isinstance(outcome, BaseException) or callable(outcome):
         pipeline.side_effect = outcome
     with (
         patch("mulder.orchestrator.runner.Orchestrator", return_value=orch),
@@ -346,7 +408,7 @@ class TestInvestigateCli:
             (OutOfCreditError("Credit balance is too low"), 2, "out of credit or over its quota"),
             (AuthenticationError("Not logged in"), 2, "authentication failed"),
             (ModelNotAvailableError("model not found"), 2, "model is not available"),
-            (KeyboardInterrupt(), 1, "interrupted by the operator"),
+            (KeyboardInterrupt(), 1, "interrupted (Ctrl-C or SIGTERM)"),
             (RuntimeError("boom"), 1, "unexpected RuntimeError: boom"),
             (_FAILED, 1, "ended without finalizing a report"),
         ],
@@ -366,6 +428,38 @@ class TestInvestigateCli:
         assert BANNER in md.read_text()
         assert reason in md.read_text()
         assert reason in html.read_text()
+
+    def test_sigterm_ends_the_run_like_ctrl_c(self, tmp_path: Path) -> None:
+        """``docker stop`` sends SIGTERM, which by default kills with no report."""
+        _make_case(tmp_path)
+
+        def terminated(_coro: object) -> None:
+            os.kill(os.getpid(), signal.SIGTERM)
+            time.sleep(1)  # cut short by KeyboardInterrupt once the signal is handled
+
+        # Ignored for the test, so a missing handler fails it instead of
+        # killing the test run.
+        before = signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        try:
+            result = _invoke(tmp_path, terminated)
+        finally:
+            signal.signal(signal.SIGTERM, before)
+
+        assert result.exit_code == 1
+        assert "interrupted (Ctrl-C or SIGTERM)" in _reports(tmp_path)[0].read_text()
+
+    def test_an_earlier_report_is_kept_and_the_terminal_says_so(self, tmp_path: Path) -> None:
+        _make_case(tmp_path)
+        md, _ = _reports(tmp_path)
+        md.write_text("FINALIZED LAST WEEK")
+        os.utime(md, (time.time() - 3600, time.time() - 3600))
+
+        result = _invoke(tmp_path, AuthenticationError("Not logged in"))
+
+        assert result.exit_code == 2
+        assert md.read_text() == "FINALIZED LAST WEEK"
+        assert f"Markdown: {tmp_path / f'{CASE}.partial.report.md'}" in result.output
+        assert f"The report an earlier run left was kept: {md}" in result.output
 
     def test_a_successful_run_is_left_alone(self, tmp_path: Path) -> None:
         _make_case(tmp_path)

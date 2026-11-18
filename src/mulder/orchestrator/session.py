@@ -7,6 +7,7 @@ token usage and tool activity to the dashboard.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -161,7 +162,8 @@ _MODEL_PATTERNS: tuple[str, ...] = (
 #: limits". OpenAI-compatible: error code ``insufficient_quota`` (sent as HTTP
 #: 429), "Billing hard limit has been reached". OpenRouter and DeepSeek (HTTP
 #: 402): "Insufficient credits", "Insufficient Balance". LiteLLM proxy
-#: budgets: "Budget has been exceeded!", "ExceededBudget:".
+#: budgets: "Budget has been exceeded!", "ExceededBudget:", and for a
+#: per-model budget "... exceeded budget for model=<model>".
 #:
 #: Deliberately absent, because providers also use them for per-minute limits
 #: that clear on their own: "rate limit", "too many requests", "quota
@@ -177,6 +179,7 @@ _CREDIT_PATTERNS: tuple[str, ...] = (
     "insufficient balance",
     "budget has been exceeded",
     "exceededbudget",
+    "exceeded budget for model",
     "payment required",
 )
 
@@ -243,6 +246,43 @@ def _is_payment_required(message: object) -> bool:
         True if its structured ``api_error_status`` is 402.
     """
     return getattr(message, "api_error_status", None) == _PAYMENT_REQUIRED
+
+
+async def _close_stream(stream: Any) -> None:
+    """Close an SDK message stream whose loop is being left on a fatal error.
+
+    The generator is suspended at a ``yield``. Left like that, asyncio closes
+    it from another task at loop shutdown, which the SDK cannot do cleanly
+    and logs as "aclose(): asynchronous generator is already running". A
+    failure to close must not replace the error being raised.
+
+    Args:
+        stream: The async generator returned by ``query``.
+    """
+    with contextlib.suppress(Exception):
+        await stream.aclose()
+
+
+def _is_result_prose(exc: object) -> bool:
+    """Return True when an SDK ``ResultError`` does not report an API failure.
+
+    Its message is then the result frame's own text, which can be the
+    model's last words (and so can quote evidence) rather than an error the
+    CLI wrote. Credit wording there is not classified.
+
+    Args:
+        exc: An exception raised by ``query``.
+
+    Returns:
+        True for a ``ResultError`` with no ``api_error_status`` and a
+        ``terminal_reason`` other than ``"api_error"``; False for every
+        other exception type.
+    """
+    return (
+        hasattr(exc, "api_error_status")
+        and getattr(exc, "api_error_status", None) is None
+        and getattr(exc, "terminal_reason", None) != "api_error"
+    )
 
 
 def _classify_fatal_error(text: str) -> tuple[str, str]:
@@ -460,6 +500,10 @@ class SessionExecutor:
         self._proxy_settings: dict[str, ModelSettings] = {}
         self._no_thinking = no_thinking
         self._show_cli_stderr = show_cli_stderr
+        #: The "Query error" text of the most recent session, empty when it
+        #: had none. A partial report quotes it next to a failed gate, which
+        #: otherwise names only the symptom (``orchestrator/fallback.py``).
+        self.last_query_error = ""
 
     def _stderr_callback(self, label: str) -> Callable[[str], None]:
         """Keep diagnostics scoped to their query and inside the live dashboard."""
@@ -645,6 +689,7 @@ class SessionExecutor:
         got_result = False
         hit_context_limit = False
         hit_turn_limit = False
+        self.last_query_error = ""
 
         for connect_attempt in range(1, _MCP_CONNECT_ATTEMPTS + 1):
             mcp_problem = ""
@@ -721,6 +766,7 @@ class SessionExecutor:
             except SystemExit:
                 raise
             except FATAL_ERRORS:
+                await _close_stream(stream)
                 raise
             except Exception as exc:
                 exc_msg = str(exc)
@@ -739,7 +785,9 @@ class SessionExecutor:
                         model=model,
                         alternative=alt,
                     ) from exc
-                if category == "credit" or _is_payment_required(exc):
+                if _is_payment_required(exc) or (
+                    category == "credit" and not _is_result_prose(exc)
+                ):
                     raise OutOfCreditError(exc_msg) from exc
 
                 if hit_turn_limit or _is_turns_exhausted(exc):
@@ -757,6 +805,7 @@ class SessionExecutor:
                 else:
                     self._dashboard.log_gate_fail(f"Query error: {exc_msg}")
                     logger.error("Query error: %s", exc_msg)
+                    self.last_query_error = exc_msg
 
             if not mcp_problem:
                 break
@@ -1110,7 +1159,8 @@ class SessionExecutor:
 
         collected_text: list[str] = []
         try:
-            async for message in query(prompt=prompt, options=options):
+            stream = query(prompt=prompt, options=options)
+            async for message in stream:
                 if isinstance(message, AssistantMessage):
                     for block in message.content:
                         if isinstance(block, TextBlock):
@@ -1135,6 +1185,7 @@ class SessionExecutor:
                     if _is_payment_required(message):
                         raise OutOfCreditError(message.result or "HTTP 402 Payment Required")
         except FATAL_ERRORS:
+            await _close_stream(stream)
             raise
         except Exception as exc:
             exc_msg = str(exc)
@@ -1151,7 +1202,7 @@ class SessionExecutor:
                     model="",
                     alternative=alt,
                 ) from exc
-            if category == "credit" or _is_payment_required(exc):
+            if _is_payment_required(exc) or (category == "credit" and not _is_result_prose(exc)):
                 raise OutOfCreditError(exc_msg) from exc
             logger.warning("Utility query '%s' failed: %s", label, exc)
             return None

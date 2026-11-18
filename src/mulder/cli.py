@@ -5,6 +5,7 @@ from __future__ import annotations
 import hmac
 import logging
 import os
+import signal
 import sys
 import time
 from pathlib import Path
@@ -120,6 +121,9 @@ def _leave_partial_report(
         err=True,
     )
     _echo_report_paths(written, err=True)
+    earlier = db_dir / f"{case_id}.report.md"
+    if written.markdown != earlier:
+        click.echo(f"  The report an earlier run left was kept: {earlier}", err=True)
 
 
 def _is_interactive() -> bool:
@@ -489,6 +493,9 @@ def investigate(
     )
 
     started_at = time.time()
+    # ``docker stop`` and runner timeouts send SIGTERM. End the way Ctrl-C
+    # does, so sessions are closed and the partial report is still written.
+    signal.signal(signal.SIGTERM, signal.default_int_handler)
 
     def run_pipeline() -> InvestigationResult:
         """Run the investigation; if it dies, leave a partial report first."""
