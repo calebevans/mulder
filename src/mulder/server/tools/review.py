@@ -38,13 +38,14 @@ _EVIDENCE_TOOL_MAP: dict[str, list[str]] = {
         "run_volatility_batch",
         "yara_scan_memory",
     ],
+    # Tools that read a path, not the inside of an image (yara_scan_files,
+    # detect_steganography), are not listed: run on an image file they scan
+    # the container, and reporting them as "not run" asked for exactly that.
     "disk_image": [
         "run_fls",
         "run_bulk_extractor",
         "run_mmls",
-        "yara_scan_files",
         "run_plaso",
-        "detect_steganography",
         "run_optical_listing",
     ],
     "network_capture": [
@@ -105,9 +106,7 @@ _EVIDENCE_INPUT_PARAMS: dict[str, tuple[str, ...]] = {
     "run_fls": ("image_path",),
     "run_bulk_extractor": ("image_path",),
     "run_mmls": ("image_path",),
-    "yara_scan_files": ("target_path",),
     "run_plaso": ("evidence_path",),
-    "detect_steganography": ("target_path",),
     "run_optical_listing": ("image_path",),
     "run_pcap_analysis": ("pcap_path",),
     "run_evtx_parser": ("evtx_path",),
@@ -576,8 +575,13 @@ def get_investigation_summary() -> dict[str, object]:
 
     remaining_work: list[str] = []
     non_negative = [f for f in findings if not f.title.startswith(_NON_EVENT_PREFIXES)]
-    if any(not f.event_time_start for f in non_negative):
-        remaining_work.append("Add timestamps to non-negative findings missing event_time_start")
+    # The same exemption the timestamp gate applies, so this never asks for
+    # work the gate does not require.
+    needs_time = [f for f in non_negative if f.severity not in ("info", "informational")]
+    if any(not f.event_time_start for f in needs_time):
+        remaining_work.append(
+            "Add timestamps to findings above 'info' severity that lack event_time_start"
+        )
     if not (case_metadata.narrative and case_metadata.narrative.strip()):
         remaining_work.append("Submit investigation narrative via submit_narrative")
     tool_counts = audit_summary.tool_call_counts

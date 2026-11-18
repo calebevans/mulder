@@ -434,14 +434,14 @@ def search(
         "has_more": total_matches > len(results),
         "remaining": remaining,
         "sources_matched": sources_matched,
-        "hint": "Use get_raw_output(source_name, offset, limit) to retrieve full evidence text.",
+        "hint": "Use get_raw_output(source_name, limit, after_id) to retrieve full evidence text.",
     }
     if remaining > 0:
         response["hint"] = (
             f"Showing {len(results)} of {total_matches} matches "
             f"({remaining} remaining). Increase max_results or narrow with "
             "source/time filters to see more. "
-            "Use get_raw_output(source_name, offset, limit) to retrieve full evidence text."
+            "Use get_raw_output(source_name, limit, after_id) to retrieve full evidence text."
         )
     return response
 
@@ -950,7 +950,7 @@ def get_raw_output(
     content in large sources, prefer search(query, source=source_name).
 
     On a multi-image case the same source name exists once per image
-    (``tsk.masquerade`` for RM1 and for RM2). Pass ``evidence_path`` to
+    (``tsk.masquerade`` for each of two images). Pass ``evidence_path`` to
     read one image's rows; without it, an ambiguous name returns an
     error listing the candidate paths rather than mixing images.
 

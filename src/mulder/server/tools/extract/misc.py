@@ -944,19 +944,33 @@ def run_vshadow_info(image_path: str, offset: int = 0) -> dict[str, object]:
 @mcp.tool()
 @tool_access(Role.EXTRACT_EXECUTOR)
 def run_chkrootkit(target_path: str | None = None) -> dict[str, object]:
-    """Scan for known Linux rootkits and suspicious kernel modifications.
+    """Scan a mounted Linux root directory for known rootkits.
 
-    Checks for known rootkits, suspicious kernel modules, and signs of
-    system compromise.  Complements ClamAV which focuses on file
-    malware signatures.
+    Call only when the evidence is available as a mounted or unpacked root
+    filesystem. It cannot read a disk image file, and it is never run
+    against the machine the analysis runs on.
+
+    Returns chkrootkit's report, indexed as chkrootkit.scan.
 
     Args:
-        target_path: Optional alternate root path to check (e.g. a
-            mounted disk image).  If None, checks the live system.
+        target_path: The root directory of the system to check (a mounted
+            image or an unpacked filesystem). Required.
     """
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
     params = {"target_path": target_path}
+
+    # Without -r chkrootkit inspects the host it runs on, and its output
+    # would be indexed as if it were the suspect system's.
+    if not target_path or not Path(target_path).is_dir():
+        return error_response(
+            tc_id,
+            "run_chkrootkit",
+            params,
+            "run_chkrootkit needs target_path: the root directory of the system to check",
+            error_type="invalid_argument",
+            suggestion="It cannot read a disk image file. Do not retry without a mounted root.",
+        )
 
     if not require_binary("chkrootkit"):
         return error_response(
@@ -967,9 +981,7 @@ def run_chkrootkit(target_path: str | None = None) -> dict[str, object]:
             error_type="binary_missing",
         )
 
-    cmd = ["chkrootkit"]
-    if target_path:
-        cmd.extend(["-r", target_path])
+    cmd = ["chkrootkit", "-r", target_path]
 
     try:
         proc = subprocess.run(

@@ -373,6 +373,10 @@ def _evaluate_and_score_pids(
 def find_suspicious_processes() -> dict[str, object]:
     """Identify suspicious processes by cross-referencing memory forensics artifacts.
 
+    Windows evidence only: it reads Windows artifacts, so on Linux, macOS,
+    mobile, network-only or cloud evidence it returns nothing, and that
+    empty result is not a negative finding.
+
     Joins data from Volatility malfind (code injection), cmdline (command
     arguments), netscan (network connections), pstree (parent-child
     relationships), psscan (hidden process detection), privs (privilege

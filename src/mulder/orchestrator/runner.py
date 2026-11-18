@@ -344,7 +344,7 @@ class Orchestrator:
         # Phase 5: Report (single-mode)
         report_result = await self._run_single_phase(
             REPORT,
-            prompt_vars={"case_briefing": self._case_briefing},
+            prompt_vars={"case_briefing": self._case_briefing, "case_id": self._case_id},
         )
         result.phases.append(report_result)
         self._accumulate(result, report_result)
@@ -398,6 +398,9 @@ class Orchestrator:
                             "evidence_path": self.evidence_path,
                             "evidence_context": evidence_context,
                             "case_id": self._case_id,
+                            # For the analyst; the planner's copy is in
+                            # evidence_context above.
+                            "case_briefing": self._case_briefing,
                         },
                         skip_phase_header=True,
                     )

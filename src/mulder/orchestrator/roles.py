@@ -391,6 +391,9 @@ class RoleRunner:
         context: dict[str, str] = {
             "execution_results": json.dumps(sanitized_results),
             "investigation_questions": json.dumps(plan.investigation_questions),
+            # The analyst writes the findings; it gets the examiner's
+            # briefing itself, not only what the planner made of it.
+            "case_briefing": "",
         }
         if prompt_vars:
             context.update(prompt_vars)
@@ -434,15 +437,15 @@ class RoleRunner:
             f"Case ID: {self._case_id}\n"
             f"Call open_case(case_id='{self._case_id}') as your FIRST action.\n\n"
             f"GATE FAILED for phase '{phase.name}':\n{gap_text}\n\n"
-            "Fix exactly these gaps and nothing else. For each finding named "
-            "above, either set event_time_start via update_finding using a "
-            "precise timestamp from evidence you have already examined, or, "
-            "if it describes a state rather than a timed event, set its "
-            "severity to 'info'; if it records a hypothesis you ruled out, "
-            "prefix its title with '[NEGATIVE]'. Do not fabricate timestamps. "
-            "Do not re-run extraction and do not submit new findings unless "
-            "a gap explicitly asks for one. Call check_finalize_readiness "
-            "when done."
+            "Fix exactly these gaps and nothing else. If a gap names findings "
+            "that lack event_time_start, then for each one either set it via "
+            "update_finding using a precise timestamp from evidence you have "
+            "already examined, or, if it describes a state rather than a "
+            "timed event, set its severity to 'info'; if it records a "
+            "hypothesis you ruled out, prefix its title with '[NEGATIVE]'. Do "
+            "not fabricate timestamps. Do not re-run extraction and do not "
+            "submit new findings unless a gap explicitly asks for one. Call "
+            "track_progress when done."
         )
         self._dashboard.log_info(f"{phase.name}: Remediating gate gaps (analyst only)")
         logger.info("[%s] Running gate remediation for gaps: %s", phase.name, gaps)

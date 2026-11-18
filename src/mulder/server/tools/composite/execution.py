@@ -191,6 +191,10 @@ def _annotate_execution_anomalies(
 def find_execution_evidence() -> dict[str, object]:
     """Build a unified execution evidence view from multiple artifact sources.
 
+    Windows evidence only: it reads Windows artifacts, so on Linux, macOS,
+    mobile, network-only or cloud evidence it returns nothing, and that
+    empty result is not a negative finding.
+
     Joins EZ Tools prefetch (run times), amcache (install/execution with
     hashes), shimcache (file existence evidence), jump lists (user file
     access), LNK files (shortcut execution), and the Volatility process
@@ -270,6 +274,10 @@ def find_execution_evidence() -> dict[str, object]:
 @tool_access(Role.CROSS_EXECUTOR)
 def analyze_execution_timeline() -> dict[str, object]:
     """Build a unified execution timeline from prefetch, amcache, and shimcache.
+
+    Windows evidence only: it reads Windows artifacts, so on Linux, macOS,
+    mobile, network-only or cloud evidence it returns nothing, and that
+    empty result is not a negative finding.
 
     Merges per-executable evidence from EZ Tools to show first/last
     seen times, run counts, SHA1 hashes, and flags anomalies like

@@ -226,8 +226,8 @@ def index_app_files(
         image_path: Path to the disk image.
         directory_pattern: Path pattern to match directories. Supports
             wildcards: ``Program Files/*`` matches all program dirs,
-            ``Documents and Settings/*/Application Data/mIRC`` matches
-            a specific app for all users. Pattern is matched against
+            ``Users/*/AppData/Roaming/<application>`` matches one
+            application's data for all users. Pattern is matched against
             the TSK file listing paths.
         extensions: File extensions to include. Defaults to common text
             and config extensions: .ini, .cfg, .conf, .txt, .log, .xml,

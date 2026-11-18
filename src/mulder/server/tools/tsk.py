@@ -408,7 +408,7 @@ def extract_file_by_inode(
             Specify manually if auto-detection fails on raw DD images.
         image_path: Path to the specific disk image containing this inode.
             Required when multiple disk images have been ingested into the
-            same case (e.g. NDLC with 4 images). When omitted, the first
+            same case. When omitted, the first
             ingested image is used (safe for single-image cases).
     """
     ctx = get_ctx()
