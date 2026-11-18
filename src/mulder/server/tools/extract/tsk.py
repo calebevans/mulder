@@ -472,26 +472,43 @@ _DIR_LISTING_NOTE = (
     "does not show it was absent from the system."
 )
 
+# ponytail: one lock for every directory; a lock per path if the listings of
+# several large collections ever need to be indexed at the same time.
+_dir_listing_lock = threading.Lock()
+
 _MAX_BODY_BYTES = 256 * 1024 * 1024
 """Most of a collection's body file handed to mactime."""
 
-_MACTIME_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2})?")
+_MACTIME_DATE = r"\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2})?"
+_MACTIME_RANGE_RE = re.compile(rf"{_MACTIME_DATE}(?:\.\.{_MACTIME_DATE})?")
 
 
-def _index_dir_listing(image_path: str) -> dict[str, object] | None:
-    """Index a directory root's files as ``tsk.filelist``; None when *image_path* is not one."""
+def _index_dir_listing(image_path: str, force: bool = False) -> dict[str, object] | None:
+    """Index a directory root's files as ``tsk.filelist``; None when *image_path* is not one.
+
+    run_fls and index_triage_collection both end up here, and one batch may
+    hold both for the same directory: the check and the write are one step.
+    """
     root = dir_root(image_path)
     if root is None:
         return None
-    summary: dict[str, object] = {
-        "listing": "directory",
-        "note": _DIR_LISTING_NOTE,
-        "files_listed": len(root.files),
-        "truncated": root.truncated,
-    }
-    summary.update(
-        extract_and_index(root.listing(), "tsk.filelist", image_path, LISTING_EXTRACTOR)
-    )
+    with _dir_listing_lock:
+        existing = sources_already_indexed(["tsk.filelist"], evidence_path=image_path)
+        if existing and not force:
+            return {
+                "status": "skipped",
+                "reason": "Sources already indexed from prior extraction",
+                "existing_sources": existing,
+            }
+        summary: dict[str, object] = {
+            "listing": "directory",
+            "note": _DIR_LISTING_NOTE,
+            "files_listed": len(root.files),
+            "truncated": root.truncated,
+        }
+        summary.update(
+            extract_and_index(root.listing(), "tsk.filelist", image_path, LISTING_EXTRACTOR)
+        )
     return summary
 
 
@@ -525,8 +542,7 @@ def _mactime_from_body_file(
     if not require_binary("mactime"):
         return error_response(tc_id, "run_mactime", params, "mactime not found on PATH")
 
-    dates = time_range.split("..") if time_range else []
-    if not all(_MACTIME_DATE_RE.fullmatch(d) for d in dates):  # they become arguments
+    if time_range and not _MACTIME_RANGE_RE.fullmatch(time_range):  # it becomes an argument
         return error_response(
             tc_id,
             "run_mactime",
@@ -534,10 +550,12 @@ def _mactime_from_body_file(
             f"time_range must be YYYY-MM-DD or YYYY-MM-DD..YYYY-MM-DD, not {time_range!r}",
             error_type="invalid_input",
         )
+    body_text = body[0].decode("utf-8", errors="replace")
     try:
         mac_proc = subprocess.run(
-            ["mactime", "-b", "-", "-d", *dates],
-            input=body[0].decode("utf-8", errors="replace"),
+            # The range is one argument: given two, mactime ignores the end date.
+            ["mactime", "-b", "-", "-d", *([time_range] if time_range else [])],
+            input=body_text,
             capture_output=True,
             text=True,
             timeout=TOOL_TIMEOUT,
@@ -546,13 +564,32 @@ def _mactime_from_body_file(
     except subprocess.TimeoutExpired:
         return error_response(tc_id, "run_mactime", params, "mactime timed out")
 
+    # mactime exits 0 and drops what it cannot read, so count what came back.
+    timeline = mac_proc.stdout.strip()
+    body_rows = body[0].count(b"\n") + (not body[0].endswith(b"\n"))
+    timeline_rows = timeline.count("\n")  # the lines after the header row
+    if not timeline_rows:
+        return error_response(
+            tc_id,
+            "run_mactime",
+            params,
+            f"mactime wrote no timeline rows (body file rows read: {body_rows})"
+            + (
+                f" for time_range {time_range}: nothing in the body file falls in that "
+                "range, or the range is not one of real dates."
+                if time_range
+                else ": the body file is not in Sleuth Kit body format."
+            ),
+            error_type="no_rows",
+        )
+
     summary: dict[str, object] = {
         "body_file": "bodyfile/bodyfile.txt, written by the collector on the live system",
         "truncated": not body[1],
+        "body_rows": body_rows,
+        "timeline_rows": timeline_rows,
     }
-    summary.update(
-        extract_and_index(mac_proc.stdout.strip(), "tsk.timeline", image_path, "sleuthkit")
-    )
+    summary.update(extract_and_index(timeline, "tsk.timeline", image_path, "sleuthkit"))
     elapsed = (time.monotonic() - t0) * 1000
     return tool_response(tc_id, "run_mactime", params, summary, "tsk.timeline", elapsed)
 
@@ -725,7 +762,7 @@ def run_fls(
                 0.0,
             )
 
-    listed = _index_dir_listing(image_path)
+    listed = _index_dir_listing(image_path, force)
     if listed is not None:
         elapsed = (time.monotonic() - t0) * 1000
         return tool_response(tc_id, "run_fls", params, listed, "tsk.filelist", elapsed)

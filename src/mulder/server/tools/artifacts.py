@@ -350,7 +350,9 @@ def parse_plist(plist_filter: str | None = None) -> dict[str, object]:
 
 @mcp.tool()
 @tool_access(Role.EXTRACT_EXECUTOR | Role.EXTRACT_ANALYST)
-def query_sqlite_from_image(inode: int, query: str, description: str = "") -> dict[str, object]:
+def query_sqlite_from_image(
+    inode: int, query: str, description: str = "", image_path: str | None = None
+) -> dict[str, object]:
     """Extract a SQLite database from a disk image and run a SQL query.
 
     Uses icat to extract the file at *inode* to a temp directory, opens
@@ -361,16 +363,36 @@ def query_sqlite_from_image(inode: int, query: str, description: str = "") -> di
         inode: The inode number of the SQLite database (from fls listing).
         query: The SQL SELECT query to execute.
         description: Optional label for the indexed source name.
+        image_path: The disk image or triage collection directory whose
+            listing the inode came from. Needed only when the case holds a
+            collection beside another file listing.
     """
+    from mulder.server.tools.tsk import _listing_root
+    from mulder.server.tools.tsk import _resolve_image_and_offset as _resolve_named
+
     ctx = get_ctx()
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
     params = {"inode": inode, "query": query, "description": description}
+    if image_path is not None:
+        params["image_path"] = image_path
 
     if not shutil.which("icat"):
         return {"tool_call_id": tc_id, "status": "error", "error_message": "icat not found"}
 
-    image_path, offset = _resolve_image_and_offset()
+    # A collection's inode column is a row number: never read it from an image.
+    directory, problem = _listing_root(image_path)
+    if problem:
+        return {"tool_call_id": tc_id, "status": "error", "error_message": problem}
+    try:
+        if directory:
+            image_path, offset = directory, 0
+        elif image_path:
+            image_path, offset, _ = _resolve_named(image_path)
+        else:
+            image_path, offset = _resolve_image_and_offset()
+    except ValueError as exc:  # image_path is not an image this case has listed
+        return {"tool_call_id": tc_id, "status": "error", "error_message": str(exc)}
     if not image_path:
         return {"tool_call_id": tc_id, "status": "error", "error_message": "No disk image indexed"}
 

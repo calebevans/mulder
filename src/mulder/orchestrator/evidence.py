@@ -12,6 +12,9 @@ Contains two collaborators extracted from the Orchestrator:
 from __future__ import annotations
 
 import logging
+import os
+import re
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +22,7 @@ from mulder import collect as collector
 from mulder.dirroot import Collection, detect_collection
 from mulder.extractors.classifier import (
     RAW_CONTAINER_EXTS,
+    ClassifiedEvidence,
     EvidenceClassifier,
     _dir_has_named_nfcapd,
     has_disk_signature,
@@ -64,6 +68,11 @@ _MEMORY_EXTENSIONS: frozenset[str] = frozenset(
 _ARCHIVE_EXTENSIONS: frozenset[str] = frozenset(
     (".7z", ".zip", ".gz", ".tar", ".xz", ".bz2", ".rar", ".zst")
 )
+
+
+def _unprintable(path: object) -> bool:
+    """Whether *path* holds a control character, which would start a prompt line of its own."""
+    return any(ch < " " or ch == "\x7f" for ch in str(path))
 
 
 def _is_raw_disk(path: Path) -> bool:
@@ -138,13 +147,22 @@ class EvidenceContext:
 
         sys_lower = system_name.lower()
 
+        # One walk of each directory, shared by the passes that classify.
+        classified = {
+            base: EvidenceClassifier().classify(base)
+            for base in (evidence_path, extracted_dir)
+            if base.is_dir()
+        }
         # A file below a triage collection's top level is one of the collected
         # files, not a loose image, dump or archive: the collection is listed
         # as a whole further down.
-        collections = self._collections()
+        collections = self._collections(classified)
+        claimed = self._claimed(sys_lower, collections)
+        inside = tuple(f"{c.root}{os.sep}" for c in collections)
 
         def collected(f: Path) -> bool:
-            return any(c.root in f.parents and f.parent != c.root for c in collections)
+            path = str(f)
+            return any(path.startswith(p) and os.sep in path[len(p) :] for p in inside)
 
         disk_images: list[str] = []
         if evidence_path.is_dir():
@@ -202,6 +220,15 @@ class EvidenceContext:
                         ) and str(f) not in memory_dumps:
                             memory_dumps.append(str(f))
 
+        # Memory and crash dumps a collector copied (KAPE takes MEMORY.DMP and
+        # *.dmp) belong to the system the collection belongs to.
+        memory_dumps += [
+            dump
+            for c in claimed
+            for dump in collections[c]
+            if dump not in memory_dumps and not _unprintable(dump)
+        ]
+
         # parent dir -> (file count, first name, last name, matches system name)
         netflow_dirs: dict[str, tuple[int, str, str, bool]] = {}
         # the sibling-name cache is per walk: a directory that gained a rotation-named file
@@ -257,8 +284,8 @@ class EvidenceContext:
         unclaimed = {d: v for d, v in netflow_dirs.items() if not _claimed_by_other(d)}
         shown = mine if mine else (unclaimed if catalog_says_netflow else {})
 
-        ci_cloud = self._ci_cloud_lines(sys_lower)
-        triage = self._triage_lines(sys_lower, collections)
+        ci_cloud = self._ci_cloud_lines(sys_lower, classified)
+        triage = self._triage_lines(claimed)
 
         lines: list[str] = [f"System: {system_name}"]
         if disk_images:
@@ -340,7 +367,9 @@ class EvidenceContext:
         )
         return lines
 
-    def _ci_cloud_lines(self, sys_lower: str) -> list[str]:
+    def _ci_cloud_lines(
+        self, sys_lower: str, classified: dict[Path, list[ClassifiedEvidence]]
+    ) -> list[str]:
         """Planner lines for cloud audit logs, repository checkouts and CI run logs.
 
         These are evidence of a kind the planner cannot recognise from a file
@@ -353,11 +382,8 @@ class EvidenceContext:
         "system" is an organization or account, whose name is rarely a path.
         """
         found: dict[str, dict[str, int]] = {t: {} for t in _CI_CLOUD_TYPES}
-        roots = [Path(self.evidence_path), self.extracted_dir]
-        for root in roots:
-            if not root.is_dir():
-                continue
-            for item in EvidenceClassifier().classify(root):
+        for root, items in classified.items():
+            for item in items:
                 if item.artifact_type not in found:
                     continue
                 # Loose audit log files are planned once, by their directory.
@@ -393,55 +419,85 @@ class EvidenceContext:
             lines.append(f"  {plan}")
         return lines
 
-    def _collections(self) -> list[Collection]:
+    @staticmethod
+    def _collections(
+        classified: dict[Path, list[ClassifiedEvidence]],
+    ) -> dict[Collection, list[str]]:
         """Triage collections in the evidence directory and in unpacked archives.
 
         Each keeps the spelling of the directory it was found under, as the
-        other paths the planner is given do.
+        other paths the planner is given do, and comes with the memory and
+        crash dumps found inside it.
         """
-        found: list[Collection] = []
-        for base in (Path(self.evidence_path), self.extracted_dir):
-            if not base.is_dir():
-                continue
+        found: dict[Collection, list[str]] = {}
+        for base, items in classified.items():
             resolved = base.resolve()
-            for item in EvidenceClassifier().classify(base):
+            for item in items:
                 if item.artifact_type != "triage_collection":
                     continue
                 collection = detect_collection(base / item.path.relative_to(resolved))
                 if collection is not None:
-                    found.append(collection)
+                    found[collection] = [
+                        str(base / dump.path.relative_to(resolved))
+                        for dump in items
+                        if dump.artifact_type == "memory_dump" and item.path in dump.path.parents
+                    ]
         return found
 
-    def _triage_lines(self, sys_lower: str, found: list[Collection]) -> list[str]:
-        """Planner lines for triage collections: where each is and how to pass it.
+    def _claimed(self, sys_lower: str, found: Iterable[Collection]) -> list[Collection]:
+        """The collections among *found* that belong to this system.
 
-        A collection belongs to this system when the system's name appears in
-        its path or matches the host name the collection states. Failing that,
-        as for cloud evidence, when the catalog assigned the type to the system
-        and no other system's name claims the collection.
+        One whose stated host name is the system's name, compared on the first
+        DNS label, or whose path below the evidence or extraction directory
+        holds the name as a whole word: PC1 does not claim PC10's collection,
+        and a name that occurs in the path to the evidence claims nothing.
+        Failing that, as for cloud evidence, the ones no other system claims
+        when the catalog assigned the type to this system.
         """
+        bases = (Path(self.evidence_path), self.extracted_dir)
+
+        def below(root: Path) -> str:
+            base = next((b for b in bases if root.is_relative_to(b)), root.parent)
+            return str(root.relative_to(base)).lower()
 
         def claims(name: str, collection: Collection) -> bool:
-            host = collection.host.lower()
-            return name in str(collection.root).lower() or bool(
-                host and (name in host or host in name)
-            )
+            host = collection.host.lower().split(".")[0]
+            if host and host == name.split(".")[0]:
+                return True
+            whole = rf"(?<![a-z0-9]){re.escape(name)}(?![a-z0-9])"
+            return bool(name) and re.search(whole, below(collection.root)) is not None
 
+        found = list(found)
         mine = [c for c in found if claims(sys_lower, c)]
         catalog_ev = self._catalog_systems.get(sys_lower, {}).get("evidence", [])
         if not mine and isinstance(catalog_ev, list) and "triage_collection" in catalog_ev:
             others = [n for n in self._catalog_systems if n and n != sys_lower]
             mine = [c for c in found if not any(claims(o, c) for o in others)]
+        return mine
+
+    @staticmethod
+    def _triage_lines(mine: list[Collection]) -> list[str]:
+        """Planner lines for this system's triage collections: where each is and how to pass it."""
         if not mine:
             return []
-
         lines = [
             'Triage collections (type "triage_collection": files copied from a live system, '
             "not a disk image):"
         ]
-        lines += [
-            f"  {c.root}  ({c.description})" for c in sorted(mine, key=lambda c: str(c.root))
-        ]
+        listed = [c for c in mine if not _unprintable(c.root)]
+        # The tools do not take a symlink for a collection, so one is spelled out.
+        lines += sorted(
+            f"  {c.root.resolve() if c.root.is_symlink() else c.root}  ({c.description})"
+            for c in listed
+        )
+        if len(listed) < len(mine):
+            lines.append(
+                f"  ({len(mine) - len(listed)} left out: the directory name holds control "
+                "characters, so its path cannot be given to a tool.)"
+            )
+        if not listed:
+            return lines
+        mine = listed
         lines.append(
             "  Plan index_triage_collection(evidence_path=<directory>), group "
             '"foundation", for each directory above.'

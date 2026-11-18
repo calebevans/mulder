@@ -149,7 +149,9 @@ A triage collection (KAPE, Velociraptor, UAC, or a Windows volume directory)
 is a set of files copied from a live system, not a disk. triage.summary names
 the collector, the host name it states, and which kinds of artifact were
 collected and which were not; tsk.filelist lists every collected file (its
-inode column is a row number).
+inode column is a row number). When triage.summary says the listing was
+truncated, a kind under not_seen_in_cut_listing may still be in the
+collection: it is not "not collected".
 - Nothing in a collection shows a deleted file, unallocated space or a carved
   fragment. A file or artifact that is not in it was not collected, which
   does not show it was absent from the system: write "not collected" or "not

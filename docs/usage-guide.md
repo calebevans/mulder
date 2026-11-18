@@ -672,7 +672,7 @@ evidence/
   uac-web01-linux-20261112093000.tar.gz UAC output
 ```
 
-Each collection is one system, named after the host the collection states (KAPE's console log, Velociraptor's `client_info.json`, the name UAC gives its archive) or else after its directory. Keep other evidence beside a collection's directory rather than inside it: apart from disk images, memory dumps, captures and archives left at its top level, files inside a collection are treated as collected files.
+Each collection is one system, named after the host the collection states (KAPE's console log, Velociraptor's `client_info.json`, the name UAC gives its archive) or else after its directory. Keep other evidence beside a collection's directory rather than inside it: apart from disk images, memory dumps, captures and archives left at its top level, files inside a collection are treated as collected files. Memory and crash dumps the collector copied (`MEMORY.DMP`, `*.dmp`) are still listed as memory dumps for Volatility. The files inside a collection are not hashed into the evidence registry one by one; `scan_evidence` says so, and KAPE's copy log carries the SHA-1 of each file as it was on the system.
 
 `index_triage_collection` writes `triage.summary`, which records which kinds of artifact the collection holds and which it does not. That matters for reading the report:
 

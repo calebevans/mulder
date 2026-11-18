@@ -9,7 +9,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from mulder.dirroot import detect_collection
+from mulder.dirroot import MAX_ENTRIES, detect_collection, walk_files
 from mulder.extractors.optical import SECTOR, signature_from_vrs
 from mulder.patterns import DISK_IMAGE_EXTS
 
@@ -73,6 +73,8 @@ _AUTORUNS_CSV_PATTERNS: tuple[str, ...] = ("autorunsc", "autoruns")
 _CONTAINER_TYPES = frozenset(
     {"memory_dump", "disk_image", "network_capture", "compressed_archive"}
 )
+# What a memory or crash dump copied into a collection is named.
+_COLLECTED_DUMP_EXTS = (".dmp", ".mem", ".vmem", ".raw")
 
 _SKIP_FILENAMES: set[str] = {
     "readme",
@@ -384,7 +386,9 @@ class EvidenceClassifier:
         """The triage collection at *path* as one item, whatever it holds.
 
         Images, memory dumps, captures and archives left at its top level are
-        not part of what the collector wrote, and stay items of their own.
+        not part of what the collector wrote, and stay items of their own. So
+        do the memory and crash dumps the collector copied (KAPE takes
+        ``MEMORY.DMP`` and ``*.dmp``): Volatility reads those, wherever they are.
         """
         items = [ClassifiedEvidence(path=path, artifact_type="triage_collection")]
         try:
@@ -394,6 +398,12 @@ class EvidenceClassifier:
         for child in children:
             found = None if child.name.startswith(".") else self._classify_file(child)
             if found is not None and found.artifact_type in _CONTAINER_TYPES:
+                items.append(found)
+        for rel, stored in sorted(walk_files(path, [MAX_ENTRIES])):
+            if "/" not in rel or not rel.lower().endswith(_COLLECTED_DUMP_EXTS):
+                continue  # at the top level (seen above), or not named as a dump
+            found = self._classify_file(Path(stored))
+            if found is not None and found.artifact_type == "memory_dump":
                 items.append(found)
         return items
 

@@ -28,7 +28,7 @@ from mulder.dirroot import detect_collection
 from mulder.extractors.classifier import ClassifiedEvidence
 from mulder.extractors.optical import probe_optical
 from mulder.path_policy import PathPolicyError, resolve_allowed_path
-from mulder.patterns import case_extract_dir
+from mulder.patterns import EXTRACTION_MARKER, case_extract_dir
 from mulder.server.app import (
     create_case,
     get_cfg,
@@ -100,7 +100,7 @@ _EXTRACTION_LOCK = threading.Lock()
 """Fallback for :func:`_extraction_slot` where ``fcntl`` is unavailable."""
 
 
-_COMPLETION_MARKER = ".mulder-extraction-complete.json"
+_COMPLETION_MARKER = EXTRACTION_MARKER
 """Written only after an extraction runs to completion.
 
 The presence of *files* in a destination proves only that an extraction
@@ -327,6 +327,12 @@ def _scan_evidence_inner(ev_path: Path, case_id: str, replace: bool) -> dict[str
     )
     if failed_files:
         message += f" WARNING: {len(failed_files)} file(s) failed to hash."
+    if type_counts.get("triage_collection"):
+        message += (
+            f" NOTE: {type_counts['triage_collection']} triage collection(s) are directories "
+            "and were not hashed: of the files inside, only those listed above as items of "
+            "their own are in the evidence registry."
+        )
     if archive_count > 0:
         message += (
             f" NOTE: {archive_count} compressed archive(s) detected. "

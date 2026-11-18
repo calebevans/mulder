@@ -62,7 +62,9 @@ OUTPUT REQUIREMENTS:
   after "host" in its label when there is one, otherwise the name of the
   collection's directory exactly as it appears in the path. "type" is Windows
   for KAPE and for a Windows volume directory; for Velociraptor and UAC use
-  the platform the paths and names show, or Unknown.
+  the platform the paths and names show, or Unknown. A memory_dump listed
+  inside the collection's directory (a crash dump the collector copied)
+  belongs to that same system.
 
 FINAL OUTPUT (MANDATORY):
 Your FINAL message MUST be ONLY valid JSON. No text before or after it.

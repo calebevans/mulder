@@ -11,8 +11,8 @@ from unittest.mock import patch
 import pytest
 
 from mulder import dirroot
-from mulder.dirroot import detect_collection, dir_root, icat, read_regular
-from mulder.patterns import fls_file_entries
+from mulder.dirroot import detect_collection, dir_root, icat, not_collected, read_regular
+from mulder.patterns import EXTRACTION_MARKER, fls_file_entries
 from tests.triage_trees import kape, uac, velociraptor, windows_volume, write
 
 
@@ -237,6 +237,7 @@ def test_unreadable_host_records_leave_the_host_empty(tmp_path: Path) -> None:
         "huge": "{" + '"k": 1,' * 40000,  # cut at the read limit
         "deep": "[" * 60000,  # exhausts the JSON parser's stack
         "number": '{"Hostname": 7}',
+        "dots": '{"Hostname": "..."}',  # would stand in any name that has a dot
     }
     for name, content in records.items():
         root = write(tmp_path / name, {"client_info.json": content, "uploads/auto/x": "1"})
@@ -252,6 +253,67 @@ def test_the_walk_is_capped_and_says_so(tmp_path: Path, monkeypatch: pytest.Monk
 
     assert listing is not None and listing.truncated
     assert 0 < len(listing.files) <= 12
+
+
+def test_a_cut_listing_keeps_the_top_of_every_volume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Velociraptor keeps $MFT under the accessor walked last; depth-first, it was cut off."""
+    root = velociraptor(tmp_path / "v")
+    write(root, {f"uploads/auto/C%3A/Users/bob/Downloads/f{i}": "x" for i in range(30)})
+    monkeypatch.setattr(dirroot, "MAX_ENTRIES", 12)
+
+    listing = dir_root(str(root))
+
+    assert listing is not None and listing.truncated
+    assert {"$MFT", "D/data/report.txt"} <= {original for original, _ in listing.files}
+    # What is past the cut is not thereby "not collected".
+    cut = not_collected(str(root))
+    assert cut is not None and "listing was cut" in cut and "the artifact was not" not in cut
+
+
+def test_loose_files_beside_velociraptor_drives_do_not_list_the_drives_twice(
+    tmp_path: Path,
+) -> None:
+    root = velociraptor(tmp_path / "v")
+    write(root, {"uploads/auto/%2Fetc%2Fshadow": "root:!\n"})
+
+    listing = dir_root(str(root))
+
+    assert listing is not None
+    names = [original for original, _ in listing.files]
+    assert len(names) == len(set(names)) == 6  # the fixture's five files and this one
+    assert "%2Fetc%2Fshadow" in names and not any(n.startswith("/") for n in names)
+
+
+def test_mulders_own_extraction_marker_is_not_a_collected_file(tmp_path: Path) -> None:
+    root = write(windows_volume(tmp_path / "w"), {EXTRACTION_MARKER: "{}"})
+
+    assert set(_paths(root)) == {"Users/carol/NTUSER.DAT", "Windows/System32/config/SAM"}
+
+
+def test_a_symlink_is_not_a_root(tmp_path: Path) -> None:
+    """The walk follows no symlink; a root that is one would leave the evidence all the same."""
+    outside = windows_volume(tmp_path / "outside")
+    link = tmp_path / "ws01"
+    link.symlink_to(outside)
+
+    assert dir_root(str(link)) is None and dir_root(f"{link}/") is None
+    assert not_collected(str(link)) is None
+    assert dir_root(str(outside)) is not None
+
+
+def test_reading_what_is_not_a_file_leaks_no_descriptor(tmp_path: Path) -> None:
+    def lowest_free() -> int:
+        fd = os.open(os.devnull, os.O_RDONLY)
+        os.close(fd)
+        return fd
+
+    before = lowest_free()
+    for _ in range(20):
+        assert read_regular(tmp_path, 10) is None  # a directory opens, and is not read
+
+    assert lowest_free() == before
 
 
 def test_an_oversized_file_is_refused_not_cut(

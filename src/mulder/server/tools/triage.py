@@ -75,6 +75,7 @@ _WINDOWS_ARTIFACTS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
         ("scheduled tasks", r"(^|/)windows/system32/tasks/"),
         ("LNK files and jump lists", r"\.(lnk|automaticdestinations-ms)$"),
         ("browser history", r"/(history|places\.sqlite|webcachev\d+\.dat)$"),
+        ("memory and crash dumps", r"\.(dmp|mem|vmem|raw)$|(^|/)hiberfil\.sys$"),
     )
 )
 
@@ -87,13 +88,16 @@ def _slug(name: str) -> str:
 
 
 def _text(path: str | Path, limit: int) -> tuple[str, bool] | None:
-    """A file's text up to *limit* bytes, cut at a line end, and whether it was cut."""
+    """A file's text up to *limit* bytes, cut at a line end, and whether it was cut.
+
+    A file with no line end in its first *limit* bytes keeps what was read.
+    """
     got = read_regular(path, limit)
     if got is None:
         return None
     data, complete = got
     if not complete:
-        data = data[: data.rfind(b"\n") + 1]
+        data = data[: data.rfind(b"\n") + 1] or data
     return data.decode("utf-8-sig", errors="replace"), not complete
 
 
@@ -209,21 +213,38 @@ def _uac_sources(collection: Collection, evidence_path: str) -> tuple[list[str],
         blocks: list[str] = []
         size = 0
         left_out = 0
+        other = 0
+        cut_files: list[str] = []
         for rel, stored in sorted(walk_files(Path(directory), budget)):
             if not rel.endswith(".txt"):
+                other += 1
                 continue
             text = _text(stored, _MAX_OUTPUT_BYTES) if size < _MAX_SOURCE_BYTES else None
             if text is None:
                 left_out += 1
                 continue
             if text[0].strip():
-                cut = f"\n[cut at {_MAX_OUTPUT_BYTES} bytes]" if text[1] else ""
-                block = f"=== live_response/{listed_name(f'{category}/{rel}')} ===\n{text[0]}{cut}"
+                shown = listed_name(f"{category}/{rel}")
+                cut = ""
+                if text[1]:
+                    cut = f"\n[cut at {_MAX_OUTPUT_BYTES} bytes]"
+                    cut_files.append(shown)
+                block = f"=== live_response/{shown} ===\n{text[0]}{cut}"
                 blocks.append(block)
                 size += len(block)
         source = f"triage.uac.{_slug(category)}"
         if left_out:
             problems.append(f"{source}: {left_out} output files unreadable or over the size limit")
+        if cut_files:
+            problems.append(
+                f"{source}: only the first {_MAX_OUTPUT_BYTES} bytes indexed of "
+                + ", ".join(_capped(cut_files))
+            )
+        if other:
+            problems.append(
+                f"{source}: {other} files that are not .txt command output (stderr and "
+                "others) were not indexed"
+            )
         if blocks and source not in sources:
             extract_and_index("\n".join(blocks), source, evidence_path, "triage")
             sources.append(source)
@@ -292,8 +313,8 @@ def index_triage_collection(evidence_path: str, force: bool = False) -> dict[str
         )
 
     sources: list[str] = []
-    if not sources_already_indexed(["tsk.filelist"], evidence_path=evidence_path):
-        _index_dir_listing(evidence_path)
+    listed = _index_dir_listing(evidence_path)
+    if listed is not None and listed.get("status") != "skipped":
         sources.append("tsk.filelist")
 
     indexers = {"kape": _kape_sources, "velociraptor": _velociraptor_sources, "uac": _uac_sources}
@@ -312,6 +333,14 @@ def index_triage_collection(evidence_path: str, force: bool = False) -> dict[str
             held = any(pattern.search(path) for path in paths)
             (collected if held else not_collected).append(artifact)
 
+    note = _READING_NOTE
+    if root.truncated:
+        # A kind that is past the cut was collected all the same.
+        note = (
+            f"The file listing was cut at {len(root.files)} files: not_seen_in_cut_listing "
+            "names kinds of artifact that are not among them, which may still be in the "
+            "collection. " + note
+        )
     summary: dict[str, object] = {
         "evidence_path": evidence_path,
         "layout": LAYOUTS[collection.layout],
@@ -322,10 +351,10 @@ def index_triage_collection(evidence_path: str, force: bool = False) -> dict[str
         "files_collected": len(root.files),
         "listing_truncated": root.truncated,
         "collected": _capped(collected),
-        "not_collected": not_collected,
+        "not_seen_in_cut_listing" if root.truncated else "not_collected": not_collected,
         "sources": _capped([*sources, "triage.summary"]),
         "not_indexed": _capped(problems),
-        "note": _READING_NOTE,
+        "note": note,
     }
     extract_and_index(
         "\n".join(

@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from typing import cast
 
-from mulder.dirroot import detect_collection, icat
+from mulder.dirroot import detect_collection, icat, not_collected
 from mulder.patterns import fls_file_entries
 from mulder.server.app import get_cfg, get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
@@ -325,7 +325,10 @@ def run_evtx_parser(evtx_path: str, force: bool = False) -> dict[str, object]:
         ctx.db.set_kv("evtx_extract_dir", extract_dir)
         ctx.db.set_kv(f"evtx_extract_dir:{evtx_path}", extract_dir)
         evtx_files = _extract_evtx_from_image(evtx_path, extract_dir)
-        if not evtx_files:
+        # Set for a directory. Nothing was carved from one: the logs carved
+        # from a disk image in the same case are not this collection's.
+        no_logs = not_collected(evtx_path)
+        if not evtx_files and no_logs is None:
             evtx_files = _find_carved_evtx(extract_dir)
         if not evtx_files:
             shutil.rmtree(extract_dir, ignore_errors=True)
@@ -335,9 +338,12 @@ def run_evtx_parser(evtx_path: str, force: bool = False) -> dict[str, object]:
                 tc_id,
                 "run_evtx_parser",
                 params,
-                "No EVTX files found in disk image. "
+                "No event logs (.evtx) among the files listed for this directory."
+                if no_logs
+                else "No EVTX files found in disk image. "
                 "Ensure run_fls has been called first, or run run_bulk_extractor "
                 "which can carve EVTX fragments even when fls fails.",
+                suggestion=no_logs,
             )
 
         manifest = _build_evtx_priority_manifest(evtx_files)

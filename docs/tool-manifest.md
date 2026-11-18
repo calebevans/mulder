@@ -171,7 +171,7 @@ Generate a filesystem MAC timeline from a disk image using TSK fls + mactime. Gi
 | image_path | str | yes | Path to the disk image |
 | time_range | str \| None | no | Date range filter (e.g. "2015-08-01..2015-08-05") |
 
-**Returns:** `source_name` (tsk.timeline), `windows_indexed`, `line_count`
+**Returns:** `source_name` (tsk.timeline), `windows_indexed`, `line_count`; for a UAC body file also `body_rows` and `timeline_rows`, and an error (`no_rows`) when mactime wrote none
 
 **Roles:** `EXTRACT_EXECUTOR`
 
@@ -414,7 +414,7 @@ disk image: `run_fls`, `run_registry_parser`, `query_registry_value`,
 | evidence_path | str | yes | The collection's directory |
 | force | bool | no | Re-index even if this collection was already indexed |
 
-**Returns:** `layout`, `host`, `volumes[]`, `files_collected`, `listing_truncated`, `collected[]`, `not_collected[]`, `sources[]`, `not_indexed[]`, `note`
+**Returns:** `layout`, `host`, `volumes[]`, `files_collected`, `listing_truncated`, `collected[]`, `not_collected[]` (`not_seen_in_cut_listing[]` instead when the listing was cut), `sources[]`, `not_indexed[]`, `note`
 
 | Source | Content |
 |--------|---------|
@@ -433,8 +433,14 @@ Bounds: 200,000 files and directories per collection, 8 MiB per indexed source,
 256 KiB per UAC output file, 40 UAC categories, 200 Velociraptor result files,
 and 4 GiB for a file an artifact tool reads (a larger one is refused, not cut);
 whatever was cut or left out is named in `not_indexed` and
-`listing_truncated`. Symlinks inside a
-collection are never followed, and Velociraptor's percent-encoded names are
+`listing_truncated`. The walk is breadth-first across the volumes, so a cut
+listing keeps the top of each one, and the kinds of artifact not found in it
+are then reported as `not_seen_in_cut_listing`, not as `not_collected`. The
+listing is in the order `fls` gives (by directory, names compared without
+case, the system volume first), so `Windows/...` comes before
+`Windows.old/...` and before a shadow copy. Memory and crash dumps inside a
+collection (`MEMORY.DMP`, `*.dmp`) stay `memory_dump` evidence items. Symlinks inside a
+collection are never followed, a symlink is not accepted as the collection, and Velociraptor's percent-encoded names are
 decoded only for display. Layout details: KAPE's `$Extend/$J`, `$Extend/$Max`
 and `$Secure_$SDS` are listed as the streams they hold (`$Extend/$UsnJrnl:$J`,
 ...); a Velociraptor drive collected through two accessors
@@ -1534,9 +1540,11 @@ Extract a file from the disk image by inode number using TSK icat.
 |-----------|------|----------|-------------|
 | inode | int | yes | Inode number of the file to extract |
 | filesystem_type | str \| None | no | TSK filesystem type (auto-detected if omitted) |
-| image_path | str \| None | no | Path to the specific disk image (required for multi-image cases) |
+| image_path | str \| None | no | Path to the specific disk image (required for multi-image cases), or the triage collection directory whose listing the inode is a row of |
 
 **Returns:** text files: `source_name`, `windows_indexed`; binary files: `sha256`, `size_bytes`
+
+The inode column of a triage collection's listing is a row number. When the case holds a collection beside another file listing and `image_path` is omitted, the call is refused (`image_path_required`) rather than reading that number from a disk image.
 
 **Roles:** `EXTRACT_EXECUTOR`
 
@@ -1551,6 +1559,8 @@ Return file metadata (MAC times, size, blocks) for an inode using TSK istat.
 | image_path | str \| None | no | Path to the specific disk image (required for multi-image cases) |
 
 **Returns:** `source_name`, `windows_indexed`
+
+A triage collection has no inode metadata: for one, the call returns `not_applicable` and says where the original timestamps are.
 
 **Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR`
 
@@ -2047,6 +2057,7 @@ Extract a SQLite database from a disk image and run a SQL query.
 | inode | int | yes | Inode number of the SQLite database |
 | query | str | yes | SQL SELECT query to execute |
 | description | str | no | Label for the indexed source name |
+| image_path | str \| None | no | The disk image or triage collection directory whose listing the inode came from; needed only when the case holds a collection beside another file listing |
 
 **Returns:** `source` (sqlite.\<description\>), `result_count`
 

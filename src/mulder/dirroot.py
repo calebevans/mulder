@@ -22,12 +22,20 @@ import os
 import re
 import stat
 import subprocess
+from collections import deque
+from collections.abc import Sequence
 from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import unquote
 
+from mulder.patterns import EXTRACTION_MARKER
+
 MAX_ENTRIES = 200_000
-"""Files and directories walked under one root before the listing is cut."""
+"""Files and directories walked under one root before the listing is cut.
+
+The walk is breadth-first across all volumes, so a cut listing keeps the
+shallow part of every volume rather than all of the first one.
+"""
 
 MAX_FILE_BYTES = 4 * 1024**3
 """Largest stored file :func:`icat` hands out; a larger one is refused, not cut."""
@@ -124,13 +132,15 @@ def read_regular(path: str | Path, limit: int, whole: bool = False) -> tuple[byt
     except OSError:
         return None
     try:
-        with os.fdopen(fd, "rb") as fh:
-            info = os.fstat(fd)
-            if not stat.S_ISREG(info.st_mode):
-                return None
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            return None
+        with open(fd, "rb", closefd=False) as fh:
             data = b"" if whole and info.st_size > limit else fh.read(limit)
     except OSError:
         return None
+    finally:
+        os.close(fd)
     return data, info.st_size <= len(data)
 
 
@@ -182,12 +192,19 @@ def _has_windows_config(volume: Path) -> bool:
 
 def _host(raw: object) -> str:
     """A host name reduced to host-name characters: it is shown to models."""
-    return _NOT_HOST_CHARS.sub("", raw)[:64] if isinstance(raw, str) else ""
+    return _NOT_HOST_CHARS.sub("", raw)[:64].strip("._-") if isinstance(raw, str) else ""
 
 
 def _system_first(volumes: list[tuple[str, Path]]) -> tuple[tuple[str, Path], ...]:
+    """The volume that holds Windows first: a drive letter before a shadow copy of it,
+    and any drive before an accessor's loose files."""
     system = {label for label, directory in volumes if _has_windows_config(directory)}
-    return tuple(sorted(volumes, key=lambda v: (v[0] not in system, v[0], str(v[1]))))
+    return tuple(
+        sorted(
+            volumes,
+            key=lambda v: (v[0] not in system, not v[0], len(v[0]) > 1, v[0], str(v[1])),
+        )
+    )
 
 
 def _velociraptor_volumes(uploads: Path) -> list[tuple[str, Path]]:
@@ -195,7 +212,8 @@ def _velociraptor_volumes(uploads: Path) -> list[tuple[str, Path]]:
 
     ``uploads/ntfs/%5C%5C.%5CC%3A`` and ``uploads/auto/C%3A`` are both drive C
     and share a label.  An accessor whose children are not devices (a Unix
-    collection: ``uploads/auto/etc``) is itself a volume.
+    collection: ``uploads/auto/etc``) is itself a volume; the walk of it leaves
+    out any device directory beside them, which is a volume of its own.
     """
     volumes: list[tuple[str, Path]] = []
     for _, entry in sorted(_entries(uploads).items()):
@@ -285,15 +303,20 @@ def _decode(component: str) -> str:
     return decoded
 
 
-def walk_files(top: Path, budget: list[int]) -> list[tuple[str, str]]:
-    """``(path below top, stored path)`` of each regular file; symlinks are not followed.
+def _walk(
+    tops: Sequence[Path], budget: list[int], skip: frozenset[str] = frozenset()
+) -> list[tuple[int, str, str]]:
+    """``(index of its top, path below it, stored path)`` of each regular file under *tops*.
 
-    *budget* holds the number of entries that may still be visited and is counted down.
+    Breadth-first across all of *tops*, so when *budget* runs out it is the
+    deepest files that are missing, not a whole top. Symlinks are not followed,
+    directories in *skip* are not entered, and mulder's own extraction marker
+    is not a collected file.
     """
-    found: list[tuple[str, str]] = []
-    stack = [("", str(top))]
-    while stack and budget[0] > 0:
-        rel, directory = stack.pop()
+    found: list[tuple[int, str, str]] = []
+    queue = deque((index, "", str(top)) for index, top in enumerate(tops))
+    while queue and budget[0] > 0:
+        index, rel, directory = queue.popleft()
         try:
             with os.scandir(directory) as it:
                 entries = sorted(it, key=lambda e: e.name)
@@ -305,11 +328,19 @@ def walk_files(top: Path, budget: list[int]) -> list[tuple[str, str]]:
             budget[0] -= 1
             child = f"{rel}/{entry.name}" if rel else entry.name
             kind = _kind(entry)
-            if kind == "dir":
-                stack.append((child, entry.path))
-            elif kind == "file":
-                found.append((child, entry.path))
+            if kind == "dir" and entry.path not in skip:
+                queue.append((index, child, entry.path))
+            elif kind == "file" and entry.name != EXTRACTION_MARKER:
+                found.append((index, child, entry.path))
     return found
+
+
+def walk_files(top: Path, budget: list[int]) -> list[tuple[str, str]]:
+    """``(path below top, stored path)`` of each regular file; symlinks are not followed.
+
+    *budget* holds the number of entries that may still be visited and is counted down.
+    """
+    return [(rel, stored) for _, rel, stored in _walk([top], budget)]
 
 
 @functools.lru_cache(maxsize=8)
@@ -319,24 +350,46 @@ def _build(path: str) -> DirRoot:
     collection = detect_collection(Path(path))
     volumes = collection.volumes if collection else (("", Path(path)),)
     layout = collection.layout if collection else ""
+    labels = [label for label, _ in volumes]
+    directories = [directory for _, directory in volumes]
+    # The rank keeps one drive's accessors together and the system volume first.
+    rank: dict[str, int] = {}
+    for index, label in enumerate(labels):
+        rank.setdefault(label, index)
     budget = [MAX_ENTRIES]
-    files: dict[str, str] = {}
-    for volume, directory in volumes:
-        prefix = "" if volume == volumes[0][0] else f"{volume}/"
-        for rel, stored in walk_files(directory, budget):
-            if layout == "velociraptor":
-                rel = "/".join(_decode(part) for part in rel.split("/"))
-            elif layout == "kape":
-                rel = _KAPE_STORED_AS.get(rel, rel)
-            files.setdefault(listed_name(prefix + rel), stored)
-    ordered = sorted(files.items(), key=lambda f: (f[0] != "$MFT", f[0]))
+    files: dict[str, tuple[int, str]] = {}
+    # A directory that is a volume of its own is not listed again under the
+    # volume that holds it (a Velociraptor accessor with drives and plain files).
+    for index, rel, stored in _walk(directories, budget, frozenset(map(str, directories))):
+        volume = labels[index]
+        if layout == "velociraptor":
+            rel = "/".join(_decode(part) for part in rel.split("/"))
+        elif layout == "kape":
+            rel = _KAPE_STORED_AS.get(rel, rel)
+        prefix = f"{volume}/" if volume and volume != labels[0] else ""
+        files.setdefault(listed_name(prefix + rel), (rank[volume], stored))
+
+    def walk_order(item: tuple[str, tuple[int, str]]) -> tuple[bool, int, list[str], str]:
+        # As fls lists an NTFS volume: by directory, names compared without case.
+        # Sorted as whole strings, Windows.old/... would come before Windows/...,
+        # and the tools that take the first match would read the old installation.
+        name, (volume_rank, _) = item
+        return name != "$MFT", volume_rank, [part.upper() for part in name.split("/")], name
+
+    ordered = tuple((name, stored) for name, (_, stored) in sorted(files.items(), key=walk_order))
     first = 0 if ordered and ordered[0][0] == "$MFT" else 1
-    return DirRoot(tuple(ordered), first, budget[0] <= 0)
+    return DirRoot(ordered, first, budget[0] <= 0)
 
 
 def dir_root(path: str) -> DirRoot | None:
-    """The directory-backed view of *path*, or None when it is not a directory."""
-    return _build(path) if os.path.isdir(path) else None
+    """The directory-backed view of *path*; None for a file, and for a symlink to a directory.
+
+    The walk follows no symlink below the root; a root that is one would lead
+    out of the evidence just the same.
+    """
+    if not os.path.isdir(path) or os.path.islink(path.rstrip(os.sep) or path):
+        return None
+    return _build(path)
 
 
 def not_collected(path: str) -> str | None:
@@ -345,8 +398,15 @@ def not_collected(path: str) -> str | None:
     For the ``suggestion`` of a parser's error, so the caller does not read a
     missing artifact as a clean system.
     """
-    if dir_root(path) is None:
+    root = dir_root(path)
+    if root is None:
         return None
+    if root.truncated:
+        return (
+            f"This is a directory of collected files, not a disk image, and its listing was "
+            f"cut at {len(root.files)} files: the artifact is not among those listed, which "
+            "shows neither that it was not collected nor that it was absent from the system."
+        )
     return (
         "This is a directory of collected files, not a disk image: the artifact was not "
         "collected. That does not show it was absent from the system. triage.summary "
