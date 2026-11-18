@@ -484,6 +484,112 @@ When indexing a Security log, automatically indexes System.evtx and PowerShell o
 
 **Roles:** `EXTRACT_EXECUTOR`
 
+### run_evtx_recovery
+
+Recover Windows event log records left behind after a log was cleared, using evtx_dump.
+
+What it does depends on what `evidence_path` is:
+
+- **A `.evtx` file, or a directory of them** (searched at any depth; symlinks
+  are not followed; at most 2,000 files): reads the stale records still inside
+  each log, in chunks whose header was reset and in the slack after a chunk's
+  last record (`evtx_dump --recover-records`).
+- **Any other file** (a raw or E01 disk image, a memory dump, a file of
+  unallocated space, a log whose file header is gone): carves event log chunks
+  out of the raw bytes and reads every record in them, slack included. The file
+  is read once and never copied; an E01 is read through xmount's flat view,
+  which needs FUSE. Exact copies of a chunk are skipped, and the scan stops
+  after one million chunks (64 GiB of event log). A file that starts like an
+  EnCase segment that is not the first, a VMDK, qcow2 or VHDX image, or a zip
+  or gzip file is still scanned as it is, and the response carries a `warning`
+  that what it stores compressed was not read.
+
+A recovered record is dropped when a live record has the same channel, record
+ID and time. On a disk image the live records are those of the image's own
+allocated event logs, which the tool extracts with `icat`, one at a time for
+the length of the call, through the file listing `run_fls` indexed for that
+image, so run `run_fls` first. Another image's listing in the same case is not
+read. A deleted log is not live: where its chunks are still in the image its
+records come out as `[carved]`, also when a new log was created under its
+name. It does not need `run_evtx_parser` or the directory that tool extracted
+to. `compared_with_live_logs` is true only when every allocated log the image
+lists was read. When one could not be extracted or read, `warning` gives the
+count and `not_parsed.files` names it. When there is none to extract (a memory
+dump, a file of unallocated space, an image `run_fls` did not list) nothing is
+compared. Either way `[carved]` records include any that are still in a live
+log that was not read.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| evidence_path | str | yes | A .evtx file, a directory of .evtx files, or a raw file to carve |
+| channels | list[str] \| None | no | Channel name patterns, case-insensitive, `*` allowed. Default: `Security`, `System`, `Microsoft-Windows-PowerShell/Operational`, `Microsoft-Windows-TaskScheduler/Operational`, `Microsoft-Windows-TerminalServices-*`. `["*"]` keeps every channel, and the records recovered without a channel name |
+| t_start | str \| None | no | Keep records at or after this UTC time (`2024-03-01` or `2024-03-01T14:30:00`) |
+| t_end | str \| None | no | Keep records at or before this UTC time; a date covers its whole day |
+| max_records | int | no | Most records kept per channel (default 10000, limit 100000) |
+| force | bool | no | Re-run even if this path was already recovered, for example with other channels or another time window. The earlier run's sources stay in the index |
+
+**Returns:** `evidence_path`, `mode`, `scope{}` (the channel patterns, time window and `max_records` applied), `recovered_records`, `earliest_recovered`, `latest_recovered`, `channels{}` (per channel: `source`, `recovered`, `earliest`, `latest`, `event_ids{}` (ten most frequent), `live_records`, `live_earliest`, `live_latest`, `not_indexed_over_max_records`; the twenty with most records), `channels_not_listed`, `live_log_cleared`, `log_clearing_events[]` (the first twenty), `duplicates_of_live_dropped`, `truncated{}`, `not_parsed{}`, `summary_source`, `interpretation`; `records_without_channel{}` when the channel patterns left such records out; when carving also `compared_with_live_logs`, `duplicate_chunks_skipped`; `warning` when carved records were not compared with every live log or the file looks like a container. A call that is skipped because the path was already recovered returns `scope_of_prior_run{}`, so the caller can see whether that run covered what it now asks for.
+
+`truncated{}` counts what was left out: `records_over_max_records`,
+`records_in_channels_over_limit` (more than 40 channels), `evtx_files_not_read`,
+`log_clearing_events_not_listed`, `carving_stopped_at_chunk_limit`.
+`not_parsed{}` counts what could not be read: `records` (lines of evtx_dump's
+output that are not JSON, records it reported it could not dump, and records
+without a usable time, event ID or record ID), `files` (logs evtx_dump failed
+on, and logs of a disk image `icat` could not extract) and
+`files_ending_in_a_partial_chunk` (evtx_dump reads whole 64 KiB chunks only, so
+the tail of such a log was not read).
+
+Records are indexed per channel as `evtx_recovered.<channel>` (`evtx_recovered.security`,
+`evtx_recovered.powershell-operational`), in time order, one per line:
+
+```
+2024-03-01T14:30:00.1234567Z | 4624 | security | [recovered record 51234] {"System":{...},"EventData":{...}}
+```
+
+These are the fields a live log's lines carry when it is indexed without EZ
+Tools (`time | EventID | channel | event`), with the event as JSON. `[recovered]`
+means stale space inside a log; `[carved]` means a chunk found in raw data. The
+channel is the record's own, not the file's name: stale space in one log can
+hold another log's records. `evtx_recovered.summary` is written on every run,
+including one that recovered nothing, and lists per channel what was recovered
+beside what is live, the scope applied, the clearing events, and what was cut
+or not parsed.
+
+evtx_dump recovers some records with their time, event ID, record ID and
+computer but without provider, channel or event data. `["*"]` indexes them as
+`evtx_recovered.no-channel` (less those whose record ID and time match a live
+record). With any other patterns they are not indexed, and
+`records_without_channel{}` gives their count, time range and most frequent
+event IDs; that count is not compared with live records. An event ID without
+its provider does not say which log or program wrote the record.
+
+`log_clearing_events` lists Security 1102 and System 104 records written by
+Microsoft-Windows-Eventlog, with the log that was cleared and the account;
+`live_log_cleared` is true when one of them is in a live log (and `null` when
+no live log was read).
+
+**What a result does and does not mean.** Recovered records are what happened
+to survive in cleared or reused space. A recovered record shows that event was
+logged. No recovered record for an event or a period does not show it did not
+happen, and recovering nothing does not show the log was never cleared. Carving
+takes any 64 KiB that starts with a chunk signature and has a record where the
+first record belongs; nothing ties such a chunk to the system under
+investigation, so corroborate what a carved record says.
+
+Past its time limit (ten minutes, plus two for each GiB of evidence over 4)
+the tool returns a timeout and indexes nothing. A search scoped to
+`evtx.<channel>` does not read `evtx_recovered.*`, and neither does a composite
+tool while the live source it queries exists: search the recovered sources by
+name (`source="evtx_recovered"` covers them all).
+
+The binary is the one `mulder setup` and the image install under the asset
+directory (`evtx-dump/evtx_dump`). It is never looked up on `PATH`: python-evtx,
+a mulder dependency, installs a console script of the same name there, and it
+is a different program.
+
+**Roles:** `EXTRACT_EXECUTOR`
+
 ### run_hayabusa
 
 Detect threats in EVTX files using 3,700+ Sigma rules via Hayabusa.

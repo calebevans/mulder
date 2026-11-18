@@ -198,6 +198,8 @@ def main() -> None:
         ("fuse2fs", "-V"),
         ("clamscan", "--version"),
         ("nfdump", "-V"),
+        # By path: "evtx_dump" on PATH is python-evtx's script, another program.
+        ("/opt/evtx-dump/evtx_dump", "--version"),
     ):
         run(*command)
     # The unprivileged mulder user can only mount NTFS through the source-built

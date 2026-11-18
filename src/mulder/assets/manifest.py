@@ -116,6 +116,7 @@ FLOSS_VERSION = "3.1.0"
 GITLEAKS_VERSION = "8.30.1"
 ZIRCOLITE_VERSION = "2.20.0"
 ZIZMOR_VERSION = "1.32.0"
+EVTX_DUMP_VERSION = "0.15.1"
 SIGMA_VERSION = "r2024-09-02"
 #: Neither repository tags releases, so the pin is a commit.
 LOLRMM_VERSION = "0c2d56639673a232ff9d2548e16c6d045d3a1217"
@@ -351,6 +352,34 @@ _ASSETS: tuple[Asset, ...] = (
         chmod_x=("gitleaks",),
         shims=("gitleaks",),
         note="secret detection in CI logs, artifacts and source trees",
+    ),
+    Asset(
+        key="evtx-dump",
+        version=EVTX_DUMP_VERSION,
+        # Upstream releases the bare executable, not an archive.
+        kind="file",
+        urls={
+            # Static, so it runs on any glibc. Upstream builds no musl arm64;
+            # its aarch64-gnu binary needs GLIBC 2.18.
+            "amd64": (
+                f"{_GH}/omerbenamram/evtx/releases/download/v{EVTX_DUMP_VERSION}"
+                f"/evtx_dump-v{EVTX_DUMP_VERSION}-x86_64-unknown-linux-musl"
+            ),
+            "arm64": (
+                f"{_GH}/omerbenamram/evtx/releases/download/v{EVTX_DUMP_VERSION}"
+                f"/evtx_dump-v{EVTX_DUMP_VERSION}-aarch64-unknown-linux-gnu"
+            ),
+        },
+        filename="evtx_dump",
+        dest=("evtx-dump",),
+        sentinel=("evtx_dump",),
+        pinnable=True,
+        size_estimate=4 * _MB,
+        chmod_x=("evtx_dump",),
+        # No shim: python-evtx, a mulder dependency, puts its own "evtx_dump"
+        # console script on PATH. run_evtx_recovery reads this one from here.
+        validate="none",
+        note="event log record recovery after a log was cleared",
     ),
     Asset(
         key="lolrmm",

@@ -104,7 +104,7 @@ mulder setup                     # everything mulder owns - no sudo
 
 Everything mulder owns, in one run: MITRE ATT&CK data, Sigma rules, the YARA signature-base,
 the Didier Stevens suite, Chainsaw 2.16.0, Hayabusa 3.8.1, Zircolite 2.20.0, zizmor 1.32.0, capa 9.4.0,
-FLOSS 3.1.0, gitleaks 8.30.1, the six EZ Tools mulder invokes, ALEAPP, iLEAPP, and the Volatility 3 symbol packs.
+FLOSS 3.1.0, gitleaks 8.30.1, evtx_dump 0.15.1, the six EZ Tools mulder invokes, ALEAPP, iLEAPP, and the Volatility 3 symbol packs.
 It also fetches two small reference data sets for ransomware cases, each pinned to a commit: the LOLRMM remote
 access tool catalog (Apache-2.0) and the ThreatLabz ransom note corpus (MIT).
 About **2.2 GB on disk**; it prints the total and asks before downloading more than 1 GB.

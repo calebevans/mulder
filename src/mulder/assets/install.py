@@ -641,6 +641,7 @@ def _fetch_asset(
             result = fetch(file_url, staged / name)
             _check_digest(asset, plan.arch, result, primary=file_url == url)
             total += result.bytes_written
+        _post_process(asset, staged)
         validate_tree(asset, staged)
         return _Fetched(staged=staged, size=total)
 

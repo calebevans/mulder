@@ -179,6 +179,25 @@ When the investigator briefing mentions specific concerns:
   copies survive). A volume with no change journal or no shadow copies
   was not thereby wiped: journaling and shadow copies can simply be off.
 
+EVENT LOG RECOVERY:
+run_evtx_recovery brings back event records that survived a log clearing.
+Plan it only when there is a reason: the briefing or the analyst's
+follow-up request says a log was cleared (Security event 1102, System
+event 104), or a log's first event is much later than the system was in
+use.
+- Loose .evtx files or a directory of them: evidence_path is that file or
+  directory, group "dependent".
+- A disk image: evidence_path is the image. It reads the whole image once,
+  and extracts the image's own event logs to tell a recovered record from
+  one that is still in them. It finds those logs in the file listing, so
+  plan it after run_fls has listed the image: group "dependent", or a
+  follow-up plan.
+- A memory dump or a file of unallocated space: evidence_path is that file.
+  Nothing is compared there, so what it brings back includes records that
+  are still in the logs.
+What it recovers is partial. Recovering nothing does not show that nothing
+was logged.
+
 BATCH DEPENDENCIES:
 Tools must be grouped into ordered batches to respect data dependencies.
 Mark each task with a "group" field to indicate which batch it belongs to.
