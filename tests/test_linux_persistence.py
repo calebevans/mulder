@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from collections.abc import Iterator
@@ -11,12 +12,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from mulder import dirroot
+from mulder import dirroot, linuxvol
 from mulder.audit import AuditLog
 from mulder.db import CaseDB
-from mulder.linuxvol import EXPORT_MARKER, Volume, export_dir
+from mulder.linuxvol import EXPORT_MARKER, Scan, Volume, export_dir
 from mulder.server import app
 from mulder.server.app import _tool_dispatch_sync
+from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import TOOL_SOURCE_PREFIXES, tool_already_indexed
 from mulder.server.tools import linux
 from tests.triage_trees import kape, uac, write
@@ -71,7 +73,7 @@ def case(
     )
     monkeypatch.setattr(app, "_ctx", ctx)
     monkeypatch.setattr(app, "_cfg", app.ServerConfig(db_dir=tmp_path / "cases"))
-    monkeypatch.setattr(linux, "probe", lambda image: ())
+    monkeypatch.setattr(linuxvol, "scan", lambda image: Scan())
     dirroot.refresh()
     yield tmp_case_db
     dirroot.refresh()
@@ -142,14 +144,39 @@ def test_accounts_with_uid_0_a_shell_or_added_since_the_backup(
     _sweep(_tree(tmp_path / "root"))
 
     accounts = [row[4] for row in _rows(case) if row[0] == "account"]
+    # What matters most first, so that a cut takes the least of it.
     assert accounts == [
         "name=root uid=0 gid=0 home=/root shell=/bin/bash (uid 0, has a login shell)",
-        "name=alice uid=1000 gid=1000 home=/home/alice shell=/bin/bash (has a login shell)",
         "name=toor uid=0 gid=0 home=/var/tmp shell=/bin/sh "
         "(uid 0, has a login shell, not in etc/passwd-)",
-        "name=svc uid=999 gid=999 home=/opt/svc shell=/bin/false (not in etc/passwd-)",
         "group=sudo members=alice,toor",
+        "name=svc uid=999 gid=999 home=/opt/svc shell=/bin/false (not in etc/passwd-)",
+        "name=alice uid=1000 gid=1000 home=/home/alice shell=/bin/bash (has a login shell)",
     ]
+
+
+def test_more_accounts_than_are_shown_is_said_and_cuts_the_ordinary_ones(
+    case: CaseDB, tmp_path: Path
+) -> None:
+    """New accounts are at the end of etc/passwd: a cut by position took those first."""
+    users = "".join(f"u{n}:x:{2000 + n}:{2000 + n}::/home/u{n}:/bin/bash\n" for n in range(300))
+    root = _tree(
+        tmp_path / "root",
+        {
+            "etc/passwd": "root:x:0:0::/root:/bin/bash\n" + users + "last:x:0:0::/:/bin/sh\n",
+            "etc/passwd-": "root:x:0:0::/root:/bin/bash\n" + users,
+            "etc/group": "sudo:x:27:u299\n",
+        },
+    )
+
+    result = _sweep(root)["results"]
+
+    accounts = [row[4] for row in _rows(case) if row[0] == "account"]
+    assert len(accounts) == 200 == result["by_kind"]["account"]
+    assert accounts[1].startswith("name=last uid=0") and accounts[2] == "group=sudo members=u299"
+    assert result["accounts_not_shown"] == 103 and result["truncated"] is True
+    header = "".join(w.raw_text for w in case.get_windows_by_source("linux.persistence"))
+    assert "103 accounts that only have a login shell are not shown" in header.split("\n")[0]
 
 
 def test_an_account_appended_to_a_long_passwd_is_still_seen(case: CaseDB, tmp_path: Path) -> None:
@@ -230,15 +257,101 @@ def test_a_collection_and_an_export_are_swept_by_the_paths_their_listings_show(
     _sweep(collection)
     assert ["cron", "etc/cron.d/job"] in [row[:2] for row in _rows(case)]
 
-    # An export: the root volume unprefixed, a volume mounted at /home under its own name.
-    export = tmp_path / "disk.E01.files-0123456789ab"
-    _tree(export / "p5_lvm1", {"etc/passwd": "root:x:0:0::/root:/bin/sh\n"})
-    _tree(export / "p5_lvm2", {"bob/.ssh/authorized_keys": KEY + "\n"})
-    write(export, {EXPORT_MARKER: "{}"})
-    dirroot.refresh()
+    # A volume with no place of its own in an export sits under its own name: a
+    # location is found from any directory.
+    export = _tree(
+        tmp_path / "export",
+        {
+            "etc/passwd": "root:x:0:0::/root:/bin/sh\n",
+            "p5_lvm6/bob/.ssh/authorized_keys": KEY + "\n",
+        },
+    )
     _sweep(export)
     listed = [row[1] for row in _rows(case)]
-    assert "p5_lvm2/bob/.ssh/authorized_keys" in listed and "etc/passwd" in listed
+    assert "p5_lvm6/bob/.ssh/authorized_keys" in listed and "etc/passwd" in listed
+
+
+def test_places_the_first_sweep_missed(case: CaseDB, tmp_path: Path) -> None:
+    root = _tree(
+        tmp_path / "root",
+        {
+            "etc/passwd": "root:x:0:0::/root:/bin/sh\n",
+            # A drop-in overrides a unit without touching the unit's own file.
+            "etc/systemd/system/ssh.service.d/override.conf": "[Service]\nExecStartPre=/tmp/x\n",
+            "etc/systemd/system.conf": "[Manager]\n",  # configuration of systemd, not a unit
+            # Where "AuthorizedKeysFile /etc/ssh/authorized_keys/%u" keeps them.
+            "etc/ssh/authorized_keys/alice": KEY + "\n",
+            "var/lib/backup/authorized_keys": KEY + "\n",
+        },
+    )
+
+    _sweep(root)
+
+    kinds = {row[1]: row[0] for row in _rows(case) if row[0] != "account"}
+    assert kinds == {
+        "etc/systemd/system/ssh.service.d/override.conf": "systemd",
+        "etc/ssh/authorized_keys/alice": "ssh",
+        "var/lib/backup/authorized_keys": "ssh",
+    }
+
+
+def test_a_path_is_shown_whole_and_a_private_key_not_at_all(case: CaseDB, tmp_path: Path) -> None:
+    long_path = "/opt/vendor/product/releases/current/bin/agent/supervisor/launcher"
+    root = _tree(
+        tmp_path / "root",
+        {
+            "etc/passwd": "root:x:0:0::/root:/bin/sh\n",
+            "etc/systemd/system/agent.service": f"[Service]\nExecStart={long_path} --daemon\n",
+            "etc/cron.d/agent": f"* * * * * root {long_path}\n",
+            "etc/cron.d/deploy": "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEA\n",
+            "root/.ssh/authorized_keys": KEY + "\n",
+        },
+    )
+
+    _sweep(root)
+
+    shown = {row[1]: row[4] for row in _rows(case)}
+    assert len(long_path) > 48  # as long as a key, and nothing like one
+    assert (
+        shown["etc/systemd/system/agent.service"] == f"[Service] | ExecStart={long_path} --daemon"
+    )
+    assert shown["etc/cron.d/agent"] == f"* * * * * root {long_path}"
+    assert shown["root/.ssh/authorized_keys"] == "ssh-rsa <...> intruder@kali"
+    assert shown["etc/cron.d/deploy"] == "(a private key: content withheld)"
+
+
+def test_an_incomplete_export_is_not_swept_as_if_it_were_whole(
+    case: CaseDB, tmp_path: Path
+) -> None:
+    """A crontab in a directory the export could not read has no row: the sweep says why."""
+    export = export_dir(tmp_path / "cases/extracted/test-case", "/evidence/web01.E01")
+    _tree(export, {"etc/passwd": "root:x:0:0::/root:/bin/sh\n", "etc/crontab": "@reboot /x\n"})
+    summary = {
+        "status": "incomplete",
+        "listing_incomplete": ["/var/spool/cron/crontabs"],
+        "not_exported": {"image_export did not copy it": ["/etc/cron.d/job"]},
+        "problems": ["-: an image_export run stopped early"],
+    }
+    record = {"summary": summary, "places": {"": ""}}
+    write(export.parent, {EXPORT_MARKER: json.dumps(record)})
+
+    result = _sweep(export)["results"]
+
+    gaps = result["export_incomplete"]
+    assert gaps["listing_incomplete"] == ["/var/spool/cron/crontabs"]
+    assert gaps["not_copied"] == ["/etc/cron.d/job"] and "was not examined" in gaps["note"]
+    header = "".join(w.raw_text for w in case.get_windows_by_source("linux.persistence"))
+    assert "INCOMPLETE EXPORT" in header.split("\n")[0]
+    assert "/var/spool/cron/crontabs" in header.split("\n")[0]
+
+    # A whole export, and a directory that only carries the file an export has, say nothing.
+    summary["status"] = "exported"
+    write(export.parent, {EXPORT_MARKER: json.dumps(record)})
+    assert "export_incomplete" not in _sweep(export, force=True)["results"]
+    planted = _tree(tmp_path / "evidence/files", {"etc/crontab": "@reboot /x\n"})
+    summary["status"] = "incomplete"
+    write(planted.parent, {EXPORT_MARKER: json.dumps(record)})
+    assert "export_incomplete" not in _sweep(planted)["results"]
 
 
 def test_a_disk_image_sleuth_kit_reads_is_swept_through_its_listing(
@@ -257,13 +370,69 @@ def test_a_disk_image_sleuth_kit_reads_is_swept_through_its_listing(
     ):
         result = _sweep(image)["results"]
 
-    icat.assert_called_once_with(
-        image, 2048, "12"
-    )  # a deleted entry's inode may hold another file
+    # A deleted entry's inode may hold another file. No more than the first
+    # bytes are read, however large the file at a persistence location is.
+    icat.assert_called_once_with(image, 2048, "12", limit=4096)
     assert _rows(case) == [
         ["cron", "etc/crontab", "modified=unknown", "size=24", "0 5 * * * root /opt/job"]
     ]
     assert result["most_recently_modified"] == []
+
+    more = subprocess.CompletedProcess(["icat"], 0, b"A = b\n" * 700, b"")  # 4,200 bytes came
+    with (
+        patch.object(linux, "_collect_fls_chunks", return_value=[([listing], 2048)]),
+        patch.object(linux, "icat", return_value=more),
+    ):
+        _sweep(image, force=True)
+    row = _rows(case)[-1]
+    assert row[3] == "size=over 4096" and row[4].endswith("[cut]")
+
+
+def test_two_images_in_one_case_are_each_swept_through_their_own_listing(
+    case: CaseDB, tmp_path: Path
+) -> None:
+    """Every image's listing is indexed as tsk.filelist: one image's rows are not another's."""
+    web, db = str(tmp_path / "web01.raw"), str(tmp_path / "db02.raw")
+    extract_and_index(
+        "r/r 12:\tetc/passwd\nr/r 13:\tetc/crontab\nr/r 14:\tetc/sudoers.d/90-evil\n",
+        "tsk.filelist",
+        web,
+        "sleuthkit",
+    )
+    extract_and_index(
+        "r/r 12:\tetc/hostname\nr/r 13:\tetc/passwd\nr/r 20:\tetc/cron.d/dbjob\n",
+        "tsk.filelist",
+        db,
+        "sleuthkit",
+    )
+    held = {
+        (web, "12"): b"root:x:0:0::/root:/bin/sh\n",
+        (web, "13"): b"@reboot /web\n",
+        (web, "14"): b"bob ALL=(ALL) NOPASSWD:ALL\n",
+        (db, "12"): b"db02\n",
+        (db, "13"): b"root:x:0:0::/root:/bin/sh\nmallory:x:0:0::/:/bin/sh\n",
+        (db, "20"): b"@daily /db\n",
+    }
+
+    def fake_icat(image: str, offset: int, inode: str, **_: object) -> Any:
+        return subprocess.CompletedProcess(["icat"], 0, held[(image, inode)], b"")
+
+    with (
+        patch.object(linux, "icat", side_effect=fake_icat),
+        patch("mulder.server.tools.extract.tsk._resolve_partition_offset", return_value=0),
+    ):
+        result = _sweep(db)["results"]
+        rows = [row for row in _rows(case)]
+        _sweep(web)
+
+    assert [row[:2] for row in rows if row[0] != "account"] == [["cron", "etc/cron.d/dbjob"]]
+    assert [row[4].split(" ")[0] for row in rows if row[0] == "account"] == [
+        "name=root",
+        "name=mallory",  # db02's own second uid 0 account, read from db02's etc/passwd
+    ]
+    assert result["by_kind"] == {"cron": 1, "account": 2}
+    both = "".join(w.raw_text for w in case.get_windows_by_source("linux.persistence"))
+    assert both.count("etc/crontab") == 1 and both.count("etc/cron.d/dbjob") == 1
 
 
 def test_nothing_found_is_not_reported_as_a_clean_system(case: CaseDB, tmp_path: Path) -> None:
@@ -292,11 +461,11 @@ def test_an_image_that_was_exported_is_answered_with_its_export_directory(
 ) -> None:
     image = tmp_path / "lvm.E01"
     image.write_bytes(b"x")
-    monkeypatch.setattr(linux, "probe", lambda path: (Volume(0, "lvm"),))
+    monkeypatch.setattr(linuxvol, "scan", lambda path: Scan((Volume(0, "lvm"),)))
     with patch.object(linux, "_collect_fls_chunks", return_value=[]):
         assert "run export_linux_files" in _sweep(image)["suggestion"]
         export = export_dir(tmp_path / "cases/extracted/test-case", str(image))
-        write(export, {EXPORT_MARKER: "{}"})
+        write(export.parent, {EXPORT_MARKER: '{"summary": {}, "places": {}}'})
         assert f"pass {export} as image_path" in _sweep(image)["suggestion"]
 
 
@@ -341,9 +510,81 @@ def test_on_a_linux_tree_the_content_decides_not_the_name(case: CaseDB, tmp_path
 
     assert result["extensions_used"] == ["*"]
     assert sorted(result["sample_files"]) == ["root/.bash_history", "root/.viminfo", "root/notes"]
-    assert result["files_discovered"] == 6 and result["files_skipped_binary"] == 3
+    assert result["files_discovered"] == 6 and result["files_skipped_binary"] == 2
+    assert result["files_skipped_too_large"] == 1  # said apart: it is not binary
     text = "".join(w.raw_text for w in case.get_windows_by_source("appfiles.root..bash_history"))
     assert text.startswith("=== root/.bash_history ===") and "203.0.113.9/x.sh" in text
+
+
+def test_a_file_over_the_size_limit_is_not_read_past_it(
+    case: CaseDB, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On a Linux tree any file is a candidate: a database dump must not be held in memory."""
+    root = _tree(
+        tmp_path / "root",
+        {"etc/passwd": "root:x:0:0::/root:/bin/bash\n", "var/www/index.php": "<?php echo 1;\n"},
+    )
+    with open(root / "var/www/dump.sql", "wb") as dump:
+        dump.truncate(3 * 1024**3)  # sparse: 3 GiB that take no space
+    asked: list[int] = []
+    real = dirroot.read_regular
+
+    def counting(path: str | Path, limit: int, whole: bool = False) -> Any:
+        asked.append(limit)
+        return real(path, limit, whole)
+
+    monkeypatch.setattr(dirroot, "read_regular", counting)
+
+    result = _index(root, "var/www")
+
+    assert result["files_indexed"] == 1 and result["files_skipped_too_large"] == 1
+    assert result["files_skipped_binary"] == 0
+    assert asked and max(asked) == 512 * 1024 + 1
+
+
+def test_a_private_key_under_any_name_is_withheld_by_its_first_line(
+    case: CaseDB, tmp_path: Path
+) -> None:
+    root = _tree(
+        tmp_path / "root",
+        {
+            "etc/passwd": "root:x:0:0::/root:/bin/bash\n",
+            "home/alice/.ssh/aws-prod.pem": "-----BEGIN RSA PRIVATE KEY-----\nMIIEow\n",
+            "home/alice/.ssh/deploy": "-----BEGIN OPENSSH PRIVATE KEY-----\nb3Blbn\n",
+            "home/alice/.ssh/deploy.pub": "ssh-ed25519 AAAA alice@laptop\n",
+            "var/backups/shadow.bak": "root:$6$salt$hash:19000:0:99999:7:::\n",
+        },
+    )
+
+    result = _index(root, "home")
+
+    assert result["sample_files"] == ["home/alice/.ssh/deploy.pub"]
+    assert result["files_withheld"] == 2 and result["files_skipped_binary"] == 0
+    assert _index(root, "var/backups")["files_withheld"] == 1  # Debian's copy of etc/shadow
+    indexed = "".join(
+        w.raw_text for s in case.get_sources() for w in case.get_windows_by_source(s.source_name)
+    )
+    assert "PRIVATE KEY" not in indexed and "$6$salt$hash" not in indexed
+
+
+def test_one_linux_image_does_not_make_every_image_of_the_case_a_linux_tree(
+    case: CaseDB, tmp_path: Path
+) -> None:
+    """The Linux default (every name) is decided by the listing of the image asked about."""
+    web, data = str(tmp_path / "web01.raw"), str(tmp_path / "data.raw")
+    extract_and_index("r/r 12:\tetc/passwd\n", "tsk.filelist", web, "sleuthkit")
+    extract_and_index(
+        "r/r 5:\tapp/README\nr/r 6:\tapp/app.ini\n", "tsk.filelist", data, "sleuthkit"
+    )
+    content = subprocess.CompletedProcess(["icat"], 0, b"[app]\n", b"")
+
+    with (
+        patch("mulder.server.tools.extract.app_files.icat", return_value=content),
+        patch("mulder.server.tools.extract.tsk._resolve_partition_offset", return_value=0),
+    ):
+        result = _index(Path(data), "app")
+
+    assert result["sample_files"] == ["app/app.ini"] and ".ini" in result["extensions_used"]
 
 
 def test_taking_every_name_does_not_take_password_hashes_or_private_keys(

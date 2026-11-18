@@ -130,9 +130,14 @@ it (an LVM physical volume or an XFS file system), plan what the context names:
   parsers do not.
 - The export directory holds ordinary files, so the file and directory
   scanners below can be pointed at it, for instance at its web root.
+When the context says the image ALSO holds such a volume (a disk with NTFS
+beside the Linux volume), plan the image as any disk image and, in addition,
+the tools the context names for that volume. Nothing is left out.
 When the context says no tool reads the image (an encrypted volume, btrfs, a
 volume group spread over several disks), plan run_mmls and run_bulk_extractor
-only.
+only. When it says no tool reads ONE volume and to plan the usual disk tools
+for the rest of the image, plan the image as any disk image: the other
+partitions are read, and that volume is not examined.
 A Linux disk image the context does not mark (ext2/3/4 on a plain partition)
 is planned as any disk image, with run_linux_persistence and index_app_files
 taking the image as image_path, group "dependent", and run_plaso with parsers

@@ -7,19 +7,31 @@ import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-import mulder.orchestrator.evidence as evidence
-import mulder.server.tools.case as case_tools
+import mulder.server.tools.review  # noqa: F401 ensure the audit tool is registered
 from mulder import dirroot
+from mulder.audit import AuditLog
+from mulder.db import CaseDB
 from mulder.dirroot import detect_collection, dir_root
 from mulder.extractors.classifier import ClassifiedEvidence, EvidenceClassifier
-from mulder.linuxvol import EXPORT_MARKER, Volume, export_dir, probe
+from mulder.linuxvol import (
+    EXPORT_MARKER,
+    EXPORTS_DIR,
+    Scan,
+    Volume,
+    export_dir,
+    probe,
+    route,
+    scan,
+    unencrypted_partitions,
+)
 from mulder.orchestrator import prompts
 from mulder.orchestrator.evidence import EvidenceContext
 from mulder.orchestrator.types import PhaseResult
+from mulder.server.app import _tool_dispatch_sync
 from mulder.server.tool_access import Role, get_tools_for_role
 from mulder.server.tools.case import _manifest_entry
 from mulder.server.tools.extract import tsk
@@ -34,10 +46,10 @@ LVM = Volume(501760, "lvm", "vg0", 1)
 
 @pytest.fixture(autouse=True)
 def _fresh() -> Iterator[None]:
-    probe.cache_clear()
+    scan.cache_clear()
     dirroot.refresh()
     yield
-    probe.cache_clear()
+    scan.cache_clear()
     dirroot.refresh()
 
 
@@ -79,7 +91,7 @@ class FakeSleuthKit:
 
 
 def _probe(disk: bytes, table: str = "") -> tuple[Volume, ...]:
-    probe.cache_clear()  # one result is kept per image path
+    scan.cache_clear()  # one result is kept per image path
     with patch("mulder.linuxvol.subprocess.run", FakeSleuthKit(disk, table)):
         return probe("/evidence/disk.E01")
 
@@ -160,10 +172,74 @@ def test_an_image_sleuth_kit_reads_or_a_tool_that_is_missing_finds_nothing() -> 
     ext[1080:1082] = b"\x53\xef"
     assert _probe(bytes(ext), MBR) == ()
     assert _probe(b"XFSB" + b"\0" * 2044) == (Volume(0, "xfs"),)  # shorter than one full read
-    probe.cache_clear()
+    scan.cache_clear()
     with patch("mulder.linuxvol.subprocess.run", side_effect=FileNotFoundError("mmls")):
         assert probe("/evidence/disk.E01") == ()
     assert probe("--help") == ()  # never handed to a command line as an option
+
+
+def _disk(*partitions: tuple[int, bytes, int]) -> bytes:
+    """A disk with *(start sector, bytes, offset of the bytes in the partition)* written in."""
+    disk = bytearray(1024 * SECTOR)
+    for start, magic, offset in partitions:
+        disk[start * SECTOR + offset : start * SECTOR + offset + len(magic)] = magic
+    return bytes(disk)
+
+
+def _route(disk: bytes, table: str = MBR) -> str:
+    scan.cache_clear()
+    with patch("mulder.linuxvol.subprocess.run", FakeSleuthKit(disk, table)):
+        return route("/evidence/disk.E01")
+
+
+def test_what_else_is_on_the_disk_decides_how_it_is_examined() -> None:
+    """A Linux volume beside NTFS, or a locked one beside ext4, must not hide the rest."""
+    lvm = (320, _pv("vg0", 1), 0)
+    luks, ext, ntfs, fat = (
+        (b"LUKS\xba\xbe", 0),
+        (b"\x53\xef", 1080),
+        (b"NTFS    ", 3),
+        (b"FAT32", 82),
+    )
+
+    assert _route(_disk()) == ""
+    # /boot on ext beside the volume group, as on any Linux server: dfVFS reads both.
+    assert _route(_disk((64, *ext), lvm)) == "export"
+    assert _route(_disk((64, *fat), lvm)) == "export"  # so does an EFI system partition
+    assert _route(_disk((64, *ntfs), lvm)) == "also"
+    assert _route(_disk((64, *ext), (320, *luks))) == "rest"
+    assert _route(_disk((64, *ntfs), (320, *luks))) == "rest"
+    assert _route(_disk((64, *luks))) == "none"
+    assert _route(_disk((0, *luks)), "") == "none"
+
+    found = scan("/evidence/disk.E01")  # the last one: a whole-disk LUKS volume
+    assert found.plain == frozenset() and found.partitions == ()
+
+
+def test_the_other_partitions_are_named_the_way_plaso_takes_them() -> None:
+    """plaso stops at a LUKS partition; --partitions with the others is how it reads them."""
+    locked = _disk((64, b"\x53\xef", 1080), (320, b"LUKS\xba\xbe", 0))
+    gpt = (
+        "GUID Partition Table (EFI)\n      Slot      Start        End          Length\n"
+        "000:  Meta      0000000000   0000000000   0000000001   Safety Table\n"
+        "003:  -------   0000000000   0000000063   0000000064   Unallocated\n"
+        "004:  000       0000000064   0000000319   0000000256   EFI System Partition\n"
+        "005:  001       0000000320   0000000831   0000000512   Linux filesystem\n"
+        "006:  002       0000000832   0000001023   0000000192   Linux filesystem\n"
+    )
+
+    assert _route(locked) == "rest"
+    # A DOS table numbers by table and slot: the logical partition at 320 is 5, not 2.
+    assert scan("/evidence/disk.E01").partitions == ((64, 1), (320, 5))
+    assert unencrypted_partitions("/evidence/disk.E01") == "1"
+    assert _route(locked, gpt) == "rest"
+    assert scan("/evidence/disk.E01").partitions == ((64, 1), (320, 2), (832, 3))
+    assert unencrypted_partitions("/evidence/disk.E01") == "1,3"
+    # Nothing to leave out, or nothing left: no value, and plaso is not run again.
+    _route(_disk((64, b"\x53\xef", 1080)))
+    assert unencrypted_partitions("/evidence/disk.E01") == ""
+    _route(_disk((64, b"LUKS\xba\xbe", 0), (320, b"LUKS\xba\xbe", 0)))
+    assert unencrypted_partitions("/evidence/disk.E01") == ""
 
 
 def test_run_fls_names_the_tool_that_reads_what_sleuth_kit_cannot() -> None:
@@ -251,18 +327,42 @@ def test_what_only_looks_like_one_is_not(tmp_path: Path) -> None:
 
 
 def test_mulders_own_export_is_not_evidence_of_its_own(tmp_path: Path) -> None:
+    """An export is where the evidence walk does not go: nothing has to recognise one."""
     extracted = tmp_path / "cases" / "extracted" / "c1"
     export = export_dir(extracted, "/evidence/web01.E01")
-    _linux_tree(export / "p5_lvm1")
-    write(export, {EXPORT_MARKER: "{}", "filelist.tsv": "volume\ttype\n"})
+    _linux_tree(export)
+    write(export.parent, {EXPORT_MARKER: "{}", "filelist.tsv": "volume\ttype\n"})
 
-    assert (
-        export.name.startswith("web01.E01.files-")
-        and len(export.name) == len("web01.E01.files-") + 12
-    )
+    assert export.parent.parent == extracted / EXPORTS_DIR and export.name == "files"
+    assert export.parent.name.startswith("web01.E01-") and len(export.parent.name) == 22
     assert export_dir(extracted, "/evidence/../evidence/web01.E01") == export
     assert EvidenceClassifier().classify(extracted) == []
-    assert EvidenceClassifier().classify(export) == []
+    # It is an ordinary Linux file tree for the tools it is handed to.
+    assert "\tetc/passwd\n" in dir_root(str(export)).listing()  # type: ignore[union-attr]
+
+
+def test_a_file_named_like_mulders_marker_hides_nothing(tmp_path: Path) -> None:
+    """An intruder can leave any file in /: it must not make a collected tree disappear."""
+    root = tmp_path / "evidence"
+    for name in ("web01-rootfs", "db02-rootfs"):
+        _linux_tree(root / name, f"{name[:4]}\n")
+    write(root / "db02-rootfs", {EXPORT_MARKER: '{"summary": {}, "places": {}}'})
+    # The same inside an archive, which is unpacked into the extraction directory.
+    slot = tmp_path / "extracted" / "c1" / "db03.files-0123456789ab"
+    _linux_tree(slot, "db03\n")
+    write(slot, {EXPORT_MARKER: "{}", "filelist.tsv": "x\n"})
+
+    types = {c.path.name: c.artifact_type for c in EvidenceClassifier().classify(root)}
+    assert types == {"web01-rootfs": "triage_collection", "db02-rootfs": "triage_collection"}
+    unpacked = EvidenceClassifier().classify(slot.parent)
+    assert [(c.path.name, c.artifact_type) for c in unpacked] == [(slot.name, "triage_collection")]
+    for tree in (root / "db02-rootfs", slot):
+        collection = detect_collection(tree)
+        assert collection is not None and collection.layout == "linux"
+        listing = dir_root(str(tree)).listing()  # type: ignore[union-attr]
+        assert "\tetc/passwd\n" in listing and "\tvar/log/auth.log\n" in listing
+    text = _context(root, "db02", tmp_path / "extracted" / "c1", ["triage_collection"])
+    assert f"  {root / 'db02-rootfs'}  (Linux file tree, host db02)" in text
 
 
 # --- what the planner is told ------------------------------------------------
@@ -277,12 +377,18 @@ def _context(root: Path, name: str, extracted: Path, types: list[str] | None = N
     return ctx.build_evidence_context(name)
 
 
+def _holding(*volumes: Volume, plain: str = "") -> Any:
+    """The disk every image is taken to be while the block runs."""
+    found = Scan(volumes, frozenset(filter(None, [plain])))
+    return patch("mulder.linuxvol.scan", return_value=found)
+
+
 def test_the_planner_is_told_what_to_plan_and_where_the_files_will_be(tmp_path: Path) -> None:
     root, extracted = tmp_path / "evidence", tmp_path / "extracted"
     image = write(root, {"web01.E01": b"EVF"}) / "web01.E01"
     export = export_dir(extracted, str(image))
 
-    with patch.object(evidence, "probe", return_value=(LVM,)):
+    with _holding(LVM, plain="ext"):  # /boot beside the volume group
         text = _context(root, "web01", extracted)
         assert f"  {image}\n    Sleuth Kit cannot read this image: it holds LVM physical" in text
         assert "export_linux_files(image_path=<this image>)" in text
@@ -291,32 +397,66 @@ def test_the_planner_is_told_what_to_plan_and_where_the_files_will_be(tmp_path: 
         assert f"    Its files will be exported to {export}\n" in text
         assert "run_linux_persistence(image_path=<that directory>)" in text
 
-        # After the export: the same directory, and its rotated logs are not
-        # archives to unpack, nor a file over 100 MB a memory dump.
-        _linux_tree(export / "p5_lvm1")
-        write(export, {EXPORT_MARKER: "{}"})
+        # After the export: the same directory. Its rotated logs are not
+        # archives to unpack, and the listing kept beside its files, which
+        # passes 100 MB at some 750,000 entries, is not a memory dump.
+        _linux_tree(export)
+        write(export.parent, {EXPORT_MARKER: "{}"})
+        with open(export.parent / "filelist.tsv", "wb") as listing:
+            listing.truncate(101 * 1024 * 1024)
+        with open(export / "var/log/core", "wb") as core:
+            core.truncate(101 * 1024 * 1024)
         after = _context(root, "web01", extracted)
         assert f"    Its files are exported to {export}\n" in after
         assert "NESTED ARCHIVES" not in after and "syslog.1.gz" not in after
+        assert "memory dumps" not in after and "filelist.tsv" not in after
         assert "Triage collections" not in after
+        # Nor for a system whose name the exports directory happens to hold.
+        named = _context(root, "linux", extracted)
+        assert "memory dumps" not in named and "NESTED ARCHIVES" not in named
 
-    with patch.object(evidence, "probe", return_value=(Volume(2048, "luks"),)):
+    with _holding(Volume(2048, "luks")):
         locked = _context(root, "web01", extracted)
     assert "LUKS-encrypted volume at sector 2048" in locked and "No tool here reads it" in locked
     assert "export_linux_files" not in locked
 
-    with patch.object(evidence, "probe", return_value=()):
+    with _holding():
         assert _context(root, "web01", extracted).splitlines()[1:3] == [
             "Disk images:",
             f"  {image}",
         ]
 
 
+def test_a_disk_that_holds_more_than_the_linux_volume_keeps_its_usual_plan(
+    tmp_path: Path,
+) -> None:
+    """NTFS beside LVM, ext4 beside LUKS: Sleuth Kit reads those, and they were being skipped."""
+    root, extracted = tmp_path / "evidence", tmp_path / "extracted"
+    image = write(root, {"ws01.E01": b"EVF"}) / "ws01.E01"
+
+    with _holding(LVM, plain="ntfs"):
+        both = _context(root, "ws01", extracted)
+    assert "This image also holds LVM physical volume at sector 501760" in both
+    assert "Plan the usual disk tools for the rest of the image, and for that volume" in both
+    assert "export_linux_files(image_path=<this image>)" in both
+    assert f"    Its files will be exported to {export_dir(extracted, str(image))}\n" in both
+    assert "Do NOT plan" not in both and "cannot read this image" not in both
+
+    for beside in ("ntfs", "ext", "fat"):
+        with _holding(Volume(133120, "luks"), plain=beside):
+            rest = _context(root, "ws01", extracted)
+        assert "This image also holds LUKS-encrypted volume at sector 133120" in rest
+        assert "Plan the usual disk tools for the rest of the image" in rest
+        assert "the files of that volume are not examined" in rest
+        for wrong in ("No tool here reads it", "only;", "Do NOT plan", "export_linux_files"):
+            assert wrong not in rest, wrong
+
+
 def test_an_image_name_cannot_write_lines_of_the_planners_context(tmp_path: Path) -> None:
     root = tmp_path / "evidence"
     write(root, {"web01\nSystem: other.E01": b"EVF"})
 
-    with patch.object(evidence, "probe", return_value=(LVM,)):
+    with _holding(LVM):
         text = _context(root, "web01", tmp_path / "extracted")
 
     assert "export_linux_files" not in text and "exported to" not in text
@@ -342,14 +482,50 @@ def test_the_catalog_sees_what_an_image_holds(tmp_path: Path) -> None:
     image = write(tmp_path, {"web01.E01": b"EVF"}) / "web01.E01"
     item = ClassifiedEvidence(path=image, artifact_type="disk_image")
 
-    with patch.object(case_tools, "probe", return_value=(LVM,)):
+    with _holding(LVM):
         entry = _manifest_entry(item)
     assert entry["media"] == "LVM physical volume at sector 501760, volume group vg0"
     assert "export_linux_files, not run_fls" in str(entry["note"])
-    with patch.object(case_tools, "probe", return_value=(Volume(0, "btrfs"),)):
+    with _holding(Volume(0, "btrfs")):
         assert _manifest_entry(item)["note"] == "No tool here reads this volume"
-    with patch.object(case_tools, "probe", return_value=()):
+    with _holding():
         assert "media" not in _manifest_entry(item)
+    # A disk that holds more keeps what Sleuth Kit reads of it.
+    with _holding(LVM, plain="ntfs"):
+        assert "the usual disk tools for the rest" in str(_manifest_entry(item)["note"])
+    with _holding(Volume(2048, "luks"), plain="ext"):
+        note = str(_manifest_entry(item)["note"])
+    assert note.startswith("No tool here reads this volume; the usual disk tools read the rest")
+
+
+def test_the_coverage_audit_does_not_ask_for_run_fls_where_it_cannot_run(tmp_path: Path) -> None:
+    """The planner is told not to plan run_fls on such an image: the audit must not miss it."""
+    root = tmp_path / "evidence"
+    image = write(root, {"web01.E01": b"EVF"}) / "web01.E01"
+    db_dir = tmp_path / "db"
+    db = CaseDB.create(case_id="cov", evidence_root=str(root), db_dir=db_dir)
+    audit = AuditLog(db_dir / "cov.audit.jsonl")
+    audit.log_tool_call("tc_0", "export_linux_files", {"image_path": str(image)}, "h")
+    ctx = MagicMock(db=db, audit=audit, case_id="cov")
+
+    def gaps() -> Any:
+        with (
+            patch("mulder.server.tools.review.get_ctx", return_value=ctx),
+            patch("mulder.server.tools.review.get_cfg", return_value=MagicMock(db_dir=db_dir)),
+        ):
+            (item,) = _tool_dispatch_sync["audit_tool_coverage"]()["coverage"]
+        return item
+
+    try:
+        with _holding(LVM, plain="ext"):
+            listed = gaps()
+        with _holding():
+            plain = gaps()
+    finally:
+        db.close()
+
+    assert listed["tools_run"] == ["export_linux_files"] and "run_fls" not in str(listed)
+    assert "run_fls" in plain["tools_not_run"] and "export_linux_files" not in str(plain)
 
 
 # --- what each role is told ---------------------------------------------------
@@ -371,12 +547,18 @@ def test_each_role_is_told_what_the_linux_sources_do_and_do_not_show() -> None:
         assert not _can_call(Role.EXTRACT_ANALYST, tool)
     assert 'parsers "linux_logs"' in planner and "EXPORT DIRECTORY as image_path" in planner
     assert "it does not judge them" in planner
+    # A disk that holds more than the Linux volume is not planned as if it held nothing else.
+    assert "ALSO holds such a volume" in planner and "Nothing is left out" in planner
+    assert "no tool reads ONE volume" in planner and "that volume is not examined" in planner
 
     section = analyst.split("LINUX SYSTEMS:", 1)[1].split("EVIDENCE OUTSIDE THE CASE:", 1)[0]
     for said in (
         'write "not exported", never "absent"',
         "a file not listed may have been deleted",
         "follow-up request that names\n  export_linux_files",
+        "An export can be incomplete",
+        'Write "not\n  examined" for what those hold',
+        "<export directory>/<path>",
         "not who used\n  it",
         "no login record in a period is not proof that nobody logged in",
         "Syslog lines carry no year",

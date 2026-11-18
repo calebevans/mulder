@@ -182,11 +182,20 @@ reads it instead and leaves two listings:
   exists, a file not listed may have been deleted.
 - tsk.filelist of the export directory: the files copied out, which are the
   only ones that can be read (configuration, logs, home directory dotfiles,
-  web roots, /tmp). A file there is an ordinary file at <export
-  directory>/<volume directory>/<path>. Password hash files and private keys
-  are never copied: write "not exported", never "absent". To read a listed
+  web roots, /tmp). The export is one Linux file tree, so a file there is an
+  ordinary file at <export directory>/<path>. Password hash files and
+  private keys are left out by name (etc/shadow, SSH and TLS private keys):
+  write "not exported", never "absent". To read a listed
   file that was not copied, end with a follow-up request that names
   export_linux_files and gives the image and the exact paths in "reason".
+- An export can be incomplete, and the result of export_linux_files and the
+  first line of linux.persistence then say so. A directory named under
+  listing_incomplete could not be read to its end (one file name that is not
+  valid UTF-8 is enough), so files in it are missing from both listings; a
+  file named as not copied was listed and could not be read. Write "not
+  examined" for what those hold: no row and no listing entry there shows
+  nothing. A name that could not be read in a directory such as /tmp or a
+  cron directory is itself worth stating.
 Who logged in, from where, and how (plaso.timeline, from run_plaso with the
 linux_logs parsers):
 - utmp events are wtmp (sessions) and btmp (failed attempts); syslog events

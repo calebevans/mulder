@@ -3,8 +3,10 @@
 Every test uses a real case database. plaso's command-line tools are stood in
 for by :class:`FakePlaso`, which answers the way the real ones were seen to:
 psort writes one JSON event per line with a path specification only for
-files, and image_export matches each path segment whole and without case,
-merges nothing across runs, and stores some characters of a name as ``_``.
+files; image_export matches each path segment whole and without case, stores
+some characters of a name as ``_``, and stops for good at a directory it
+cannot read to the end; log2timeline only counts such a directory as a
+warning, which pinfo then names.
 """
 
 from __future__ import annotations
@@ -20,11 +22,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from mulder import dirroot
+from mulder import dirroot, linuxvol
 from mulder.audit import AuditLog
 from mulder.db import CaseDB
-from mulder.dirroot import LISTING_EXTRACTOR, detect_collection, dir_root
-from mulder.linuxvol import EXPORT_MARKER, Volume, export_dir
+from mulder.dirroot import LISTING_EXTRACTOR, detect_collection, dir_root, icat
+from mulder.linuxvol import EXPORT_MARKER, EXPORTS_DIR, Scan, Volume, export_dir
 from mulder.patterns import case_extract_dir
 from mulder.server import app
 from mulder.server.app import _tool_dispatch_sync
@@ -36,7 +38,8 @@ MODIFIED = 1_570_274_078  # 2019-10-05T11:14:38Z
 
 
 def _arg(argv: list[str], flag: str) -> str:
-    return argv[argv.index(flag) + 1]
+    """The value of *flag* as the tool takes it: the last one given."""
+    return argv[len(argv) - argv[::-1].index(flag)]
 
 
 def _events(
@@ -67,7 +70,7 @@ def _events(
 
 
 class FakePlaso:
-    """subprocess.run stand-in for log2timeline, psort and image_export."""
+    """subprocess.run stand-in for log2timeline, psort, pinfo and image_export."""
 
     def __init__(self, files: dict[str, dict[str, bytes]], extra: list[dict[str, Any]] = ()):  # type: ignore[assignment]
         self.files = files
@@ -77,6 +80,10 @@ class FakePlaso:
         self.filters: dict[str, list[str]] = {}
         self.fail = ""
         self.leak: list[str] = []
+        self.unreadable: dict[str, str] = {}
+        """Directory to the first of its names that cannot be read: nothing from it on."""
+        self.encrypted = False
+        """Whether the image holds a partition plaso stops at unless told to stay off it."""
 
     def ran(self, tool: str) -> list[list[str]]:
         return [argv for argv in self.calls if Path(argv[0]).name == tool]
@@ -85,20 +92,42 @@ class FakePlaso:
         self.calls.append(list(argv))
         assert kwargs.get("stdin") is subprocess.DEVNULL, "plaso must never wait on stdin"
         tool = Path(argv[0]).name
+        out = ""
         if tool == "log2timeline":
             if self.fail:
                 return subprocess.CompletedProcess(argv, 1, stdout=self.fail, stderr="")
+            if self.encrypted and _arg(argv, "--partitions") == "all":
+                said = "Unable to proceed. Encrypted volume found but no mediator to determine\n"
+                return subprocess.CompletedProcess(argv, 1, stdout=said, stderr="")
             Path(_arg(argv, "--storage_file")).write_bytes(b"plaso")
+            if self.unreadable:
+                count = len(self.unreadable)
+                out = f"Number of warnings generated while extracting events: {count}.\n"
         elif tool == "psort":
             lines = "\n".join(json.dumps(e) for e in self.events)
             Path(_arg(argv, "-w")).write_text(lines, encoding="utf-8")
+        elif tool == "pinfo":
+            specs = {
+                "type: OS, location: /evidence/disk.E01\ntype: EWF\n"
+                "type: TSK_PARTITION, location: /p5, part_index: 6\n"
+                "type: LVM, location: /lvm1, volume_index: 0\n"
+                f"type: EXT, inode: 51, location: {directory}\n": 1
+                for directory in self.unreadable
+            }
+            counters = {"storage_counters": {"warnings_by_path_spec": specs}}
+            Path(_arg(argv, "-w")).write_text(json.dumps(counters), encoding="utf-8")
         elif tool == "image_export":
             parts = [f"p{_arg(argv, '--partitions')}", f"lvm{_arg(argv, '--volumes')}"]
             volume = "/".join(p for p in parts if not p.endswith("all"))
             text = Path(_arg(argv, "-f")).read_text(encoding="utf-8")
             wanted = [json.loads(line[2:]) for line in text.splitlines() if line.startswith("- ")]
-            self.filters[volume] = wanted
-            for path, data in self.files.get(volume, {}).items():
+            self.filters[volume] = [*self.filters.get(volume, []), *wanted]
+            # A directory is read only when the filter leads into it.
+            entered = {w.rpartition("/")[0].replace("\\", "") for w in wanted}
+            for path, data in sorted(self.files.get(volume, {}).items()):
+                directory, _, name = path.rpartition("/")
+                if directory in entered and name >= self.unreadable.get(directory, "\U0010ffff"):
+                    return subprocess.CompletedProcess(argv, 1, "OSError: unable to read\n", "")
                 if path in self.leak or any(self._matches(w, path) for w in wanted):
                     stored = Path(_arg(argv, "-w")) / re.sub(r"[@+~%]", "_", path).lstrip("/")
                     stored.parent.mkdir(parents=True, exist_ok=True)
@@ -106,7 +135,7 @@ class FakePlaso:
                         stored.write_bytes(data)
         else:
             raise AssertionError(f"unexpected command: {argv}")
-        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
 
     @staticmethod
     def _matches(pattern: str, path: str) -> bool:
@@ -130,7 +159,7 @@ def case(
     monkeypatch.setattr(app, "_ctx", ctx)
     monkeypatch.setattr(app, "_cfg", app.ServerConfig(db_dir=tmp_path / "cases"))
     monkeypatch.setattr(linux, "_find_plaso_cmd", lambda tool: [f"/usr/bin/{tool}"])
-    monkeypatch.setattr(linux, "probe", lambda image: ())
+    monkeypatch.setattr(linuxvol, "scan", lambda image: Scan())
     dirroot.refresh()
     yield tmp_case_db
     dirroot.refresh()
@@ -153,6 +182,10 @@ def _run(
 
 def _text(db: CaseDB, source: str) -> str:
     return "".join(w.raw_text for w in db.get_windows_by_source(source))
+
+
+def _held(root: Path) -> list[str]:
+    return sorted(str(p.relative_to(root)) for p in root.rglob("*") if p.is_file())
 
 
 SERVER = {
@@ -186,6 +219,7 @@ def test_every_entry_is_listed_with_its_volume_and_its_times(
     result = _run(monkeypatch, FakePlaso(SERVER, extra), image)["results"]
 
     assert result["entries_listed"] == 15 and result["listing_truncated"] is False
+    assert result["status"] == "exported" and result["listing_incomplete"] == []
     listing = _text(case, "linux.filelist")
     assert listing.startswith("volume\ttype\tmode\tuid\tgid\tsize\tmodified\tchanged\tcreated\t")
     row = "p5/lvm1\tfile\t0644\t0\t0\t10\t2019-10-05T11:14:38Z\t-\t2016-04-03T16:05:51Z\t"
@@ -202,14 +236,19 @@ def test_every_entry_is_listed_with_its_volume_and_its_times(
 
 
 def test_the_files_are_listed_without_reading_or_hashing_them(
-    case: CaseDB, image: str, monkeypatch: pytest.MonkeyPatch
+    case: CaseDB, image: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake = FakePlaso(SERVER)
-    _run(monkeypatch, fake, image)
+    monkeypatch.chdir(tmp_path)
+    _run(monkeypatch, fake, "evidence/disk.E01")
 
     (l2t,) = fake.ran("log2timeline")
     assert _arg(l2t, "--parsers") == "filestat" and _arg(l2t, "--hashers") == "none"
-    assert "-u" in l2t and _arg(l2t, "--volumes") == "all" and l2t[-1] == image
+    # Nor are the gzip, bzip2 and xz files on the volume unpacked to look inside.
+    assert "--skip_compressed_streams" in l2t
+    assert "-u" in l2t and _arg(l2t, "--volumes") == "all"
+    # The tools run in a directory of their own: a relative path would name nothing there.
+    assert l2t[-1] == image and fake.ran("image_export")[0][-1] == image
     (psort,) = fake.ran("psort")
     assert _arg(psort, "-o") == "json_line", "the one output with exact names and the volume"
 
@@ -244,7 +283,7 @@ def test_a_listing_past_the_limit_is_cut_and_says_so(
 # --- the export ------------------------------------------------------------
 
 
-def test_the_targeted_set_is_exported_one_directory_per_volume(
+def test_the_targeted_set_is_exported_as_one_tree(
     case: CaseDB, image: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake = FakePlaso(SERVER)
@@ -253,30 +292,33 @@ def test_the_targeted_set_is_exported_one_directory_per_volume(
     root = Path(result["export_root"])
     # Where the planner was told it would be, before it existed.
     assert root == export_dir(case_extract_dir(tmp_path / "cases", "test-case"), image)
-    held = sorted(str(p.relative_to(root)) for p in root.rglob("*") if p.is_file())
-    assert held == [
+    assert _held(root) == [
+        "etc/cron.d/backup",
+        "etc/hostname",
+        "etc/passwd",
+        "lib/systemd/system/ssh@.service",
+        "root/.bash_history",
+        "tmp/apache-xTRhUVX",
+        "var/log/auth.log",
+        "var/www/html/index.php",
+    ]
+    # What mulder keeps about the export sits beside the tree, not in it.
+    assert sorted(p.name for p in root.parent.iterdir()) == [
         EXPORT_MARKER,
         "filelist.tsv",
-        "p5_lvm1/etc/cron.d/backup",
-        "p5_lvm1/etc/hostname",
-        "p5_lvm1/etc/passwd",
-        "p5_lvm1/lib/systemd/system/ssh@.service",
-        "p5_lvm1/root/.bash_history",
-        "p5_lvm1/tmp/apache-xTRhUVX",
-        "p5_lvm1/var/log/auth.log",
-        "p5_lvm1/var/www/html/index.php",
+        "files",
     ]
     assert result["files_exported"] == 8
     assert result["selected"] == {"config": 4, "logs": 1, "homes": 1, "web": 1, "tmp": 1}
     assert result["volumes"] == [
-        "p1 (EXT, 2 files, 0 exported to p1/): read as /boot, guessed from its top-level names",
-        "p5/lvm1 (EXT, 10 files, 8 exported to p5_lvm1/): the root volume: it holds etc/passwd",
+        "p1 (EXT, 2 files, 0 exported to boot/): read as /boot, guessed from its top-level names",
+        "p5/lvm1 (EXT, 10 files, 8 exported to ./): the root volume: it holds etc/passwd",
     ]
     # One run per volume that has something to export, selected as dfVFS names it.
     (export,) = fake.ran("image_export")
     assert _arg(export, "--partitions") == "5" and _arg(export, "--volumes") == "1"
     assert "--include_duplicates" in export and "--no_hashes" in export and "-u" in export
-    assert _arg(export, "-w") == str(root / "p5_lvm1") and export[-1] == image
+    assert _arg(export, "-w") == str(root) and export[-1] == image
     assert "/etc/passwd" in fake.filters[ROOT] and "/usr/bin/python3" not in fake.filters[ROOT]
     assert (Path(image).parent / "disk.E01").read_bytes() == b"EVF"
     assert sorted(p.name for p in Path(image).parent.iterdir()) == ["disk.E01"]
@@ -288,43 +330,87 @@ def test_an_exported_file_gets_its_name_and_its_time_back(
     """image_export stored ssh@.service as ssh_.service, stamped with the time of the copy."""
     root = Path(_run(monkeypatch, FakePlaso(SERVER), image)["results"]["export_root"])
 
-    unit = root / "p5_lvm1/lib/systemd/system/ssh@.service"
+    unit = root / "lib/systemd/system/ssh@.service"
     assert unit.read_bytes().startswith(b"[Service]")
     assert not (unit.parent / "ssh_.service").exists()
     assert int(unit.stat().st_mtime) == MODIFIED
-    assert int((root / "p5_lvm1/etc/passwd").stat().st_mtime) == MODIFIED
+    assert int((root / "etc/passwd").stat().st_mtime) == MODIFIED
 
 
-def test_two_names_image_export_stores_as_one_are_reported(
+def test_names_image_export_would_store_as_one_are_not_exported_together(
     case: CaseDB, image: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    files = {ROOT: {"/etc/passwd": b"x\n", "/etc/hosts~": b"old\n", "/etc/hosts+": b"new\n"}}
+    """Whose content the one stored file holds cannot be told, so neither is given a row."""
+    files = {
+        ROOT: {
+            "/etc/passwd": b"x\n",
+            "/etc/hosts~": b"old\n",
+            "/etc/hosts+": b"new\n",
+            "/etc/x y": b"a space is not replaced\n",
+            "/etc/x_y": b"so this is no twin of it\n",
+        }
+    }
+    fake = FakePlaso(files)
 
-    result = _run(monkeypatch, FakePlaso(files), image)["results"]
+    result = _run(monkeypatch, fake, image)["results"]
 
     root = Path(result["export_root"])
-    assert (root / "p5_lvm1/etc/hosts_").read_bytes() == b"old\n"  # which one, nobody can say
-    assert not (root / "p5_lvm1/etc/hosts~").exists()
-    assert result["problems"][0].startswith("p5/lvm1: 1 stored names each stand for several")
+    assert _held(root) == ["etc/passwd", "etc/x y", "etc/x_y"]
+    assert (root / "etc/x y").read_bytes() == b"a space is not replaced\n"
+    (reason,) = [r for r in result["not_exported"] if "another file's too" in r]
+    assert result["not_exported"][reason] == ["p5/lvm1:/etc/hosts+", "p5/lvm1:/etc/hosts~"]
+    assert result["status"] == "exported", "left out on purpose, and named: not a failure"
+
+    # One of them alone has no twin in its run, and gets its own name.
+    alone = _run(monkeypatch, fake, image, paths=["/etc/hosts~"])["results"]["requested"]
+    assert Path(alone["exported"][0]).read_bytes() == b"old\n"
+    assert alone["exported"][0].endswith("/etc/hosts~")
 
 
-def test_the_export_is_read_as_a_directory_root_with_the_root_volume_first(
+def test_the_export_holds_the_files_asked_for_and_nothing_else(
     case: CaseDB, image: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """image_export matches without case, so the filter for one name can fetch another file."""
+    fake = FakePlaso({ROOT: {"/etc/passwd": b"x\n", "/tmp/a.bin": b"small\n"}})
+    fake.files[ROOT]["/tmp/CORE"] = b"not asked for\n"
+    fake.events += _events("/tmp/CORE", size=65 * 1024 * 1024)
+    fake.leak = ["/tmp/CORE"]
+
+    result = _run(monkeypatch, fake, image)["results"]
+
+    assert result["not_exported"]["larger than 64 MiB"] == ["p5/lvm1:/tmp/CORE"]
+    assert _held(Path(result["export_root"])) == ["etc/passwd", "tmp/a.bin"]
+
+
+def test_a_volume_mounted_at_home_is_exported_at_home(
+    case: CaseDB, image: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The RHEL default: the planner is told to index "home", and that is where the files are."""
     files = {**SERVER, HOME: {"/alice/.bashrc": b"alias l=ls\n", "/alice/thesis.odt": b"PK"}}
+    files[HOME]["/alice/.bash_history"] = b"ALICEHISTORY\n"
     result = _run(monkeypatch, FakePlaso(files), image)["results"]
     root = result["export_root"]
 
+    assert result["volumes"][2] == (
+        "p5/lvm2 (EXT, 3 files, 2 exported to home/): read as /home, guessed from the "
+        "dotfiles in its directories"
+    )
+    assert not (Path(root) / "home/alice/thesis.odt").exists()  # dotfiles and .ssh only
+    # A plain Linux file tree: nothing in mulder has to know that it is an export.
     collection = detect_collection(Path(root))
-    assert collection is not None and collection.layout == "export" and collection.host == "web01"
-    assert [label for label, _ in collection.volumes] == ["p5_lvm1", "p5_lvm2"]
-    assert collection.linux and not collection.windows
+    assert collection is not None and (collection.layout, collection.host) == ("linux", "web01")
     listing = dir_root(root).listing()  # type: ignore[union-attr]
-    assert "\tetc/passwd\n" in listing and "\tp5_lvm2/alice/.bashrc" in listing
+    assert "\tetc/passwd\n" in listing and "\thome/alice/.bashrc" in listing
     assert EXPORT_MARKER not in listing and "filelist.tsv" not in listing
-    assert "\tetc/passwd\n" in _text(case, "tsk.filelist")
-    assert "read as /home, guessed from the dotfiles" in result["volumes"][2]
-    assert not (Path(root) / "p5_lvm2/alice/thesis.odt").exists()  # dotfiles and .ssh only
+    assert "\thome/alice/.bash_history" in _text(case, "tsk.filelist")
+
+    with pytest.MonkeyPatch.context() as patched:
+        patched.setattr("mulder.server.tools.extract.app_files.shutil.which", lambda name: name)
+        indexed = _tool_dispatch_sync["index_app_files"](
+            case_id="test-case", image_path=root, directory_pattern="home"
+        )["results"]
+    assert indexed["files_indexed"] == 2
+    assert "ALICEHISTORY" in _text(case, "appfiles.home..bash_history")
 
 
 def test_var_and_var_log_on_volumes_of_their_own_still_yield_their_logs(
@@ -335,21 +421,24 @@ def test_var_and_var_log_on_volumes_of_their_own_still_yield_their_logs(
         ROOT: {"/etc/passwd": b"x\n"},
         "p5/lvm2": {"/lib/dpkg/status": b"Package: x\n", "/www/html/a.php": b"<?php\n"},
         "p5/lvm3": {"/auth.log": b"Oct  5 sshd\n", "/journal/abc/system.journal": b"LPKSHHRH"},
-        "p5/lvm4": {"/data/blob.bin": b"\x00"},
+        "p5/lvm4": {"/data/blob.bin": b"\x00", "/etc/motd": b"another root?\n"},
+        "p5/lvm5": {"/bob/.profile": b"x\n"},
+        "p5/lvm6": {"/carol/.profile": b"y\n"},
     }
     files["p5/lvm2"]["/log/placeholder"] = b""  # the mount point of the third volume
 
     result = _run(monkeypatch, FakePlaso(files), image)["results"]
 
-    root = Path(result["export_root"])
-    held = sorted(str(p.relative_to(root)) for p in root.rglob("*") if p.is_file())
-    assert held[2:] == [
-        "p5_lvm1/etc/passwd",
-        "p5_lvm2/lib/dpkg/status",
-        "p5_lvm2/log/placeholder",
-        "p5_lvm2/www/html/a.php",
-        "p5_lvm3/auth.log",
-        "p5_lvm3/journal/abc/system.journal",
+    assert _held(Path(result["export_root"])) == [
+        "etc/passwd",
+        "home/bob/.profile",
+        "p5_lvm4/etc/motd",  # no place of its own in the tree: under its own name
+        "p5_lvm6/carol/.profile",  # /home is taken
+        "var/lib/dpkg/status",
+        "var/log/auth.log",
+        "var/log/journal/abc/system.journal",
+        "var/log/placeholder",
+        "var/www/html/a.php",
     ]
     said = [line.split("): ", 1)[1] for line in result["volumes"]]
     assert said == [
@@ -357,7 +446,11 @@ def test_var_and_var_log_on_volumes_of_their_own_still_yield_their_logs(
         "read as /var, guessed from its top-level names",
         "read as /var/log, guessed from its top-level names",
         "mount point not recognised: read as a root volume",
+        "read as /home, guessed from the dotfiles in its directories",
+        "read as /home, guessed from the dotfiles in its directories (another volume has "
+        "that place, so its files are under its own name)",
     ]
+    assert "exported to p5_lvm6/" in result["volumes"][5]
 
 
 def test_a_single_file_system_needs_no_volume_selector(
@@ -369,11 +462,11 @@ def test_a_single_file_system_needs_no_volume_selector(
 
     (export,) = fake.ran("image_export")
     assert _arg(export, "--partitions") == "all" and _arg(export, "--volumes") == "all"
-    assert (Path(result["export_root"]) / "vol/etc/passwd").is_file()
+    assert (Path(result["export_root"]) / "etc/passwd").is_file()
     assert _text(case, "linux.filelist").splitlines()[1].startswith("-\tfile\t")
 
 
-def test_password_hashes_and_private_keys_never_reach_the_case_directory(
+def test_password_hashes_and_private_keys_do_not_reach_the_case_directory(
     case: CaseDB, image: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     secrets = [
@@ -385,6 +478,8 @@ def test_password_hashes_and_private_keys_never_reach_the_case_directory(
         "/root/.ssh/id_ed25519",
         "/etc/ssl/private/site.key",
         "/etc/letsencrypt/live/site/privkey1.pem",
+        "/var/backups/shadow.bak",  # Debian's daily copy
+        "/var/backups/gshadow.bak",
     ]
     public = ["/etc/passwd", "/etc/ssh/ssh_host_rsa_key.pub", "/root/.ssh/id_ed25519.pub"]
     fake = FakePlaso({ROOT: dict.fromkeys(secrets + public, b"secret\n")})
@@ -393,21 +488,23 @@ def test_password_hashes_and_private_keys_never_reach_the_case_directory(
     result = _run(monkeypatch, fake, image)["results"]
 
     root = Path(result["export_root"])
-    held = {str(p.relative_to(root / "p5_lvm1")) for p in (root / "p5_lvm1").rglob("*")}
-    assert {p.lstrip("/") for p in public} <= held
-    assert not {p.lstrip("/") for p in secrets} & held
+    assert _held(root) == sorted(p.lstrip("/") for p in public)
     assert not set(secrets) & set(fake.filters[ROOT])
-    refused = result["not_exported"]["never exported (password hashes and private keys)"]
-    assert "p5/lvm1:/etc/shadow" in refused and len(refused) == len(secrets)
+    refused = result["not_exported"]["not exported (password hashes and private keys, by name)"]
+    # /var/backups is outside the targeted set, so its two are not even candidates.
+    assert "p5/lvm1:/etc/shadow" in refused and len(refused) == len(secrets) - 2
     # Listed all the same: that the file exists, its size and its times are evidence.
     assert "\t/etc/shadow\n" in _text(case, "linux.filelist")
+    assert "by their well-known names" in result["note"]
 
-    again = _run(monkeypatch, fake, image, paths=["/etc/shadow", "/root/.ssh"])["results"]
-    assert list(again["requested"]["not_exported"]) == [
-        "never exported (password hashes and private keys)"
+    again = _run(monkeypatch, fake, image, paths=["/etc/shadow", "/root/.ssh", "/var/backups"])
+    asked = again["results"]["requested"]
+    assert list(asked["not_exported"]) == [
+        "not exported (password hashes and private keys, by name)"
     ]
-    assert not (root / "p5_lvm1/etc/shadow").exists()
-    assert not (root / "p5_lvm1/root/.ssh/id_ed25519").exists()
+    assert "p5/lvm1:/var/backups/shadow.bak" in list(asked["not_exported"].values())[0]
+    assert _held(Path(asked["root"])) == ["root/.ssh/id_ed25519.pub"]
+    assert _held(root) == sorted(p.lstrip("/") for p in public)
 
 
 def test_size_limits_keep_the_newest_and_name_what_was_left(
@@ -416,6 +513,7 @@ def test_size_limits_keep_the_newest_and_name_what_was_left(
     mib = 1024 * 1024
     fake = FakePlaso({ROOT: {"/etc/passwd": b"x\n"}})
     for day, name in enumerate(["old", "mid", "new", "newest", "latest"]):
+        fake.files[ROOT][f"/tmp/{name}.bin"] = b"stands for 60 MiB"
         fake.events += _events(f"/tmp/{name}.bin", size=60 * mib, modified=MODIFIED + day * 86400)
     fake.events += _events("/var/log/huge.log", size=65 * mib)
 
@@ -432,14 +530,30 @@ def test_size_limits_keep_the_newest_and_name_what_was_left(
         "larger than 64 MiB": ["p5/lvm1:/var/log/huge.log"],
         "over the limit for tmp": ["p5/lvm1:/tmp/old.bin"],
     }
+    assert result["status"] == "exported", "limits are not failures"
+
+
+def test_a_file_image_export_does_not_write_is_named(
+    case: CaseDB, image: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """It reports success whether or not it found the file it was asked for."""
+    fake = FakePlaso({ROOT: {"/etc/passwd": b"x\n"}})
+    fake.events += _events("/etc/gone.conf")  # listed, and not there to be copied
+
+    result = _run(monkeypatch, fake, image)["results"]
+
+    assert result["not_exported"] == {"image_export did not copy it": ["p5/lvm1:/etc/gone.conf"]}
+    assert result["status"] == "incomplete" and result["files_exported"] == 1
 
 
 def test_a_name_from_the_evidence_cannot_forge_a_row_or_leave_the_export(
     case: CaseDB, image: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     forged = "/etc/x\np5/lvm1\tfile\t0644\t0\t0\t1\t-\t-\t-\t/etc/planted"
-    fake = FakePlaso({ROOT: {"/etc/passwd": b"x\n"}})
+    separators = "/etc/a b\u0085c d‮e"  # line breaks to str.splitlines, and a bidi override
+    fake = FakePlaso({ROOT: {"/etc/passwd": b"x\n", "/etc/a\\..\\..\\..\\b": b"backslashes\n"}})
     fake.events += _events(forged) + _events("/etc/../../../outside") + _events("/etc/a%b{c}.conf")
+    fake.events += _events(separators)
     outside = tmp_path / "cases/extracted/outside"
     outside.parent.mkdir(parents=True)
     outside.write_bytes(b"mine")
@@ -449,38 +563,168 @@ def test_a_name_from_the_evidence_cannot_forge_a_row_or_leave_the_export(
 
     listing = _text(case, "linux.filelist")
     assert "/etc/x^p5/lvm1^file^" in listing and "\n" + forged.split("\n")[1] not in listing
-    assert result["not_exported"]["name holds characters that cannot be passed to image_export"]
-    assert not any("\n" in p for p in fake.filters[ROOT])
+    assert "\t/etc/a^b^c^d^e\n" in listing
+    rows = listing.rstrip("\n")
+    assert len(rows.splitlines()) == len(rows.split("\n")) == result["entries_listed"] + 1
+    refused = result["not_exported"]["name holds characters that cannot be passed to image_export"]
+    assert "p5/lvm1:/etc/a^b^c^d^e" in refused and "p5/lvm1:/etc/../../../outside" in refused
+    assert not any("\n" in p or " " in p or ".." in p for p in fake.filters[ROOT])
     # Every character of a name is matched as itself, and % cannot start a variable.
     assert "/etc/a\\%b\\{c\\}\\.conf" in fake.filters[ROOT]
     assert outside.stat().st_mtime_ns == before and outside.read_bytes() == b"mine"
+    # image_export takes a backslash for a separator and ".." for "_": the copy is looked
+    # for where it writes it, never up the tree from the export.
+    assert linux._as_stored(Path("/x"), "/etc/a\\..\\..\\..\\b") == Path("/x/etc/a/_/_/_/b")
+    # A later call reads the listing the first one kept, row for row.
+    again = _run(monkeypatch, fake, image, paths=["/etc"])["results"]["requested"]
+    assert "p5/lvm1:/etc/a^b^c^d^e" in str(again["not_exported"])
+    assert all(Path(p).is_relative_to(again["root"]) for p in again["exported"])
 
 
 # --- what cannot be read ---------------------------------------------------
+
+
+def test_a_directory_that_cannot_be_read_costs_only_itself_and_is_named(
+    case: CaseDB, image: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One name that is not valid UTF-8 stops image_export for good; var/ was never reached.
+
+    The listing has the same hole: log2timeline counts the directory as a
+    warning and lists what it had read of it.
+    """
+    files = {ROOT: {**SERVER[ROOT], "/tmp/zz-after": b"unreachable\n", "/tmp/.x": b"hidden\n"}}
+    fake = FakePlaso(files)
+    fake.unreadable = {"/tmp": "caf\udce9.txt"}  # sorts after apache-xTRhUVX, before zz-after
+
+    result = _run(monkeypatch, fake, image)["results"]
+
+    root = Path(result["export_root"])
+    assert _held(root) == [
+        "etc/cron.d/backup",
+        "etc/hostname",
+        "etc/passwd",
+        "lib/systemd/system/ssh@.service",
+        "root/.bash_history",
+        "tmp/.x",
+        "tmp/apache-xTRhUVX",
+        "var/log/auth.log",  # not reached by the first run, which stopped in /tmp
+        "var/www/html/index.php",
+    ]
+    assert len(fake.ran("image_export")) > 1
+    assert result["status"] == "incomplete"
+    assert result["listing_incomplete"] == ["p5/lvm1:/tmp"]
+    assert result["not_exported"]["image_export did not copy it"] == ["p5/lvm1:/tmp/zz-after"]
+    assert "stopped early and was repeated in parts" in result["problems"][0]
+    assert "OSError: unable to read" in result["problems"][0]
+    assert "listing_incomplete" in result["note"]
+
+    # Nor does a later call answer as if the export were whole.
+    again = _run(monkeypatch, fake, image)["results"]
+    assert again["status"] == "already exported, incomplete"
+    assert again["listing_incomplete"] == ["p5/lvm1:/tmp"]
+
+
+def test_retrying_a_failed_export_is_bounded(
+    case: CaseDB, image: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    files = {ROOT: {"/etc/passwd": b"x\n"}}
+    for n in range(40):
+        files[ROOT][f"/etc/d{n:02}/conf"] = b"x\n"
+    fake = FakePlaso(files)
+    fake.unreadable = {f"/etc/d{n:02}": "" for n in range(40)}  # not one of them can be read
+    monkeypatch.setattr(linux, "_MAX_RUNS", 6)
+
+    result = _run(monkeypatch, fake, image)["results"]
+
+    assert len(fake.ran("image_export")) == 6
+    assert _held(Path(result["export_root"])) == []
+    # All 41 are accounted for, whether a run was spent on them or not.
+    assert result["not_exported"]["image_export did not copy it"][-1] == "... and 31 more"
+    assert result["status"] == "incomplete"
+
+    monkeypatch.setattr(linux, "_MAX_RUNS", 200)
+    whole = _run(monkeypatch, fake, image, force=True)["results"]
+    assert _held(Path(whole["export_root"])) == ["etc/passwd"]
+    assert whole["not_exported"]["image_export did not copy it"][-1] == "... and 30 more"
+
+
+def test_warnings_pinfo_cannot_name_are_still_counted(
+    case: CaseDB, image: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = FakePlaso({ROOT: {"/etc/passwd": b"x\n", "/srv/data": b"x\n"}})
+    fake.unreadable = {"/srv": "zzz"}  # nothing of the targeted set is in it
+    monkeypatch.setattr(
+        linux, "_find_plaso_cmd", lambda tool: None if tool == "pinfo" else [f"/usr/bin/{tool}"]
+    )
+
+    result = _run(monkeypatch, fake, image)["results"]
+
+    assert result["listing_incomplete"] == ["1 directories, which pinfo did not name"]
+    assert result["status"] == "incomplete" and result["files_exported"] == 1
+
+
+def test_an_image_plaso_reads_as_one_plain_file_is_unreadable(
+    case: CaseDB, image: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Truncated, empty, random bytes, btrfs: plaso finds no volume and stats the image itself."""
+    event = _events(image, volume="")[0]
+    event["pathspec"] = {"type_indicator": "OS", "location": image}
+    event["file_system_type"] = "OS"
+    fake = FakePlaso({}, [event, {**event, "timestamp_desc": "Creation Time"}])
+    monkeypatch.setattr(linuxvol, "scan", lambda path: Scan((Volume(0, "btrfs"),)))
+
+    result = _run(monkeypatch, fake, image)
+
+    assert result["status"] == "error" and result["error_type"] == "unreadable"
+    assert "no Linux volume or file system it can read" in result["error_message"]
+    assert "btrfs file system at sector 0" in result["error_message"]
+    assert not fake.ran("image_export") and case.get_sources() == []
+    # Nothing says the image was exported: the next tool is not sent to an empty directory.
+    home = export_dir(case_extract_dir(tmp_path / "cases", "test-case"), image).parent
+    assert not home.exists()
 
 
 def test_an_encrypted_volume_is_an_error_that_says_why(
     case: CaseDB, image: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake = FakePlaso({})
-    fake.fail = "Unable to proceed. Encrypted volume found but no mediator to determine how\n"
-    monkeypatch.setattr(linux, "probe", lambda image: (Volume(2048, "luks"),))
+    fake.encrypted = True
+    monkeypatch.setattr(linuxvol, "scan", lambda image: Scan((Volume(0, "luks"),)))
 
     result = _run(monkeypatch, fake, image)
 
     assert result["status"] == "error" and result["error_type"] == "unreadable"
     assert "Encrypted volume found" in result["error_message"]
-    assert "LUKS-encrypted volume at sector 2048" in result["error_message"]
+    assert "LUKS-encrypted volume at sector 0" in result["error_message"]
     assert "not examined" in result["suggestion"]
+    assert len(fake.ran("log2timeline")) == 1, "nothing but the encrypted volume to read"
     assert not fake.ran("psort") and not fake.ran("image_export")
     assert case.get_sources() == []
+
+
+def test_an_encrypted_partition_does_not_hide_the_ones_beside_it(
+    case: CaseDB, image: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """plaso stops at a LUKS partition and reads nothing: it is told to read the others."""
+    fake = FakePlaso({"p1": {"/etc/passwd": b"root:x:0:0::/root:/bin/sh\n"}})
+    fake.encrypted = True
+    found = Scan((Volume(133120, "luks"),), frozenset({"ext"}), ((2048, 1), (133120, 2)))
+    monkeypatch.setattr(linuxvol, "scan", lambda image: found)
+
+    result = _run(monkeypatch, fake, image)["results"]
+
+    first, second = fake.ran("log2timeline")
+    assert _arg(first, "--partitions") == "all" and _arg(second, "--partitions") == "1"
+    assert result["status"] == "exported" and result["files_exported"] == 1
+    assert result["not_read"] == ["LUKS-encrypted volume at sector 133120"]
+    assert (Path(result["export_root"]) / "etc/passwd").is_file()
 
 
 def test_a_volume_group_on_several_disks_is_named_as_not_read(
     case: CaseDB, image: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """dfVFS reads the plain partition and nothing of the group; the result must not look whole."""
-    monkeypatch.setattr(linux, "probe", lambda image: (Volume(501760, "lvm", "vg0", 2),))
+    monkeypatch.setattr(linuxvol, "scan", lambda image: Scan((Volume(501760, "lvm", "vg0", 2),)))
 
     result = _run(monkeypatch, FakePlaso({"p1": SERVER["p1"]}), image)["results"]
 
@@ -494,12 +738,15 @@ def test_a_volume_group_on_several_disks_is_named_as_not_read(
 def test_a_volume_group_that_yields_no_file_system_is_named_too(
     case: CaseDB, image: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(linux, "probe", lambda image: (Volume(501760, "lvm", "vg0", 1),))
+    found = Scan((Volume(501760, "lvm", "vg0", 1),), frozenset({"ntfs"}))
+    monkeypatch.setattr(linuxvol, "scan", lambda image: found)
 
     result = _run(monkeypatch, FakePlaso({"p1": SERVER["p1"]}), image)["results"]
 
     assert result["not_read"] == [
-        "the LVM volume group: dfVFS found no file system in its volumes"
+        "the LVM volume group: dfVFS found no file system in its volumes",
+        # A disk with NTFS beside the Linux volume: where its files are to be had.
+        "the NTFS or exFAT file system on this disk: not listed here, run_fls reads it",
     ]
 
 
@@ -530,7 +777,7 @@ def test_a_second_call_is_answered_from_the_first(
 
     second = _run(monkeypatch, fake, image)["results"]
 
-    assert second == {"status": "already exported", **first}
+    assert second == {**first, "status": "already exported"}
     assert len(fake.calls) == calls
     assert [s.source_name for s in case.get_sources()].count("linux.filelist") == 1
 
@@ -543,27 +790,60 @@ def test_a_listed_file_is_exported_on_request_without_listing_again(
 ) -> None:
     fake = FakePlaso(SERVER)
     root = Path(_run(monkeypatch, fake, image)["results"]["export_root"])
-    assert not (root / "p5_lvm1/opt/app/config.php").exists()
 
     result = _run(monkeypatch, fake, image, paths=["/opt/app", "usr/bin/python3", "/nope"])
     asked = result["results"]["requested"]
 
     assert len(fake.ran("log2timeline")) == 1, "the listing the first call kept is enough"
+    more = Path(asked["root"])
+    assert more.parent == root.parent / "requested"
     assert asked["exported"] == [
-        str(root / "p5_lvm1/opt/app/config.php"),
-        str(root / "p5_lvm1/usr/bin/python3"),
+        str(more / "opt/app/config.php"),
+        str(more / "usr/bin/python3"),
     ]
-    assert asked["not_in_listing"] == ["/nope"]
-    assert int((root / "p5_lvm1/opt/app/config.php").stat().st_mtime) == MODIFIED
-    # The live listing of the directory root has it at once.
-    assert "\topt/app/config.php" in dir_root(str(root)).listing()  # type: ignore[union-attr]
+    assert asked["not_in_listing"] == ["/nope"] and asked["paths_ignored"] == 0
+    assert int((more / "opt/app/config.php").stat().st_mtime) == MODIFIED
+    # A directory root of its own, read like the first.
+    assert "\topt/app/config.php" in dir_root(str(more)).listing()  # type: ignore[union-attr]
+    # The same request is the same directory: asking twice does not pile up copies.
+    again = _run(monkeypatch, fake, image, paths=["/nope", "/usr/bin/python3", "/opt/app/"])
+    assert again["results"]["requested"]["root"] == str(more)
+    assert sorted(p.name for p in more.parent.iterdir()) == [more.name]
 
 
-def test_the_first_call_may_name_extra_paths(
+def test_a_later_export_does_not_renumber_the_rows_already_indexed(
     case: CaseDB, image: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    result = _run(monkeypatch, FakePlaso(SERVER), image, paths=["/opt/app/config.php"])["results"]
+    """A row number of the indexed listing is the handle a file is read by."""
+    fake = FakePlaso(SERVER)
+    root = _run(monkeypatch, fake, image)["results"]["export_root"]
+    indexed = _text(case, "tsk.filelist")
+    row = re.search(r"^r/r (\d+):\tvar/log/auth\.log$", indexed, re.MULTILINE)
+    assert row is not None
+
+    _run(monkeypatch, fake, image, paths=["/opt/app", "/usr/bin"])  # sort before var/
+
+    assert dir_root(root).listing() == indexed.strip()  # type: ignore[union-attr]
+    assert icat(root, 0, row.group(1)).stdout.startswith(b"Oct  5 11:00:01 web01 sshd")
+
+
+def test_the_first_call_may_name_extra_paths_and_more_than_are_taken_are_counted(
+    case: CaseDB, image: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = ["/opt/app/config.php", *(f"/nope/{n}" for n in range(250))]
+    result = _run(monkeypatch, FakePlaso(SERVER), image, paths=paths)["results"]
 
     assert result["requested"]["files_exported"] == 1 and result["files_exported"] == 8
     assert os.path.isfile(result["requested"]["exported"][0])
-    assert "\topt/app/config.php" in _text(case, "tsk.filelist")
+    assert result["requested"]["paths_ignored"] == 51
+    assert "\topt/app/config.php" not in _text(case, "tsk.filelist")
+
+
+def test_exports_live_where_the_evidence_walk_does_not_go(
+    case: CaseDB, image: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = Path(_run(monkeypatch, FakePlaso(SERVER), image)["results"]["export_root"])
+
+    extracted = case_extract_dir(tmp_path / "cases", "test-case")
+    assert root.parent.parent == extracted / EXPORTS_DIR and EXPORTS_DIR.startswith(".")
+    assert root.parent.name.startswith("disk.E01-") and len(root.parent.name) == 21

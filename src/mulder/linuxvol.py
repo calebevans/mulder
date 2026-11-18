@@ -19,21 +19,35 @@ from typing import NamedTuple
 
 from mulder.patterns import parse_mmls_rows
 
+EXPORTS_DIR = ".linux-exports"
+"""Where exports live under a case's extraction directory.
+
+Hidden, because the evidence walk enters no hidden directory: an export is
+never taken for evidence, and nothing has to recognise one by a file inside
+it, which evidence could carry too. No archive is unpacked to this name.
+"""
+
 EXPORT_MARKER = ".mulder-linux-export.json"
-"""Written by export_linux_files at the top of a finished export; not evidence."""
+"""Written by export_linux_files beside a finished export's files: what it reported."""
 
 SECRET_FILES = re.compile(
     r"(?:^|/)(?:etc/(?:g?shadow|master\.passwd|security/opasswd)[^/]*"
+    r"|var/backups/g?shadow[^/]*"
     r"|etc/ssh/ssh_host_[^/]*_key|\.ssh/id_[^/]*(?<!\.pub)"
     r"|etc/(?:ssl|pki/tls)/private/.*|privkey[^/]*\.pem)$",
     re.IGNORECASE,
 )
-"""Password hash files and private keys, matched from any directory of a path.
+"""Password hash files and private keys by their well-known names, from any directory.
 
-Never copied into the case directory and never indexed, asked for or not.
-That they exist, their size and their times are in the listing; their content
-is a credential. Without case, as image_export matches the names it is given.
+Not copied into the case directory and not indexed, asked for or not. That
+they exist, their size and their times are in the listing; their content is
+a credential. Without case, as image_export matches the names it is given.
+A secret under another name (a copy, a hard link, a key called deploy.pem)
+is not caught here; :data:`PRIVATE_KEY` catches a key by its content.
 """
+
+PRIVATE_KEY = re.compile(rb"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----")
+"""The first line of a PEM or OpenSSH private key, whatever the file is called."""
 
 _KINDS = {
     "lvm": "LVM physical volume",
@@ -104,7 +118,7 @@ def export_dir(extract_root: Path, image_path: str) -> Path:
     """
     resolved = Path(image_path).resolve()
     digest = hashlib.blake2b(str(resolved).encode("utf-8", "surrogateescape"), digest_size=6)
-    return extract_root / f"{resolved.name}.files-{digest.hexdigest()}"
+    return extract_root / EXPORTS_DIR / f"{resolved.name}-{digest.hexdigest()}" / "files"
 
 
 def _sectors(image_path: str, start: int, count: int) -> bytes:
@@ -134,26 +148,45 @@ def _lvm(image_path: str, start: int) -> Volume:
     return Volume(start, "lvm", name.group(1) if name else "", len(disks))
 
 
-@functools.lru_cache(maxsize=32)
-def probe(image_path: str) -> tuple[Volume, ...]:
-    """The LVM, XFS, LUKS and btrfs volumes in a disk image; empty when it has none.
+# What Sleuth Kit reads by itself, by the bytes at the start of a partition.
+_PLAIN = (
+    ("ntfs", 3, b"NTFS    "),
+    ("exfat", 3, b"EXFAT   "),
+    ("ext", 1080, b"\x53\xef"),
+    ("fat", 82, b"FAT32"),
+    ("fat", 54, b"FAT1"),
+)
+# An allocated row of mmls: "002:  000:000   0000002048" (DOS), "004:  000   0000002048" (GPT).
+_MMLS_SLOT_RE = re.compile(r"^\s*\d+:\s+(\d+)(?::(\d+))?\s+(\d+)\s", re.MULTILINE)
 
-    Looks at the image's first sectors and at the start of every row ``mmls``
-    prints, so a volume is found whether it fills the disk or sits in a
-    partition, and whatever the partition table calls it.
-    """
+
+class Scan(NamedTuple):
+    """What a disk image holds, as far as routing it needs to know."""
+
+    volumes: tuple[Volume, ...] = ()
+    """The LVM, XFS, LUKS and btrfs volumes."""
+    plain: frozenset[str] = frozenset()
+    """Names from ``_PLAIN`` of the file systems found beside them."""
+    partitions: tuple[tuple[int, int], ...] = ()
+    """``(start sector, number)`` of each allocated partition, numbered as dfVFS does."""
+
+
+@functools.lru_cache(maxsize=32)
+def scan(image_path: str) -> Scan:
+    """What starts at sector 0 of a disk image and at every row ``mmls`` prints."""
     if image_path.startswith("-"):
-        return ()
+        return Scan()
     try:
         mmls = subprocess.run(
             ["mmls", image_path], capture_output=True, text=True, timeout=60, check=False
         )
     except (OSError, subprocess.TimeoutExpired):
-        return ()
+        return Scan()
     # mmls fails on an image with no partition table: then the volume starts at 0.
-    rows = parse_mmls_rows(mmls.stdout) if mmls.returncode == 0 else []
-    starts = sorted({0, *(start for start, _, _ in rows)})[:_MAX_STARTS]
+    table = mmls.stdout if mmls.returncode == 0 else ""
+    starts = sorted({0, *(start for start, _, _ in parse_mmls_rows(table))})[:_MAX_STARTS]
     found: list[Volume] = []
+    plain: set[str] = set()
     for start in starts:
         head = _sectors(image_path, start, _HEAD_SECTORS) or _sectors(image_path, start, 4)
         label, kind = _lvm_label(head), volume_kind(head)
@@ -165,4 +198,50 @@ def probe(image_path: str) -> tuple[Volume, ...]:
                 found.append(_lvm(image_path, first))
         elif kind is not None:
             found.append(Volume(start, kind))
-    return tuple(found)
+        else:
+            plain.update(name for name, at, magic in _PLAIN if head[at:].startswith(magic))
+    # As dfVFS's Sleuth Kit back end numbers them: a DOS table by table and
+    # slot (the first logical partition is 5), any other in table order.
+    numbered = tuple(
+        (int(m[3]), int(m[1]) * 4 + int(m[2]) + 1 if m[2] is not None else count)
+        for count, m in enumerate(_MMLS_SLOT_RE.finditer(table), 1)
+    )
+    return Scan(tuple(found), frozenset(plain), numbered)
+
+
+def probe(image_path: str) -> tuple[Volume, ...]:
+    """The LVM, XFS, LUKS and btrfs volumes in a disk image; empty when it has none.
+
+    A volume is found whether it fills the disk or sits in a partition, and
+    whatever the partition table calls it.
+    """
+    return scan(image_path).volumes
+
+
+def route(image_path: str) -> str:
+    """How an image that holds such a volume is examined; ``""`` when it holds none.
+
+    ``export``: export_linux_files stands in for the Sleuth Kit tools, since
+    dfVFS also reads whatever else a Linux disk holds (``/boot``, an EFI
+    partition). ``also``: the disk holds NTFS or exFAT too, so the export is
+    planned beside the usual disk tools. ``rest``: nothing reads the volume and
+    Sleuth Kit reads the rest. ``none``: nothing reads anything on the image.
+    """
+    found = scan(image_path)
+    if not found.volumes:
+        return ""
+    if any(v.readable for v in found.volumes):
+        return "also" if found.plain & {"ntfs", "exfat"} else "export"
+    return "rest" if found.plain else "none"
+
+
+def unencrypted_partitions(image_path: str) -> str:
+    """plaso's ``--partitions`` value that leaves the LUKS partitions out; ``""`` if none is left.
+
+    plaso stops at an encrypted volume it has no key for and has no option to
+    pass one by: naming the other partitions is how it is kept off it.
+    """
+    found = scan(image_path)
+    locked = {v.sector for v in found.volumes if v.kind == "luks"}
+    keep = sorted(number for start, number in found.partitions if start not in locked)
+    return ",".join(map(str, keep)) if locked and len(keep) < len(found.partitions) else ""

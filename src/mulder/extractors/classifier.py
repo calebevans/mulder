@@ -393,9 +393,6 @@ class EvidenceClassifier:
         do the memory and crash dumps the collector copied (KAPE takes
         ``MEMORY.DMP`` and ``*.dmp``): Volatility reads those, wherever they are.
         """
-        collection = detect_collection(path)
-        if collection is not None and collection.layout == "export":
-            return []  # written by export_linux_files from an image that is the evidence
         items = [ClassifiedEvidence(path=path, artifact_type="triage_collection")]
         try:
             children = sorted(p for p in path.iterdir() if p.is_file() and not p.is_symlink())

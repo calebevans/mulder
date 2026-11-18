@@ -11,6 +11,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from mulder.linuxvol import unencrypted_partitions
 from mulder.server.app import get_cfg, get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
@@ -161,8 +162,9 @@ def run_plaso(
         plaso_timeout = adaptive_timeout(evidence_path, base=_PLASO_TIMEOUT)
         wanted = PARSER_PRESETS.get(parsers or "", parsers)
         dropped: list[str] = []
+        only: list[str] = []
         while True:
-            l2t_cmd = [*l2t_cmd_prefix, "--storage_file", str(plaso_file), *_L2T_FLAGS]
+            l2t_cmd = [*l2t_cmd_prefix, "--storage_file", str(plaso_file), *_L2T_FLAGS, *only]
             if wanted:
                 l2t_cmd.extend(["--parsers", wanted])
             l2t_cmd.append(cli_path(evidence_path))
@@ -179,6 +181,13 @@ def run_plaso(
                 return error_response(
                     tc_id, "run_plaso", params, f"log2timeline timed out after {plaso_timeout}s"
                 )
+            # plaso stops at a LUKS partition it has no key for and reads nothing:
+            # name the other partitions, once, so that they are read.
+            locked = "Encrypted volume found" in f"{proc.stdout}{proc.stderr}" and not only
+            if locked and (others := unencrypted_partitions(evidence_path)):
+                only = ["--partitions", others]
+                plaso_file.unlink(missing_ok=True)
+                continue
             # A preset names the parsers of the plaso it was written for. An older
             # plaso rejects the whole run over one name it lacks: drop those, once.
             unknown = _UNKNOWN_PARSERS_RE.search(f"{proc.stdout}{proc.stderr}")
@@ -275,5 +284,12 @@ def run_plaso(
 
     if dropped:
         results.append({"parsers_not_in_this_plaso": dropped, "parsers_run": wanted})
+    if only:
+        results.append(
+            {
+                "partitions_read": only[1],
+                "not_read": "the encrypted (LUKS) partitions of this image: no key was given",
+            }
+        )
     elapsed = (time.monotonic() - t0) * 1000
     return tool_response(tc_id, "run_plaso", params, results, "plaso.timeline", elapsed)

@@ -17,7 +17,7 @@ import time
 from typing import Any
 
 from mulder.dirroot import icat
-from mulder.linuxvol import SECRET_FILES
+from mulder.linuxvol import PRIVATE_KEY, SECRET_FILES
 from mulder.patterns import fls_file_entries
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
@@ -157,11 +157,12 @@ def _extract_and_read_file(
     inode_str: str,
     offset: int,
     max_size_bytes: int | None = None,
+    why: list[str] | None = None,
 ) -> str | None:
     """Extract a file via icat and return its text content.
 
-    Returns None if icat fails, the file is binary, or the file
-    exceeds the text size limit.
+    Returns None if icat fails, the file is binary, the file exceeds the
+    text size limit, or it is a private key.
 
     Args:
         image_path: Path to the disk image.
@@ -170,7 +171,11 @@ def _extract_and_read_file(
         max_size_bytes: Skip the file when it is larger than this. The
             caller's ``max_file_size_kb`` used to be checked against a size
             field parsed out of the fls listing, but ``fls -r -p`` emits no
-            size column, so that check could never fire.
+            size column, so that check could never fire. No more than this
+            is read: on a Linux tree any file under the pattern is a
+            candidate, a database dump or a core file among them.
+        why: Given a list, ``"too_large"`` or ``"private_key"`` is appended
+            when that is why None is returned.
 
     Returns:
         Decoded text content or None if extraction fails or file
@@ -180,14 +185,21 @@ def _extract_and_read_file(
         return None
 
     try:
-        proc = icat(image_path, offset, inode_str, _ICAT_TIMEOUT)
+        proc = icat(image_path, offset, inode_str, _ICAT_TIMEOUT, limit=max_size_bytes)
     except (subprocess.TimeoutExpired, OSError):
         return None
 
     if proc.returncode != 0 or not proc.stdout:
         return None
 
+    skip = None
     if max_size_bytes is not None and len(proc.stdout) > max_size_bytes:
+        skip = "too_large"
+    elif PRIVATE_KEY.search(proc.stdout[:4096]):  # a key under a name SECRET_FILES lacks
+        skip = "private_key"
+    if skip is not None:
+        if why is not None:
+            why.append(skip)
         return None
 
     if _is_binary_content(proc.stdout):
@@ -233,9 +245,11 @@ def index_app_files(
             etc/passwd) the default is every file whatever its name, since
             crontab, sshd_config, .bash_history and access.log.1 have no
             such extension; ["*"] asks for that anywhere. Either way a file
-            that is binary, compressed or over the size limit is skipped,
-            and password hash files and private keys (etc/shadow, SSH and
-            TLS private keys) are withheld and counted in files_withheld.
+            that is binary or compressed is skipped (files_skipped_binary),
+            one over the size limit is skipped without being read past it
+            (files_skipped_too_large), and password hash files and private
+            keys are withheld (files_withheld): etc/shadow and the like by
+            name, a private key under any name by its first line.
         max_file_size_kb: Skip files larger than this threshold to avoid
             extracting multi-megabyte logs. Defaults to 512 KB.
         max_files: Maximum number of files to extract per invocation to
@@ -319,11 +333,20 @@ def index_app_files(
     total_windows = 0
     sample_files: list[str] = []
     skipped_binary = 0
+    too_large = 0
 
     for inode_str, rel_path, offset in capped:
-        content = _extract_and_read_file(image_path, inode_str, offset, max_file_size_kb * 1024)
+        why: list[str] = []
+        content = _extract_and_read_file(
+            image_path, inode_str, offset, max_file_size_kb * 1024, why
+        )
         if content is None:
-            skipped_binary += 1
+            if why == ["too_large"]:
+                too_large += 1
+            elif why == ["private_key"]:
+                withheld.append(rel_path)
+            else:
+                skipped_binary += 1
             continue
 
         files_extracted += 1
@@ -350,6 +373,7 @@ def index_app_files(
         "files_extracted": files_extracted,
         "files_indexed": files_indexed,
         "files_skipped_binary": skipped_binary,
+        "files_skipped_too_large": too_large,
         "files_withheld": len(withheld),
         "windows_indexed": total_windows,
         "source_prefix": source_name,

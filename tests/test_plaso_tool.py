@@ -211,3 +211,46 @@ def test_a_parser_name_the_caller_got_wrong_is_an_error_not_an_empty_timeline(
     assert "Unknown parser or plugin names" in str(resp["error_message"])
     assert len(fake.calls) == 1, "only a preset is retried: the caller's own list is the caller's"
     fake_env.assert_not_called()
+
+
+class _LockedDisk(_FakePlaso):
+    """A disk with a LUKS partition: plaso stops at it unless told which partitions to read."""
+
+    def __call__(self, argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        named = [argv[i + 1] for i, arg in enumerate(argv) if arg == "--partitions"]
+        if Path(argv[0]).name == "log2timeline" and named[-1] == "all":  # the last one counts
+            self.calls.append({"argv": argv, **kwargs})
+            said = "Unable to proceed. Encrypted volume found but no mediator to determine\n"
+            return subprocess.CompletedProcess(argv, 1, stdout=said, stderr="")
+        return super().__call__(argv, **kwargs)
+
+
+def test_an_encrypted_partition_does_not_stop_the_timeline_of_the_others(
+    fake_env: MagicMock,
+) -> None:
+    """ext4 beside LUKS is planned as any disk, with linux_logs: plaso read nothing of it."""
+    fake = _LockedDisk()
+    with (
+        patch(f"{_MOD}.subprocess.run", fake),
+        patch(f"{_MOD}.unencrypted_partitions", return_value="1,3") as others,
+    ):
+        resp = run_plaso.__wrapped__(  # type: ignore[attr-defined]
+            "/evidence/web01.raw", parsers="linux_logs"
+        )
+
+    assert resp["status"] == "success"
+    others.assert_called_once_with("/evidence/web01.raw")
+    first, second = (c["argv"] for c in fake.calls[:2])
+    assert first.count("--partitions") == 1
+    assert [second[i + 1] for i, arg in enumerate(second) if arg == "--partitions"][-1] == "1,3"
+    assert '"partitions_read": "1,3"' in str(resp["preview"]) and "LUKS" in str(resp["preview"])
+
+    # Nothing but the encrypted volume: said once, and not tried again.
+    fake = _LockedDisk()
+    with (
+        patch(f"{_MOD}.subprocess.run", fake),
+        patch(f"{_MOD}.unencrypted_partitions", return_value=""),
+    ):
+        resp = run_plaso.__wrapped__("/evidence/web01.raw")  # type: ignore[attr-defined]
+    assert resp["status"] == "error" and "Encrypted volume found" in str(resp["error_message"])
+    assert len(fake.calls) == 1

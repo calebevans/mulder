@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -230,13 +231,13 @@ def _run_fls_inline(image_path: str) -> str:
 def _collect_fls_chunks(image_path: str) -> list[tuple[list[str], int]]:
     """Collect fls text chunks paired with their partition offsets.
 
-    Gathers output from all indexed ``tsk.filelist*`` sources (primary
-    and secondary partitions).  Each returned element is a ``(chunks,
-    offset)`` pair representing one partition's file listing and the
-    sector offset required for ``icat`` extraction.
+    Gathers output from the ``tsk.filelist*`` sources indexed for this
+    image (primary and secondary partitions).  Each returned element is a
+    ``(chunks, offset)`` pair representing one partition's file listing and
+    the sector offset required for ``icat`` extraction.
 
     Falls back to ``_run_fls_inline`` on the primary partition when no
-    indexed sources exist.
+    source was indexed for this image.
 
     Args:
         image_path: Path to the disk image.
@@ -260,12 +261,22 @@ def _collect_fls_chunks(image_path: str) -> list[tuple[list[str], int]]:
         ],
         key=lambda s: s.source_name,
     )
+    # Every image of a case is listed under the same source names. Read this
+    # image's listings alone: another image's rows name files this one may not
+    # hold, with inode numbers that are other files here. An image no listing
+    # was indexed for is listed inline below, as it is in a case with one image.
+    real = os.path.realpath(image_path)
+    fls_sources = [
+        s
+        for s in fls_sources
+        if s.source_path == image_path or os.path.realpath(s.source_path) == real
+    ]
 
     if fls_sources:
         result: list[tuple[list[str], int]] = []
         for src in fls_sources:
             windows = ctx.db.get_windows_by_source(src.source_name)
-            chunks = [w.raw_text for w in windows if w.source_id not in dir_ids]
+            chunks = [w.raw_text for w in windows if w.source_id == src.source_id]
             if not chunks:
                 continue
 
