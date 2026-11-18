@@ -1203,6 +1203,12 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
             <tr><td style="color:var(--text-muted)">Input Tokens</td><td class="mono" style="text-align:right;">{{ "{:,}".format(real_in) }}</td></tr>
             <tr><td style="color:var(--text-muted)">Output Tokens</td><td class="mono" style="text-align:right;">{{ "{:,}".format(real_out) }}</td></tr>
             <tr><td style="color:var(--text-muted)">Total Tokens</td><td class="mono" style="text-align:right;font-weight:700;">{{ "{:,}".format(real_in + real_out) }}</td></tr>
+            {%- set cache_write = model_token_breakdown | sum(attribute='cache_creation') %}
+            {%- set cache_read = model_token_breakdown | sum(attribute='cache_read') %}
+            {%- if cache_write or cache_read %}
+            <tr><td style="color:var(--text-muted)">Cache-Write Input (not in total)</td><td class="mono" style="text-align:right;">{{ "{:,}".format(cache_write) }}</td></tr>
+            <tr><td style="color:var(--text-muted)">Cache-Read Input (not in total)</td><td class="mono" style="text-align:right;">{{ "{:,}".format(cache_read) }}</td></tr>
+            {%- endif %}
             <tr><td colspan="2" style="border-top:1px solid var(--border);padding-top:0.5rem;font-weight:600;">Per-Model Breakdown</td></tr>
             {% for entry in model_token_breakdown %}
             <tr><td style="color:var(--text-muted);padding-left:1rem;">{{ entry.model }}</td><td class="mono" style="text-align:right;">{{ "{:,}".format(entry.input + entry.output) }}</td></tr>

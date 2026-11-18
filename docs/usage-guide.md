@@ -23,6 +23,7 @@ Try-it-out instructions for running Mulder, the forensic investigation platform.
     - [Using Amazon Bedrock](#using-amazon-bedrock)
   - [Starting an Investigation](#starting-an-investigation)
     - [When a Run Ends Early](#when-a-run-ends-early)
+    - [Limiting Token Use](#limiting-token-use)
   - [Using Non-Anthropic Models via LiteLLM](#using-non-anthropic-models-via-litellm)
     - [Provider Prefixes](#provider-prefixes)
     - [Mixing Providers Across Roles](#mixing-providers-across-roles)
@@ -374,7 +375,7 @@ Each phase passes through a quality gate before proceeding. The investigation ru
 | Exit status | Meaning |
 |-------------|---------|
 | `0` | Every phase passed its gate and the report was finalized |
-| `1` | A phase failed its gate after every retry, the run was interrupted (Ctrl-C, or SIGTERM as sent by `docker stop`), or it crashed |
+| `1` | A phase failed its gate after every retry, the run was interrupted (Ctrl-C, or SIGTERM as sent by `docker stop`), it crashed, or it reached its [token budget](#limiting-token-use) |
 | `2` | The run could not continue: authentication failed, the model is not available, or the API account is out of credit |
 
 **Out of credit.** If the provider reports that the account has no credit left or has reached a hard spending limit (for example Anthropic's "credit balance is too low", OpenAI's `insufficient_quota`, HTTP 402, or a LiteLLM budget), the investigation stops at once. No further phases, retries or continuations are started, because each would fail the same way. Ordinary rate limiting (requests or tokens per minute, HTTP 429 "too many requests") is not treated this way and is handled as before.
@@ -386,6 +387,28 @@ Read a partial report for what it is. Its findings were saved before the run sto
 A partial report never replaces a finished one. A report that was finalized during the same run is left alone and no partial report is written. A report left by an earlier run of the same case is kept as well: the partial report is then written beside it as `{case_id}.partial.report.md` and `{case_id}.partial.report.html`, and its banner says so. Only an earlier partial report is replaced.
 
 The case database and audit log are kept either way.
+
+### Limiting Token Use
+
+`--max-tokens N` (or `MULDER_MAX_TOKENS=N`) caps what one run may use. Without it there is no limit and nothing in this section applies.
+
+```bash
+mulder investigate /evidence my-case --max-tokens 20000000
+```
+
+**What is counted.** Every token that every session reports when it ends: uncached input, output, cache-write input and cache-read input, summed over all sessions (planner, executor and analyst sessions, continuations, retries and the short utility queries) and over all models. The four kinds are added with equal weight. On Claude models most of the count is cache-read input, because each turn re-reads the conversation so far. Models behind the LiteLLM proxy have no prompt caching, so there the same replayed context is counted as input. Either way the number is how much text the models processed. As a guide, the published GLM-5 runs of the single-host NDLC case used about 9 million tokens counted this way.
+
+**Why tokens and not dollars.** Every provider reports token counts. The dollar figure Claude Code computes is priced from its own table of Claude models and is wrong for any other model, which is why Mulder has no dollar cap.
+
+**What happens when it is reached.** Part of the budget is held back for the report: 15% of it, at least 750,000 tokens, and never more than half. Once what remains is down to that reserve, no new catalog, extraction, cross-system or alternative-narrative session is started, and whatever was left of those phases is skipped. The run goes straight to the report phase, which may spend the reserve. Its prompt says the budget was reached and lists the systems and phases that were not completed, so that the narrative says the investigation is incomplete. If the report phase cannot finalize a report, or the budget is fully spent before it starts, the [partial report](#when-a-run-ends-early) is written instead, with the reason "token budget reached".
+
+Either way the run exits with status `1` and the end-of-run summary has a `Token budget` line marked REACHED. While the run is going, the dashboard header shows `Budget: used / limit`.
+
+**The cap can be overshot.** The budget is checked when a session starts. A session that is running is never interrupted, because stopping it would lose its work and its usage report. The final total can therefore end above `--max-tokens` by the sessions that were running when the line was crossed: one in most phases, up to `--workers` during extraction. A long analyst session can use more than a million tokens, so leave headroom.
+
+**What it cannot see.** The count is only what providers report. A session that is killed or crashes before it ends reports nothing. Some proxy routes under-report: in the published Kimi K3 runs LiteLLM reported almost no input tokens, so for such a model the count is close to output tokens only and the budget has to be set with that in mind.
+
+`{case_id}.model_usage.json` and the token table in the report list cache-write and cache-read input beside the input and output counts. "Total tokens" there is still input plus output, as before.
 
 ## Using Non-Anthropic Models via LiteLLM
 
@@ -694,6 +717,7 @@ Runs a full multi-phase forensic investigation.
 | `--no-thinking` | off | Disable extended thinking for all queries; overrides `--effort` |
 | `--workers` | `3` | Max concurrent extraction sessions |
 | `--max-compactions` | `3` | Continuation sessions allowed per role session after context exhaustion; `0` disables. Also settable via `MULDER_MAX_COMPACTIONS` (the flag wins) |
+| `--max-tokens` | None | Token budget for the whole run: input, output, cache-write and cache-read tokens of every session and model. Unset means no limit. Also settable via `MULDER_MAX_TOKENS` (the flag wins). See [Limiting Token Use](#limiting-token-use) |
 | `--db-dir` | `~/.mulder/cases` | Case database directory |
 | `--cwd` | `~/.mulder/workspace` | Working directory for agent sessions. Also settable via `MULDER_CWD`; the container sets it to `/mulder-investigation`. Created on first use, along with a default `.mcp.json` |
 | `--proxy-config` | None | LiteLLM config YAML for custom model routing |
@@ -794,6 +818,7 @@ After an investigation completes, all artifacts are written to the cases directo
 |------|-------------|
 | `{case_id}.db` | SQLite database with all indexed evidence, findings, and metadata |
 | `{case_id}.audit.jsonl` | Append-only audit log recording every tool invocation with parameters and timestamps |
+| `{case_id}.model_usage.json` | Tokens each model reported during `mulder investigate`: input, output, cache-write input and cache-read input |
 
 ### Reports
 

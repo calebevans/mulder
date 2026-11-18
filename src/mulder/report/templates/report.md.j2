@@ -217,7 +217,9 @@ These hypotheses were explicitly tested and no supporting evidence was found.
 {% if model_token_breakdown %}| Input tokens | {{ model_token_breakdown | sum(attribute='input') | tokformat }} |
 | Output tokens | {{ model_token_breakdown | sum(attribute='output') | tokformat }} |
 | Total tokens | {{ (model_token_breakdown | sum(attribute='input') + model_token_breakdown | sum(attribute='output')) | tokformat }} |
-{% elif estimated_input_tokens %}| Estimated input tokens | {{ estimated_input_tokens | tokformat }} |
+{% if model_token_breakdown | sum(attribute='cache_creation') or model_token_breakdown | sum(attribute='cache_read') %}| Cache-write input tokens (not in total) | {{ model_token_breakdown | sum(attribute='cache_creation') | tokformat }} |
+| Cache-read input tokens (not in total) | {{ model_token_breakdown | sum(attribute='cache_read') | tokformat }} |
+{% endif %}{% elif estimated_input_tokens %}| Estimated input tokens | {{ estimated_input_tokens | tokformat }} |
 | Estimated output tokens | {{ estimated_output_tokens | tokformat }} |
 {% endif %}| Audit log | {{ audit_log_path }} |
 

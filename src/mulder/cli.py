@@ -365,6 +365,20 @@ def report(case_id: str, db_dir: str) -> None:
     "(env: MULDER_MAX_COMPACTIONS).",
 )
 @click.option(
+    "--max-tokens",
+    default=None,
+    envvar="MULDER_MAX_TOKENS",
+    type=click.IntRange(min=1),
+    help="Token budget for the whole run: the input, output, cache-write and "
+    "cache-read tokens of every session, summed over all models. Counted in "
+    "tokens, not dollars, because every provider reports tokens while dollar "
+    "figures are priced for Claude models only. Part of it (15%, at least "
+    "750,000, at most half) is held back for the report: once what remains is "
+    "down to that, no new analysis starts and the run goes straight to the "
+    "report. A session that is running is never interrupted, so the total can "
+    "end above the budget. Unset: no limit (env: MULDER_MAX_TOKENS).",
+)
+@click.option(
     "--proxy-config",
     default=None,
     type=click.Path(exists=True),
@@ -388,6 +402,7 @@ def investigate(
     cwd: str,
     workers: int,
     max_compactions: int,
+    max_tokens: int | None,
     proxy_config: str | None,
     no_thinking: bool,
     show_cli_stderr: bool,
@@ -468,6 +483,14 @@ def investigate(
         click.echo(f"Thinking: disabled (effort ignored), Workers: {workers}", err=True)
     else:
         click.echo(f"Effort: {effort}, Workers: {workers}", err=True)
+    if max_tokens is not None:
+        from mulder.orchestrator.budget import report_reserve
+
+        click.echo(
+            f"Token budget: {max_tokens:,} "
+            f"({report_reserve(max_tokens):,} held back for the report)",
+            err=True,
+        )
     click.echo(f"Logging to {log_file}", err=True)
 
     orchestrator = Orchestrator(
@@ -484,6 +507,7 @@ def investigate(
         no_thinking=no_thinking,
         show_cli_stderr=show_cli_stderr,
         max_compactions=max_compactions,
+        max_tokens=max_tokens,
     )
 
     from mulder.orchestrator.errors import (
@@ -553,7 +577,8 @@ def investigate(
     orchestrator.dashboard.print_summary(result)
 
     if not result.success:
-        _leave_partial_report(orchestrator, case_id, log_dir, started_at, None)
+        # A run that stopped at its token budget names that as the reason.
+        _leave_partial_report(orchestrator, case_id, log_dir, started_at, result.budget_stop)
         raise SystemExit(1)
 
 

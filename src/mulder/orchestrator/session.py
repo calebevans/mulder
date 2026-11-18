@@ -28,6 +28,7 @@ from claude_agent_sdk.types import (
 )
 from rich.text import Text
 
+from mulder.orchestrator.budget import TokenBudget
 from mulder.orchestrator.display import InvestigationDashboard
 from mulder.orchestrator.errors import (
     FATAL_ERRORS,
@@ -475,6 +476,7 @@ class SessionExecutor:
         using_proxy: bool = False,
         no_thinking: bool = False,
         show_cli_stderr: bool = False,
+        budget: TokenBudget | None = None,
     ) -> None:
         """Initialize the session executor.
 
@@ -488,8 +490,12 @@ class SessionExecutor:
                 per-message token tracking to avoid double counting).
             no_thinking: Disable extended thinking for phase and utility queries.
             show_cli_stderr: Stream agent CLI diagnostics to the dashboard and log.
+            budget: The run's token tally and limit. Every session's usage
+                is added to it, and no session starts once it is used up.
+                Defaults to a tally with no limit.
         """
         self._dashboard = dashboard
+        self._budget = budget or TokenBudget()
         self._model_config = model_config
         self._cwd = cwd
         self._env = env
@@ -648,7 +654,12 @@ class SessionExecutor:
 
         Returns:
             PhaseResult with collected messages and usage information.
+
+        Raises:
+            TokenBudgetReached: The run's token budget is used up, so the
+                session was not started.
         """
+        self._budget.check()
         options = ClaudeAgentOptions(
             system_prompt=system_prompt,
             model=model,
@@ -1105,9 +1116,7 @@ class SessionExecutor:
             phase_in_tokens = result_in
             phase_out_tokens = result_out
 
-        model_usage = getattr(message, "model_usage", None)
-        if model_usage and isinstance(model_usage, dict):
-            self._dashboard.add_model_usage(model_usage)
+        self._budget.record(message, model_label)
 
         total_phase_tokens = phase_in_tokens + phase_out_tokens
         self._dashboard.log_phase_done(tool_count, turns_used, total_phase_tokens)
@@ -1145,7 +1154,12 @@ class SessionExecutor:
 
         Returns:
             Parsed JSON dictionary, or None if the query failed.
+
+        Raises:
+            TokenBudgetReached: The run's token budget is used up, so the
+                query was not started.
         """
+        self._budget.check()
         utility_model = self._model_config.resolve("utility", "planner")
 
         options = ClaudeAgentOptions(
@@ -1223,6 +1237,4 @@ class SessionExecutor:
         if tok_in or tok_out:
             self._dashboard.add_tokens(tok_in, tok_out)
 
-        model_usage = getattr(result, "model_usage", None)
-        if model_usage and isinstance(model_usage, dict):
-            self._dashboard.add_model_usage(model_usage)
+        self._budget.record(result, self._model_config.resolve("utility", "planner"))
