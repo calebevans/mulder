@@ -37,6 +37,7 @@ from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import DatabaseError, OperationalError
 from sqlalchemy.pool import NullPool
 
+from mulder.cut_short import MAX_CUT_SHORT
 from mulder.models import CaseMetadataRow, Finding, SourceRow, WindowRow
 
 _T = TypeVar("_T")
@@ -371,7 +372,6 @@ _QueueItem = tuple[
 
 _CUT_SHORT_KEY = "cut_short_sessions"
 _CUT_SHORT_FIELDS = ("phase", "role", "system", "question", "recorded_at")
-_MAX_CUT_SHORT = 100
 
 
 class _WriteQueue:
@@ -1485,8 +1485,9 @@ class CaseDB:
                 one of its own.
         """
         # ponytail: read-modify-write of one kv value, kept to the last
-        # _MAX_CUT_SHORT rows. The orchestrator is the only writer; give it
-        # a table if a second one ever appears.
+        # MAX_CUT_SHORT rows (readers say so once it is full). The
+        # orchestrator is the only writer; give it a table if a second one
+        # ever appears.
         rows = self.get_cut_short()
         rows.append(
             {
@@ -1497,7 +1498,7 @@ class CaseDB:
                 "recorded_at": datetime.now(UTC).isoformat(timespec="seconds"),
             }
         )
-        self.set_kv(_CUT_SHORT_KEY, json.dumps(rows[-_MAX_CUT_SHORT:]))
+        self.set_kv(_CUT_SHORT_KEY, json.dumps(rows[-MAX_CUT_SHORT:]))
 
     def get_cut_short(self) -> list[dict[str, str]]:
         """Return the role sessions recorded as cut short, oldest first.

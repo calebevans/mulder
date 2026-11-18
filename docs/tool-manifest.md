@@ -2172,7 +2172,7 @@ Return a compact progress dashboard for the current investigation.
 
 **Returns:** `sources_indexed`, `findings_submitted`, `findings_by_severity{}`, `remaining_work[]`, `ready_to_finalize`
 
-When a role session was cut short (it ended at a turn or context limit with no continuation left), `remaining_work` has one item starting `Analysis cut short` that names up to ten such sessions by phase, role, system and question. It means those sessions did not finish, so conclusions about them may be incomplete; it does not mean nothing was found, and what they had not reached was not examined.
+When a role session was cut short (it ended at a turn or context limit with no continuation left), `remaining_work` has one item starting `Analysis cut short` that names up to ten such sessions by phase, role, system and question. It means those sessions did not finish, so conclusions about them may be incomplete; it does not mean nothing was found. What they had not reached may not have been examined, unless a later retry or follow-up covered it.
 
 **Roles:** `EXTRACT_ANALYST` `CROSS_PLANNER` `CROSS_ANALYST` `NARRATIVE_PLANNER` `NARRATIVE_ANALYST` `REPORT`
 
