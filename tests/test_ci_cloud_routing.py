@@ -215,7 +215,7 @@ def test_collection_leads_get_their_own_report_section(tmp_path: Path) -> None:
     report = ReportRenderer().render(_META, findings, summary, audit)
 
     section = report.split("## Evidence To Collect", 1)[1].split("\n## ", 1)[0]
-    assert "**Cloud audit log of project acme-prod**" in section
+    assert "### Cloud audit log of project acme-prod\n" in section
     assert "nothing in them has been ruled in or out" in section
     # Listed once, in its section, and not among the findings proper.
     assert report.count("Cloud audit log of project acme-prod") == 1
