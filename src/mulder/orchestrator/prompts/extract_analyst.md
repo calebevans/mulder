@@ -213,7 +213,9 @@ gives, in "reason", the path of the log, the log directory or the disk image.
 evtx_recovered.<channel> sources hold what it brought back, one record per
 line, marked [recovered] (stale space inside a log) or [carved] (a chunk
 found in raw data); evtx_recovered.summary says what was read and what was
-cut. A search of evtx.<channel> does not include them: search them by name
+cut. A record in evtx_recovered.no-channel lost its channel and provider
+name: its event ID alone does not say which log or program wrote it.
+A search of evtx.<channel> does not include them: search them by name
 (source="evtx_recovered" covers them all). They are a partial remainder,
 not the log. A recovered record shows that event was logged. No recovered
 record for an event or a period does not show it did not happen. Say in

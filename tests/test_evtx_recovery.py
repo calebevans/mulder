@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import inspect
+import io
 import json
+import os
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -93,12 +95,13 @@ class _FakeEvtxDump:
             errors.append(b"Error: Failed to open file\n")
         else:
             body = data[4096:]
+            if Path(cmd[-1]).name == "carved.evtx":
+                assert len(body) % _CHUNK == 0, "a chunk was not padded"
             # The real one reads whole 64 KiB chunks only.
-            assert len(body) % _CHUNK == 0, "a chunk was not padded"
-            for offset in range(0, len(body), _CHUNK):
+            for offset in range(0, len(body) - _CHUNK + 1, _CHUNK):
                 payload = body[offset + 516 : offset + _CHUNK].rstrip(b"\x00")
                 lines += payload.splitlines(keepends=True)
-        self.stdout = iter(lines)
+        self.stdout = io.BytesIO(b"".join(lines))
         self.stderr = iter(errors)
 
     def wait(self) -> int:
@@ -404,37 +407,54 @@ def test_chunks_are_carved_out_of_raw_data_wherever_they_are(
     # Nothing to compare with: said in the response and in the indexed summary.
     assert summary["compared_with_live_logs"] is False
     assert summary["live_log_cleared"] is None
-    assert "still in the live logs" in summary["warning"]
-    assert any("still in the live logs" in ln for ln in _lines(case, "evtx_recovered.summary"))
+    assert "still in a live log" in summary["warning"]
+    assert any("still in a live log" in ln for ln in _lines(case, "evtx_recovered.summary"))
     # The evidence is read, never written, and nothing is left beside it.
     assert raw.read_bytes() == before
     assert list(raw.parent.iterdir()) == [raw]
 
 
-def test_carved_records_still_in_the_extracted_live_logs_are_dropped(
+def test_carved_records_still_live_in_the_image_are_dropped_in_a_later_session(
     case: CaseDB, tmp_path: Path
 ) -> None:
-    image = tmp_path / "disk.raw"
+    image = tmp_path / "evidence" / "disk.raw"
+    image.parent.mkdir()
     image.write_bytes(b"\x00" * 1000 + _chunk(*(_rec(i) for i in range(1, 6))))
-    extracted = tmp_path / "mulder_evtx_extract"
-    _log(extracted / "Security.evtx", _chunk(_rec(1), _rec(2), _rec(3), _rec(9, recovered=True)))
-    case.set_kv(f"evtx_extract_dir:{image}", str(extracted))
-
-    # run_evtx_parser writes the manifest once every log is out. Before that
-    # the directory may be half filled, so it is not used.
-    early = _recover(image)["results"]
-    assert early["compared_with_live_logs"] is False
-    assert early["recovered_records"] == 5
-
+    # What an earlier executor session leaves: run_evtx_parser's manifest, and
+    # the name of an extraction directory that went when its server exited.
     extract_and_index("Security.evtx\t1 MB\tHIGH", "evtx.manifest", str(image), "evtx-extract")
-    summary = _recover(image, force=True)["results"]
+    case.set_kv(f"evtx_extract_dir:{image}", str(tmp_path / "mulder_evtx_extract_gone"))
+    extracted_to: list[Path] = []
+
+    def icat(image_path: str, dest: str) -> list[Path]:
+        assert image_path == str(image)
+        extracted_to.append(Path(dest))
+        log = _log(
+            Path(dest) / "Windows_System32_winevt_Logs_Security.evtx",
+            _chunk(_rec(1), _rec(2), _rec(3), _rec(9, recovered=True)),
+        )
+        return [log, log]  # two logs of one name land in one file
+
+    with patch.object(evtx_recovery, "_extract_evtx_from_image", icat):
+        # Without run_fls's listing of this image there is nothing to extract by.
+        early = _recover(image)["results"]
+        assert extracted_to == []
+        assert early["compared_with_live_logs"] is False
+        assert early["recovered_records"] == 5
+
+        extract_and_index("r/r 66-128-2:\tSecurity.evtx", "tsk.filelist", str(image), "fls")
+        summary = _recover(image, force=True)["results"]
 
     assert summary["compared_with_live_logs"] is True
     assert summary["duplicates_of_live_dropped"] == 3
     assert summary["channels"]["security"]["recovered"] == 3
     assert summary["channels"]["security"]["live_records"] == 3
-    assert summary["mode"].endswith("and read 1 extracted logs")
+    assert summary["mode"].endswith("and compared them with 1 event logs extracted from it")
     assert "warning" not in summary
+    # The logs were extracted to a place of the tool's own, removed afterwards.
+    assert len(extracted_to) == 1 and not extracted_to[0].exists()
+    assert image.parent not in extracted_to[0].parents
+    assert list(image.parent.iterdir()) == [image]
 
 
 def test_an_e01_is_carved_through_its_raw_view_and_never_copied(
@@ -485,7 +505,14 @@ def test_the_dump_is_streamed_from_a_real_process_and_killed_at_the_deadline(
     tmp_path: Path,
 ) -> None:
     lines = tmp_path / "out.jsonl"
-    lines.write_text(json.dumps(_rec(1)) + "\nnot json\n" + json.dumps(_rec(2)) + "\n")
+    # evtx_dump 0.15.1 prints some names with a raw control character in them.
+    odd = _rec(3)
+    odd["Event"]["EventData"]["Na\rme"] = "x"
+    raw_cr = json.dumps(odd).replace("\\r", "\r")
+    lines.write_text(
+        json.dumps(_rec(1)) + "\nnot json\n" + json.dumps(_rec(2)) + "\n" + raw_cr + "\n",
+        newline="",
+    )
     prints = tmp_path / "prints"
     prints.write_text(
         f'#!/bin/sh\ncat "{lines}"\n'
@@ -502,8 +529,17 @@ def test_the_dump_is_streamed_from_a_real_process_and_killed_at_the_deadline(
     )
 
     assert status == 0
-    assert [r["Event"]["System"]["EventRecordID"] for r in seen] == [1, 2]
+    assert [r["Event"]["System"]["EventRecordID"] for r in seen] == [1, 2, 3]
     assert unreadable == 2, "one line that is not JSON, one failure evtx_dump reported"
+
+    # A line longer than a record can be is read in pieces and never held whole.
+    with patch.object(evtx_recovery, "_MAX_LINE", len(json.dumps(_rec(1))) + 1):
+        seen.clear()
+        _, unreadable = evtx_recovery._dump(
+            str(prints), tmp_path / "x.evtx", time.monotonic() + 30, seen.append
+        )
+    assert [r["Event"]["System"]["EventRecordID"] for r in seen] == [1, 2]
+    assert unreadable >= 3
 
     started = time.monotonic()
     with pytest.raises(TimeoutError):
@@ -551,8 +587,197 @@ def test_the_binary_comes_from_the_asset_root_and_never_from_path(
     assert evtx_recovery._evtx_dump_binary() == str(installed)
 
 
-def test_a_missing_path_is_an_error(case: CaseDB, tmp_path: Path) -> None:
+def test_a_path_that_cannot_be_read_is_an_error_not_an_exception(
+    case: CaseDB, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     assert _recover(tmp_path / "gone.evtx")["error_type"] == "file_not_found"
+    # An empty path is the server's working directory to pathlib.
+    monkeypatch.chdir(tmp_path)
+    _log(tmp_path / "cwd.evtx", _chunk(_rec(1, recovered=True)))
+    assert _recover("")["error_type"] == "invalid_argument"
+    assert _recover("x" * 5000)["status"] == "error"
+    assert _recover("a\x00b")["error_type"] == "file_not_found"
+
+    def denied(_: Path) -> list[Path]:
+        raise PermissionError(13, "Permission denied")
+
+    with patch.object(evtx_recovery, "_evtx_files", denied):
+        unreadable = _recover(tmp_path)
+    assert unreadable["error_type"] == "tool_failed"
+    assert "Permission denied" in unreadable["error_message"]
+    assert _sources(case) == set()
+
+    # evtx_dump takes a bare "help" for a command: it is handed the full path.
+    _log(tmp_path / "help", _chunk(_rec(1, recovered=True)))
+    assert _recover("help")["results"]["recovered_records"] == 1
+    assert _FakeEvtxDump.calls[0][-1] == os.path.abspath("help")
+
+
+def test_a_hostile_time_or_id_is_not_parsed_and_cannot_flood_the_response(
+    case: CaseDB, tmp_path: Path
+) -> None:
+    log = _log(
+        tmp_path / "x.evtx",
+        _chunk(
+            _rec(1, when="2024-03-01T10:00:00." + "9" * 20_000 + "Z", recovered=True),
+            _rec(2, when="٢٠٢٤-٠٣-٠١T١٠:٠٠:٠٠Z", recovered=True),
+            _rec(3, eid=int("9" * 300), recovered=True),
+            _rec(4, eid={"#text": "9" * 300}, recovered=True),
+            _rec(-5, recovered=True),
+            _rec(2**64, recovered=True),
+            _rec(7, eid=float("inf"), recovered=True),
+            _rec(8, channel="A" * 500, recovered=True),
+        ),
+    )
+
+    result = _recover(log, channels=["*"])
+
+    assert result["results"]["not_parsed"] == {"records": 7}
+    assert result["results"]["recovered_records"] == 1
+    assert max(len(source) for source in _sources(case)) <= len("evtx_recovered.") + 64
+    assert len(json.dumps(result)) < 3000
+
+    # Nested deeper than the interpreter will follow: not parsed, not a crash.
+    deep: object = "x"
+    for _ in range(100_000):
+        deep = {"a": deep}
+    run = evtx_recovery._Recovery(["*"], None, None, 10)
+    run.take(_rec(1, recovered=True, Deep=deep), carved=False)
+    assert run.stats["records_not_parsed"] == 1 and run.results() == {}
+
+
+def test_records_recovered_without_a_channel_are_counted_or_kept_under_their_own_source(
+    case: CaseDB, tmp_path: Path
+) -> None:
+    def bare(rid: int, eid: int) -> dict[str, Any]:
+        """As evtx_dump prints a record it recovers without its provider."""
+        record = _rec(rid, eid=eid, recovered=True)
+        del record["Event"]["System"]["Channel"], record["Event"]["EventData"]
+        record["Event"]["System"]["Provider"] = None
+        return record
+
+    log = _log(
+        tmp_path / "x.evtx",
+        _chunk(
+            bare(1, 7036), bare(2, 7036), bare(3, 7045), bare(4, 104), _rec(4, channel="System")
+        ),
+    )
+
+    counted = _recover(log)["results"]
+
+    # They may belong to a channel that was asked for: said, not passed over.
+    left_out = counted["records_without_channel"]
+    assert (left_out["not_indexed"], left_out["event_ids"]) == (
+        4,
+        {"7036": 2, "7045": 1, "104": 1},
+    )
+    assert (left_out["earliest"], left_out["latest"]) == (_T.format(1), _T.format(4))
+    assert 'channels=["*"]' in left_out["note"]
+    assert counted["not_parsed"] == {} and counted["recovered_records"] == 0
+    assert any("without a channel name" in ln for ln in _lines(case, "evtx_recovered.summary"))
+
+    kept = _recover(log, channels=["*"], force=True)["results"]
+
+    assert "records_without_channel" not in kept
+    assert kept["channels"]["no-channel"]["source"] == "evtx_recovered.no-channel"
+    lines = _lines(case, "evtx_recovered.no-channel")
+    # Record 4 is still live in System: its stale copy only lost the channel name.
+    assert [line.split(" | ")[1] for line in lines] == ["7036", "7036", "7045"]
+    assert " | no-channel | [recovered record 1] " in lines[0]
+    assert kept["duplicates_of_live_dropped"] == 1
+
+
+def test_the_scope_of_a_run_is_recorded_and_shown_when_a_later_call_is_skipped(
+    case: CaseDB, tmp_path: Path
+) -> None:
+    log = _log(tmp_path / "x.evtx", _chunk(_rec(1, recovered=True)))
+    scope = {
+        "channels": ["application"],
+        "t_start": "2030-01-01",
+        "t_end": None,
+        "max_records": 10_000,
+    }
+
+    narrow = _recover(log, channels=["Application"], t_start="2030-01-01")["results"]
+    later = _recover(log)["results"]
+
+    assert narrow["scope"] == scope
+    assert f"scope: {json.dumps(scope)}" in _lines(case, "evtx_recovered.summary")
+    # The wider call is skipped, but can see that what it asked for was not read.
+    assert later["status"] == "skipped"
+    assert later["scope_of_prior_run"] == scope
+
+
+def test_a_live_copy_read_later_gives_the_stale_copys_place_under_the_cap_back(
+    case: CaseDB, tmp_path: Path
+) -> None:
+    logs = tmp_path / "logs"
+    _log(logs / "a-old.evtx", _chunk(_rec(1, recovered=True), _rec(2, recovered=True)))
+    _log(logs / "b-live.evtx", _chunk(_rec(1)))
+    _log(logs / "c-old.evtx", _chunk(_rec(3, recovered=True)))
+
+    summary = _recover(logs, max_records=2)["results"]
+
+    assert summary["recovered_records"] == 2
+    assert summary["truncated"] == {}
+    assert summary["duplicates_of_live_dropped"] == 1
+
+
+def test_clearing_events_past_the_listed_ones_are_counted(case: CaseDB, tmp_path: Path) -> None:
+    def cleared(rid: int) -> dict[str, Any]:
+        record = _rec(
+            rid,
+            when=f"2024-03-01T10:00:{rid:02}Z",
+            eid=1102,
+            provider="Microsoft-Windows-Eventlog",
+        )
+        record["Event"]["UserData"] = {"LogFileCleared": {"SubjectUserName": "mallory"}}
+        return record
+
+    log = _log(tmp_path / "x.evtx", _chunk(*(cleared(i) for i in range(25)), cleared(3)))
+
+    summary = _recover(log)["results"]
+
+    assert len(summary["log_clearing_events"]) == 20
+    assert summary["truncated"] == {"log_clearing_events_not_listed": 5}
+
+
+def test_a_log_that_ends_in_a_partial_chunk_is_named(case: CaseDB, tmp_path: Path) -> None:
+    log = _log(tmp_path / "cut.evtx", _chunk(_rec(1, recovered=True)))
+    with open(log, "ab") as handle:
+        handle.write(_chunk(_rec(2, recovered=True))[:30_000])
+
+    summary = _recover(log)["results"]
+
+    assert summary["recovered_records"] == 1
+    assert summary["not_parsed"] == {
+        "files_ending_in_a_partial_chunk": ["cut.evtx"],
+        "files_ending_in_a_partial_chunk_count": 1,
+    }
+
+
+def test_carving_says_when_the_file_is_a_container_and_stops_at_the_chunk_limit(
+    case: CaseDB, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A later EnCase segment, or an Ex01: not a first segment, so read as it is.
+    segment = tmp_path / "disk.E02"
+    segment.write_bytes(b"EVF\x09\x0d\x0a\xff\x00" + b"\x00" * 100 + _chunk(_rec(1)))
+    archive = tmp_path / "logs.zip"
+    archive.write_bytes(b"PK\x03\x04" + b"\x00" * 100)
+
+    assert "starts like an EnCase image segment" in _recover(segment)["results"]["warning"]
+    zipped = _recover(archive)["results"]
+    assert "starts like a zip archive" in zipped["warning"]
+    assert any("a zip archive" in line for line in _lines(case, "evtx_recovered.summary"))
+
+    monkeypatch.setattr(evtx_recovery, "_MAX_CARVED_CHUNKS", 2)
+    raw = tmp_path / "many.raw"
+    raw.write_bytes(b"\x11" * 10 + b"".join(_chunk(_rec(i)) for i in range(1, 5)))
+
+    summary = _recover(raw)["results"]
+
+    assert summary["recovered_records"] == 2
+    assert summary["truncated"] == {"carving_stopped_at_chunk_limit": 2}
 
 
 def test_guidance_says_when_to_recover_and_what_recovery_does_not_show() -> None:
@@ -563,10 +788,18 @@ def test_guidance_says_when_to_recover_and_what_recovery_does_not_show() -> None
     assert "mcp__mulder__run_evtx_recovery" in get_tools_for_role(Role.EXTRACT_EXECUTOR)
     assert "mcp__mulder__run_evtx_recovery" not in get_tools_for_role(Role.EXTRACT_ANALYST)
     assert "Plan it only when there is a reason" in planner
-    assert "never in the same plan\n  as run_evtx_parser" in planner
+    assert "after run_fls has listed the image" in planner
+    assert "run_evtx_parser" not in planner.split("EVENT LOG RECOVERY:")[1].split("BATCH")[0]
     assert "Recovering nothing does not show that nothing\nwas logged" in planner
     assert "names run_evtx_recovery (you cannot call it)" in analyst
     assert "does not show it did not happen" in analyst
+    assert "event ID alone does not say which log or program wrote it" in analyst
+    # The composites read the live logs only, and the cross-system planner prefers them.
+    cross = (prompt_dir / "cross_system_planner.md").read_text(encoding="utf-8")
+    assert (
+        'do not read these: also plan a search of them by name\n(source="evtx_recovered"' in cross
+    )
+    assert "does not show it did not happen" in cross
     doc = " ".join((inspect.getdoc(run_evtx_recovery) or "").split())
     assert "does NOT show it did not happen" in doc
 

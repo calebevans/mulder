@@ -21,17 +21,17 @@ from typing import Any
 
 from mulder.assets.paths import asset_path
 from mulder.extractors.optical import OpticalError, raw_image
-from mulder.server.app import get_ctx, has_ctx, mcp
+from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
     adaptive_timeout,
-    cli_path,
     error_response,
     make_tool_call_id,
     sources_already_indexed,
     tool_response,
 )
 from mulder.server.tool_access import Role, tool_access
+from mulder.server.tools.extract.evtx import _extract_evtx_from_image
 
 __all__ = ["run_evtx_recovery"]
 
@@ -40,6 +40,9 @@ _NAME = "run_evtx_recovery"
 # proof that the path's live logs were parsed, and would then skip them.
 _PREFIX = "evtx_recovered."
 _SUMMARY_SOURCE = _PREFIX + "summary"
+# A record evtx_dump recovers without its provider has no channel name.
+_NO_CHANNEL = "no-channel"
+_SCOPE_KEY = "evtx_recovery_scope:"
 
 # Channel name patterns (fnmatch, case-insensitive) recovered by default.
 _DEFAULT_CHANNELS = (
@@ -57,6 +60,11 @@ _MAX_CHANNELS = 40
 _MAX_RESPONSE_CHANNELS = 20
 _MAX_RESPONSE_EVENT_IDS = 10
 _MAX_LISTED = 20
+_MAX_EVENT_IDS_COUNTED = 1_000
+# 64 GiB of event log. Each chunk carved also costs a digest held in memory.
+_MAX_CARVED_CHUNKS = 1_000_000
+# One record as JSON. A longer line is read in pieces, and none of them parses.
+_MAX_LINE = 4 * 1024 * 1024
 
 _CHUNK_SIZE = 65536
 _HEADER_SIZE = 4096
@@ -71,7 +79,9 @@ _CLEARING_EVENTS = {("security", 1102), ("system", 104)}
 
 _TIME_RE = re.compile(r"\d{4}-\d{2}-\d{2}(T\d{2}(:\d{2}(:\d{2}(\.\d+)?)?)?)?")
 # How evtx_dump writes a record's time. Anything else is evidence text.
-_STAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z?")
+_STAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?Z?", re.ASCII)
+# A record ID is 64 bits on disk. Anything else is evidence text.
+_ID_RANGE = range(2**64)
 # str.splitlines() breaks a line on these too, and json.dumps leaves them as
 # they are: a record holding one could otherwise forge an indexed line.
 _LINE_BREAKS = {0x85: "\\u0085", 0x2028: "\\u2028", 0x2029: "\\u2029"}
@@ -82,11 +92,19 @@ _INTERPRETATION = (
     "No recovered record for an event or a period does not show it did not happen."
 )
 _NOT_COMPARED = (
-    "No extracted live logs were available to compare with, so [carved] records "
-    "include any that are still in the live logs. For a disk image, run "
-    "run_evtx_parser on it first (with force=True if it reports the image as "
-    "already extracted), then this tool with force=True."
+    "No event log could be extracted from this file to compare with, so [carved] "
+    "records include any that are still in a live log. Logs are extracted only "
+    "from a disk image whose files run_fls has listed."
 )
+# What a file that stores its data compressed or remapped starts with.
+_CONTAINERS = {
+    b"EVF": "an EnCase image segment",
+    b"KDMV": "a VMDK image",
+    b"QFI\xfb": "a qcow2 image",
+    b"vhdxfile": "a VHDX image",
+    b"PK\x03\x04": "a zip archive",
+    b"\x1f\x8b": "a gzip file",
+}
 
 
 def _evtx_dump_binary() -> str | None:
@@ -112,7 +130,7 @@ def _slug(channel: str) -> str:
 
     The shape a live log's source name has (``evtx.powershell-operational``).
     """
-    name = channel.lower().removeprefix("microsoft-windows-")[:120]
+    name = channel.lower().removeprefix("microsoft-windows-")[:64]
     return re.sub(r"[^a-z0-9]+", "-", name).strip("-") or "unknown"
 
 
@@ -153,6 +171,23 @@ def _evtx_files(root: Path) -> list[Path]:
     return sorted(p for p in found if not p.is_symlink() and p.is_file())
 
 
+def _image_logs(image: str, dest: Path) -> list[Path]:
+    """The event logs inside a disk image, extracted to *dest*, or [].
+
+    Their records say which carved records are still live. They are read
+    through the file listing run_fls indexed for this image, here and now:
+    run_evtx_parser's own extraction is a temporary directory that is gone
+    once its MCP server exits. With no listing (a memory dump, a file of
+    unallocated space, an image run_fls was not run on) there is nothing to
+    compare with.
+    """
+    if not sources_already_indexed(["tsk.filelist"], evidence_path=image):
+        return []
+    dest.mkdir()
+    # Two logs of one name are written to one file, and listed twice.
+    return sorted(set(_extract_evtx_from_image(image, str(dest))))
+
+
 def _file_header() -> bytes:
     """A minimal EVTX file header, so evtx_dump reads a run of chunks as a log.
 
@@ -171,7 +206,8 @@ def _carved(raw: Path, out: Path, deadline: float, stats: Counter[str]) -> Itera
     A chunk is the 64 KiB after a chunk signature that is followed by a record
     where the first record belongs; an exact copy of one already taken is
     skipped. *raw* is read once, in blocks, and never copied: only the chunks
-    are written, a batch at a time, and each batch replaces the last.
+    are written, a batch at a time, and each batch replaces the last. The
+    scan stops at ``_MAX_CARVED_CHUNKS`` chunks.
 
     ponytail: evtx_dump has this built in on its main branch (--carve, with
     bad-sector handling) but not in a release; switch when one ships it.
@@ -185,14 +221,14 @@ def _carved(raw: Path, out: Path, deadline: float, stats: Counter[str]) -> Itera
     carry = b""
     base = 0
     with open(raw, "rb") as source:
-        while block := source.read(_SCAN_BLOCK):
+        while (block := source.read(_SCAN_BLOCK)) and stats["chunks_carved"] < _MAX_CARVED_CHUNKS:
             if time.monotonic() > deadline:
                 raise TimeoutError
             # A signature may straddle two blocks: search the last 7 bytes again.
             data = carry + block
             start = base - len(carry)
             hit = data.find(_CHUNK_MAGIC)
-            while hit != -1:
+            while hit != -1 and stats["chunks_carved"] < _MAX_CARVED_CHUNKS:
                 chunk = os.pread(source.fileno(), _CHUNK_SIZE, start + hit)
                 if chunk[_FIRST_RECORD : _FIRST_RECORD + 4] == _RECORD_MAGIC:
                     digest = hashlib.blake2b(chunk, digest_size=16).digest()
@@ -222,7 +258,8 @@ def _dump(
     """Feed every record evtx_dump reads from *evtx*, live and recovered, to *take*.
 
     The JSON lines are streamed, never held. Returns (exit status, records
-    evtx_dump found but could not render).
+    that did not come out as a JSON line: those evtx_dump reported it could
+    not dump, and lines that are not JSON).
 
     Raises:
         TimeoutError: When *deadline* passes; evtx_dump is killed.
@@ -231,14 +268,15 @@ def _dump(
     if remaining <= 0:
         raise TimeoutError
     proc = subprocess.Popen(
-        [binary, "--recover-records", "-o", "jsonl", cli_path(str(evtx))],
+        # Absolute: evtx_dump reads a bare "help" or "-x" as a command or an option.
+        [binary, "--recover-records", "-o", "jsonl", os.path.abspath(evtx)],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
     assert proc.stdout is not None and proc.stderr is not None
     failures: list[int] = []
-    stderr = proc.stderr
+    stdout, stderr = proc.stdout, proc.stderr
     # Drained on its own thread so a flood of errors cannot block the pipe.
     drain = threading.Thread(
         target=lambda: failures.append(sum(ln.startswith(b"Failed to dump") for ln in stderr)),
@@ -255,10 +293,12 @@ def _dump(
     timer.start()
     unreadable = 0
     try:
-        for line in proc.stdout:
+        for line in iter(lambda: stdout.readline(_MAX_LINE), b""):
             try:
-                record = json.loads(line)
-            except ValueError:
+                # Not strict: evtx_dump 0.15.1 leaves raw control characters in
+                # the names of some recovered records, which are whole otherwise.
+                record = json.loads(line, strict=False)
+            except (ValueError, RecursionError):
                 unreadable += 1
                 continue
             take(record)
@@ -294,43 +334,75 @@ class _Recovery:
     kept: dict[str, dict[int, _Row]] = field(default_factory=dict)
     over_cap: Counter[str] = field(default_factory=Counter)
     cleared: list[dict[str, object]] = field(default_factory=list)
+    clearings_seen: set[int] = field(default_factory=set)
     live_log_cleared: bool = False
+    # Recovered records with no channel name that the patterns left out:
+    # their event IDs, and [earliest, latest].
+    unnamed_ids: Counter[str] = field(default_factory=Counter)
+    unnamed_span: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        # True for ["*"]: records with no channel name are kept too.
+        self.keeps_unnamed = any(fnmatch.fnmatchcase("", p) for p in self.patterns)
 
     def take(self, record: Any, carved: bool) -> None:
         """Sort one evtx_dump record into live, recovered or dropped."""
         try:
+            self._sort(record, carved)
+        except RecursionError:
+            # Nested deeper than the interpreter will follow it.
+            self.stats["records_not_parsed"] += 1
+
+    def _sort(self, record: Any, carved: bool) -> None:
+        try:
             event = record["Event"]
             system = event["System"]
-            channel = system["Channel"]
+            channel = system.get("Channel")
             when = system["TimeCreated"]["#attributes"]["SystemTime"]
             record_id = int(system["EventRecordID"])
             event_id = system["EventID"]
             event_id = int(event_id["#text"] if isinstance(event_id, dict) else event_id)
-        except (KeyError, TypeError, ValueError):
+        except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
             self.stats["records_not_parsed"] += 1
             return
-        if not (isinstance(channel, str) and isinstance(when, str) and _STAMP_RE.fullmatch(when)):
+        if not (
+            (channel is None or isinstance(channel, str))
+            and isinstance(when, str)
+            and _STAMP_RE.fullmatch(when)
+            and record_id in _ID_RANGE
+            and event_id in _ID_RANGE
+        ):
             self.stats["records_not_parsed"] += 1
             return
 
         recovered = record.get("recovered") is True
         is_live = not carved and not recovered
-        name = channel.lower()
+        name = (channel or "").lower()
         if (name, event_id) in _CLEARING_EVENTS:
             self._note_clearing(event, system, when, event_id, is_live, recovered)
 
-        if not any(fnmatch.fnmatchcase(name, pattern) for pattern in self.patterns):
-            return
         if self.t_start and when[: len(self.t_start)] < self.t_start:
             return
         if self.t_end and when[: len(self.t_end)] > self.t_end:
             return
+        if not any(fnmatch.fnmatchcase(name, pattern) for pattern in self.patterns):
+            if not name and not is_live:
+                self._count_unnamed(when, event_id)
+            return
 
         # A hash, not the tuple: a large Security log has millions of records.
         key = hash((name, record_id, when))
-        slug = _slug(channel)
+        slug = _slug(name) if name else _NO_CHANNEL
         if is_live:
-            self.live.add(key)
+            twins = [(slug, key)]
+            if name and self.keeps_unnamed:
+                # A stale copy of this record may have lost its channel name.
+                twins.append((_NO_CHANNEL, hash(("", record_id, when))))
+            for twin_slug, twin in twins:
+                self.live.add(twin)
+                # A stale copy read before this one gives its place back.
+                if self.kept.get(twin_slug, {}).pop(twin, None):
+                    self.stats["duplicates_of_live"] += 1
             span = self.live_span.get(slug)
             if span is None and len(self.live_span) < _MAX_CHANNELS:
                 span = self.live_span[slug] = [0, when, when]
@@ -361,6 +433,14 @@ class _Recovery:
                 + payload.translate(_LINE_BREAKS),
             )
 
+    def _count_unnamed(self, when: str, event_id: int) -> None:
+        self.stats["records_without_channel"] += 1
+        first, last = self.unnamed_span or (when, when)
+        self.unnamed_span = [min(first, when), max(last, when)]
+        eid = str(event_id)
+        if eid in self.unnamed_ids or len(self.unnamed_ids) < _MAX_EVENT_IDS_COUNTED:
+            self.unnamed_ids[eid] += 1
+
     def _note_clearing(
         self, event: Any, system: Any, when: str, event_id: int, is_live: bool, recovered: bool
     ) -> None:
@@ -376,8 +456,11 @@ class _Recovery:
         self.live_log_cleared = self.live_log_cleared or is_live
         log_cleared = _flat(detail.get("Channel") or system["Channel"])
         # The same record is met again as a stale or carved copy: list it once.
-        known = any(c["time"] == when and c["log_cleared"] == log_cleared for c in self.cleared)
-        if not known and len(self.cleared) < _MAX_LISTED:
+        seen = hash((when, log_cleared))
+        if seen in self.clearings_seen:
+            return
+        self.clearings_seen.add(seen)
+        if len(self.cleared) < _MAX_LISTED:
             self.cleared.append(
                 {
                     "time": when,
@@ -393,16 +476,8 @@ class _Recovery:
             )
 
     def results(self) -> dict[str, list[_Row]]:
-        """Recovered records per channel, in time order, without live duplicates."""
-        final: dict[str, list[_Row]] = {}
-        for slug, rows in sorted(self.kept.items()):
-            # A live copy may have been read after the recovered one.
-            late = [key for key in rows if key in self.live]
-            self.stats["duplicates_of_live"] += len(late)
-            records = sorted(row for key, row in rows.items() if key not in self.live)
-            if records:
-                final[slug] = records
-        return final
+        """Recovered records per channel, in time order."""
+        return {slug: sorted(rows.values()) for slug, rows in sorted(self.kept.items()) if rows}
 
 
 @mcp.tool()
@@ -422,8 +497,8 @@ def run_evtx_recovery(
     reads the stale records still inside the files. Given any other file (a
     raw or E01 disk image, a memory dump, unallocated space), it carves event
     log chunks out of the raw bytes, which reads the whole file once; on a
-    disk image call it after run_evtx_parser, whose extracted logs are used to
-    drop records that are still live.
+    disk image call it after run_fls, whose file listing is used to extract
+    the image's own logs and drop the records that are still live in them.
 
     Returns counts per channel and event ID, the earliest and latest recovered
     time, whether a live log records its own clearing, and what was cut or not
@@ -438,12 +513,14 @@ def run_evtx_recovery(
             to carve (disk image, memory dump, unallocated space).
         channels: Channel name patterns, case-insensitive, ``*`` allowed.
             Default: Security, System, PowerShell and Task Scheduler
-            operational, Terminal Services. ``["*"]`` keeps every channel.
+            operational, Terminal Services. ``["*"]`` keeps every channel,
+            and the records recovered without a channel name.
         t_start: Keep records at or after this UTC time (2024-03-01 or
             2024-03-01T14:30:00).
         t_end: Keep records at or before this UTC time.
         max_records: Most records kept per channel (default 10000).
-        force: Re-run even if this path was already recovered.
+        force: Re-run even if this path was already recovered, for example
+            with other channels or another time window.
     """
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
@@ -466,15 +543,21 @@ def run_evtx_recovery(
         return fail(str(exc), "invalid_argument")
     if not 1 <= max_records <= _MAX_RECORDS_LIMIT:
         return fail(f"max_records must be 1 to {_MAX_RECORDS_LIMIT}", "invalid_argument")
+    if not evidence_path.strip():
+        return fail("evidence_path is empty", "invalid_argument")
     patterns = [str(c).lower()[:200] for c in (channels or _DEFAULT_CHANNELS)][:_MAX_LISTED]
+    scope = {"channels": patterns, "t_start": start, "t_end": end, "max_records": max_records}
 
     if not force:
         existing = sources_already_indexed([_PREFIX], evidence_path=evidence_path)
         if existing:
+            earlier = get_ctx().db.get_kv(_SCOPE_KEY + evidence_path)
             skipped: dict[str, object] = {
                 "status": "skipped",
                 "reason": "Sources already indexed from prior extraction",
                 "existing_sources": existing,
+                # What that run kept. force=True runs again when this call asks for more.
+                "scope_of_prior_run": json.loads(earlier) if earlier else None,
             }
             return tool_response(tc_id, _NAME, params, skipped, None, 0.0)
 
@@ -485,46 +568,43 @@ def run_evtx_recovery(
             "binary_missing",
             "Run 'mulder setup' (installs evtx_dump).",
         )
+
     target = Path(evidence_path)
-    if not target.exists():
-        return fail(f"Path not found: {evidence_path}", "file_not_found")
-
-    carving = False
-    compared_with_live = True
-    if target.is_dir():
-        logs = _evtx_files(target)
-        if not logs:
-            return fail(
-                f"No .evtx files under {evidence_path}. Pass a .evtx file, a directory of "
-                "them, or a raw file to carve (disk image, memory dump).",
-                "invalid_argument",
-            )
-    elif not target.is_file():
-        return fail(f"Not a regular file or directory: {evidence_path}", "invalid_argument")
-    elif _is_evtx(target):
-        logs = [target]
-    else:
-        carving = True
-        # run_evtx_parser's copies of this image's logs say which records are
-        # live. It indexes evtx.manifest only once every log is extracted.
-        logs = []
-        if has_ctx() and sources_already_indexed(["evtx.manifest"], evidence_path=evidence_path):
-            extracted = get_ctx().db.get_kv(f"evtx_extract_dir:{evidence_path}")
-            if extracted and Path(extracted).is_dir():
-                logs = _evtx_files(Path(extracted))
-        compared_with_live = bool(logs)
-
     run = _Recovery(patterns, start, end, max_records)
+    logs: list[Path] = []
     unread: list[str] = []
-    deadline = t0 + adaptive_timeout(target)
+    cut_short: list[str] = []
+    warnings: list[str] = []
+    carving = False
+    deadline = t0
 
     def read(evtx: Path, carved: bool) -> None:
         status, failed = _dump(evtx_dump, evtx, deadline, lambda record: run.take(record, carved))
         run.stats["records_not_parsed"] += failed
         if status != 0:
             unread.append("carved chunks" if carved else _flat(evtx.name))
+        # evtx_dump reads whole chunks only: the rest of such a log is left out.
+        elif not carved and (evtx.stat().st_size - _HEADER_SIZE) % _CHUNK_SIZE:
+            cut_short.append(_flat(evtx.name))
 
     try:
+        if not target.exists():
+            return fail(f"Path not found: {evidence_path}", "file_not_found")
+        deadline += adaptive_timeout(target)
+        if target.is_dir():
+            logs = _evtx_files(target)
+            if not logs:
+                return fail(
+                    f"No .evtx files under {evidence_path}. Pass a .evtx file, a directory of "
+                    "them, or a raw file to carve (disk image, memory dump).",
+                    "invalid_argument",
+                )
+        elif not target.is_file():
+            return fail(f"Not a regular file or directory: {evidence_path}", "invalid_argument")
+        elif _is_evtx(target):
+            logs = [target]
+        else:
+            carving = True
         for log in logs[:_MAX_EVTX_FILES]:
             read(log, carved=False)
         if carving:
@@ -534,6 +614,21 @@ def run_evtx_recovery(
             ):
                 # An E01's raw view is larger than its compressed segments.
                 deadline = t0 + adaptive_timeout(raw)
+                with open(raw, "rb") as handle:
+                    head = handle.read(8)
+                kind = next((k for magic, k in _CONTAINERS.items() if head.startswith(magic)), "")
+                if kind:
+                    warnings.append(
+                        f"This file starts like {kind}. Carving reads raw bytes, so "
+                        "what it stores compressed was not read. Carve the raw image "
+                        "(for an EnCase image, pass its first segment, .E01)."
+                    )
+                # The image's own logs say which carved records are still live.
+                logs = _image_logs(evidence_path, Path(tmp, "live"))
+                if not logs:
+                    warnings.append(_NOT_COMPARED)
+                for log in logs[:_MAX_EVTX_FILES]:
+                    read(log, carved=False)
                 for batch in _carved(raw, Path(tmp) / "carved.evtx", deadline, run.stats):
                     read(batch, carved=True)
     except TimeoutError:
@@ -552,7 +647,7 @@ def run_evtx_recovery(
     mode = (
         f"carved {run.stats['chunks_carved']} event log chunks out of "
         f"{run.stats['bytes_scanned']} bytes"
-        + (f" and read {len(logs)} extracted logs" if logs else "")
+        + (f" and compared them with {len(logs)} event logs extracted from it" if logs else "")
         if carving
         else f"read {min(len(logs), _MAX_EVTX_FILES)} event log files"
     )
@@ -560,6 +655,7 @@ def run_evtx_recovery(
     per_channel: dict[str, dict[str, object]] = {}
     summary_lines = [
         f"Event log recovery of {_flat(evidence_path, 300)}: {total} records recovered ({mode})",
+        f"scope: {json.dumps(scope)}",
         "channel\trecovered\tearliest\tlatest\tlive records\tlive earliest\tlive latest",
     ]
     for slug in sorted({*final, *run.live_span}):
@@ -608,30 +704,55 @@ def run_evtx_recovery(
         truncated["records_in_channels_over_limit"] = run.stats["records_over_channel_limit"]
     if len(logs) > _MAX_EVTX_FILES:
         truncated["evtx_files_not_read"] = len(logs) - _MAX_EVTX_FILES
+    if len(run.clearings_seen) > len(run.cleared):
+        truncated["log_clearing_events_not_listed"] = len(run.clearings_seen) - len(run.cleared)
+    if run.stats["chunks_carved"] >= _MAX_CARVED_CHUNKS:
+        truncated["carving_stopped_at_chunk_limit"] = _MAX_CARVED_CHUNKS
     not_parsed: dict[str, object] = {}
     if run.stats["records_not_parsed"]:
         not_parsed["records"] = run.stats["records_not_parsed"]
     if unread:
         not_parsed["files"] = unread[:_MAX_LISTED]
         not_parsed["file_count"] = len(unread)
+    if cut_short:
+        not_parsed["files_ending_in_a_partial_chunk"] = cut_short[:_MAX_LISTED]
+        not_parsed["files_ending_in_a_partial_chunk_count"] = len(cut_short)
+    without_channel: dict[str, object] = {}
+    if run.unnamed_ids:
+        without_channel = {
+            "not_indexed": run.stats["records_without_channel"],
+            "earliest": run.unnamed_span[0],
+            "latest": run.unnamed_span[1],
+            "event_ids": dict(run.unnamed_ids.most_common(_MAX_RESPONSE_EVENT_IDS)),
+            "note": (
+                "Recovered with a time, an event ID and a record ID but no channel name, "
+                "so the channel patterns left them out. Not compared with live records. "
+                f'channels=["*"] indexes them as {_PREFIX}{_NO_CHANNEL}.'
+            ),
+        }
 
     for item in run.cleared:
         summary_lines.append(
             f"{item['time']}\tlog cleared: {item['log_cleared']} (event {item['event_id']}) "
             f"by {item['by']}; read from a {item['read_from']}"
         )
-    if carving and not compared_with_live:
-        summary_lines.append(_NOT_COMPARED)
-    for label, value in (("truncated", truncated), ("not parsed", not_parsed)):
+    summary_lines += warnings
+    for label, value in (
+        ("truncated", truncated),
+        ("not parsed", not_parsed),
+        ("recovered records without a channel name", without_channel),
+    ):
         if value:
             summary_lines.append(f"{label}: {json.dumps(value)}")
     summary_lines.append(_INTERPRETATION)
     extract_and_index("\n".join(summary_lines), _SUMMARY_SOURCE, evidence_path, "evtx_dump")
+    get_ctx().db.set_kv(_SCOPE_KEY + evidence_path, json.dumps(scope))
 
     shown = sorted(per_channel, key=lambda s: (-int(str(per_channel[s]["recovered"])), s))
     summary: dict[str, object] = {
         "evidence_path": evidence_path,
         "mode": mode,
+        "scope": scope,
         "recovered_records": total,
         "earliest_recovered": min(times, default=None),
         "latest_recovered": max(times, default=None),
@@ -646,10 +767,12 @@ def run_evtx_recovery(
         "summary_source": _SUMMARY_SOURCE,
         "interpretation": _INTERPRETATION,
     }
+    if without_channel:
+        summary["records_without_channel"] = without_channel
     if carving:
         summary["duplicate_chunks_skipped"] = run.stats["duplicate_chunks"]
-        summary["compared_with_live_logs"] = compared_with_live
-        if not compared_with_live:
-            summary["warning"] = _NOT_COMPARED
+        summary["compared_with_live_logs"] = bool(logs)
+    if warnings:
+        summary["warning"] = " ".join(warnings)
     # Returned in full: it is bounded, and the counts are what the caller acts on.
     return tool_response(tc_id, _NAME, params, summary, None, (time.monotonic() - t0) * 1000)

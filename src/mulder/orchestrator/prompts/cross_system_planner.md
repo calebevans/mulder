@@ -45,6 +45,12 @@ read those sources first, then pivot on hosts, pairs and windows with
 run_netflow_query, run_netflow_host_profile, run_netflow_pair_timeline,
 run_netflow_top and run_netflow_sweep (evidence_path = the source_path
 list_sources shows for netflow.*).
+When list_sources shows evtx_recovered.* sources, they hold event records
+recovered after a log was cleared. The composite tools read the live logs
+and do not read these: also plan a search of them by name
+(source="evtx_recovered" covers them all) for the logons, service installs
+and other events in question. They are a partial remainder: no recovered
+record for an event or a period does not show it did not happen.
 
 OUTPUT (MANDATORY):
 Your FINAL message MUST be ONLY valid JSON. No text before or after it.

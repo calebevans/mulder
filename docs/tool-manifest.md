@@ -443,25 +443,41 @@ What it does depends on what `evidence_path` is:
   unallocated space, a log whose file header is gone): carves event log chunks
   out of the raw bytes and reads every record in them, slack included. The file
   is read once and never copied; an E01 is read through xmount's flat view,
-  which needs FUSE. Exact copies of a chunk are skipped.
+  which needs FUSE. Exact copies of a chunk are skipped, and the scan stops
+  after one million chunks (64 GiB of event log). A file that starts like an
+  EnCase segment that is not the first, a VMDK, qcow2 or VHDX image, or a zip
+  or gzip file is still scanned as it is, and the response carries a `warning`
+  that what it stores compressed was not read.
 
 A recovered record is dropped when a live record has the same channel, record
-ID and time. On a disk image the live records are those of the logs
-`run_evtx_parser` extracted from that image, so run that first. They are read
-from its extraction directory, which is temporary: when it is gone, or was
-never made, the response says `compared_with_live_logs: false` and `[carved]`
-records include any that are still in the live logs.
+ID and time. On a disk image the live records are those of the image's own
+event logs, which the tool extracts for the length of the call through the file
+listing `run_fls` indexed for that image (the same `icat` extraction
+`run_evtx_parser` does, deleted logs included), so run `run_fls` first. It
+does not need `run_evtx_parser` or the directory that tool extracted to. When
+no log can be extracted (a memory dump, a file of unallocated space, an image
+`run_fls` did not list) the response says `compared_with_live_logs: false` and
+`[carved]` records include any that are still in a live log.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | evidence_path | str | yes | A .evtx file, a directory of .evtx files, or a raw file to carve |
-| channels | list[str] \| None | no | Channel name patterns, case-insensitive, `*` allowed. Default: `Security`, `System`, `Microsoft-Windows-PowerShell/Operational`, `Microsoft-Windows-TaskScheduler/Operational`, `Microsoft-Windows-TerminalServices-*`. `["*"]` keeps every channel |
+| channels | list[str] \| None | no | Channel name patterns, case-insensitive, `*` allowed. Default: `Security`, `System`, `Microsoft-Windows-PowerShell/Operational`, `Microsoft-Windows-TaskScheduler/Operational`, `Microsoft-Windows-TerminalServices-*`. `["*"]` keeps every channel, and the records recovered without a channel name |
 | t_start | str \| None | no | Keep records at or after this UTC time (`2024-03-01` or `2024-03-01T14:30:00`) |
 | t_end | str \| None | no | Keep records at or before this UTC time; a date covers its whole day |
 | max_records | int | no | Most records kept per channel (default 10000, limit 100000) |
-| force | bool | no | Re-run even if this path was already recovered |
+| force | bool | no | Re-run even if this path was already recovered, for example with other channels or another time window. The earlier run's sources stay in the index |
 
-**Returns:** `mode`, `recovered_records`, `earliest_recovered`, `latest_recovered`, `channels{}` (per channel: `source`, `recovered`, `earliest`, `latest`, `event_ids{}` (ten most frequent), `live_records`, `live_earliest`, `live_latest`, `not_indexed_over_max_records`), `live_log_cleared`, `log_clearing_events[]`, `duplicates_of_live_dropped`, `truncated{}`, `not_parsed{}`, `summary_source`; when carving also `compared_with_live_logs`, `duplicate_chunks_skipped`
+**Returns:** `evidence_path`, `mode`, `scope{}` (the channel patterns, time window and `max_records` applied), `recovered_records`, `earliest_recovered`, `latest_recovered`, `channels{}` (per channel: `source`, `recovered`, `earliest`, `latest`, `event_ids{}` (ten most frequent), `live_records`, `live_earliest`, `live_latest`, `not_indexed_over_max_records`; the twenty with most records), `channels_not_listed`, `live_log_cleared`, `log_clearing_events[]` (the first twenty), `duplicates_of_live_dropped`, `truncated{}`, `not_parsed{}`, `summary_source`, `interpretation`; `records_without_channel{}` when the channel patterns left such records out; when carving also `compared_with_live_logs`, `duplicate_chunks_skipped`; `warning` when carved records were not compared with live logs or the file looks like a container. A call that is skipped because the path was already recovered returns `scope_of_prior_run{}`, so the caller can see whether that run covered what it now asks for.
+
+`truncated{}` counts what was left out: `records_over_max_records`,
+`records_in_channels_over_limit` (more than 40 channels), `evtx_files_not_read`,
+`log_clearing_events_not_listed`, `carving_stopped_at_chunk_limit`.
+`not_parsed{}` counts what could not be read: `records` (lines of evtx_dump's
+output that are not JSON, records it reported it could not dump, and records
+without a usable time, event ID or record ID), `files` (logs evtx_dump failed
+on) and `files_ending_in_a_partial_chunk` (evtx_dump reads whole 64 KiB chunks
+only, so the tail of such a log was not read).
 
 Records are indexed per channel as `evtx_recovered.<channel>` (`evtx_recovered.security`,
 `evtx_recovered.powershell-operational`), in time order, one per line:
@@ -476,7 +492,16 @@ means stale space inside a log; `[carved]` means a chunk found in raw data. The
 channel is the record's own, not the file's name: stale space in one log can
 hold another log's records. `evtx_recovered.summary` is written on every run,
 including one that recovered nothing, and lists per channel what was recovered
-beside what is live, the clearing events, and what was cut or not parsed.
+beside what is live, the scope applied, the clearing events, and what was cut
+or not parsed.
+
+evtx_dump recovers some records with their time, event ID, record ID and
+computer but without provider, channel or event data. `["*"]` indexes them as
+`evtx_recovered.no-channel` (less those whose record ID and time match a live
+record). With any other patterns they are not indexed, and
+`records_without_channel{}` gives their count, time range and most frequent
+event IDs; that count is not compared with live records. An event ID without
+its provider does not say which log or program wrote the record.
 
 `log_clearing_events` lists Security 1102 and System 104 records written by
 Microsoft-Windows-Eventlog, with the log that was cleared and the account;

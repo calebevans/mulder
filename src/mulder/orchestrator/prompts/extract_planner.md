@@ -156,11 +156,14 @@ event 104), or a log's first event is much later than the system was in
 use.
 - Loose .evtx files or a directory of them: evidence_path is that file or
   directory, group "dependent".
-- A disk image: evidence_path is the image. It reads the whole image once
-  and uses the logs run_evtx_parser extracted to tell recovered records
-  from live ones, so plan it in a follow-up plan, never in the same plan
-  as run_evtx_parser.
+- A disk image: evidence_path is the image. It reads the whole image once,
+  and extracts the image's own event logs to tell a recovered record from
+  one that is still in them. It finds those logs in the file listing, so
+  plan it after run_fls has listed the image: group "dependent", or a
+  follow-up plan.
 - A memory dump or a file of unallocated space: evidence_path is that file.
+  Nothing is compared there, so what it brings back includes records that
+  are still in the logs.
 What it recovers is partial. Recovering nothing does not show that nothing
 was logged.
 
