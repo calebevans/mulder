@@ -25,7 +25,7 @@ from mulder.server.helpers import audited_tool
 from mulder.server.tool_access import ANALYSTS, Role, tool_access
 from mulder.server.tools.composite.core import decode_evidence_text
 
-__all__ = ["family_hints", "is_known_note_name", "ransomware_family_hints"]
+__all__ = ["family_hints", "is_known_note_name", "note_text_score", "ransomware_family_hints"]
 
 _DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "ransomware"
 _NOTES_DIRNAME = "ransomware-notes"
@@ -179,6 +179,11 @@ def _note_text_hints(text: str) -> list[_Hint]:
         _Hint(family, "note_text", round(score, 2), detail.format(family, corpus_name))
         for family, (score, corpus_name) in best.items()
     ]
+
+
+def note_text_score(text: str) -> float:
+    """How closely *text* resembles its nearest note in the corpus (0 when none is near)."""
+    return max((hint.score for hint in _note_text_hints(text)), default=0.0)
 
 
 def family_hints(

@@ -231,7 +231,8 @@ ransomware, answer each of these with its own evidence:
   first directories. It is a lead, not a verdict: compression, backups
   and bulk renames look the same. Read rows from the burst (its
   inspect_with) before stating it, and say so when the journal begins
-  inside the burst. Neither source names the process or the account.
+  inside the burst or the candidate comes from the MFT (basis mft: one
+  time per file). Neither source names the process or the account.
 - Which family: the family_hints in that result, or
   ransomware_family_hints for an extension or note found another way.
   A hint is a family to check, never an identification.
