@@ -327,6 +327,39 @@ def test_the_export_is_read_as_a_directory_root_with_the_root_volume_first(
     assert not (Path(root) / "p5_lvm2/alice/thesis.odt").exists()  # dotfiles and .ssh only
 
 
+def test_var_and_var_log_on_volumes_of_their_own_still_yield_their_logs(
+    case: CaseDB, image: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A hardened layout: a file's path on its volume lacks the mount point."""
+    files = {
+        ROOT: {"/etc/passwd": b"x\n"},
+        "p5/lvm2": {"/lib/dpkg/status": b"Package: x\n", "/www/html/a.php": b"<?php\n"},
+        "p5/lvm3": {"/auth.log": b"Oct  5 sshd\n", "/journal/abc/system.journal": b"LPKSHHRH"},
+        "p5/lvm4": {"/data/blob.bin": b"\x00"},
+    }
+    files["p5/lvm2"]["/log/placeholder"] = b""  # the mount point of the third volume
+
+    result = _run(monkeypatch, FakePlaso(files), image)["results"]
+
+    root = Path(result["export_root"])
+    held = sorted(str(p.relative_to(root)) for p in root.rglob("*") if p.is_file())
+    assert held[2:] == [
+        "p5_lvm1/etc/passwd",
+        "p5_lvm2/lib/dpkg/status",
+        "p5_lvm2/log/placeholder",
+        "p5_lvm2/www/html/a.php",
+        "p5_lvm3/auth.log",
+        "p5_lvm3/journal/abc/system.journal",
+    ]
+    said = [line.split("): ", 1)[1] for line in result["volumes"]]
+    assert said == [
+        "the root volume: it holds etc/passwd",
+        "read as /var, guessed from its top-level names",
+        "read as /var/log, guessed from its top-level names",
+        "mount point not recognised: read as a root volume",
+    ]
+
+
 def test_a_single_file_system_needs_no_volume_selector(
     case: CaseDB, image: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
