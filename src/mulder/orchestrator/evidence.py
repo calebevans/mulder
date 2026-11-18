@@ -36,6 +36,13 @@ from mulder.patterns import (
     extract_iocs_from_text,
     resolve_db_dir,
 )
+from mulder.questions import (
+    ID_LABELS,
+    MAX_QUESTION_CHARS,
+    MAX_QUESTIONS_PER_PLAN,
+    MAX_SYSTEM_CHARS,
+    clean,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -709,6 +716,51 @@ class ServerBridge:
         except Exception:
             logger.warning("get_readiness failed", exc_info=True)
             return None
+
+    def record_questions(self, phase: str, system: str, questions: list[Any]) -> list[Any]:
+        """Store a plan's investigation questions and label them with their ids.
+
+        Writes straight to the case database: no LLM call. Each question
+        that was stored comes back as ``"[q_1a2b3c4d] <question>"`` so the
+        analyst can name it to ``resolve_question``. Anything that cannot be
+        stored (not a string, or past the per-plan cap) is passed through as
+        the planner wrote it, and so is everything when the write fails:
+        the analyst then gets its questions exactly as it did before they
+        were recorded.
+
+        Args:
+            phase: Phase the plan belongs to.
+            system: System the plan is for, or "" when it covers the case.
+            questions: ``investigation_questions`` from the planner's JSON.
+
+        Returns:
+            The questions to hand the analyst, in the planner's order.
+        """
+        if not isinstance(questions, list):
+            return questions
+        # A follow-up planner is shown the analyst's request, which quotes
+        # questions with their labels: store the question, not the label, so
+        # an echoed one is the question already on record.
+        cleaned = [
+            clean(ID_LABELS.sub("", q) if isinstance(q, str) else q, MAX_QUESTION_CHARS)
+            for q in questions
+        ]
+        try:
+            self.ensure_context()
+            from mulder.server.app import get_ctx
+
+            rows = get_ctx().db.record_questions(
+                phase,
+                clean(system, MAX_SYSTEM_CHARS),
+                [c for c in cleaned if c][:MAX_QUESTIONS_PER_PLAN],
+            )
+        except Exception:
+            logger.warning("Failed to record investigation questions", exc_info=True)
+            return questions
+        ids = {row.question: row.question_id for row in rows}
+        return [
+            f"[{ids[c]}] {c}" if c in ids else q for q, c in zip(questions, cleaned, strict=True)
+        ]
 
     def build_consistency_report(self) -> str:
         """Build a consistency report identifying dedup clusters.

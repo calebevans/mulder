@@ -65,6 +65,18 @@ class Finding(BaseModel):
         return self
 
 
+class Question(BaseModel):
+    """An investigation question a planner asked, and how it was resolved."""
+
+    question_id: str
+    phase: str
+    system: str
+    question: str
+    resolution: Literal["answered", "ruled_out", "undetermined"] | None = None
+    finding_ids: list[str] = []
+    reason: str = ""
+
+
 class ToolCallEntry(BaseModel):
     """A single tool invocation recorded in the audit log."""
 

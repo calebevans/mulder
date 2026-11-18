@@ -894,6 +894,15 @@ class Orchestrator:
 
                         # Step 3: Analyst
                         self._update_dashboard_sub_step(phase, "Analyzing", log_prefix)
+                        if plan.investigation_questions:
+                            # Recorded here, not when planned, so only
+                            # questions that reach an analyst are on record;
+                            # the analyst gets them back with their ids.
+                            plan.investigation_questions = self._server.record_questions(
+                                phase.name,
+                                (prompt_vars or {}).get("system_name", ""),
+                                plan.investigation_questions,
+                            )
                         analyst_out = await self._roles.run_analyst(
                             phase,
                             plan,

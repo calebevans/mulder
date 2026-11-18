@@ -44,7 +44,7 @@ Each investigation runs through five phases with quality gates between them. Pha
 4. **Alternative Narrative** - challenge the primary narrative with counter-evidence, test alternative hypotheses, audit for tool and evidence coverage gaps
 5. **Report** - write the investigation narrative, generate Markdown/HTML reports, export IOCs and ATT&CK Navigator layers
 
-Each gate validates structural criteria (minimum sources indexed, findings submitted, MITRE mappings present, audit tools invoked). Failed gates trigger bounded phase retries; single-agent retries include gap-specific remediation instructions. See [Architecture](https://github.com/calebevans/mulder/blob/main/docs/architecture.md) for the full pipeline design.
+Each gate validates structural criteria (minimum sources indexed, findings submitted, MITRE mappings present, audit tools invoked). Failed gates trigger bounded phase retries; single-agent retries include gap-specific remediation instructions. A case where nothing happened passes a second way: every question the planners asked is resolved against findings, and the report states that no evidence of an incident was found in the evidence examined. See [Architecture](https://github.com/calebevans/mulder/blob/main/docs/architecture.md) for the full pipeline design.
 
 ## Key Design Decisions
 
