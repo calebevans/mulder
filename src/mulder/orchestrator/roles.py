@@ -20,7 +20,7 @@ from mulder.orchestrator.display import InvestigationDashboard
 from mulder.orchestrator.errors import FATAL_ERRORS
 from mulder.orchestrator.models import ModelConfig
 from mulder.orchestrator.phases import PhaseConfig
-from mulder.orchestrator.session import SessionExecutor
+from mulder.orchestrator.session import _MAX_NUDGES, SessionExecutor
 from mulder.orchestrator.types import (
     AnalystResult,
     ExecutionResults,
@@ -253,13 +253,23 @@ def _sanitize_for_prompt(text: str, max_len: int = 200) -> str:
     return cleaned
 
 
-def _one_line(text: str) -> str:
+def _one_line(text: str, max_len: int = 200) -> str:
     """Return evidence-derived *text* as one sanitised, bounded line.
 
-    Used for the label a role session's progress notes are recorded under
-    and for finding titles quoted into a prompt.
+    Used for finding titles quoted into a prompt.
     """
-    return _sanitize_for_prompt(" ".join(text.split()))
+    return _sanitize_for_prompt(" ".join(text.split()), max_len)
+
+
+def _label(name: str) -> str:
+    """Return the label a role session's progress notes are recorded under.
+
+    One sanitised line, not cut: the session is told to use it exactly and
+    a later session finds the notes by it, so a shortened label would miss
+    a note recorded under the full name. The name is the system or group
+    the task prompt already names in full.
+    """
+    return _one_line(name, len(name))
 
 
 class RoleRunner:
@@ -618,7 +628,7 @@ class RoleRunner:
         if self._wrapup:
             prompt += _ANALYST_TURN_BUDGET.format(
                 max_turns=phase.analyst_max_turns,
-                system=json.dumps(_one_line(task_system or phase.name)),
+                system=json.dumps(_label(task_system or phase.name)),
             )
         started = datetime.now(UTC)
         result = await self._session.execute(
@@ -772,7 +782,7 @@ class RoleRunner:
             Additional turns consumed across all continuations.
         """
         since = started or datetime.now(UTC)
-        system = _one_line(handoff_system or role_label)
+        system = _label(handoff_system or role_label)
         # Only analyst roles have track_progress; a paused session of any
         # role needs it for its checkpoint note.
         resume_tools = (
@@ -782,6 +792,8 @@ class RoleRunner:
         )
         compaction_count = 0
         additional_turns = 0
+        # One allowance for the role session, not one for each continuation.
+        nudges = _MAX_NUDGES - result.nudges_used
         while result.context_exhausted:
             paused = self._wrapup and result.turns_exhausted
             if compaction_count >= self._max_compactions:
@@ -818,6 +830,7 @@ class RoleRunner:
                     role_label,
                     log_prefix,
                     task_system=task_system,
+                    nudges=nudges,
                 )
             if continuation is None:
                 why = (
@@ -835,7 +848,9 @@ class RoleRunner:
                     max_turns=max_turns,
                     log_prefix=log_prefix,
                     task_system=task_system,
+                    nudges=nudges,
                 )
+            nudges -= continuation.nudges_used
             additional_turns += continuation.turns_used
             result.messages.extend(continuation.messages)
             result.tool_names.extend(continuation.tool_names)
@@ -1075,11 +1090,13 @@ class RoleRunner:
                 1,
                 "Planner",
                 log_prefix,
+                nudges=_MAX_NUDGES - result.nudges_used,
             )
             if resumed is not None:
                 result.messages.extend(resumed.messages)
                 result.tool_names.extend(resumed.tool_names)
                 result.turns_used += resumed.turns_used
+                result.nudges_used += resumed.nudges_used
                 plan = extract_json_plan(resumed.messages)
                 if plan is not None:
                     return plan
@@ -1094,6 +1111,7 @@ class RoleRunner:
             disallowed_tools=tools_off,
             max_turns=1,
             log_prefix=log_prefix,
+            nudges=_MAX_NUDGES - result.nudges_used,
         )
         result.messages.extend(follow_up.messages)
         result.tool_names.extend(follow_up.tool_names)

@@ -130,6 +130,8 @@ class PhaseResult:
             a context overflow. Implies ``context_exhausted``.
         batch_ids: Batch IDs captured structurally from start_extraction_batch
             tool result blocks during the session.
+        nudges_used: Times the session was resumed after ending on a turn
+            with no text and no tool call.
     """
 
     phase_name: str
@@ -144,6 +146,7 @@ class PhaseResult:
     context_exhausted: bool = False
     turns_exhausted: bool = False
     batch_ids: set[str] = field(default_factory=set)
+    nudges_used: int = 0
 
 
 @dataclass

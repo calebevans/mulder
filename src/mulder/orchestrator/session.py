@@ -236,10 +236,11 @@ def _is_turns_exhausted(message: object) -> bool:
     return getattr(message, "subtype", None) == _MAX_TURNS_SUBTYPE
 
 
-#: Times one ``execute`` call resumes its session after it ended on a turn
+#: Times a role session is resumed after a session of it ended on a turn
 #: with no text and no tool call (the answer stayed in the reasoning, #199).
 #: Once: Claude Code 2.1.327 already re-asks once inside the session before
-#: it ends.
+#: it ends. Callers that continue a role session pass on what is left
+#: (``PhaseResult.nudges_used``).
 _MAX_NUDGES: int = 1
 
 _NUDGE_PROMPT: str = (
@@ -522,6 +523,9 @@ class SessionExecutor:
         #: had none. A partial report quotes it next to a failed gate, which
         #: otherwise names only the symptom (``orchestrator/fallback.py``).
         self.last_query_error = ""
+        #: ``model_usage`` last reported for each session id: a resumed query
+        #: reports the session's running total (``_new_model_usage``).
+        self._model_usage_seen: dict[str, dict[str, Any]] = {}
 
     def _stderr_callback(self, label: str) -> Callable[[str], None]:
         """Keep diagnostics scoped to their query and inside the live dashboard."""
@@ -671,7 +675,8 @@ class SessionExecutor:
                 result, or an error before the resumed session called any
                 tool) returns a result with no ``session_id``.
             nudges: Times this session may still be resumed after ending
-                on a turn with no text and no tool call.
+                on a turn with no text and no tool call. How many it used
+                is in the result's ``nudges_used``.
 
         Returns:
             PhaseResult with collected messages and usage information.
@@ -775,8 +780,7 @@ class SessionExecutor:
                         # A resumed session that ends on an error before its
                         # first tool call never got going (the provider
                         # rejected the request, or the conversation no longer
-                        # fits). The CLI then reports the usage of the session
-                        # it loaded, which was counted when that session ran.
+                        # fits).
                         resume_failed = (
                             bool(resume)
                             and not tool_count
@@ -800,7 +804,7 @@ class SessionExecutor:
                             phase_out_tokens,
                             thinking=(thinking_blocks, thinking_chars),
                             last_silent=last_silent,
-                            count_usage=not resume_failed,
+                            resume=resume,
                         )
                         if _is_payment_required(message):
                             raise OutOfCreditError(message.result or "HTTP 402 Payment Required")
@@ -921,6 +925,7 @@ class SessionExecutor:
                 resume=session_id,
                 nudges=nudges - 1,
             )
+            result.nudges_used = 1 + follow.nudges_used
             if follow.session_id:
                 result.messages.extend(follow.messages)
                 result.tool_names.extend(follow.tool_names)
@@ -1097,7 +1102,9 @@ class SessionExecutor:
         )
 
     @staticmethod
-    def _extract_tokens(message: Any) -> tuple[int, int]:
+    def _extract_tokens(
+        message: Any, model_usage: dict[str, Any] | None = None
+    ) -> tuple[int, int]:
         """Extract (input_tokens, output_tokens) from a ResultMessage.
 
         Checks ``message.usage`` first, then falls back to ``model_usage``
@@ -1105,6 +1112,8 @@ class SessionExecutor:
 
         Args:
             message: A ResultMessage (or any object with usage/model_usage).
+            model_usage: Per-model usage to fall back on in place of the
+                message's own (see ``_new_model_usage``).
 
         Returns:
             Tuple of (input_tokens, output_tokens).
@@ -1113,7 +1122,7 @@ class SessionExecutor:
         tok_in: int = usage.get("input_tokens", 0) or 0
         tok_out: int = usage.get("output_tokens", 0) or 0
         if not tok_in and not tok_out:
-            mu = getattr(message, "model_usage", None)
+            mu = getattr(message, "model_usage", None) if model_usage is None else model_usage
             if mu and isinstance(mu, dict):
                 for _mname, mvals in mu.items():
                     if isinstance(mvals, dict):
@@ -1152,6 +1161,39 @@ class SessionExecutor:
             except (json.JSONDecodeError, TypeError):
                 pass
 
+    def _new_model_usage(self, message: ResultMessage, resume: str) -> dict[str, Any]:
+        """Return the per-model usage *message* adds to what was already counted.
+
+        ``ResultMessage.usage`` is the query's own, but on a resumed query
+        ``model_usage`` is the session's running total (Claude Code
+        2.1.327), so what the session's earlier queries reported is taken
+        off. A resume that never reached the model then adds nothing.
+
+        Args:
+            message: The result message from the SDK.
+            resume: Session id the query resumed; empty for a new session.
+
+        Returns:
+            ``model_usage`` with its token counts reduced to this query's.
+        """
+        reported = getattr(message, "model_usage", None)
+        if not reported or not isinstance(reported, dict):
+            return {}
+        seen = self._model_usage_seen.get(resume, {}) if resume else {}
+        if session_id := getattr(message, "session_id", "") or resume:
+            self._model_usage_seen[session_id] = reported
+        new: dict[str, Any] = {}
+        for name, counts in reported.items():
+            before = seen.get(name)
+            if not isinstance(counts, dict) or not isinstance(before, dict):
+                new[name] = counts
+                continue
+            new[name] = {
+                key: max(0, (counts.get(key) or 0) - (before.get(key) or 0))
+                for key in ("inputTokens", "outputTokens")
+            }
+        return new
+
     def _process_result_message(
         self,
         message: ResultMessage,
@@ -1162,7 +1204,7 @@ class SessionExecutor:
         phase_out_tokens: int,
         thinking: tuple[int, int] = (0, 0),
         last_silent: bool = False,
-        count_usage: bool = True,
+        resume: str = "",
     ) -> tuple[int, str, bool, int, int]:
         """Process a ResultMessage and reconcile token counts.
 
@@ -1175,8 +1217,7 @@ class SessionExecutor:
             phase_out_tokens: Running output token count.
             thinking: (block count, total chars) of thinking seen this query.
             last_silent: The final assistant turn had no text and no tool use.
-            count_usage: False for a resume that failed, whose reported
-                usage is that of the session it loaded.
+            resume: Session id the query resumed; empty for a new session.
 
         Returns:
             Tuple of (turns_used, session_id, got_result,
@@ -1185,9 +1226,8 @@ class SessionExecutor:
         turns_used = getattr(message, "num_turns", 0) or 0
         session_id: str = getattr(message, "session_id", "") or ""
 
-        result_in, result_out = (
-            self._extract_tokens(message) if count_usage else (phase_in_tokens, phase_out_tokens)
-        )
+        model_usage = self._new_model_usage(message, resume)
+        result_in, result_out = self._extract_tokens(message, model_usage)
 
         correction_in = result_in - phase_in_tokens
         correction_out = result_out - phase_out_tokens
@@ -1202,8 +1242,7 @@ class SessionExecutor:
             phase_in_tokens = result_in
             phase_out_tokens = result_out
 
-        model_usage = getattr(message, "model_usage", None)
-        if count_usage and model_usage and isinstance(model_usage, dict):
+        if model_usage:
             self._dashboard.add_model_usage(model_usage)
 
         total_phase_tokens = phase_in_tokens + phase_out_tokens

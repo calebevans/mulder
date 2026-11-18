@@ -13,6 +13,8 @@ an instruction to act or answer. ``--no-wrapup`` turns all of it off.
 
 from __future__ import annotations
 
+import dataclasses
+import json
 import logging
 from collections.abc import AsyncIterator, Callable, Iterator
 from datetime import UTC, datetime, timedelta
@@ -38,6 +40,7 @@ import mulder.server.tools.review  # noqa: F401 ensure track_progress is registe
 from mulder.cli import cli
 from mulder.db import CaseDB
 from mulder.models import Finding
+from mulder.orchestrator.display import InvestigationDashboard
 from mulder.orchestrator.errors import OutOfCreditError
 from mulder.orchestrator.evidence import ServerBridge
 from mulder.orchestrator.gates import GateResult
@@ -99,6 +102,37 @@ OVERFLOW = "Prompt is too long"
 ANSWER = [_assistant(TextBlock(text="42"), msg_id="msg_2"), _result(turns=2)]
 
 
+def _usage(tok_in: int, tok_out: int) -> dict[str, int]:
+    return {"input_tokens": tok_in, "output_tokens": tok_out}
+
+
+def _model_usage(tok_in: int, tok_out: int) -> dict[str, dict[str, int]]:
+    return {"m": {"inputTokens": tok_in, "outputTokens": tok_out}}
+
+
+def _tool_turn(n: int) -> AssistantMessage:
+    return _assistant(
+        ToolUseBlock(id=f"t{n}", name="mcp__mulder__search", input={}), msg_id=f"msg_{n}"
+    )
+
+
+def _limit(
+    own_in: int, own_out: int, total_in: int, total_out: int, session_id: str = SESSION
+) -> ResultMessage:
+    """A turn-limit result as Claude Code 2.1.327 reports it.
+
+    ``usage`` is the query's own; ``model_usage`` is the session's running
+    total, which on a resumed query includes the queries before it.
+    """
+    return _result(
+        session_id,
+        subtype="error_max_turns",
+        is_error=True,
+        usage=_usage(own_in, own_out) if own_in or own_out else None,
+        model_usage=_model_usage(total_in, total_out),
+    )
+
+
 class _Query:
     """Fake SDK ``query``: one scripted stream per call (the last repeats)."""
 
@@ -119,9 +153,9 @@ class _Query:
         return messages()
 
 
-def _session(wrapup: bool = True) -> SessionExecutor:
+def _session(wrapup: bool = True, dashboard: Any = None) -> SessionExecutor:
     return SessionExecutor(
-        dashboard=MagicMock(),
+        dashboard=dashboard or MagicMock(),
         model_config=ModelConfig(),
         cwd="/tmp",
         env={},
@@ -133,6 +167,16 @@ def _session(wrapup: bool = True) -> SessionExecutor:
 async def _execute(session: SessionExecutor, fake: _Query, **kwargs: Any) -> PhaseResult:
     with patch("mulder.orchestrator.session.query", fake):
         return await session.execute("sys", "go", "m", ["mcp__mulder__search"], [], 60, **kwargs)
+
+
+def _reported(session: SessionExecutor) -> tuple[int, int, dict[str, dict[str, int]]]:
+    """What a real dashboard holds: the running totals and the per-model ones.
+
+    The per-model totals are what the summary, ``model_usage.json`` and the
+    report show whenever they exist.
+    """
+    dashboard = session._dashboard
+    return dashboard.input_tokens, dashboard.output_tokens, dashboard.model_tokens
 
 
 class TestResume:
@@ -180,18 +224,18 @@ class TestResume:
     async def test_a_resume_that_never_got_going_is_not_counted_and_reports_no_session(
         self, text: str
     ) -> None:
-        """The CLI answers a rejected resume with the loaded session's usage."""
+        """The CLI answers a rejected resume with the loaded session's model usage."""
         rejected = [
             _assistant(TextBlock(text=text)),
-            _result(is_error=True, usage=USAGE, model_usage={"m": {"inputTokens": 500}}),
+            _result(is_error=True, usage=_usage(0, 0), model_usage=_model_usage(300, 30)),
         ]
-        session = _session()
-        result = await _execute(session, _Query(rejected), resume=SESSION)
+        session = _session(dashboard=InvestigationDashboard())
+        fake = _Query([_tool_turn(1), _limit(300, 30, 300, 30)], rejected)
+        first = await _execute(session, fake)
+        result = await _execute(session, fake, resume=first.session_id)
 
         assert result.session_id == ""
-        dashboard: Any = session._dashboard
-        dashboard.add_tokens.assert_not_called()
-        dashboard.add_model_usage.assert_not_called()
+        assert _reported(session) == (300, 30, {"m": {"input": 300, "output": 30}})
 
     @pytest.mark.asyncio()
     async def test_a_resumed_session_that_worked_before_it_failed_is_kept(self) -> None:
@@ -230,6 +274,71 @@ class TestResume:
         dashboard.add_tokens.assert_called_once_with(500, 50)
 
 
+class TestUsageOfAResumedSession:
+    """A resumed query's ``model_usage`` is its session's running total."""
+
+    @pytest.mark.asyncio()
+    async def test_each_resume_adds_only_its_own_share_to_the_model_totals(self) -> None:
+        session = _session(dashboard=InvestigationDashboard())
+        fake = _Query(
+            [_tool_turn(1), _limit(300, 30, 300, 30)],
+            [_tool_turn(2), _limit(300, 30, 600, 60)],
+            [_tool_turn(3), _limit(300, 30, 900, 90)],
+        )
+        result = await _execute(session, fake)
+        for _ in range(2):
+            result = await _execute(session, fake, resume=result.session_id)
+
+        assert _reported(session) == (900, 90, {"m": {"input": 900, "output": 90}})
+        dashboard: Any = session._dashboard
+        assert dashboard._effective_total_tokens() == 990  # what was sent, once
+
+    @pytest.mark.asyncio()
+    async def test_without_usage_the_fallback_is_the_share_too(self) -> None:
+        """``usage`` can be empty; ``model_usage`` is then all there is."""
+        session = _session(dashboard=InvestigationDashboard())
+        fake = _Query(
+            [_tool_turn(1), _limit(0, 0, 300, 30)], [_tool_turn(2), _limit(0, 0, 600, 60)]
+        )
+        first = await _execute(session, fake)
+        await _execute(session, fake, resume=first.session_id)
+
+        assert _reported(session) == (600, 60, {"m": {"input": 600, "output": 60}})
+
+    @pytest.mark.asyncio()
+    async def test_the_running_total_is_kept_for_each_session(self) -> None:
+        """Analysts for different systems are paused and resumed side by side."""
+        session = _session(dashboard=InvestigationDashboard())
+        fake = _Query(
+            [_tool_turn(1), _limit(300, 30, 300, 30, "a")],
+            [_tool_turn(2), _limit(200, 20, 200, 20, "b")],
+            [_tool_turn(3), _limit(100, 10, 400, 40, "a")],
+            [_tool_turn(4), _limit(50, 5, 250, 25, "b")],
+        )
+        await _execute(session, fake)
+        await _execute(session, fake)
+        await _execute(session, fake, resume="a")
+        await _execute(session, fake, resume="b")
+
+        assert _reported(session) == (650, 65, {"m": {"input": 650, "output": 65}})
+
+    @pytest.mark.asyncio()
+    async def test_a_resumed_session_never_seen_before_is_counted_in_full(self) -> None:
+        """Nothing of it was counted, so there is nothing to take off."""
+        session = _session(dashboard=InvestigationDashboard())
+        await _execute(session, _Query([_tool_turn(1), _limit(300, 30, 600, 60)]), resume=SESSION)
+        assert _reported(session)[2] == {"m": {"input": 600, "output": 60}}
+
+    @pytest.mark.asyncio()
+    async def test_the_nudge_is_a_resume_like_any_other(self) -> None:
+        session = _session(dashboard=InvestigationDashboard())
+        silent = [SILENT[0], _result(usage=_usage(100, 10), model_usage=_model_usage(100, 10))]
+        answer = [ANSWER[0], _result(usage=_usage(120, 5), model_usage=_model_usage(220, 15))]
+        await _execute(session, _Query(silent, answer))
+
+        assert _reported(session) == (220, 15, {"m": {"input": 220, "output": 15}})
+
+
 class TestNudge:
     @pytest.mark.asyncio()
     async def test_a_silent_ending_is_resumed_with_an_instruction_to_act_or_answer(self) -> None:
@@ -250,12 +359,19 @@ class TestNudge:
         assert result.messages == ["42"]
         assert result.turns_used == 3
         assert not result.context_exhausted
+        assert result.nudges_used == 1
 
     @pytest.mark.asyncio()
     async def test_nudges_are_bounded(self) -> None:
         fake = _Query(SILENT)
-        await _execute(_session(), fake)
+        result = await _execute(_session(), fake)
         assert len(fake.calls) == 1 + _MAX_NUDGES
+        assert result.nudges_used == _MAX_NUDGES
+
+    @pytest.mark.asyncio()
+    async def test_a_session_that_answered_used_none(self) -> None:
+        result = await _execute(_session(), _Query(ANSWER))
+        assert result.nudges_used == 0
 
     @pytest.mark.asyncio()
     async def test_a_caller_can_ask_for_none(self) -> None:
@@ -477,7 +593,7 @@ class TestResumeAtTheTurnLimit:
         assert resume["allowed_tools"] == EXTRACTION.analyst_allowed_tools
         assert resume["disallowed_tools"] == EXTRACTION.disallowed_tools
         assert resume["system_prompt"] == EXTRACTION.analyst_system_prompt
-        assert "nudges" not in resume  # it is doing the role's work, so the default
+        assert resume["nudges"] == _MAX_NUDGES  # it is doing the role's work
         assert sessions.wrapups == []
         assert out.messages == ["done"]
         assert out.turns_used == 60 + 5
@@ -521,6 +637,24 @@ class TestResumeAtTheTurnLimit:
         assert sessions.calls[-1] is sessions.wrapups[0]
         assert out.findings_submitted == 1  # what the wrap-up saved counts
         assert out.turns_used == 60 * 3 + 2
+
+    @pytest.mark.asyncio()
+    async def test_a_role_session_has_one_nudge_allowance_for_all_its_continuations(
+        self, db_dir: Path
+    ) -> None:
+        nudged = dataclasses.replace(_exhausted("b"), nudges_used=_MAX_NUDGES)
+        sessions = _Sessions(db_dir, _exhausted("a"), nudged, _overflowed(), _exhausted("d"))
+        await _analyst(_orchestrator(db_dir), sessions)
+
+        # A resume, a resume, a new session, then the wrap-up, which never has one.
+        assert [c["nudges"] for c in sessions.calls[1:]] == [_MAX_NUDGES, 0, 0, 0]
+
+    @pytest.mark.asyncio()
+    async def test_a_first_session_that_used_the_nudge_leaves_none(self, db_dir: Path) -> None:
+        nudged = dataclasses.replace(_exhausted(), nudges_used=_MAX_NUDGES)
+        sessions = _Sessions(db_dir, nudged, _done())
+        await _analyst(_orchestrator(db_dir), sessions)
+        assert sessions.resumes[0]["nudges"] == 0
 
     @pytest.mark.asyncio()
     async def test_an_executor_is_resumed_with_its_tools_and_track_progress(
@@ -754,6 +888,23 @@ class TestNewSessionFallback:
         assert 'exactly "host-a, host-b"' in sessions.resumes[0]["prompt"]
         assert f"> {NOTE}" in sessions.fresh[1]["prompt"]
 
+    @pytest.mark.asyncio()
+    async def test_a_long_group_label_is_not_cut_so_its_note_is_found(self, db_dir: Path) -> None:
+        """Four fully qualified names are more than the 200 characters a title gets."""
+        group = ", ".join(f"host-{n}.{'branch-office' * 4}.corp.example" for n in "abcd")
+        assert len(group) > 200
+        sessions = _Sessions(db_dir, _exhausted(), _overflowed(), _exhausted(), system=group)
+        await _analyst(_orchestrator(db_dir, max_compactions=2), sessions, system=group)
+
+        for prompt in (
+            sessions.fresh[0]["prompt"].split("TURN BUDGET")[1],
+            sessions.resumes[0]["prompt"],
+            sessions.wrapups[0]["prompt"],
+        ):
+            assert f"exactly {json.dumps(group)}" in prompt
+        # Recorded under the name it was given, and found under it.
+        assert f"> {NOTE}" in sessions.fresh[1]["prompt"]
+
     def test_the_label_ignores_case_and_spacing_and_empty_notes_are_dropped(
         self, db_dir: Path
     ) -> None:
@@ -935,6 +1086,14 @@ class TestPlanner:
 
         assert plan is not None and len(self.calls) == 3
         assert "Let me read one more source." in self.calls[2]["prompt"]
+
+    @pytest.mark.asyncio()
+    async def test_its_nudge_allowance_is_for_the_whole_role_session(self, db_dir: Path) -> None:
+        nudged = dataclasses.replace(self._plan_result("Thinking."), nudges_used=_MAX_NUDGES)
+        await self._plan(_orchestrator(db_dir), _exhausted(), nudged, self._plan_result(self.GOOD))
+
+        first, resume, from_notes = self.calls
+        assert (resume["nudges"], from_notes["nudges"]) == (_MAX_NUDGES, 0)
 
     @pytest.mark.asyncio()
     @pytest.mark.parametrize("wrapup", [True, False], ids=["overflow", "switched off"])
