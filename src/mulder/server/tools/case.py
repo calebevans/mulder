@@ -27,6 +27,7 @@ from pathlib import Path
 from mulder.dirroot import detect_collection
 from mulder.extractors.classifier import ClassifiedEvidence
 from mulder.extractors.optical import probe_optical
+from mulder.linuxvol import probe
 from mulder.path_policy import PathPolicyError, resolve_allowed_path
 from mulder.patterns import EXTRACTION_MARKER, case_extract_dir
 from mulder.server.app import (
@@ -264,6 +265,13 @@ def _manifest_entry(item: ClassifiedEvidence) -> dict[str, object]:
         if media is not None:
             entry["media"] = f"optical ({media})"
             entry["note"] = "CD/DVD image: use run_optical_listing, not run_fls/run_mmls"
+        elif volumes := probe(str(item.path)):
+            entry["media"] = "; ".join(map(str, volumes))
+            entry["note"] = (
+                "Sleuth Kit cannot read this volume: export_linux_files, not run_fls"
+                if any(v.readable for v in volumes)
+                else "No tool here reads this volume"
+            )
     if item.artifact_type == "triage_collection":
         collection = detect_collection(item.path)
         if collection is not None:

@@ -440,6 +440,7 @@ The `EvidenceClassifier` scans evidence directories and categorizes files by typ
 | Linux logs | `/var/log/*`, journal files | Zircolite, native parsing |
 | Archive | `.zip`, `.7z`, `.tar`, `.gz` | Internal extraction |
 | Triage collection | A directory laid out as KAPE target output, a Velociraptor offline collection or UAC output, or a Windows volume directory | The disk artifact tools on the directory, `index_triage_collection` |
+| Linux file tree (a triage collection) | A directory that holds `etc/passwd` | `run_linux_persistence`, `run_plaso` with `linux_logs`, `index_app_files` |
 
 `.raw` and `.001` are written by disk imagers and memory acquisition tools
 alike, so their first bytes decide: a partition table, filesystem, BitLocker
@@ -486,6 +487,17 @@ The pairs are what make this general. For a plain directory the two paths are th
 Evidence is hostile, so the walk never follows a symlink (a root that is one is refused), lists only regular files, is capped at 200,000 entries (breadth-first across the volumes, so a cut listing keeps the top of each), and prints control characters in names as `^` so that a file name cannot forge a listing row. A decoded name is a label only: the file that is opened is the one the walk found, with `O_NOFOLLOW`.
 
 A triage collection has no unallocated space and no deleted files. `mount_disk_image` refuses a directory, `run_mactime` works only on the body file a UAC collection carries, and `triage.summary` records which artifact kinds were and were not collected so that absence is reported as "not collected".
+
+### Linux Volumes Sleuth Kit Cannot Read
+
+Sleuth Kit 4.11 has no LVM and no XFS support, so on the usual Linux server image `fls` fails or lists only `/boot`. dfVFS reads both, and plaso's command-line tools are built on it. Mulder drives those tools and never imports plaso: on SIFT it lives in its own virtualenv.
+
+- `linuxvol.probe(image)` reads the first sectors at offset 0 and at every `mmls` row through `img_cat` (which opens EWF and raw alike) and recognises an LVM2 label, XFS, LUKS and btrfs. For LVM it reads the metadata text for the volume group's name and its number of physical volumes. The classifier's manifest, the planner context and `run_fls`'s error all use it, so an image is routed by what it holds and not by whether `fls` happened to fail.
+- `export_linux_files` runs `log2timeline --parsers filestat --hashers none`, which stats every file and reads none, then `psort -o json_line`: the one output that keeps names exact and carries the path specification saying which volume a file is on (`/p5` then `/lvm1`). A directory or link carries none and takes the volume of the nearest directory whose files are all on one volume. The result is `linux.filelist`. It is not a `tsk.filelist`, because the image tools hand every `tsk.filelist` inode to `icat`.
+- The files to export are chosen from that listing, so sizes are known before anything is written and exclusions are exact. `image_export` merges the volumes it is given into one tree and skips the second file of a path, so it runs once per volume with a filter file of exact paths, into `<export>/<volume>/`. The copies get their names and modification times back afterwards, since `image_export` stores some characters as `_`.
+- The export is a [directory root](#directories-as-evidence-roots) of layout `export`, recognised by `.mulder-linux-export.json`: one volume per top-level directory, the one that holds `etc/passwd` first and unprefixed. Its path is `export_dir(extraction directory, image)`, a function of the image's resolved path, so the planner context names it in the plan that creates it. The classifier does not report it as evidence, and the planner context does not scan it for archives or dumps.
+
+A directory with `etc/passwd` is layout `linux`, one triage collection. `Collection.linux` is what the planner context checks before naming the Linux tools for a collection.
 
 ### Registry Hive Parsing
 

@@ -139,6 +139,7 @@ Mulder integrates 35+ open-source forensic tools exposed as 140+ typed MCP opera
 | Disk | Sleuthkit, Plaso, foremost, PhotoRec, Scalpel |
 | Windows artifacts | EZ Tools (Prefetch, Amcache, ShimCache, MFT, USN Journal, Jump Lists, Shellbags, SRUM), RegRipper, Hayabusa (3,700+ Sigma rules), Chainsaw |
 | Triage collections | KAPE target output, Velociraptor offline collections and UAC output, read in place by the disk and Windows artifact tools |
+| Linux | LVM and XFS volumes read through dfVFS (Plaso's command-line tools), systemd journal, wtmp/btmp, syslog and shell history, persistence locations |
 | Event logs | python-evtx, Zircolite |
 | Network | tshark, Zeek, Suricata, tcpflow, tcpxtract, nfdump (NetFlow) |
 | Malware | YARA, CAPA, FLOSS, ClamAV, radare2, Detect-It-Easy&nbsp;\* |

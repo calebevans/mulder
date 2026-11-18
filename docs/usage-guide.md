@@ -36,6 +36,7 @@ Try-it-out instructions for running Mulder, the forensic investigation platform.
   - [Artifact Awareness](#artifact-awareness)
   - [Cloud Audit Logs](#cloud-audit-logs)
   - [Triage Collections](#triage-collections)
+  - [Linux Disk Images and File Trees](#linux-disk-images-and-file-trees)
   - [CLI Reference](#cli-reference)
     - [`mulder investigate`](#mulder-investigate)
     - [`mulder setup`](#mulder-setup)
@@ -681,6 +682,45 @@ Each collection is one system, named after the host the collection states (KAPE'
 - **The host name is the collector's own record** of it.
 
 A KAPE `.vhd` or `.vhdx` container is read as a disk image (Sleuth Kit opens both). Paths inside it start with the drive letter, and the container's own file system describes the copies, not the original system. CyLR output is not recognised by name; a tree that holds `C/Windows/System32/config` is treated as a Windows volume directory.
+
+## Linux Disk Images and File Trees
+
+The usual Linux server disk is LVM, often with XFS on top, and the Sleuth Kit packaged for Ubuntu 22.04 (4.11) reads neither: `fls` fails, or lists `/boot` and nothing else. Mulder reads such an image through dfVFS instead, by driving plaso's `log2timeline`, `psort` and `image_export`. Nothing needs installing and nothing needs mounting.
+
+When mulder scans the evidence it looks at the first sectors of each partition. An image that holds an LVM physical volume or an XFS file system is labelled with it (`[disk_image, LVM physical volume at sector 501760, volume group vg0]`), and the planner is told to plan:
+
+| Tool | On | What it gives |
+|------|----|---------------|
+| `export_linux_files` | the image | `linux.filelist`, a listing of every file on every volume that could be read, and an export directory under the case directory holding `/etc`, cron and systemd units, `/var/log`, `/root`, each user's dotfiles and `.ssh`, package manager state, web roots and `/tmp`, each within a size limit |
+| `run_plaso` with `parsers="linux_logs"` | the image | who logged in, from where and how: wtmp, btmp, auth.log or secure, the systemd journal, the audit log, apt and dpkg logs |
+| `run_linux_persistence` | the export directory | one row per file in the places Linux starts programs from or grants access through, and the accounts with uid 0 or a login shell |
+| `index_app_files` | the export directory | the text of a directory (`etc/ssh`, `root`, `home`, `var/www`), whatever the files are called |
+
+`run_mmls` and `run_bulk_extractor` run on the image as usual. The export directory holds ordinary files, so `yara_scan_files`, `run_clamav`, `read_evidence_file` and `triage_binary` can be pointed at it.
+
+What to keep in mind when reading the report:
+
+- **The listing is not the export.** `linux.filelist` shows that a file exists, with its owner, size and three timestamps, whether or not it was exported. To read a listed file that was not exported, the analyst asks for it and `export_linux_files` is run again with `paths`.
+- **Password hashes and private keys are never exported**: `/etc/shadow`, `/etc/gshadow`, SSH host and user private keys, TLS private keys. They are listed, and the report should say "not exported" rather than "absent".
+- **No deleted files.** dfVFS lists allocated files only, and nothing here reads unallocated space except `run_bulk_extractor`.
+- **Volumes are kept apart.** Each volume gets its own directory in the export (`p5_lvm1/`). The one that holds `etc/passwd` is the root; `/home`, `/var` and `/var/log` on a volume of their own are recognised from their top-level names so that their files are exported too, and the result says that this is a guess. Any other separately mounted volume is listed, and its files are exported only when asked for by path.
+- **The persistence sweep is an inventory.** Nearly every row is the distribution's own file. It marks nothing as malicious and does not show that anything ran.
+- **Syslog lines have no year.** plaso takes it from the file's own times; the systemd journal, wtmp and dpkg.log carry full dates.
+
+What cannot be read is said, not skipped: an encrypted (LUKS) volume, btrfs, and a volume group spread over several disks of which the image is one. For those the planner is told to plan `run_mmls` and `run_bulk_extractor` only, and `export_linux_files` names them under `not_read` when it reads the rest of the image.
+
+A Linux image Sleuth Kit can read (ext2/3/4 on a plain partition) is handled as any disk image; `run_linux_persistence`, `index_app_files` and `run_plaso` with `linux_logs` take the image itself.
+
+A directory that holds a Linux file tree is recognised by its `etc/passwd`: an unpacked root file system, the `[root]` of a UAC collection, a Velociraptor collection of a Unix host. It is one evidence item, labelled `Linux file tree` with the name from `etc/hostname`, and the three tools above take the directory.
+
+```
+evidence/
+  web01.E01            LVM: exported to <cases>/extracted/<case>/web01.E01.files-<digest>/
+  db02-rootfs/         a Linux file tree: etc/, var/, home/, ...
+  uac-app03-linux-20261112093000.tar.gz
+```
+
+The listing takes about four minutes for a disk of 85,000 files, and `run_plaso` about as long again.
 
 ## CLI Reference
 

@@ -29,6 +29,7 @@ from mulder.extractors.classifier import (
     is_nfcapd,
 )
 from mulder.extractors.optical import probe_optical
+from mulder.linuxvol import EXPORT_MARKER, export_dir, probe
 from mulder.orchestrator.types import PhaseResult, extract_catalog_result
 from mulder.patterns import (
     DISK_IMAGE_EXTS,
@@ -159,6 +160,12 @@ class EvidenceContext:
         collections = self._collections(classified)
         claimed = self._claimed(sys_lower, collections)
         inside = tuple(f"{c.root}{os.sep}" for c in collections)
+        # So is a file export_linux_files copied out of a disk image: its
+        # rotated logs are not archives to unpack.
+        if extracted_dir.is_dir():
+            inside += tuple(
+                f"{d}{os.sep}" for d in extracted_dir.iterdir() if (d / EXPORT_MARKER).is_file()
+            )
 
         def collected(f: Path) -> bool:
             path = str(f)
@@ -299,6 +306,7 @@ class EvidenceContext:
                     )
                 else:
                     lines.append(f"  {p}")
+                    lines.extend(self._linux_volume_lines(p))
         if memory_dumps:
             lines.append("Extracted memory dumps (ready for Volatility):")
             for p in sorted(memory_dumps):
@@ -350,6 +358,40 @@ class EvidenceContext:
 
         lines.extend(collection)
         return "\n".join(lines)
+
+    def _linux_volume_lines(self, image: str) -> list[str]:
+        """What to plan for a disk image whose volumes Sleuth Kit cannot read.
+
+        LVM and XFS are read through dfVFS instead: the files are exported to
+        a directory whose path is fixed by the image's, so the plan that
+        creates it can already name it.
+        """
+        volumes = probe(image)
+        if not volumes or _unprintable(image):  # the export's path repeats the image's name
+            return []
+        lines = [
+            f"    Sleuth Kit cannot read this image: it holds {'; '.join(map(str, volumes))}."
+        ]
+        if not any(v.readable for v in volumes):
+            return [
+                *lines,
+                "    No tool here reads it (an encrypted volume needs its key, a volume group "
+                "on several disks needs every disk, btrfs is not supported). Plan run_mmls and "
+                "run_bulk_extractor only; its files are not examined.",
+            ]
+        export = export_dir(self.extracted_dir, image)
+        done = "are" if (export / EXPORT_MARKER).is_file() else "will be"
+        return [
+            *lines,
+            "    Plan export_linux_files(image_path=<this image>) and "
+            'run_plaso(evidence_path=<this image>, parsers="linux_logs"), group "foundation", '
+            "with run_mmls and run_bulk_extractor. Do NOT plan run_fls, run_mactime, "
+            "run_fsstat, detect_masquerading or the Windows artifact parsers on it.",
+            f"    Its files {done} exported to {export}",
+            "    Plan run_linux_persistence(image_path=<that directory>) and "
+            "index_app_files(image_path=<that directory>, directory_pattern=<a directory "
+            'such as etc/ssh, root, home or var/www>), group "dependent".',
+        ]
 
     @staticmethod
     def _collection_lines() -> list[str]:
@@ -514,6 +556,13 @@ class EvidenceContext:
             lines.append(
                 "  UAC: plan run_mactime(image_path=<directory>) for a timeline from the body "
                 "file the collector wrote."
+            )
+        if any(c.linux for c in mine):
+            lines.append(
+                "  Linux files: plan run_linux_persistence(image_path=<directory>), "
+                'run_plaso(evidence_path=<directory>, parsers="linux_logs") and '
+                "index_app_files(image_path=<directory>, directory_pattern=<a directory such "
+                "as etc/ssh, root, home or var/www>)."
             )
         lines.append(
             "  Do not plan run_mmls, run_bulk_extractor, carving tools or detect_masquerading "

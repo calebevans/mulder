@@ -138,7 +138,7 @@ List partitions in a disk image using TSK mmls.
 
 ### run_fls
 
-List all files and directories (including deleted) from a disk image. Automatically analyzes all NTFS partitions above 100 MB when multiple partitions are present, indexing each as a separate source. The largest NTFS partition is selected as primary when `partition_offset` is omitted. Given a [triage collection](#index_triage_collection) directory instead, lists the collected files: no deleted entries, and the inode column is the row number.
+List all files and directories (including deleted) from a disk image. Automatically analyzes all NTFS partitions above 100 MB when multiple partitions are present, indexing each as a separate source. The largest NTFS partition is selected as primary when `partition_offset` is omitted. Given a [triage collection](#index_triage_collection) directory instead, lists the collected files: no deleted entries, and the inode column is the row number. On an image whose volume Sleuth Kit cannot read (LVM, XFS, LUKS, btrfs) it fails with `unsupported_volume` and names [`export_linux_files`](#export_linux_files).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -237,10 +237,27 @@ Run log2timeline (Plaso) against an evidence file to build a super-timeline.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | evidence_path | str | yes | Path to a disk image or directory |
-| parsers | str \| None | no | Comma-separated Plaso parsers (e.g. "winevtx,prefetch,pe") |
+| parsers | str \| None | no | Comma-separated Plaso parsers (e.g. "winevtx,prefetch,pe"), or the preset `linux_logs` |
 | time_range | str \| None | no | Date filter passed to psort |
 
 **Returns:** `source_name` (plaso.timeline), `windows_indexed`
+
+`parsers="linux_logs"` is a name mulder expands to the Linux login and system-log
+parsers: `systemd_journal` (compact format and LZ4/ZSTD/XZ included), `utmp`
+(wtmp, btmp, utmp), `text/syslog` and `text/syslog_traditional` (auth.log, secure,
+messages), `text/bash_history` and `text/zsh_extended_history`, `text/selinux`
+(audit.log), `text/apt_history`, `text/dpkg` and `jsonl/docker_container_log`.
+Give it a Linux disk image (plaso reads LVM and XFS) or a directory holding a
+Linux file tree. The parsers recognise files by content, so no path filter is
+applied. Parsers the installed plaso does not have are dropped, the run is
+repeated once, and the result names them under `parsers_not_in_this_plaso`.
+Shell history without timestamps yields no events; read it with
+`index_app_files`. Syslog lines carry no year: plaso takes it from the file's
+own times. On an image those are the original times; on exported or collected
+copies only the modification time is, so a log that spans several years is
+dated by its last one. Run the preset on the image when there is one. Over a
+whole image the `utmp` parser also fires on a few binary files and writes
+events with impossible dates; the file each event came from is in its row.
 
 **Roles:** `EXTRACT_EXECUTOR`
 
@@ -446,6 +463,114 @@ and `$Secure_$SDS` are listed as the streams they hold (`$Extend/$UsnJrnl:$J`,
 ...); a Velociraptor drive collected through two accessors
 (`uploads/ntfs/%5C%5C.%5CC%3A`, `uploads/auto/C%3A`) is one volume; files of a
 second volume are listed under its label (`D/...`).
+
+**Roles:** `EXTRACT_EXECUTOR`
+
+### export_linux_files
+
+List and export the files of a Linux disk image Sleuth Kit cannot read.
+
+Sleuth Kit 4.11 opens neither LVM nor XFS, so `run_fls` fails on the usual Linux
+server image. This tool reads the image through dfVFS by driving plaso's
+command-line tools (`log2timeline`, `psort`, `image_export`), which open LVM on
+one disk, XFS v4/v5 and ext2/3/4. See the
+[usage guide](usage-guide.md#linux-disk-images-and-file-trees).
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| image_path | str | yes | Path to the disk image |
+| paths | list[str] \| None | no | Files or directories to export as well, spelled as the path column of `linux.filelist` shows them |
+| force | bool | no | List and export again even if this image was already exported |
+
+**Returns:** `export_root`, `volumes[]` (name, file system, files listed and exported, mount point), `not_read[]`, `entries_listed`, `listing_truncated`, `files_exported`, `bytes_exported`, `selected{}` (files per kind), `not_exported{}` (reason to names), `problems[]`, `requested{}` (when `paths` was given), `note`
+
+| Source | Content |
+|--------|---------|
+| `linux.filelist` | every file, directory and link on every volume that could be read: volume, type, mode, uid, gid, size, modified, changed and created times, path. No deleted entries |
+| `tsk.filelist` | the exported files, as `fls` rows of the export directory (a [directory root](#index_triage_collection)); the inode column is the row number |
+
+The export directory is `<cases>/extracted/<case>/<image name>.files-<digest>`,
+with one directory per volume named as dfVFS names it (`p5_lvm1` for the first
+LVM volume of partition 5, `vol` for an image that is one file system). The
+volume that holds `etc/passwd` is listed without a prefix, any other under its
+directory name. Pass `export_root` as `image_path` to `run_linux_persistence`,
+`index_app_files`, `extract_file_by_inode` and `query_sqlite_from_image`; a
+single file is at `export_root/<volume directory>/<path>`.
+
+Exported without being asked for, within 64 MiB per file, 50,000 files, and a
+limit per kind (the most recently modified files are taken first):
+
+| Kind | Limit | Paths on the volume |
+|------|-------|---------------------|
+| config | 1 GiB | `etc/`, `var/spool/{cron,at,anacron}/`, systemd unit, `modules-load.d`, `modprobe.d` and `udev/rules.d` directories under `lib/`, `usr/lib/` and `usr/local/lib/`, package state (`var/lib/dpkg/status*`, `var/lib/apt/extended_states`, `var/lib/rpm/`, `var/lib/dnf/history*`, `var/lib/yum/history/`) |
+| logs | 2 GiB | `var/log/`, `var/lib/docker/containers/*/*.{json,log}` |
+| homes | 512 MiB | `root/`; in each `home/<user>/`: dotfiles at its top, `.ssh/`, `.config/{systemd,autostart}/`, `.local/share/systemd/` |
+| web | 512 MiB | `var/www/`, `srv/www/`, `usr/share/nginx/html/` |
+| tmp | 256 MiB | `tmp/`, `var/tmp/` |
+
+Never exported, by default or through `paths`: `etc/shadow*`, `etc/gshadow*`,
+`etc/master.passwd`, `etc/security/opasswd*`, SSH host private keys, `.ssh/id_*`
+other than `.pub`, `etc/ssl/private/`, `etc/pki/tls/private/` and
+`privkey*.pem`. They are listed in `linux.filelist` and named in
+`not_exported`.
+
+A volume that holds `etc/passwd` is the root volume. For any other, three
+mount points are guessed from its top-level names (`/var`, `/var/log`, `/home`;
+`/boot` is recognised so that it is not read as a root) and the guess decides
+which of the paths above apply to it; the result states the guess as one. The
+files are never moved: they stay under their volume's directory.
+image_export stores some characters of a name as `_` and stamps each copy with
+the time of the copy; the tool gives each exported file its name and its
+modification time back.
+
+`not_read` names what the image holds that was not listed: an encrypted (LUKS)
+volume, btrfs, a volume group whose metadata names more than one physical
+volume, or a volume group in which dfVFS found no file system. When nothing
+could be read the call is an error that says why. Bounds: 1,000,000 listed
+entries (`listing_truncated`), 200 `paths` per call. The listing takes about
+four minutes for 85,000 entries; a later call with `paths` reuses it.
+
+**Roles:** `EXTRACT_EXECUTOR`
+
+### run_linux_persistence
+
+List what a Linux system starts on its own and who it lets in, one row per file.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| image_path | str | yes | A directory holding a Linux file tree (the `export_root` of `export_linux_files`, a UAC or Velociraptor collection), or a Linux disk image `run_fls` has listed |
+| force | bool | no | Run again even if this path was already swept |
+
+**Returns:** `source` (linux.persistence), `rows`, `by_kind{}`, `most_recently_modified[]`, `files_not_readable`, `truncated`, `note`
+
+Each row of `linux.persistence` is kind, path, `modified=`, `size=` and the
+file's first lines without comments (300 characters; long keys and blobs
+shortened):
+
+| Kind | Files |
+|------|-------|
+| cron | `etc/crontab`, `etc/anacrontab`, `etc/cron.*/`, `var/spool/{cron,at,anacron}/` |
+| systemd | units, timers, sockets and paths under `etc/`, `lib/`, `usr/lib/` and `usr/local/lib/systemd/{system,user}/`, and per-user units |
+| init | `etc/rc.local`, `etc/init.d/`, `etc/init/*.conf`, `etc/inittab`, inetd and xinetd configuration |
+| ld_preload | `etc/ld.so.preload`, `etc/ld.so.conf`, `etc/ld.so.conf.d/` |
+| ssh | every `.ssh/authorized_keys`, `.ssh/rc`, `.ssh/config`, the sshd configuration |
+| shell_profile | `etc/profile`, `etc/profile.d/`, `etc/bash.bashrc`, `etc/environment`, and each user's shell start-up files |
+| sudoers | `etc/sudoers`, `etc/sudoers.d/` |
+| kernel_modules | `etc/modules`, `modules-load.d/` and `modprobe.d/` |
+| pam | `etc/pam.d/` |
+| udev | `udev/rules.d/` |
+| login_hooks | `etc/update-motd.d/`, XDG autostart, `etc/network/if-*.d/`, NetworkManager dispatcher scripts |
+| account | accounts in `etc/passwd` with uid 0, a login shell, or absent from `etc/passwd-`; members of the root, sudo, wheel, admin, adm, docker and lxd groups |
+
+It is an inventory. A row shows that a file exists and what it holds: not that
+it is malicious, not that a unit is enabled, and not that anything ran; most
+rows are the distribution's own. A place with no row was not found in what was
+examined. Paths are matched from any directory, so a second volume's directory
+or a volume mounted below the root hides nothing. Symbolic links are not listed
+(which units are enabled is in the file listing), deleted entries of a disk
+image are not read, and `modified` is the time on the file as it is stored:
+the original time in an export or an unpacked archive, `unknown` for a disk
+image. Bounds: 4 KiB read per file, 5,000 rows, 200 accounts.
 
 **Roles:** `EXTRACT_EXECUTOR`
 
@@ -1619,11 +1744,13 @@ Index text and config files from application directories on a disk image.
 | case_id | str | yes | Active case identifier |
 | image_path | str | yes | Path to the disk image |
 | directory_pattern | str | yes | Path pattern to match directories (supports wildcards) |
-| extensions | list[str] \| None | no | File extensions to include (defaults to .ini, .cfg, .conf, .txt, .log, .xml, .json, .yaml, .yml, .properties, .csv, .bat, .cmd, .ps1, .reg, .inf, .manifest) |
+| extensions | list[str] \| None | no | File extensions to include (defaults to .ini, .cfg, .conf, .txt, .log, .xml, .json, .yaml, .yml, .properties, .csv, .bat, .cmd, .ps1, .reg, .inf, .manifest). On a Linux file tree (the listing holds `etc/passwd`) the default is every file whatever its name; `["*"]` asks for that anywhere. A file that is binary, compressed or over the size limit is skipped either way |
 | max_file_size_kb | int | no | Skip files larger than this (default 512 KB) |
 | max_files | int | no | Maximum files to extract per call (default 200) |
 
-**Returns:** `files_discovered`, `files_extracted`, `files_indexed`, `source_prefix`, `sample_files[]`
+**Returns:** `files_discovered`, `files_extracted`, `files_indexed`, `files_withheld`, `source_prefix`, `sample_files[]`
+
+When every name is taken, password hash files and private keys (`etc/shadow`, SSH host and user private keys, TLS private keys) are withheld and counted in `files_withheld`: their content is a credential.
 
 **Roles:** `EXTRACT_EXECUTOR`
 
@@ -1631,6 +1758,7 @@ Index text and config files from application directories on a disk image.
 - `Program Files/mIRC` - index all text/config files in a specific app directory
 - `Documents and Settings/*/Application Data/Thunderbird` - index across all user profiles
 - `Program Files/*` - broad sweep of all program directories
+- `etc/ssh`, `root`, `home`, `var/www` - on a Linux tree, every text file there (`crontab`, `sshd_config`, `.bash_history`, `access.log.1`), up to `max_files`
 
 ---
 
