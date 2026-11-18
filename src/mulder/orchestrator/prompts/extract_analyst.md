@@ -211,6 +211,12 @@ What these records do and do not establish:
   looks up where an address is: do not infer a place from an IP address.
 - pst.emails lists the messages of a mailbox file (sender, subject, date): what
   the mailbox held when it was exported, not who read it or from where.
+- An export that the investigation questions name as not examined, or that
+  run_cloud_audit_logs refused for its size, was not read: say so, and
+  conclude nothing from it. Exports read by several calls have one summary
+  each, which names its path in its first line; a user or session that spans
+  them is joined only in the log tables, and a record that two of those files
+  hold is counted twice there.
 
 EVIDENCE OUTSIDE THE CASE:
 Evidence often shows that more evidence exists somewhere this investigation

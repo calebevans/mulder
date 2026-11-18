@@ -263,7 +263,8 @@ def audit_tool_coverage() -> dict[str, object]:
     skipped. Re-classifies the evidence directory and compares applicable
     tools against the audit log. A call counts for an evidence item only
     when one of the tool's evidence-input parameters names that item or a
-    directory holding it; a path that matches no item counts for none.
+    directory holding it; a path that matches no item counts for none, and
+    so does a run_cloud_audit_logs call that returned an error.
     Tools that can pick their input themselves count by name only while
     none of their calls names an input path or a source image.
 
@@ -319,6 +320,10 @@ def audit_tool_coverage() -> dict[str, object]:
     for entry in ctx.audit.tool_call_entries():
         params = entry.get("params")
         tool_name = str(entry.get("tool_name"))
+        # A run_cloud_audit_logs call that failed indexed nothing: a path over the size
+        # one call reads is refused whole. It is no coverage of the files under that path.
+        if tool_name == "run_cloud_audit_logs" and entry.get("status") == "error":
+            continue
         hits = targets[tool_name]
         if not isinstance(params, dict):
             continue

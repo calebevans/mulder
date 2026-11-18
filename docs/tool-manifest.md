@@ -676,10 +676,15 @@ JSON decoder allows cannot be written back as a line: it is counted in
 `files_with_problems` ("events nested too deeply to index") and as not parsed.
 
 One call reads at most 512 MiB of files. Every event of a call is held in memory,
-at about nine times the size of the files, so past that limit the tool reads
-nothing and returns an error that names the largest files: run it once per file
-or subdirectory. A single file over the limit has to be exported again over
-shorter date ranges, or split.
+at eight to nine times the size of the files (a 533 MB export peaked at 4.4 GB),
+so past that limit the tool reads nothing and returns an error that names the
+largest files: run it once per file or subdirectory. A single file over the limit
+has to be exported again over shorter date ranges, or split. An investigation
+does not plan the call that would be refused: the planner's evidence context
+lists a directory over the limit file by file (the 50 largest that fit), and
+lists apart, as not read, a file over the limit and the files beyond those 50.
+`audit_tool_coverage` does not count a call that returned an error, so what was
+not read is reported there as a gap.
 
 **Microsoft 365 and Entra ID.** Three log types, told apart per record:
 
@@ -697,11 +702,13 @@ read only when its header has an `AuditData` column; it may be separated by
 commas, semicolons or tabs (`Export-Csv -UseCulture`). A date that Windows
 PowerShell 5.1 wrote as `\/Date(<milliseconds>)\/` is read as the time it is.
 
-A record that the files hold more than once, with the same `Id` and the same
-content, is kept once: `Search-UnifiedAuditLog` returns records on more than one
-page, and exports overlap. `duplicates_skipped` counts the repeats, and the
-summary's first line says how many there were. A record without an `Id`, or one
-that differs in any value, is never taken for a repeat.
+A record that the files of one call hold more than once, with the same `Id` and
+the same content, is kept once: `Search-UnifiedAuditLog` returns records on more
+than one page, and exports overlap. `duplicates_skipped` counts the repeats, and
+the summary's first line says how many there were. A record without an `Id`, or
+one that differs in any value, is never taken for a repeat. Repeats are found
+within one call only: a record that two files hold is counted twice when the
+files are read by separate calls.
 
 The fields come from wherever the workload puts them: the source IP from
 `ClientIP`, `ClientIPAddress` or `ActorIpAddress`, without a port or brackets
@@ -728,7 +735,8 @@ no model involved, one tab-separated fact per line:
 Sign-in summaries have `user` and `session` lines, audit summaries `user` and
 `persistence` lines. Each section is capped and says when it was, with the
 `log_top` or `log_rows` call that covers the rest: 50 users (first those named in
-a listed session or persistence line, then those with the most source IPs), the
+a listed persistence line, then those named in a listed session line, then those
+with the most source IPs), the
 10 least frequent values per user and field, 200 sessions, 200 mailboxes, and
 the newest 40 operations of each kind, so that many of one kind cannot push
 another off the list; the section's first line counts every kind. A line is at

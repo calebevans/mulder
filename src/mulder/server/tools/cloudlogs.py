@@ -24,7 +24,11 @@ from typing import Any, Literal
 
 from mulder import logtable, m365
 from mulder.assets.paths import asset_path
-from mulder.extractors.classifier import JSON_LOG_EXTS, is_audit_log_csv
+from mulder.extractors.classifier import (
+    MAX_AUDIT_LOG_BYTES,
+    audit_log_files,
+    is_audit_log_file,
+)
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
@@ -72,9 +76,6 @@ _TIME_FIELD = "mulder.event_time"
 _UNSAFE_FIELD_CHARS = re.compile(r"[^A-Za-z0-9_.@-]")
 _TOP_LEVEL_START = re.compile(r"\n(?=[\[{])")
 _SUMMARY_CHARS = 500
-# ponytail: every event of a call is held in memory, at about nine times the size of the
-# files (a 361 MB export peaked at 3.4 GB). Stream per file to lift the limit.
-_MAX_EXPORT_BYTES = 512 * 1024 * 1024
 _MAX_FILES_NAMED = 20
 
 _GENERIC_TIME_KEYS = ("timestamp", "@timestamp", "time", "eventTime", "created_at", "date")
@@ -295,13 +296,6 @@ def _read_events(path: Path) -> tuple[list[dict[str, Any]], int, int]:
         not_objects += found.count(None)
 
 
-def _is_log_file(path: Path) -> bool:
-    """Whether a directory run reads *path*: a JSON suffix, or a CSV whose header has
-    the unified audit log's AuditData column."""
-    suffix = path.suffix.lower()
-    return suffix in JSON_LOG_EXTS or (suffix == ".csv" and is_audit_log_csv(path))
-
-
 def _flatten(event: dict[str, Any]) -> dict[str, object]:
     """Flatten an event to ``{"full.dotted.path": value}`` for the Sigma scan.
 
@@ -443,9 +437,10 @@ def run_cloud_audit_logs(
     than one source IP, operations that leave access behind, and mailbox access.
     export_warnings names a unified audit log file whose record count is exactly
     a size at which exports stop: it is probably incomplete. A Microsoft record
-    that the exports hold twice (the same Id and content) is kept once, and
-    duplicates_skipped counts the rest. The two Entra types have no default
-    Sigma rules.
+    that the files of this call hold twice (the same Id and content) is kept
+    once, and duplicates_skipped counts the rest; a record that another call
+    already loaded is not recognised as a repeat. The two Entra types have no
+    default Sigma rules.
 
     Args:
         evidence_path: A log file, or a directory searched recursively for
@@ -482,10 +477,7 @@ def run_cloud_audit_logs(
             tc_id, name, params, f"Path not found: {evidence_path}", error_type="file_not_found"
         )
     if root.is_dir():
-        # Symlinks are not followed: one planted in the evidence could point anywhere.
-        files = sorted(
-            f for f in root.rglob("*") if not f.is_symlink() and _is_log_file(f) and f.is_file()
-        )
+        files = audit_log_files(root)
     elif root.is_file() and not root.is_symlink():
         files = [root]
     else:
@@ -498,14 +490,14 @@ def run_cloud_audit_logs(
         )
 
     sizes = {str(f): f.stat().st_size for f in files}
-    if sum(sizes.values()) > _MAX_EXPORT_BYTES:
+    if sum(sizes.values()) > MAX_AUDIT_LOG_BYTES:
         largest = sorted(sizes.items(), key=lambda kv: (-kv[1], kv[0]))[:_MAX_FILES_NAMED]
         return error_response(
             tc_id,
             name,
             params,
             f"{evidence_path} holds {sum(sizes.values()) // 2**20} MiB of log files in "
-            f"{len(files)} files, and one call reads at most {_MAX_EXPORT_BYTES // 2**20} MiB "
+            f"{len(files)} files, and one call reads at most {MAX_AUDIT_LOG_BYTES // 2**20} MiB "
             "because every event is held in memory. Nothing was read. Call the tool once "
             "per file or subdirectory instead; a single file over the limit has to be "
             "exported again over shorter date ranges, or split by the investigator (each "
@@ -626,7 +618,7 @@ def run_cloud_audit_logs(
                 # was already loaded; its events are then in the table once, not twice.
                 # Not so a file that reading a directory skips for its suffix: nothing
                 # above it holds its events, and nothing above it may replace them.
-                nested=root.is_dir() or _is_log_file(root.resolve()),
+                nested=root.is_dir() or is_audit_log_file(root.resolve()),
             )
             entry["log_table"] = source
             if "covered_by" in loaded:

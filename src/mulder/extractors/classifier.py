@@ -299,6 +299,28 @@ def is_audit_log_csv(path: Path) -> bool:
     return "auditdata" in {name.strip(' "').lower() for name in header.split(separator)}
 
 
+def is_audit_log_file(path: Path) -> bool:
+    """Whether run_cloud_audit_logs reads *path* when given a directory that holds it: a
+    JSON suffix, or a CSV whose header has the unified audit log's AuditData column."""
+    suffix = path.suffix.lower()
+    return suffix in JSON_LOG_EXTS or (suffix == ".csv" and is_audit_log_csv(path))
+
+
+# What one run_cloud_audit_logs call reads at most, which the planner's evidence context
+# has to know too: a directory over it is planned file by file.
+# ponytail: every event of a call is held in memory, at eight to nine times the size of
+# the files (a 533 MB export peaked at 4.4 GB). Stream per file to lift the limit.
+MAX_AUDIT_LOG_BYTES = 512 * 1024 * 1024
+
+
+def audit_log_files(root: Path) -> list[Path]:
+    """The files one run_cloud_audit_logs call on the directory *root* reads, at any depth.
+    Symlinks are not followed: one planted in the evidence could point anywhere."""
+    return sorted(
+        f for f in root.rglob("*") if not f.is_symlink() and is_audit_log_file(f) and f.is_file()
+    )
+
+
 def has_nfdump_magic(path: Path) -> bool:
     """4-byte header check; empty, short, unreadable and symlinked files fail."""
     try:

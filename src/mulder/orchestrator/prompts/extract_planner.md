@@ -87,7 +87,9 @@ paths spelled exactly as listed, group "foundation":
   Entra ID exports (JSON, or the unified audit log's CSV) are read by the same
   call: plan it once per listed path, not per file or per log. It also writes
   the summaries and log tables the analyst works from, so plan nothing else
-  for those logs.
+  for those logs. A directory too large for one call is listed file by file.
+  Do not plan a path listed under NOT READ: the call would be refused. Name
+  it in investigation_questions as evidence that was not examined.
 - parse_pst lists the messages in an Outlook mailbox file (type "mailbox").
 - run_workflow_audit finds CI workflows an outsider could drive and lists the
   secrets each refers to (type "repository").

@@ -156,7 +156,7 @@ def _mail_access(when: str, how: str, ip: str, session: str, **more: Any) -> dic
         "OrganizationId": _TENANT,
         "RecordType": 50,
         "ResultStatus": "Succeeded",
-        "UserKey": "10032001266C162C",
+        "UserKey": "100320032428BB29",
         "UserType": 0,
         "Version": 1,
         "Workload": "Exchange",
@@ -1296,9 +1296,36 @@ def test_many_operations_of_one_kind_do_not_push_the_others_off_the_summary(
     assert logtable.rows(case, "cloudlog.m365", filters=filters)["rows_matched"] == 400
     # The user behind a listed operation is listed, however many users there are.
     assert any("\tuser\tvictim@contoso.example\tsrc_ip\t" in line for line in lines)
-    assert "# 351 more users are not listed (those named in a session or persistence" in (
+    assert "# 351 more users are not listed (those named in a persistence line below" in (
         "".join(lines)
     )
+
+
+def test_the_user_behind_a_listed_operation_is_listed_before_the_users_of_listed_sessions() -> (
+    None
+):
+    """A tenant has more sessions that changed address than the user section has room
+    for; the one account that had forwarding set is the one the analyst asks about."""
+    roaming = [
+        _recognise(
+            _logon("UserLoggedIn", f"2026-10-05T12:00:0{n}", f"198.51.{u}.{n}", f"s-{u}")
+            | {"UserId": f"user{u:03d}@contoso.example", "Id": f"logon-{u}-{n}"}
+        )
+        for u in range(60)
+        for n in range(2)
+    ]
+    forwarding = _recognise(_FORWARDING | {"UserId": "victim@contoso.example"})
+
+    lines, counts = m365.summarise("m365", "/evidence/ual.csv", [*roaming, forwarding])
+
+    assert counts["users"] == 61 and counts["sessions_from_several_ips"] == 60
+    assert sum("\tpersistence\tmailbox forwarding\tvictim@" in line for line in lines) == 1
+    # One source IP against the others' two: by that alone the victim would be the last.
+    assert any("\tuser\tvictim@contoso.example\tsrc_ip\t" in line for line in lines)
+    assert (
+        "# 11 more users are not listed (those named in a persistence line below come "
+        "first, then those named in a session line, then those with the most source IPs)"
+    ) in "".join(lines)
 
 
 def test_a_summary_line_fits_one_index_window_whatever_a_record_names(
@@ -1481,7 +1508,7 @@ def test_a_call_reads_no_more_than_its_memory_allows_and_names_the_files(
 ) -> None:
     """Every event of a call is held in memory, so a tenant-sized export is refused
     before it is read, with the files to run one at a time."""
-    monkeypatch.setattr(cloudlogs, "_MAX_EXPORT_BYTES", (bec / "ual.csv").stat().st_size)
+    monkeypatch.setattr(cloudlogs, "MAX_AUDIT_LOG_BYTES", (bec / "ual.csv").stat().st_size)
 
     refused = _run(bec)
 
@@ -1663,6 +1690,67 @@ def test_the_coverage_audit_expects_parse_pst_on_a_mailbox_and_credits_it(tmp_pa
 
     gaps = {Path(str(item["path"])).name: item["tools_not_run"] for item in result["coverage"]}
     assert gaps == {"alice.pst": [], "bob.ost": ["parse_pst"]}
+
+
+def test_a_directory_over_the_size_limit_is_planned_file_by_file_and_a_refusal_covers_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The executor runs the plan as written, so the planner is not handed a path the tool
+    refuses; and a refused call read nothing, so the coverage audit does not count it."""
+    root = tmp_path / "evidence"
+    tenant = root / "contoso-m365"
+    month = tenant / "2026-09"
+    month.mkdir(parents=True)
+    ual, signins, wide = (tenant / n for n in ("ual.csv", "signins.json", "tenant-wide.csv"))
+    ual.write_text(_purview_csv(_BEC))
+    signins.write_text(json.dumps([_GRAPH_SIGNIN, _GRAPH_SIGNIN_BETA]))
+    wide.write_text(_purview_csv(_BEC * 3))
+    (month / "september.json").write_text(json.dumps([_GRAPH_AUDIT]))
+    # Each of the first two files fits one call, and so does the subdirectory, which is
+    # how the usage guide says to lay out a large export. The tenant's directory does
+    # not fit, nor does the third file.
+    limit = ual.stat().st_size
+    assert signins.stat().st_size < limit < wide.stat().st_size
+    for module in ("mulder.server.tools.cloudlogs", "mulder.orchestrator.evidence"):
+        monkeypatch.setattr(f"{module}.MAX_AUDIT_LOG_BYTES", limit)
+
+    text = _context(root, "contoso-m365", ["cloud_audit_log"])
+
+    planned, _, unread = text.partition("  NOT READ, do not plan these: ")
+    paths = f"  {signins}\n  {ual}\n  {month}  (1 files)\n"
+    assert paths + "  Plan one run_cloud_audit_logs(" in planned
+    assert f"  {tenant}  (" not in text and str(wide) not in planned
+    assert "investigation_questions" in unread and f"\n  {wide}  (0 MiB)" in unread
+    # A directory of more files than a plan can name: the largest that fit are planned.
+    monkeypatch.setattr("mulder.orchestrator.evidence._MAX_AUDIT_LOG_FILES_PLANNED", 1)
+    planned, _, unread = _context(root, "contoso-m365", ["cloud_audit_log"]).partition(
+        "  NOT READ"
+    )
+    assert f"  {ual}\n  {month}  (1 files)\n  Plan one" in planned
+    assert str(signins) not in planned and f"\n  1 more files in {tenant}  (0 MiB)" in unread
+
+    db_dir = tmp_path / "db"
+    db = CaseDB.create(case_id="cov", evidence_root=str(root), db_dir=db_dir)
+    ctx = app.ServerContext(
+        case_id="cov", db=db, correlator=MagicMock(), audit=AuditLog(db_dir / "cov.audit.jsonl")
+    )
+    monkeypatch.setattr(app, "_ctx", ctx)
+
+    def gaps() -> dict[str, list[str]]:
+        coverage = _tool_dispatch_sync["audit_tool_coverage"]()["coverage"]
+        return {Path(str(item["path"])).name: item["tools_not_run"] for item in coverage}
+
+    try:
+        # The directory, as it was planned before: refused, and no longer counted as run.
+        assert _run(tenant)["status"] == "error" and db.get_sources() == []
+        names = ("ual.csv", "signins.json", "september.json", "tenant-wide.csv")
+        assert gaps() == dict.fromkeys(names, ["run_cloud_audit_logs"])
+        # The paths the planner is given now are read; the file over the limit stays a gap.
+        assert [_run(path)["status"] for path in (ual, signins, month)] == ["success"] * 3
+        assert _run(wide)["status"] == "error"
+        assert gaps() == dict.fromkeys(names[:3], []) | {names[3]: ["run_cloud_audit_logs"]}
+    finally:
+        db.close()
 
 
 def _can_call(role: Role, tool: str) -> bool:

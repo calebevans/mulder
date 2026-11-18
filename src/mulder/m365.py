@@ -589,12 +589,14 @@ def summarise(
         by_kind.setdefault(row[1], []).append(row)
     kept = sorted(row for rows in by_kind.values() for row in rows[-_MAX_OPERATIONS:])
 
-    # First the users behind a line listed below, whom the analyst will ask about, then
-    # those with the most source IPs.
-    named = {row[2] for row in kept}.union(*(session_users[s] for s, _ in several[:_MAX_SESSIONS]))
+    # First the users behind a line listed below, whom the analyst will ask about: those
+    # of a persistence line before those of a session line, of which a tenant has many.
+    # Then those with the most source IPs.
+    acted = {row[2] for row in kept}
+    moved: set[str] = set().union(*(session_users[s] for s, _ in several[:_MAX_SESSIONS]))
     users = sorted(
         {user for user, _ in seen},
-        key=lambda u: (u not in named, -len(seen.get((u, "src_ip"), ())), u),
+        key=lambda u: (u not in acted, u not in moved, -len(seen.get((u, "src_ip"), ())), u),
     )
     counts = {"users": len(users)}
     lines.append(
@@ -621,8 +623,9 @@ def summarise(
     if len(users) > _MAX_USERS:
         lines.append(
             f"# {len(users) - _MAX_USERS} more users are not listed (those named in a "
-            "session or persistence line below come first, then those with the most "
-            f'source IPs); log_top(table="{table}", fields=["actor", "src_ip"]) counts all.'
+            "persistence line below come first, then those named in a session line, then "
+            f'those with the most source IPs); log_top(table="{table}", '
+            'fields=["actor", "src_ip"]) counts all.'
         )
 
     if kind != "entra_audit":
