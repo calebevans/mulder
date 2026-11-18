@@ -21,6 +21,7 @@ from mulder.audit import AuditLog
 from mulder.db import CaseDB
 from mulder.server import app
 from mulder.server.tools import hayabusa
+from mulder.server.tools.extract import evtx as evtx_tools
 from mulder.server.tools.hayabusa import run_hayabusa, run_hayabusa_logon_summary
 
 HEADER = (
@@ -45,6 +46,14 @@ FAILED = "\n".join(
     ]
 )
 NO_CONFIG = "[ERROR] Cannot open file. [file:rules/config/eventkey_alias.txt]\n"
+# What 3.8.1 prints with --quiet --no-color: colour resets are still there.
+STDOUT = (
+    "\x1b[0mGenerating Logon Summary\n\n"
+    "Total Event Records\x1b[0m:  653\n\n"
+    "\x1b[0mFirst Timestamp\x1b[0m:  2023-03-15 07:05:04.108 +00:00\n"
+    "\x1b[0mLast Timestamp\x1b[0m:  2023-03-24 12:37:15.067 +00:00\n\n"
+    "\x1b[0mElapsed time: \x1b[0m00:00:00.013\n"
+)
 
 Fake = Callable[[list[str], str], "subprocess.CompletedProcess[str]"]
 
@@ -79,7 +88,7 @@ def writes(successful: str = SUCCESSFUL, failed: str = FAILED, returncode: int =
     def fake(cmd: list[str], prefix: str) -> subprocess.CompletedProcess[str]:
         Path(f"{prefix}-successful.csv").write_text(successful)
         Path(f"{prefix}-failed.csv").write_text(failed)
-        return subprocess.CompletedProcess(cmd, returncode, stdout="Elapsed time", stderr="")
+        return subprocess.CompletedProcess(cmd, returncode, stdout=STDOUT, stderr="")
 
     return fake
 
@@ -143,6 +152,12 @@ def test_totals_types_and_sourced_rows_are_returned_and_everything_is_indexed(
     )
     assert "no first or last time" in summary["note"]
     assert "A logon is not a compromise" in summary["note"]
+    # The only times the pinned version gives: the span of the records the counts cover.
+    assert summary["log_period"] == {
+        "first_timestamp": "2023-03-15 07:05:04.108 +00:00",
+        "last_timestamp": "2023-03-24 12:37:15.067 +00:00",
+        "event_records": "653",
+    }
 
     (source,) = [s for s in case.get_sources() if s.source_name == "logon.summary"]
     assert source.source_path == str(evtx_dir)
@@ -217,6 +232,89 @@ def test_no_logon_rows_is_reported_with_the_reasons_it_can_happen(
     assert summary["successful"]["logons"] == summary["failed"]["logons"] == 0
     assert "not that nobody logged on" in summary["note"]
     assert "cleared, rolled over or absent" in summary["note"]
+    # Nothing is registered, so the next call reads the logs again: a log that
+    # was corrupt this time must not be skipped as done from then on.
+    assert summary["index"]["status"] == "not_indexed"
+    assert not [s for s in case.get_sources() if s.source_name == "logon.summary"]
+    _again, argvs = summarise(monkeypatch, binary, writes(), evtx_dir=str(evtx_dir))
+    assert len(argvs) == 1
+
+
+def test_another_image_s_logs_are_never_summarised_as_this_image_s(
+    case: CaseDB, evtx_dir: Path, binary: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Host A's logs are extracted, host B's are not: B must not get A's logons."""
+    host_b = tmp_path / "hostB.E01"
+    host_b.write_bytes(b"EVF")
+    monkeypatch.setattr(evtx_tools, "_evtx_extract_dirs", {"/evidence/hostA.E01": str(evtx_dir)})
+    case.set_kv("evtx_extract_dir", str(evtx_dir))
+    extracted: list[str] = []
+
+    def no_logs(image: str) -> None:
+        extracted.append(image)
+
+    monkeypatch.setattr(hayabusa, "_extract_evtx_inline", no_logs)
+
+    result, argvs = summarise(monkeypatch, binary, writes(), image_path=str(host_b))
+
+    assert result["status"] == "error" and "No EVTX directory found" in result["error_message"]
+    assert argvs == [] and extracted == [str(host_b)], "B's own logs were looked for"
+    assert not case.get_sources()
+    # Without an image named, the most recent extraction is still used.
+    assert hayabusa._resolve_evtx_dir(None) == str(evtx_dir)
+    assert hayabusa._resolve_evtx_dir(None, image_path="/evidence/hostA.E01") == str(evtx_dir)
+
+
+def test_with_an_image_and_a_directory_the_summary_is_indexed_under_the_image(
+    case: CaseDB, evtx_dir: Path, binary: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """start_extraction_batch skips by image_path, so that is the path the source must carry."""
+    image = "/evidence/hostA.E01"
+
+    first, _argv = summarise(
+        monkeypatch, binary, writes(), evtx_dir=str(evtx_dir), image_path=image
+    )
+    again, argvs = summarise(monkeypatch, binary, writes(), image_path=image)
+
+    assert first["status"] == "success"
+    assert [s.source_path for s in case.get_sources()] == [image]
+    assert "skipped" in again["preview"] and argvs == []
+
+
+def test_source_addresses_are_classified_whatever_their_family() -> None:
+    rows = [
+        "5,Sec 4624,alice,CORP,SRV01,10 - RemoteInteractive,-,-,WS1,2a01:4f8:c17:1234::1",
+        "4,Sec 4624,bob,CORP,SRV01,3 - Network,-,-,WS2,::ffff:45.33.32.156",
+        "9,Sec 4624,carol,CORP,SRV01,3 - Network,-,-,WS3,fe80::1",
+        "8,Sec 4624,dave,CORP,SRV01,3 - Network,-,-,WS4,::ffff:10.0.0.5",
+        "7,Sec 4624,erin,CORP,SRV01,3 - Network,-,-,WS5,LOCAL",
+        "3,Sec 4624,frank,CORP,SRV01,3 - Network,-,-,WS6,45.33.32.156",
+    ]
+    table: Any = hayabusa._logon_table("\n".join([HEADER.format(kind="Successful"), *rows]))
+
+    # External first, then what could not be classified, then internal; by count within each.
+    assert [(r["Target Account"], r["external"]) for r in table["with_source_address"]] == [
+        ("alice", True),
+        ("bob", True),
+        ("frank", True),
+        ("erin", None),
+        ("carol", False),
+        ("dave", False),
+    ]
+
+
+def test_malformed_rows_are_not_counted_and_fields_are_cleaned() -> None:
+    """A failed logon's account name is whatever the remote party typed."""
+    rows = [
+        "2,Sec 4625,adm\x1b[31min\x07,CORP,SRV01,3 - Network,-,-,KALI,185.220.101.4",
+        "not-a-count,Sec 4625,x,CORP,SRV01,3 - Network,-,-,KALI,185.220.101.4",
+        "1,short,row",
+    ]
+    table: Any = hayabusa._logon_table("\n".join([HEADER.format(kind="Failed"), *rows]))
+
+    assert (table["logons"], table["combinations"]) == (2, 1)
+    (row,) = table["with_source_address"]
+    assert row["Target Account"] == "adm?[31min?"
 
 
 def test_it_is_skipped_per_target_and_does_not_mark_the_sigma_scan_as_done(
