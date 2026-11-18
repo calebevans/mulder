@@ -172,7 +172,8 @@ def test_each_tool_is_reported_with_the_sources_it_was_found_in(
     assert "ANYDESK.EXE-22222222.pf" in anydesk["ez.prefetch"]["sample"]
     assert anydesk["tsk.filelist"]["evidence"] == image
     assert anydesk["tsk.filelist"]["sample"].endswith("Program Files (x86)/AnyDesk/AnyDesk.exe")
-    assert "relay-7f.net.anydesk.com" in anydesk["pcap.dns"]["sample"]
+    assert anydesk["pcap.dns"]["sample"] == DNS.splitlines()[0]
+    assert anydesk["pcap.dns"]["evidence"] == "/evidence/capture.pcap"
     assert result["results"]["tools"][0]["matched"] == ["anydesk.exe", "net.anydesk.com"]
     assert set(tools["MeshCentral"]) == {"ez.prefetch"}
     assert result["results"]["sources_searched"] == [
