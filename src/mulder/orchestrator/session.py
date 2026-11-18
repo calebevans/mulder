@@ -28,7 +28,12 @@ from claude_agent_sdk.types import (
 from rich.text import Text
 
 from mulder.orchestrator.display import InvestigationDashboard
-from mulder.orchestrator.errors import AuthenticationError, ModelNotAvailableError
+from mulder.orchestrator.errors import (
+    FATAL_ERRORS,
+    AuthenticationError,
+    ModelNotAvailableError,
+    OutOfCreditError,
+)
 from mulder.orchestrator.models import ModelConfig
 from mulder.orchestrator.proxy import ModelSettings, is_proxy_model
 from mulder.orchestrator.types import EffortLevel, PhaseResult, extract_json_from_text
@@ -149,6 +154,35 @@ _MODEL_PATTERNS: tuple[str, ...] = (
     "you could try using",
 )
 
+#: Provider phrasings that mean the account has no credit or has hit a hard
+#: spending cap, so no later request can succeed. Anthropic: "Your credit
+#: balance is too low to access the Anthropic API", error type
+#: ``billing_error`` (HTTP 402), "You have reached your specified API usage
+#: limits". OpenAI-compatible: error code ``insufficient_quota`` (sent as HTTP
+#: 429), "Billing hard limit has been reached". OpenRouter and DeepSeek (HTTP
+#: 402): "Insufficient credits", "Insufficient Balance". LiteLLM proxy
+#: budgets: "Budget has been exceeded!", "ExceededBudget:".
+#:
+#: Deliberately absent, because providers also use them for per-minute limits
+#: that clear on their own: "rate limit", "too many requests", "quota
+#: exceeded", "exceeded your current quota", and the bare word "billing".
+_CREDIT_PATTERNS: tuple[str, ...] = (
+    "credit balance is too low",
+    "credit balance too low",
+    "billing_error",
+    "api usage limits",
+    "insufficient_quota",
+    "billing hard limit",
+    "insufficient credit",
+    "insufficient balance",
+    "budget has been exceeded",
+    "exceededbudget",
+    "payment required",
+)
+
+#: HTTP status for "Payment Required"; unlike 429 it is never transient.
+_PAYMENT_REQUIRED = 402
+
 
 #: Provider phrasings for a request that no longer fits the model's context
 #: window. Anthropic: "prompt is too long: N tokens > M maximum" and "input
@@ -199,15 +233,27 @@ def _is_turns_exhausted(message: object) -> bool:
     return getattr(message, "subtype", None) == _MAX_TURNS_SUBTYPE
 
 
+def _is_payment_required(message: object) -> bool:
+    """Return True when a ResultMessage or SDK error reports HTTP 402.
+
+    Args:
+        message: A ``ResultMessage`` or an exception raised by ``query``.
+
+    Returns:
+        True if its structured ``api_error_status`` is 402.
+    """
+    return getattr(message, "api_error_status", None) == _PAYMENT_REQUIRED
+
+
 def _classify_fatal_error(text: str) -> tuple[str, str]:
-    """Classify text as an auth error, model error, or neither.
+    """Classify text as an auth error, model error, credit error, or neither.
 
     Args:
         text: Error message or streamed text content.
 
     Returns:
         Tuple of (category, matched_text) where category is
-        "auth", "model", or "" (empty string for no match).
+        "auth", "model", "credit", or "" (empty string for no match).
     """
     lower = text.lower()
     for pattern in _AUTH_PATTERNS:
@@ -216,6 +262,9 @@ def _classify_fatal_error(text: str) -> tuple[str, str]:
     for pattern in _MODEL_PATTERNS:
         if pattern in lower:
             return "model", text
+    for pattern in _CREDIT_PATTERNS:
+        if pattern in lower:
+            return "credit", text
     return "", ""
 
 
@@ -231,7 +280,8 @@ def _classify_assistant_error(message: object, text: str) -> str:
         text: Text content of one of its blocks.
 
     Returns:
-        "auth", "model", or "" when the message is not a fatal error.
+        "auth", "model", "credit", or "" when the message is not a fatal
+        error. The ``rate_limit`` flag alone is never fatal.
     """
     error = getattr(message, "error", None)
     if not error:
@@ -239,6 +289,8 @@ def _classify_assistant_error(message: object, text: str) -> str:
     category, _ = _classify_fatal_error(text)
     if not category and error == "authentication_failed":
         return "auth"
+    if not category and error == "billing_error":
+        return "credit"
     return category
 
 
@@ -660,13 +712,15 @@ class SessionExecutor:
                             thinking=(thinking_blocks, thinking_chars),
                             last_silent=last_silent,
                         )
+                        if _is_payment_required(message):
+                            raise OutOfCreditError(message.result or "HTTP 402 Payment Required")
 
                     self._extract_batch_ids_from_message(message, collected_batch_ids)
             except KeyboardInterrupt:
                 raise
             except SystemExit:
                 raise
-            except (AuthenticationError, ModelNotAvailableError):
+            except FATAL_ERRORS:
                 raise
             except Exception as exc:
                 exc_msg = str(exc)
@@ -685,6 +739,8 @@ class SessionExecutor:
                         model=model,
                         alternative=alt,
                     ) from exc
+                if category == "credit" or _is_payment_required(exc):
+                    raise OutOfCreditError(exc_msg) from exc
 
                 if hit_turn_limit or _is_turns_exhausted(exc):
                     # The CLI already yielded the error_max_turns result; the
@@ -803,6 +859,8 @@ class SessionExecutor:
                         model="",
                         alternative=alt,
                     )
+                if category == "credit":
+                    raise OutOfCreditError(text)
 
                 if _is_context_exhausted(text):
                     stats.hit_context = True
@@ -1070,9 +1128,13 @@ class SessionExecutor:
                                     model="",
                                     alternative=alt,
                                 )
+                            if category == "credit":
+                                raise OutOfCreditError(block.text)
                 elif isinstance(message, ResultMessage):
                     self._track_utility_tokens(message, label)
-        except (AuthenticationError, ModelNotAvailableError):
+                    if _is_payment_required(message):
+                        raise OutOfCreditError(message.result or "HTTP 402 Payment Required")
+        except FATAL_ERRORS:
             raise
         except Exception as exc:
             exc_msg = str(exc)
@@ -1089,6 +1151,8 @@ class SessionExecutor:
                     model="",
                     alternative=alt,
                 ) from exc
+            if category == "credit" or _is_payment_required(exc):
+                raise OutOfCreditError(exc_msg) from exc
             logger.warning("Utility query '%s' failed: %s", label, exc)
             return None
 

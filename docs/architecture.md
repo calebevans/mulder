@@ -199,6 +199,14 @@ When a quality gate fails after a phase completes, the orchestrator retries with
 
 The retry system is bounded: each phase allows up to 2 retries (configurable), after which it reports failure and the investigation proceeds with partial results.
 
+### Fatal Errors
+
+Three errors bypass the retry system and end the run at once (`FATAL_ERRORS` in `orchestrator/errors.py`): `AuthenticationError`, `ModelNotAvailableError` and `OutOfCreditError`. Each is account-wide, so every later session would fail the same way. `SessionExecutor` raises them from the SDK's error channels only: the text of an exception raised by `query`, and assistant messages the CLI itself flagged with `error`. Model-written text can quote evidence and is never classified.
+
+`OutOfCreditError` means the account has no credit left or has hit a hard spending cap. Its signals are the CLI's `billing_error` flag, `api_error_status == 402` on a `ResultMessage` or the SDK's `ResultError`, and provider wording that means only that: "credit balance is too low", `insufficient_quota`, "billing hard limit", "insufficient credits", LiteLLM's "Budget has been exceeded". Transient rate limiting is not fatal: the `rate_limit` flag, HTTP 429, "too many requests" and per-minute limits take the ordinary path. Phrases providers use for both cases ("quota exceeded", "exceeded your current quota") are deliberately not matched.
+
+A fatal error propagates out of the phase loops with no retry and no continuation. In the extraction pool, the worker that hits one cancels the other workers, so a session waiting on a long tool call does not hold the run open. `mulder investigate` exits with status 2.
+
 ### Phase Gates
 
 Extraction, cross-system, and narrative gates read the database directly.
@@ -636,6 +644,14 @@ The `ReportRenderer` uses Jinja2 templates to produce Markdown and HTML reports:
 - **HTML** (`{case_id}.report.html`): Self-contained styled page with dark/light theme toggle, sidebar navigation, per-model token usage breakdown, and collapsible source window samples
 
 IOC export (STIX 2.1, CSV) and ATT&CK Navigator layer generation are separate CLI commands (`mulder export-iocs`, `mulder export-navigator`), not part of the `ReportRenderer` flow.
+
+### Partial Report
+
+`finalize_report` is the only thing that writes a report during a run, and it refuses until every readiness gate passes. A run that ends early would otherwise leave its findings in the database and nothing to read. `mulder investigate` therefore ends every unsuccessful run (a failed gate, a fatal error, `KeyboardInterrupt`, an unexpected exception) by calling `write_fallback_report` (`orchestrator/fallback.py`).
+
+It renders through `write_case_report` (`report/case_report.py`), the function behind `mulder report`, with no gates. It passes an `incomplete` notice that both templates show as a banner: the phase the run stopped in, why, and the phases and systems not completed. The orchestrator records those as it goes (`Orchestrator.result`, `current_phase`, `systems_done`).
+
+Nothing is written when the Markdown report's modification time shows it was finalized during this run (`gates.report_written`, the test the report gate uses), when there is no case database, or when it holds no source and no finding. The notice can carry system names taken from evidence file names and provider error bodies, so each line is flattened to bounded printable text and the HTML template escapes it.
 
 ## Investigation Quality
 

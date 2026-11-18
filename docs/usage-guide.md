@@ -22,6 +22,7 @@ Try-it-out instructions for running Mulder, the forensic investigation platform.
     - [Using Google Cloud Vertex AI](#using-google-cloud-vertex-ai)
     - [Using Amazon Bedrock](#using-amazon-bedrock)
   - [Starting an Investigation](#starting-an-investigation)
+    - [When a Run Ends Early](#when-a-run-ends-early)
   - [Using Non-Anthropic Models via LiteLLM](#using-non-anthropic-models-via-litellm)
     - [Provider Prefixes](#provider-prefixes)
     - [Mixing Providers Across Roles](#mixing-providers-across-roles)
@@ -365,6 +366,24 @@ The orchestrator runs five phases in sequence:
 5. **Report** generates the investigation narrative and final report artifacts.
 
 Each phase passes through a quality gate before proceeding. The investigation runs unattended from start to finish.
+
+### When a Run Ends Early
+
+`mulder investigate` exits non-zero whenever it does not finish, and it still leaves a report.
+
+| Exit status | Meaning |
+|-------------|---------|
+| `0` | Every phase passed its gate and the report was finalized |
+| `1` | A phase failed its gate after every retry, the run was interrupted (Ctrl-C), or it crashed |
+| `2` | The run could not continue: authentication failed, the model is not available, or the API account is out of credit |
+
+**Out of credit.** If the provider reports that the account has no credit left or has reached a hard spending limit (for example Anthropic's "credit balance is too low", OpenAI's `insufficient_quota`, HTTP 402, or a LiteLLM budget), the investigation stops at once. No further phases, retries or continuations are started, because each would fail the same way. Ordinary rate limiting (requests or tokens per minute, HTTP 429 "too many requests") is not treated this way and is handled as before.
+
+**Partial report.** When a run ends without a finalized report and the case database already holds at least one indexed source or finding, Mulder renders `{case_id}.report.md` and `{case_id}.report.html` from the database, the way `mulder report` does, and prints where they are. Both open with an **INCOMPLETE INVESTIGATION** banner naming the phase the run stopped in, the reason, and the phases and systems that were not completed.
+
+Read a partial report for what it is. Its findings were saved before the run stopped and it has not passed the finalize gates. Evidence the run never reached was not examined, so a finding that is absent is not a clean result. A report that was finalized during the same run is never overwritten; a report left by an earlier run of the same case is replaced.
+
+The case database and audit log are kept either way.
 
 ## Using Non-Anthropic Models via LiteLLM
 
@@ -783,6 +802,8 @@ After an investigation completes, all artifacts are written to the cases directo
 | `{case_id}.report.pdf` | PDF report for formal distribution |
 
 All report formats include an executive summary, severity overview, evidence integrity hashes, attack timeline, detailed findings with MITRE ATT&CK mappings, IOC tables, audit metrics, and a sources appendix.
+
+A report that opens with an **INCOMPLETE INVESTIGATION** banner is a partial one, written because the run ended early. See [When a Run Ends Early](#when-a-run-ends-early).
 
 ### IOC Exports
 

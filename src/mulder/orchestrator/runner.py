@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from mulder.orchestrator.display import InvestigationDashboard
-from mulder.orchestrator.errors import AuthenticationError, ModelNotAvailableError
+from mulder.orchestrator.errors import FATAL_ERRORS
 from mulder.orchestrator.evidence import EvidenceContext, ServerBridge
 from mulder.orchestrator.gates import (
     GateResult,
@@ -133,6 +133,12 @@ class Orchestrator:
         self._running = False
         self._active_systems: list[str] = []
         self._cached_catalog_data: dict[str, Any] | None = None
+        # How far the run got, for the partial report left when it ends
+        # early (``orchestrator/fallback.py``): the phase results so far, the
+        # last phase started, and whether each system's extraction passed.
+        self.result = InvestigationResult()
+        self.current_phase: str = ""
+        self.systems_done: dict[str, bool] = {}
         self.dashboard = InvestigationDashboard()
         self._session = SessionExecutor(
             dashboard=self.dashboard,
@@ -173,7 +179,7 @@ class Orchestrator:
         Returns:
             InvestigationResult with all phase results and aggregate metrics.
         """
-        result = InvestigationResult()
+        result = self.result = InvestigationResult()
         self._total_phases = 5
         self._phase_counter = 0
 
@@ -379,6 +385,8 @@ class Orchestrator:
         done_count = 0
         active_count = 0
         lock = asyncio.Lock()
+        self.systems_done = {name: False for group in groups for name in group}
+        tasks: list[asyncio.Task[PhaseResult]] = []
 
         async def _extract_one(group: list[str]) -> PhaseResult:
             nonlocal done_count, active_count
@@ -406,7 +414,16 @@ class Orchestrator:
                     )
                     for system_name in group:
                         self.dashboard.clear_system_tasks(system_name)
+                        self.systems_done[system_name] = phase_result.success
                     return phase_result
+                except FATAL_ERRORS:
+                    # The account, key and model are shared, so every other
+                    # worker would fail the same way: stop them now rather
+                    # than after whatever tool call each is waiting on.
+                    for task in tasks:
+                        if task is not asyncio.current_task():
+                            task.cancel()
+                    raise
                 finally:
                     async with lock:
                         done_count += 1
@@ -416,13 +433,16 @@ class Orchestrator:
                                 self._active_systems.remove(system_name)
                         self.dashboard.set_extraction_counts(total, done_count, active_count)
 
-        tasks = [_extract_one(group) for group in groups]
+        tasks.extend(asyncio.create_task(_extract_one(group)) for group in groups)
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
+        # First, so the workers it cancelled are not logged as failures.
+        fatal = next((res for res in results if isinstance(res, FATAL_ERRORS)), None)
+        if fatal is not None:
+            self.dashboard.log_gate_fail(str(fatal))
+            raise fatal
+
         for i, res in enumerate(results):
-            if isinstance(res, AuthenticationError | ModelNotAvailableError):
-                self.dashboard.log_gate_fail(str(res))
-                raise res
             if isinstance(res, BaseException):
                 system_label = ", ".join(groups[i])
                 logger.error("Extraction failed for [%s]: %s", system_label, res)
@@ -477,6 +497,7 @@ class Orchestrator:
         accumulated_turns = 0
         last_result: PhaseResult | None = None
         self._phase_started_at = time.time()
+        self.current_phase = phase.name
 
         self._phase_counter += 1
         self.dashboard.set_phase(
@@ -518,9 +539,12 @@ class Orchestrator:
                     disallowed_tools=phase.disallowed_tools,
                     max_turns=phase.single_max_turns,
                 )
-            except (AuthenticationError, ModelNotAvailableError) as exc:
+            except FATAL_ERRORS as exc:
                 self.dashboard.log_gate_fail(str(exc))
                 raise
+            # The session names every result "query"; the summary table and
+            # the partial report look phases up by their own name.
+            phase_result.phase_name = phase.name
             accumulated_turns += phase_result.turns_used
 
             # Continuation for context overflow or turn-limit exhaustion
@@ -613,6 +637,7 @@ class Orchestrator:
         ):
             log_prefix = prompt_vars["system_name"].split(",")[0].strip()
 
+        self.current_phase = phase.name
         if not skip_phase_header:
             self._phase_counter += 1
             planner_model = self.model_config.resolve(phase.name, "planner")
@@ -743,7 +768,7 @@ class Orchestrator:
                             log_prefix,
                             task_system=task_sys,
                         )
-                    except (AuthenticationError, ModelNotAvailableError):
+                    except FATAL_ERRORS:
                         raise
 
                     combined_result.turns_used += (

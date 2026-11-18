@@ -963,7 +963,7 @@ class InvestigationDashboard:
         summary.add_row("Elapsed", elapsed_str)
         if any(p.phase_name == "report" and not p.success for p in result.phases):
             summary.add_row(
-                "Report", Text("MISSING (report phase failed; nothing written)", style="bold red")
+                "Report", Text("MISSING (report phase failed; none finalized)", style="bold red")
             )
 
         # Per-model breakdown
