@@ -110,6 +110,7 @@ Source = "https://github.com/calebevans/mulder"
 Documentation = "https://github.com/calebevans/mulder/blob/main/docs/usage-guide.md"
 Issues = "https://github.com/calebevans/mulder/issues"
 Changelog = "https://github.com/calebevans/mulder/releases"
+Funding = "https://buymeacoffee.com/calebevans"
 "Example report" = "https://calebevans.github.io/mulder/examples/srl-2018/SRL-2018.report.html"
 
 [project.scripts]
