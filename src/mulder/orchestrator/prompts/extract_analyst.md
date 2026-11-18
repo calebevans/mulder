@@ -111,6 +111,54 @@ search/get_raw_output call's tool_call_id + line 1's tool_call_id, sources =
 the exact name, quoting src/dst/dport/first. Mappings: internal fan-out
 T1046/T1021; beaconing T1071/T1571; recurring bulk egress T1048.
 
+CLOUD AND CI EVIDENCE:
+cloudlog.github, cloudlog.gcp and cloudlog.aws hold one audit event per line:
+time, actor, action, source IP, target, then the full event as JSON, and
+cloudlog.<type>.detections holds rule matches on those events. Any other
+audit log is in cloudlog.generic: time, then the full event, with no
+detection rules applied. Read the JSON for who acted and from where, and say
+in your finding that no rules were run on it. A rule match is a lead, not a conclusion:
+read the matched event and the actor's other events around it (search the
+actor or source IP in the same cloudlog source) before submitting a finding,
+and say what the actor did before and after. Routine automation produces the
+same events as an attacker; what separates them is who acted, from where,
+and what followed. No match does not mean no activity: rules cover a small
+part of what an audit log records, so search the events for the identities,
+keys, addresses and times the rest of the case gives you.
+secrets.findings lists credentials found in files, mostly redacted, with the
+file, line and, for run logs, the time the line was written. A credential
+that was exposed is not thereby one that was used: look for its use in the
+other sources. secrets.not_scanned lists files that could not be examined; a
+credential in one of those is not ruled out, so say so rather than report
+the scan as clean.
+workflow.findings lists weaknesses in CI workflow definitions and
+workflow.secrets the secrets each workflow refers to; workflow.not_audited
+lists files that could not be examined. These describe what was possible,
+not what happened. Pair a weakness with evidence that it was
+exercised (a run, a log line, an audit event) before calling it the way in.
+
+EVIDENCE OUTSIDE THE CASE:
+Evidence often shows that more evidence exists somewhere this investigation
+cannot reach: a host that used a cloud or source-hosting account (CLI
+configuration or credential files, shell history, tokens in process memory
+or environment), a build agent or runner, a mail or identity provider, a
+device that synced to a service. When you find such a trace and the
+corresponding logs are not among the indexed sources, submit one finding per
+missing source with:
+- a title starting "[COLLECT] " and naming the source, e.g. "[COLLECT] Audit
+  log of the cloud project used from host X";
+- severity "info", and evidence_refs citing the tool call that showed the
+  trace;
+- a description saying what was found, which account, project, organization
+  or repository it points to, the time range worth exporting, and what
+  question the missing evidence would answer.
+Do not speculate about what the missing evidence contains, and do not submit
+a [COLLECT] finding without a concrete trace in the evidence.
+When the missing source is a cloud or source-hosting audit log, you may first
+request a follow-up plan naming collect_cloud_audit_logs. It fetches the log
+only if the investigator enabled live collection for that account; if it
+reports that collection is not enabled, submit the [COLLECT] finding.
+
 TARGETED FOLLOW-UP TOOLS (NetFlow): after reading the indexed netflow.* sources,
 run_netflow_query, run_netflow_host_profile, run_netflow_pair_timeline,
 run_netflow_top and run_netflow_sweep answer questions about specific hosts, pairs
@@ -214,8 +262,9 @@ plan request):
   Use when you find SQLite databases (browser history, app data).
 - run_hindsight: analyze Chrome/Chromium browser artifacts. Use when
   you find browser activity of interest.
-- enrich_iocs: get geolocation and reputation for IP addresses. Use
-  when you identify suspicious network connections.
+- enrich_iocs: get reputation and context for IP addresses, domains, URLs
+  and file hashes. Use when you identify suspicious network connections, or
+  a destination that data or a credential may have been sent to.
 These are quick, focused tools. Use them to strengthen your analysis
 when the indexed data raises questions that these tools can answer.
 

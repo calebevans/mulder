@@ -8,6 +8,7 @@ from mulder.server.tools import (  # noqa: F401  # noqa: F401
     case,
     chainsaw,
     cloudlogs,
+    collect,
     composite,
     core,
     documents,
@@ -24,7 +25,9 @@ from mulder.server.tools import (  # noqa: F401  # noqa: F401
     phone,
     plaso,
     review,
+    secretscan,
     tsk,
+    workflowaudit,
     yara,
     zircolite,
 )

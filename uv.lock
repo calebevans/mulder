@@ -1914,6 +1914,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+cloud = [
+    { name = "pyjwt", extra = ["crypto"] },
+]
 dev = [
     { name = "mypy" },
     { name = "pre-commit" },
@@ -1960,6 +1963,7 @@ requires-dist = [
     { name = "pre-commit", marker = "extra == 'dev'" },
     { name = "psutil", specifier = ">=5.9" },
     { name = "pydantic", specifier = ">=2.12" },
+    { name = "pyjwt", extras = ["crypto"], marker = "extra == 'cloud'", specifier = ">=2.8" },
     { name = "pysigma", marker = "extra == 'forensics'", specifier = ">=0.10.10" },
     { name = "pysigma-backend-sqlite", marker = "extra == 'forensics'", specifier = ">=0.1.1" },
     { name = "pytest", marker = "extra == 'dev'" },
@@ -1978,7 +1982,7 @@ requires-dist = [
     { name = "weasyprint", marker = "extra == 'pdf'", specifier = ">=60.0" },
     { name = "xxhash", marker = "extra == 'forensics'", specifier = ">=3.0" },
 ]
-provides-extras = ["dev", "forensics", "pdf", "stix"]
+provides-extras = ["cloud", "dev", "forensics", "pdf", "stix"]
 
 [[package]]
 name = "mypy"
