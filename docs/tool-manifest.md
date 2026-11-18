@@ -138,7 +138,7 @@ List partitions in a disk image using TSK mmls.
 
 ### run_fls
 
-List all files and directories (including deleted) from a disk image. Automatically analyzes all NTFS partitions above 100 MB when multiple partitions are present, indexing each as a separate source. The largest NTFS partition is selected as primary when `partition_offset` is omitted.
+List all files and directories (including deleted) from a disk image. Automatically analyzes all NTFS partitions above 100 MB when multiple partitions are present, indexing each as a separate source. The largest NTFS partition is selected as primary when `partition_offset` is omitted. Given a [triage collection](#index_triage_collection) directory instead, lists the collected files: no deleted entries, and the inode column is the row number.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -164,14 +164,14 @@ Retrieve filesystem metadata (type, block size, volume label) from a disk image.
 
 ### run_mactime
 
-Generate a filesystem MAC timeline from a disk image using TSK fls + mactime.
+Generate a filesystem MAC timeline from a disk image using TSK fls + mactime. Given a UAC collection directory, the timeline is built from the body file the collector wrote; other triage collections have none and get an error saying so.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | image_path | str | yes | Path to the disk image |
 | time_range | str \| None | no | Date range filter (e.g. "2015-08-01..2015-08-05") |
 
-**Returns:** `source_name` (tsk.timeline), `windows_indexed`, `line_count`
+**Returns:** `source_name` (tsk.timeline), `windows_indexed`, `line_count`; for a UAC body file also `body_rows` and `timeline_rows`, and an error (`no_rows`) when mactime wrote none
 
 **Roles:** `EXTRACT_EXECUTOR`
 
@@ -394,13 +394,68 @@ Extract metadata from a FileVault-encrypted macOS volume.
 
 **Roles:** `EXTRACT_EXECUTOR`
 
+### index_triage_collection
+
+Index a triage collection's file list and the collector's own records.
+
+A triage collection is a directory of files copied from a live system: KAPE
+target output, an unpacked Velociraptor offline collection, UAC output, or a
+plain Windows volume directory (see the
+[usage guide](usage-guide.md#triage-collections)). The collected files are read
+by the ordinary tools, which take the collection's directory where they take a
+disk image: `run_fls`, `run_registry_parser`, `query_registry_value`,
+`run_prefetch_parser`, `run_amcache_parser`, `run_shimcache_parser`,
+`run_mft_parser`, `run_evtx_parser`, `index_app_files`, `analyze_disk_pcaps`,
+`parse_browser_history`, `parse_plist`, `query_sqlite_from_image`, and
+`run_mactime` for a UAC body file. This tool indexes the rest.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| evidence_path | str | yes | The collection's directory |
+| force | bool | no | Re-index even if this collection was already indexed |
+
+**Returns:** `layout`, `host`, `volumes[]`, `files_collected`, `listing_truncated`, `collected[]`, `not_collected[]` (`not_seen_in_cut_listing[]` instead when the listing was cut), `sources[]`, `not_indexed[]`, `note`
+
+| Source | Content |
+|--------|---------|
+| `tsk.filelist` | every collected file at its original path, as `fls` rows; the inode column is the row number (`$MFT`, when collected, is 0) |
+| `triage.summary` | layout, host name the collection states, volumes, and which kinds of artifact were and were not collected |
+| `triage.kape.copylog`, `triage.kape.skiplog` | KAPE's record of each file on the source system: original path, SHA-1, size and created/modified/accessed times; files it found and did not copy |
+| `triage.velociraptor.<artifact>` | each `results/<Artifact>.json`, one JSON row per line |
+| `triage.uac.<category>` | the `live_response/<category>` command output, each file under a `=== path ===` header |
+
+A collection is not a disk: it has no unallocated space and no deleted files,
+and the timestamps on the copies are those of the copy. `not_collected` lists
+artifact kinds that are missing from the collection, which does not show they
+were missing from the system.
+
+Bounds: 200,000 files and directories per collection, 8 MiB per indexed source,
+256 KiB per UAC output file, 40 UAC categories, 200 Velociraptor result files,
+and 4 GiB for a file an artifact tool reads (a larger one is refused, not cut);
+whatever was cut or left out is named in `not_indexed` and
+`listing_truncated`. The walk is breadth-first across the volumes, so a cut
+listing keeps the top of each one, and the kinds of artifact not found in it
+are then reported as `not_seen_in_cut_listing`, not as `not_collected`. The
+listing is in the order `fls` gives (by directory, names compared without
+case, the system volume first), so `Windows/...` comes before
+`Windows.old/...` and before a shadow copy. Memory and crash dumps inside a
+collection (`MEMORY.DMP`, `*.dmp`) stay `memory_dump` evidence items. Symlinks inside a
+collection are never followed, a symlink is not accepted as the collection, and Velociraptor's percent-encoded names are
+decoded only for display. Layout details: KAPE's `$Extend/$J`, `$Extend/$Max`
+and `$Secure_$SDS` are listed as the streams they hold (`$Extend/$UsnJrnl:$J`,
+...); a Velociraptor drive collected through two accessors
+(`uploads/ntfs/%5C%5C.%5CC%3A`, `uploads/auto/C%3A`) is one volume; files of a
+second volume are listed under its label (`D/...`).
+
+**Roles:** `EXTRACT_EXECUTOR`
+
 ---
 
 ## 4. Extraction: Windows Artifacts
 
 ### run_evtx_parser
 
-Extract .evtx files from a disk image and return a prioritized manifest.
+Extract .evtx files from a disk image and return a prioritized manifest. A triage collection directory is handled the same way; any other directory or a single .evtx file is parsed at once.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -1485,9 +1540,11 @@ Extract a file from the disk image by inode number using TSK icat.
 |-----------|------|----------|-------------|
 | inode | int | yes | Inode number of the file to extract |
 | filesystem_type | str \| None | no | TSK filesystem type (auto-detected if omitted) |
-| image_path | str \| None | no | Path to the specific disk image (required for multi-image cases) |
+| image_path | str \| None | no | Path to the specific disk image (required for multi-image cases), or the triage collection directory whose listing the inode is a row of |
 
 **Returns:** text files: `source_name`, `windows_indexed`; binary files: `sha256`, `size_bytes`
+
+The inode column of a triage collection's listing is a row number. When the case holds a collection beside another file listing and `image_path` is omitted, the call is refused (`image_path_required`) rather than reading that number from a disk image.
 
 **Roles:** `EXTRACT_EXECUTOR`
 
@@ -1502,6 +1559,8 @@ Return file metadata (MAC times, size, blocks) for an inode using TSK istat.
 | image_path | str \| None | no | Path to the specific disk image (required for multi-image cases) |
 
 **Returns:** `source_name`, `windows_indexed`
+
+A triage collection has no inode metadata: for one, the call returns `not_applicable` and says where the original timestamps are.
 
 **Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR`
 
@@ -1998,6 +2057,7 @@ Extract a SQLite database from a disk image and run a SQL query.
 | inode | int | yes | Inode number of the SQLite database |
 | query | str | yes | SQL SELECT query to execute |
 | description | str | no | Label for the indexed source name |
+| image_path | str \| None | no | The disk image or triage collection directory whose listing the inode came from; needed only when the case holds a collection beside another file listing |
 
 **Returns:** `source` (sqlite.\<description\>), `result_count`
 

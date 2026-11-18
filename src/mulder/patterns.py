@@ -99,6 +99,9 @@ def case_extract_dir(db_dir: str | Path, case_id: str | None) -> Path:
     return root / case_id
 
 
+EXTRACTION_MARKER: str = ".mulder-extraction-complete.json"
+"""Written by extract_archive at the top of a finished extraction; not evidence."""
+
 DEFAULT_WORKSPACE_DIR: str = "~/.mulder/workspace"
 """Default working directory for agent sessions on a native install.
 

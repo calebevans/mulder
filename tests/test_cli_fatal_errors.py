@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -33,7 +34,10 @@ def _invoke_investigate_with_error(error: Exception) -> Result:
     mock_handler = MagicMock(spec=_logging.FileHandler)
     mock_handler.level = _logging.NOTSET
 
+    # A temp --db-dir: the failure path looks for a case database to render a
+    # partial report from, and must not find one in the developer's home.
     with (
+        tempfile.TemporaryDirectory() as db_dir,
         patch("mulder.orchestrator.models.ModelConfig.from_args", return_value=MagicMock()),
         patch("mulder.orchestrator.runner.Orchestrator", return_value=mock_orch),
         patch("asyncio.run", side_effect=error),
@@ -42,7 +46,7 @@ def _invoke_investigate_with_error(error: Exception) -> Result:
     ):
         result = runner.invoke(
             cli,
-            ["investigate", "/evidence", "test-case"],
+            ["investigate", "/evidence", "test-case", "--db-dir", db_dir],
             catch_exceptions=False,
         )
 

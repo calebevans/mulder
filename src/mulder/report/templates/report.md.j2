@@ -1,5 +1,21 @@
 # Mulder Investigation Report
 
+{% if incomplete -%}
+> **INCOMPLETE INVESTIGATION: THIS IS A PARTIAL REPORT.** `mulder investigate`
+> ended without finalizing a report, so this one was rendered from the case
+> database as it stood.
+>
+{% for line in incomplete -%}
+> - {{ line }}
+{% endfor -%}
+>
+> The findings below were saved before the run stopped. This report has not
+> passed the finalize gates (minimum findings, timestamp coverage, coverage
+> audits, submitted narrative), and the phases listed as not completed did not
+> review these findings. Evidence the run did not reach was not examined: a
+> finding that is absent here is not a clean result.
+
+{% endif -%}
 **Case:** {{ case_id }}
 **Generated:** {{ timestamp }}
 **Evidence:** {{ evidence_root }}
@@ -213,7 +229,9 @@ Each question the investigation asked, how it was resolved, and the findings the
 {% if model_token_breakdown %}| Input tokens | {{ model_token_breakdown | sum(attribute='input') | tokformat }} |
 | Output tokens | {{ model_token_breakdown | sum(attribute='output') | tokformat }} |
 | Total tokens | {{ (model_token_breakdown | sum(attribute='input') + model_token_breakdown | sum(attribute='output')) | tokformat }} |
-{% elif estimated_input_tokens %}| Estimated input tokens | {{ estimated_input_tokens | tokformat }} |
+{% if model_token_breakdown | sum(attribute='cache_creation') or model_token_breakdown | sum(attribute='cache_read') %}| Cache-write input tokens (not in total) | {{ model_token_breakdown | sum(attribute='cache_creation') | tokformat }} |
+| Cache-read input tokens (not in total) | {{ model_token_breakdown | sum(attribute='cache_read') | tokformat }} |
+{% endif %}{% elif estimated_input_tokens %}| Estimated input tokens | {{ estimated_input_tokens | tokformat }} |
 | Estimated output tokens | {{ estimated_output_tokens | tokformat }} |
 {% endif %}| Audit log | {{ audit_log_path }} |
 

@@ -1199,6 +1199,7 @@ class ReportRenderer:
         evidence_integrity: list[dict[str, object]] | None = None,
         source_windows: dict[str, list[dict[str, Any]]] | None = None,
         enrichment_windows: list[dict[str, Any]] | None = None,
+        incomplete: Sequence[str] = (),
         questions: Sequence[Question] | None = None,
     ) -> dict[str, Any]:
         """Assemble template variables from case metadata, findings, audit trail, and sources.
@@ -1214,6 +1215,9 @@ class ReportRenderer:
             source_windows: Per-source raw text windows for the HTML report.
             enrichment_windows: Raw windows from the ``enrichment.iocs``
                 DB source containing threat intel metadata for IOCs.
+            incomplete: Plain-text lines saying where and why the
+                investigation stopped. When non-empty both templates open
+                with an INCOMPLETE banner listing them.
             questions: Recorded investigation questions. With none, the
                 report is what it was before questions were recorded.
 
@@ -1397,6 +1401,7 @@ class ReportRenderer:
             "mitre_all_tactics": all_tactics,
             "mitre_tactic_groups": active_tactic_groups,
             "source_windows": source_windows or {},
+            "incomplete": list(incomplete),
             "model_token_breakdown": self._load_model_usage(
                 Path(audit_log_path).parent, case_metadata.case_id
             ),
@@ -1417,8 +1422,10 @@ class ReportRenderer:
             case_id: Case identifier.
 
         Returns:
-            List of dicts with model, input, and output keys, or empty
-            list if the sidecar file does not exist.
+            List of dicts with model, input, output, cache_creation and
+            cache_read keys (the last two are 0 for a sidecar written
+            before they were recorded), or empty list if the sidecar file
+            does not exist.
         """
         usage_path = db_dir / f"{case_id}.model_usage.json"
         if not usage_path.exists():
@@ -1431,6 +1438,8 @@ class ReportRenderer:
                         "model": entry.get("model", "unknown"),
                         "input": entry.get("input_tokens", 0),
                         "output": entry.get("output_tokens", 0),
+                        "cache_creation": entry.get("cache_creation_input_tokens", 0),
+                        "cache_read": entry.get("cache_read_input_tokens", 0),
                     }
                     for entry in data
                     if isinstance(entry, dict)
@@ -1589,6 +1598,7 @@ class ReportRenderer:
         sources_list: list[SourceRow] | None = None,
         evidence_integrity: list[dict[str, object]] | None = None,
         enrichment_windows: list[dict[str, Any]] | None = None,
+        incomplete: Sequence[str] = (),
         questions: Sequence[Question] | None = None,
     ) -> str:
         """Render the markdown report template (``report.md.j2``) to a string.
@@ -1606,6 +1616,7 @@ class ReportRenderer:
             evidence_integrity: Evidence registry entries with file hashes.
             enrichment_windows: Raw windows from the ``enrichment.iocs``
                 DB source for threat intel context.
+            incomplete: Lines for the INCOMPLETE banner (see ``build_context``).
 
         Returns:
             Rendered markdown report string.
@@ -1619,6 +1630,7 @@ class ReportRenderer:
             sources_list=sources_list,
             evidence_integrity=evidence_integrity,
             enrichment_windows=enrichment_windows,
+            incomplete=incomplete,
             questions=questions,
         )
         return self._render_markdown(ctx)
@@ -1634,6 +1646,7 @@ class ReportRenderer:
         evidence_integrity: list[dict[str, object]] | None = None,
         source_windows: dict[str, list[dict[str, Any]]] | None = None,
         enrichment_windows: list[dict[str, Any]] | None = None,
+        incomplete: Sequence[str] = (),
         questions: Sequence[Question] | None = None,
     ) -> str:
         """Render the HTML report with markdown descriptions converted to HTML.
@@ -1652,6 +1665,7 @@ class ReportRenderer:
             source_windows: Per-source raw text windows for the HTML report.
             enrichment_windows: Raw windows from the ``enrichment.iocs``
                 DB source for threat intel context.
+            incomplete: Lines for the INCOMPLETE banner (see ``build_context``).
 
         Returns:
             Rendered HTML report string.
@@ -1666,6 +1680,7 @@ class ReportRenderer:
             evidence_integrity=evidence_integrity,
             source_windows=source_windows,
             enrichment_windows=enrichment_windows,
+            incomplete=incomplete,
             questions=questions,
         )
         return self._render_html(ctx)

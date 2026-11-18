@@ -5,7 +5,9 @@ from __future__ import annotations
 import hmac
 import logging
 import os
+import signal
 import sys
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -26,6 +28,9 @@ if TYPE_CHECKING:  # heavy imports stay inside the command bodies
 
     from mulder.assets.fetch import Fetcher
     from mulder.assets.install import Plan, Result, SetupOptions
+    from mulder.orchestrator.runner import Orchestrator
+    from mulder.orchestrator.types import InvestigationResult
+    from mulder.report.case_report import WrittenReport
 
 #: The default ``.mcp.json`` shipped as package data, copied into a fresh
 #: workspace on first run so a ``pipx``/``uv tool`` install works out of the box.
@@ -78,6 +83,47 @@ def _require_bearer(app: ASGIApp, token: str) -> ASGIApp:
         await app(scope, receive, send)
 
     return guarded
+
+
+def _echo_report_paths(written: WrittenReport, err: bool = False) -> None:
+    """Print where a report was written, one line per format."""
+    click.echo(f"  Markdown: {written.markdown}", err=err)
+    if written.html is not None:
+        click.echo(f"  HTML:     {written.html}", err=err)
+    else:
+        click.echo(f"  HTML generation failed: {written.html_error}", err=True)
+
+
+def _leave_partial_report(
+    orchestrator: Orchestrator,
+    case_id: str,
+    db_dir: Path,
+    started_at: float,
+    error: BaseException | None,
+) -> None:
+    """Render what the case database holds when a run ends without a report.
+
+    Never raises: the failure that ended the run is the one to report.
+    """
+    from mulder.orchestrator.fallback import write_fallback_report
+
+    try:
+        written = write_fallback_report(orchestrator, case_id, db_dir, started_at, error)
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Partial report failed", exc_info=True)
+        click.echo(f"\nCould not render a partial report: {exc}", err=True)
+        return
+    if written is None:
+        return
+    click.echo(
+        "\nInvestigation INCOMPLETE. Partial report rendered from the case database "
+        f"({written.findings} findings, {written.sources} sources):",
+        err=True,
+    )
+    _echo_report_paths(written, err=True)
+    earlier = db_dir / f"{case_id}.report.md"
+    if written.markdown != earlier:
+        click.echo(f"  The report an earlier run left was kept: {earlier}", err=True)
 
 
 def _is_interactive() -> bool:
@@ -231,79 +277,18 @@ def report(case_id: str, db_dir: str) -> None:
     formats, and writes them alongside the database.  Does not require
     the MCP server to be running.
     """
-    from mulder.audit import AuditLog
-    from mulder.db import CaseDB
-    from mulder.report.renderer import ReportRenderer
+    from mulder.report.case_report import write_case_report
 
     db_dir_path = Path(db_dir).expanduser()
     db_path = db_dir_path / f"{case_id}.db"
-    audit_path = db_dir_path / f"{case_id}.audit.jsonl"
 
     if not db_path.exists():
         raise click.ClickException(f"Case database not found: {db_path}")
 
     click.echo(f"Loading case '{case_id}' from {db_path} ...")
-
-    with CaseDB(db_path) as case_db:
-        case_metadata = case_db.get_case_metadata()
-        findings = case_db.get_findings()
-        sources_list = case_db.get_sources()
-        evidence_integrity = case_db.get_evidence_registry()
-        questions = case_db.get_questions()
-
-        audit = AuditLog(audit_path)
-        audit_summary = audit.summary()
-
-        click.echo(f"  {len(findings)} findings, {len(sources_list)} sources")
-
-        renderer = ReportRenderer()
-
-        md_path = db_dir_path / f"{case_id}.report.md"
-        md_text = renderer.render(
-            case_metadata=case_metadata,
-            findings=findings,
-            audit_summary=audit_summary,
-            audit_log_path=audit_path,
-            sources_list=sources_list,
-            evidence_integrity=evidence_integrity,
-            questions=questions,
-        )
-        md_path.write_text(md_text, encoding="utf-8")
-        click.echo(f"  Markdown: {md_path}")
-
-        _MAX_WINDOWS = 50
-        source_names = [s.source_name for s in sources_list]
-        bulk_windows = case_db.get_capped_windows_by_sources(source_names, _MAX_WINDOWS)
-        source_windows: dict[str, list[dict[str, object]]] = {}
-        for sname, (windows, total) in bulk_windows.items():
-            source_windows[sname] = [
-                {
-                    "line_start": w.line_start,
-                    "line_end": w.line_end,
-                    "event_time": w.event_time,
-                    "raw_text": w.raw_text,
-                    "total": total,
-                    "truncated": total > _MAX_WINDOWS,
-                }
-                for w in windows
-            ]
-
-        html_path = db_dir_path / f"{case_id}.report.html"
-        try:
-            html_text = renderer.render_html(
-                case_metadata=case_metadata,
-                findings=findings,
-                audit_summary=audit_summary,
-                audit_log_path=audit_path,
-                sources_list=sources_list,
-                evidence_integrity=evidence_integrity,
-                source_windows=source_windows,
-                questions=questions,
-            )
-            html_path.write_text(html_text, encoding="utf-8")
-            click.echo(f"  HTML:     {html_path}")
-        except Exception as exc:
-            click.echo(f"  HTML generation failed: {exc}", err=True)
+    written = write_case_report(case_id, db_dir_path)
+    click.echo(f"  {written.findings} findings, {written.sources} sources")
+    _echo_report_paths(written)
 
     click.echo("Done.")
 
@@ -380,6 +365,20 @@ def report(case_id: str, db_dir: str) -> None:
     "(env: MULDER_MAX_COMPACTIONS).",
 )
 @click.option(
+    "--max-tokens",
+    default=None,
+    envvar="MULDER_MAX_TOKENS",
+    type=click.IntRange(min=1),
+    help="Token budget for the whole run: the input, output, cache-write and "
+    "cache-read tokens of every session, summed over all models. Counted in "
+    "tokens, not dollars, because every provider reports tokens while dollar "
+    "figures are priced for Claude models only. Part of it (15%, at least "
+    "750,000, at most half) is held back for the report: once what remains is "
+    "down to that, no new analysis starts and the run goes straight to the "
+    "report. A session that is running is never interrupted, so the total can "
+    "end above the budget. Unset: no limit (env: MULDER_MAX_TOKENS).",
+)
+@click.option(
     "--proxy-config",
     default=None,
     type=click.Path(exists=True),
@@ -403,6 +402,7 @@ def investigate(
     cwd: str,
     workers: int,
     max_compactions: int,
+    max_tokens: int | None,
     proxy_config: str | None,
     no_thinking: bool,
     show_cli_stderr: bool,
@@ -483,6 +483,14 @@ def investigate(
         click.echo(f"Thinking: disabled (effort ignored), Workers: {workers}", err=True)
     else:
         click.echo(f"Effort: {effort}, Workers: {workers}", err=True)
+    if max_tokens is not None:
+        from mulder.orchestrator.budget import report_reserve
+
+        click.echo(
+            f"Token budget: {max_tokens:,} "
+            f"({report_reserve(max_tokens):,} held back for the report)",
+            err=True,
+        )
     click.echo(f"Logging to {log_file}", err=True)
 
     orchestrator = Orchestrator(
@@ -499,15 +507,30 @@ def investigate(
         no_thinking=no_thinking,
         show_cli_stderr=show_cli_stderr,
         max_compactions=max_compactions,
+        max_tokens=max_tokens,
     )
 
     from mulder.orchestrator.errors import (
         AuthenticationError,
         ModelNotAvailableError,
+        OutOfCreditError,
     )
 
+    started_at = time.time()
+    # ``docker stop`` and runner timeouts send SIGTERM. End the way Ctrl-C
+    # does, so sessions are closed and the partial report is still written.
+    signal.signal(signal.SIGTERM, signal.default_int_handler)
+
+    def run_pipeline() -> InvestigationResult:
+        """Run the investigation; if it dies, leave a partial report first."""
+        try:
+            return asyncio.run(orchestrator.run())
+        except BaseException as exc:
+            _leave_partial_report(orchestrator, case_id, log_dir, started_at, exc)
+            raise
+
     try:
-        result = asyncio.run(orchestrator.run())
+        result = run_pipeline()
     except AuthenticationError as exc:
         orchestrator.dashboard.stop()
         click.echo(f"\nError: {exc}", err=True)
@@ -538,10 +561,24 @@ def investigate(
                 err=True,
             )
         raise SystemExit(2) from None
+    except OutOfCreditError as exc:
+        click.echo(
+            f"\nError: the API account is out of credit or over its quota.\n  {exc}",
+            err=True,
+        )
+        click.echo(
+            "\nThe investigation stopped there: no further phases, retries or "
+            "continuations were run. The case database and audit log are kept. "
+            "Add credit or raise the limit before running it again.",
+            err=True,
+        )
+        raise SystemExit(2) from None
 
     orchestrator.dashboard.print_summary(result)
 
     if not result.success:
+        # A run that stopped at its token budget names that as the reason.
+        _leave_partial_report(orchestrator, case_id, log_dir, started_at, result.budget_stop)
         raise SystemExit(1)
 
 

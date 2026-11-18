@@ -27,6 +27,7 @@ from mulder.server.tools import (  # noqa: F401  # noqa: F401
     questions,
     review,
     secretscan,
+    triage,
     tsk,
     workflowaudit,
     yara,

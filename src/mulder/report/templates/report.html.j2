@@ -143,6 +143,9 @@ body { background: var(--bg); color: var(--text); font-family: var(--font); line
 .page { display: none; padding: 2rem 2.5rem 3rem; max-width: 1200px; margin: 0 auto; opacity: 0; transform: translateY(8px); }
 .page.active { display: block; animation: pageIn 0.35s cubic-bezier(0.4,0,0.2,1) forwards; }
 @keyframes pageIn { to { opacity: 1; transform: translateY(0); } }
+.incomplete-banner { margin: 2rem 2.5rem 0; padding: 1rem 1.25rem; border: 1px solid var(--critical-border); border-left: 4px solid var(--critical); background: var(--critical-dim); border-radius: var(--radius); font-size: 0.88rem; }
+.incomplete-banner strong { color: var(--critical); }
+.incomplete-banner ul { margin: 0.5rem 0 0.5rem 1.25rem; }
 
 /* ===================== MOBILE ===================== */
 .mobile-toggle { display: none; position: fixed; top: 0.75rem; left: 0.75rem; z-index: 200; background: var(--surface-solid); border: 1px solid var(--border); color: var(--text); width: 40px; height: 40px; border-radius: var(--radius); cursor: pointer; font-size: 1.1rem; backdrop-filter: blur(12px); }
@@ -154,6 +157,7 @@ body { background: var(--bg); color: var(--text); font-family: var(--font); line
   .mobile-toggle { display: flex; align-items: center; justify-content: center; }
   .main { margin-left: 0; }
   .page { padding: 3.5rem 1rem 2rem; }
+  .incomplete-banner { margin: 3.5rem 1rem 0; }
   .ev-browser { flex-direction: column; }
   .ev-source-tree { width: 100%; max-height: 200px; border-right: none; border-bottom: 1px solid var(--border); }
 }
@@ -608,6 +612,18 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
 
 <!-- MAIN CONTENT -->
 <div class="main">
+{%- if incomplete %}
+<div class="incomplete-banner" role="alert">
+  <strong>INCOMPLETE INVESTIGATION: THIS IS A PARTIAL REPORT.</strong>
+  <code>mulder investigate</code> ended without finalizing a report, so this one was rendered from the case database as it stood.
+  <ul>
+    {%- for line in incomplete %}
+    <li>{{ line }}</li>
+    {%- endfor %}
+  </ul>
+  The findings below were saved before the run stopped. This report has not passed the finalize gates (minimum findings, timestamp coverage, coverage audits, submitted narrative), and the phases listed as not completed did not review these findings. Evidence the run did not reach was not examined: a finding that is absent here is not a clean result.
+</div>
+{%- endif %}
 
 <!-- ==================== DASHBOARD ==================== -->
 <div class="page active" id="page-dashboard">
@@ -1206,6 +1222,12 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
             <tr><td style="color:var(--text-muted)">Input Tokens</td><td class="mono" style="text-align:right;">{{ "{:,}".format(real_in) }}</td></tr>
             <tr><td style="color:var(--text-muted)">Output Tokens</td><td class="mono" style="text-align:right;">{{ "{:,}".format(real_out) }}</td></tr>
             <tr><td style="color:var(--text-muted)">Total Tokens</td><td class="mono" style="text-align:right;font-weight:700;">{{ "{:,}".format(real_in + real_out) }}</td></tr>
+            {%- set cache_write = model_token_breakdown | sum(attribute='cache_creation') %}
+            {%- set cache_read = model_token_breakdown | sum(attribute='cache_read') %}
+            {%- if cache_write or cache_read %}
+            <tr><td style="color:var(--text-muted)">Cache-Write Input (not in total)</td><td class="mono" style="text-align:right;">{{ "{:,}".format(cache_write) }}</td></tr>
+            <tr><td style="color:var(--text-muted)">Cache-Read Input (not in total)</td><td class="mono" style="text-align:right;">{{ "{:,}".format(cache_read) }}</td></tr>
+            {%- endif %}
             <tr><td colspan="2" style="border-top:1px solid var(--border);padding-top:0.5rem;font-weight:600;">Per-Model Breakdown</td></tr>
             {% for entry in model_token_breakdown %}
             <tr><td style="color:var(--text-muted);padding-left:1rem;">{{ entry.model }}</td><td class="mono" style="text-align:right;">{{ "{:,}".format(entry.input + entry.output) }}</td></tr>

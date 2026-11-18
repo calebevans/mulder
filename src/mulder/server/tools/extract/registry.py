@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from mulder.dirroot import icat, not_collected
 from mulder.patterns import fls_file_entries
 from mulder.server.app import mcp
 from mulder.server.extract_helpers import extract_and_index, mount_disk_image
@@ -200,17 +201,8 @@ def _discover_user_hives_via_tsk(
                 sanitized = rel_path.replace("/", "_").replace(chr(92), "_")
                 safe_name = f"{username}_{hive_type}_{sanitized}"
                 out_path = extract_dir / safe_name
-                cmd = ["icat"]
-                if chunk_offset > 0:
-                    cmd.extend(["-o", str(chunk_offset)])
-                cmd.extend([image_path, inode_str])
                 try:
-                    proc = subprocess.run(
-                        cmd,
-                        capture_output=True,
-                        timeout=30,
-                        check=False,
-                    )
+                    proc = icat(image_path, chunk_offset, inode_str)
                     if proc.returncode == 0 and proc.stdout:
                         out_path.write_bytes(proc.stdout)
                         hives.append((out_path, hive_type, username))
@@ -438,7 +430,7 @@ def run_registry_parser(
     RecentDocs, UserAssist, MRU lists, mapped drives).
 
     Args:
-        image_path: Path to the disk image.
+        image_path: Path to the disk image, or a triage collection directory.
         hive: Optional specific hive to parse (e.g. "SYSTEM", "SOFTWARE").
         force: Re-run extraction even if sources already exist.
         include_user_hives: Whether to discover and parse per-user
@@ -544,6 +536,7 @@ def run_registry_parser(
         params,
         "No registry hives found via TSK extraction or mount",
         (time.monotonic() - t0) * 1000,
+        suggestion=not_collected(image_path),
     )
 
 

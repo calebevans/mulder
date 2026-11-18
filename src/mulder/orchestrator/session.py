@@ -7,6 +7,7 @@ token usage and tool activity to the dashboard.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -27,8 +28,14 @@ from claude_agent_sdk.types import (
 )
 from rich.text import Text
 
+from mulder.orchestrator.budget import TokenBudget
 from mulder.orchestrator.display import InvestigationDashboard
-from mulder.orchestrator.errors import AuthenticationError, ModelNotAvailableError
+from mulder.orchestrator.errors import (
+    FATAL_ERRORS,
+    AuthenticationError,
+    ModelNotAvailableError,
+    OutOfCreditError,
+)
 from mulder.orchestrator.models import ModelConfig
 from mulder.orchestrator.proxy import ModelSettings, is_proxy_model
 from mulder.orchestrator.types import EffortLevel, PhaseResult, extract_json_from_text
@@ -149,6 +156,37 @@ _MODEL_PATTERNS: tuple[str, ...] = (
     "you could try using",
 )
 
+#: Provider phrasings that mean the account has no credit or has hit a hard
+#: spending cap, so no later request can succeed. Anthropic: "Your credit
+#: balance is too low to access the Anthropic API", error type
+#: ``billing_error`` (HTTP 402), "You have reached your specified API usage
+#: limits". OpenAI-compatible: error code ``insufficient_quota`` (sent as HTTP
+#: 429), "Billing hard limit has been reached". OpenRouter and DeepSeek (HTTP
+#: 402): "Insufficient credits", "Insufficient Balance". LiteLLM proxy
+#: budgets: "Budget has been exceeded!", "ExceededBudget:", and for a
+#: per-model budget "... exceeded budget for model=<model>".
+#:
+#: Deliberately absent, because providers also use them for per-minute limits
+#: that clear on their own: "rate limit", "too many requests", "quota
+#: exceeded", "exceeded your current quota", and the bare word "billing".
+_CREDIT_PATTERNS: tuple[str, ...] = (
+    "credit balance is too low",
+    "credit balance too low",
+    "billing_error",
+    "api usage limits",
+    "insufficient_quota",
+    "billing hard limit",
+    "insufficient credit",
+    "insufficient balance",
+    "budget has been exceeded",
+    "exceededbudget",
+    "exceeded budget for model",
+    "payment required",
+)
+
+#: HTTP status for "Payment Required"; unlike 429 it is never transient.
+_PAYMENT_REQUIRED = 402
+
 
 #: Provider phrasings for a request that no longer fits the model's context
 #: window. Anthropic: "prompt is too long: N tokens > M maximum" and "input
@@ -199,15 +237,64 @@ def _is_turns_exhausted(message: object) -> bool:
     return getattr(message, "subtype", None) == _MAX_TURNS_SUBTYPE
 
 
+def _is_payment_required(message: object) -> bool:
+    """Return True when a ResultMessage or SDK error reports HTTP 402.
+
+    Args:
+        message: A ``ResultMessage`` or an exception raised by ``query``.
+
+    Returns:
+        True if its structured ``api_error_status`` is 402.
+    """
+    return getattr(message, "api_error_status", None) == _PAYMENT_REQUIRED
+
+
+async def _close_stream(stream: Any) -> None:
+    """Close an SDK message stream whose loop is being left on a fatal error.
+
+    The generator is suspended at a ``yield``. Left like that, asyncio closes
+    it from another task at loop shutdown, which the SDK cannot do cleanly
+    and logs as "aclose(): asynchronous generator is already running". A
+    failure to close must not replace the error being raised.
+
+    Args:
+        stream: The async generator returned by ``query``.
+    """
+    with contextlib.suppress(Exception):
+        await stream.aclose()
+
+
+def _is_result_prose(exc: object) -> bool:
+    """Return True when an SDK ``ResultError`` does not report an API failure.
+
+    Its message is then the result frame's own text, which can be the
+    model's last words (and so can quote evidence) rather than an error the
+    CLI wrote. Credit wording there is not classified.
+
+    Args:
+        exc: An exception raised by ``query``.
+
+    Returns:
+        True for a ``ResultError`` with no ``api_error_status`` and a
+        ``terminal_reason`` other than ``"api_error"``; False for every
+        other exception type.
+    """
+    return (
+        hasattr(exc, "api_error_status")
+        and getattr(exc, "api_error_status", None) is None
+        and getattr(exc, "terminal_reason", None) != "api_error"
+    )
+
+
 def _classify_fatal_error(text: str) -> tuple[str, str]:
-    """Classify text as an auth error, model error, or neither.
+    """Classify text as an auth error, model error, credit error, or neither.
 
     Args:
         text: Error message or streamed text content.
 
     Returns:
         Tuple of (category, matched_text) where category is
-        "auth", "model", or "" (empty string for no match).
+        "auth", "model", "credit", or "" (empty string for no match).
     """
     lower = text.lower()
     for pattern in _AUTH_PATTERNS:
@@ -216,6 +303,9 @@ def _classify_fatal_error(text: str) -> tuple[str, str]:
     for pattern in _MODEL_PATTERNS:
         if pattern in lower:
             return "model", text
+    for pattern in _CREDIT_PATTERNS:
+        if pattern in lower:
+            return "credit", text
     return "", ""
 
 
@@ -231,7 +321,8 @@ def _classify_assistant_error(message: object, text: str) -> str:
         text: Text content of one of its blocks.
 
     Returns:
-        "auth", "model", or "" when the message is not a fatal error.
+        "auth", "model", "credit", or "" when the message is not a fatal
+        error. The ``rate_limit`` flag alone is never fatal.
     """
     error = getattr(message, "error", None)
     if not error:
@@ -239,6 +330,8 @@ def _classify_assistant_error(message: object, text: str) -> str:
     category, _ = _classify_fatal_error(text)
     if not category and error == "authentication_failed":
         return "auth"
+    if not category and error == "billing_error":
+        return "credit"
     return category
 
 
@@ -384,6 +477,7 @@ class SessionExecutor:
         using_proxy: bool = False,
         no_thinking: bool = False,
         show_cli_stderr: bool = False,
+        budget: TokenBudget | None = None,
     ) -> None:
         """Initialize the session executor.
 
@@ -397,8 +491,12 @@ class SessionExecutor:
                 per-message token tracking to avoid double counting).
             no_thinking: Disable extended thinking for phase and utility queries.
             show_cli_stderr: Stream agent CLI diagnostics to the dashboard and log.
+            budget: The run's token tally and limit. Every session's usage
+                is added to it, and no session starts once it is used up.
+                Defaults to a tally with no limit.
         """
         self._dashboard = dashboard
+        self._budget = budget or TokenBudget()
         self._model_config = model_config
         self._cwd = cwd
         self._env = env
@@ -409,6 +507,13 @@ class SessionExecutor:
         self._proxy_settings: dict[str, ModelSettings] = {}
         self._no_thinking = no_thinking
         self._show_cli_stderr = show_cli_stderr
+        #: The "Query error" text of the most recent session, empty when it
+        #: had none. A partial report quotes it next to a failed gate, which
+        #: otherwise names only the symptom (``orchestrator/fallback.py``).
+        self.last_query_error = ""
+        #: Turns of every role session so far. A phase the token budget cuts
+        #: short returns no result to add up, so the run's total is read here.
+        self.turns_run = 0
 
     def _stderr_callback(self, label: str) -> Callable[[str], None]:
         """Keep diagnostics scoped to their query and inside the live dashboard."""
@@ -553,7 +658,12 @@ class SessionExecutor:
 
         Returns:
             PhaseResult with collected messages and usage information.
+
+        Raises:
+            TokenBudgetReached: The run's token budget is used up, so the
+                session was not started.
         """
+        self._budget.check()
         options = ClaudeAgentOptions(
             system_prompt=system_prompt,
             model=model,
@@ -594,6 +704,7 @@ class SessionExecutor:
         got_result = False
         hit_context_limit = False
         hit_turn_limit = False
+        self.last_query_error = ""
 
         for connect_attempt in range(1, _MCP_CONNECT_ATTEMPTS + 1):
             mcp_problem = ""
@@ -661,13 +772,16 @@ class SessionExecutor:
                             thinking=(thinking_blocks, thinking_chars),
                             last_silent=last_silent,
                         )
+                        if _is_payment_required(message):
+                            raise OutOfCreditError(message.result or "HTTP 402 Payment Required")
 
                     self._extract_batch_ids_from_message(message, collected_batch_ids)
             except KeyboardInterrupt:
                 raise
             except SystemExit:
                 raise
-            except (AuthenticationError, ModelNotAvailableError):
+            except FATAL_ERRORS:
+                await _close_stream(stream)
                 raise
             except Exception as exc:
                 exc_msg = str(exc)
@@ -686,6 +800,10 @@ class SessionExecutor:
                         model=model,
                         alternative=alt,
                     ) from exc
+                if _is_payment_required(exc) or (
+                    category == "credit" and not _is_result_prose(exc)
+                ):
+                    raise OutOfCreditError(exc_msg) from exc
 
                 if hit_turn_limit or _is_turns_exhausted(exc):
                     # The CLI already yielded the error_max_turns result; the
@@ -702,6 +820,7 @@ class SessionExecutor:
                 else:
                     self._dashboard.log_gate_fail(f"Query error: {exc_msg}")
                     logger.error("Query error: %s", exc_msg)
+                    self.last_query_error = exc_msg
 
             if not mcp_problem:
                 break
@@ -726,6 +845,7 @@ class SessionExecutor:
                 phase_out_tokens,
             )
 
+        self.turns_run += turns_used
         return PhaseResult(
             phase_name="query",
             success=False,
@@ -804,6 +924,8 @@ class SessionExecutor:
                         model="",
                         alternative=alt,
                     )
+                if category == "credit":
+                    raise OutOfCreditError(text)
 
                 if _is_context_exhausted(text):
                     stats.hit_context = True
@@ -999,9 +1121,7 @@ class SessionExecutor:
             phase_in_tokens = result_in
             phase_out_tokens = result_out
 
-        model_usage = getattr(message, "model_usage", None)
-        if model_usage and isinstance(model_usage, dict):
-            self._dashboard.add_model_usage(model_usage)
+        self._budget.record(message, model_label)
 
         total_phase_tokens = phase_in_tokens + phase_out_tokens
         self._dashboard.log_phase_done(tool_count, turns_used, total_phase_tokens)
@@ -1039,7 +1159,12 @@ class SessionExecutor:
 
         Returns:
             Parsed JSON dictionary, or None if the query failed.
+
+        Raises:
+            TokenBudgetReached: The run's token budget is used up, so the
+                query was not started.
         """
+        self._budget.check()
         utility_model = self._model_config.resolve("utility", "planner")
 
         options = ClaudeAgentOptions(
@@ -1053,7 +1178,8 @@ class SessionExecutor:
 
         collected_text: list[str] = []
         try:
-            async for message in query(prompt=prompt, options=options):
+            stream = query(prompt=prompt, options=options)
+            async for message in stream:
                 if isinstance(message, AssistantMessage):
                     for block in message.content:
                         if isinstance(block, TextBlock):
@@ -1071,9 +1197,14 @@ class SessionExecutor:
                                     model="",
                                     alternative=alt,
                                 )
+                            if category == "credit":
+                                raise OutOfCreditError(block.text)
                 elif isinstance(message, ResultMessage):
                     self._track_utility_tokens(message, label)
-        except (AuthenticationError, ModelNotAvailableError):
+                    if _is_payment_required(message):
+                        raise OutOfCreditError(message.result or "HTTP 402 Payment Required")
+        except FATAL_ERRORS:
+            await _close_stream(stream)
             raise
         except Exception as exc:
             exc_msg = str(exc)
@@ -1090,6 +1221,8 @@ class SessionExecutor:
                     model="",
                     alternative=alt,
                 ) from exc
+            if _is_payment_required(exc) or (category == "credit" and not _is_result_prose(exc)):
+                raise OutOfCreditError(exc_msg) from exc
             logger.warning("Utility query '%s' failed: %s", label, exc)
             return None
 
@@ -1109,6 +1242,4 @@ class SessionExecutor:
         if tok_in or tok_out:
             self._dashboard.add_tokens(tok_in, tok_out)
 
-        model_usage = getattr(result, "model_usage", None)
-        if model_usage and isinstance(model_usage, dict):
-            self._dashboard.add_model_usage(model_usage)
+        self._budget.record(result, self._model_config.resolve("utility", "planner"))

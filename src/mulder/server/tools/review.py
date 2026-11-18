@@ -89,12 +89,20 @@ _EVIDENCE_TOOL_MAP: dict[str, list[str]] = {
         "run_fls",
         "run_bulk_extractor",
     ],
+    # A directory of collected files, read where a disk image would be. Which
+    # artifact parsers apply depends on what was collected, so only the tool
+    # that always does is audited (it also writes the file listing).
+    "triage_collection": [
+        "index_triage_collection",
+    ],
 }
 
 # Types audited inside the case's extracted-archives directory as well as in
 # the evidence root. Disk and memory images found there are handled by their
 # own planner listings and stay out, as before.
-_UNPACKED_EVIDENCE_TYPES = frozenset({"cloud_audit_log", "repository", "ci_run_logs"})
+_UNPACKED_EVIDENCE_TYPES = frozenset(
+    {"cloud_audit_log", "repository", "ci_run_logs", "triage_collection"}
+)
 
 # Parameters that name the evidence a mapped tool reads. Output locations
 # such as extract_to and auxiliary inputs such as ssl_keylog_path are left
@@ -104,6 +112,7 @@ _EVIDENCE_INPUT_PARAMS: dict[str, tuple[str, ...]] = {
     "run_cloud_audit_logs": ("evidence_path",),
     "run_secret_scan": ("evidence_path",),
     "run_workflow_audit": ("evidence_path",),
+    "index_triage_collection": ("evidence_path",),
     "run_volatility": ("memory_path",),
     "run_volatility_batch": ("memory_path",),
     "run_fls": ("image_path",),
