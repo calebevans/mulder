@@ -171,8 +171,10 @@ def _evaluate_finalize_gates(
                 f"{len(questions)} open"
                 + (f": {', '.join(still_open[:10])}" if still_open else "")
                 + ") and both audit_evidence_coverage and audit_tool_coverage have been run. "
-                f"A ruled_out resolution names a {_NEGATIVE_PREFIX} finding; submit one that "
-                "cites the tool calls you ran if none exists."
+                f"A ruled_out resolution names a {_NEGATIVE_PREFIX} finding that cites the "
+                "tool calls that looked for it: submit one if none exists and you can submit "
+                "findings. If you cannot, resolve a question that no finding addresses as "
+                "undetermined and give the reason."
             )
     gates.append({"name": "minimum_findings", "passed": passed, "detail": detail})
 

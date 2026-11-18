@@ -48,10 +48,11 @@ def resolve_question(
     resolution is one of:
     - "answered": the evidence shows what happened. finding_ids must name at
       least one finding of activity (not [NEGATIVE], not [COLLECT]).
-    - "ruled_out": you looked for it and the sources examined do not show
-      it. finding_ids must name at least one [NEGATIVE] finding that cites
-      the tool calls you ran; submit that finding first. This records that
-      the evidence examined did not show it, not that it did not happen.
+    - "ruled_out": the sources examined were searched for it and do not
+      show it. finding_ids must name at least one [NEGATIVE] finding that
+      cites those tool calls. If none exists, submit one first; if you
+      cannot submit findings, use "undetermined". This records that the
+      evidence examined did not show it, not that it did not happen.
     - "undetermined": the evidence needed to answer is not in the case or
       could not be read. Give the reason. This is not for work you skipped.
 
@@ -91,9 +92,11 @@ def resolve_question(
             )
     else:
         ids = list(dict.fromkeys(finding_ids or []))
+        # The report role resolves questions too and cannot submit findings,
+        # so the message must not send every caller to submit_finding.
         needed = (
-            f"a {NEGATIVE_PREFIX} finding that cites the tool calls you ran (submit one "
-            "with submit_finding if none exists)"
+            f"a {NEGATIVE_PREFIX} finding that cites the tool calls that looked for it (if "
+            "none exists, submit one first, or use 'undetermined' if you cannot submit findings)"
             if resolution == "ruled_out"
             else f"a finding of activity (not {NEGATIVE_PREFIX} or [COLLECT])"
         )

@@ -220,6 +220,10 @@ def test_the_second_path_needs_every_question_resolved_and_both_audits(
     # told only to submit more findings.
     assert "resolve_question" in str(gate["detail"])
     assert "audit_evidence_coverage and audit_tool_coverage" in str(gate["detail"])
+    # The report role reads this detail too, and cannot submit findings.
+    assert "If you cannot, resolve a question that no finding addresses as undetermined" in str(
+        gate["detail"]
+    )
 
 
 def test_a_failing_gate_lists_the_open_question_ids() -> None:
@@ -480,7 +484,8 @@ def test_questions_pass_through_unchanged_when_they_cannot_be_recorded(
         ({"resolution": "closed"}, "invalid_params", "resolution must be one of"),
         ({"question_id": "q_00000000"}, "not_found", "No investigation question has the id"),
         ({"resolution": "answered"}, "invalid_params", "must name at least one finding_id"),
-        ({"resolution": "ruled_out", "finding_ids": []}, "invalid_params", "[NEGATIVE] finding"),
+        # The report role calls this too and has no submit_finding.
+        ({"resolution": "ruled_out", "finding_ids": []}, "invalid_params", "if you cannot submit"),
         ({"resolution": "answered", "finding_ids": ["f_nope"]}, "invalid_params", "No such"),
         ({"resolution": "answered", "finding_ids": ["NEG"]}, "invalid_params", "not that kind"),
         ({"resolution": "answered", "finding_ids": ["COL"]}, "invalid_params", "not that kind"),
