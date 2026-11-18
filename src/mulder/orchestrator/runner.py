@@ -24,6 +24,7 @@ from mulder.orchestrator.evidence import EvidenceContext, ServerBridge
 from mulder.orchestrator.fallback import not_completed
 from mulder.orchestrator.gates import (
     GateResult,
+    report_written,
     validate_catalog,
     validate_cross_system,
     validate_extraction,
@@ -217,7 +218,12 @@ class Orchestrator:
         self.dashboard.start()
 
         try:
-            return await self._run_pipeline(result)
+            result = await self._run_pipeline(result)
+            if result.budget_stop is not None:
+                # The phase the budget cut short returned no PhaseResult to
+                # add up, so count what every session reported instead.
+                result.total_turns = self._session.turns_run
+            return result
         finally:
             self._running = False
             self.dashboard.stop()
@@ -289,7 +295,25 @@ class Orchestrator:
             logger.warning("Token budget reached in phase '%s': %s", self.current_phase, exc)
             if self.current_phase == CATALOG.name:
                 return result  # nothing was analysed, so there is nothing to report on
+            if self._too_few_findings():
+                # The report role cannot submit findings, so its sessions
+                # would spend the reserve and ``finalize_report`` would still
+                # refuse. The partial report is rendered from the database.
+                self.dashboard.log_info(
+                    "Too few findings for finalize_report; skipping the report phase"
+                )
+                return result
         return await self._run_report(result)
+
+    def _too_few_findings(self) -> bool:
+        """Return True when ``finalize_report`` would refuse for want of findings.
+
+        Of its readiness gates, ``minimum_findings`` is the one a report
+        session has no tool to fix. Unknown (no readable case) counts as
+        enough, which leaves the report phase to run as it always has.
+        """
+        gates = (self._server.get_readiness() or {}).get("gates", [])
+        return any(g.get("name") == "minimum_findings" and not g.get("passed") for g in gates)
 
     async def _run_analysis(self, result: InvestigationResult) -> bool:
         """Run the phases before the report: catalog to alternative narrative.
@@ -423,6 +447,7 @@ class Orchestrator:
             budget_note = _BUDGET_NOTE.format(limit=self.budget.limit, left="; ".join(left))
 
         # Phase 5: Report (single-mode)
+        turns_before = self._session.turns_run
         try:
             report_result = await self._run_single_phase(
                 REPORT,
@@ -433,12 +458,24 @@ class Orchestrator:
                 },
             )
         except TokenBudgetReached as exc:
-            # Nothing is left for a report session; the partial report
-            # rendered from the database takes over (``fallback.py``).
-            result.budget_stop = exc
-            self.dashboard.log_gate_fail(f"Token budget reached: {exc}; no report finalized")
+            # A session that finalized the report and then ran out of turns
+            # or context has done the job: only its continuation was refused.
+            written = report_written(
+                self._db_dir / f"{self._case_id}.report.md", self._phase_started_at
+            )
+            if written:
+                self.dashboard.log_info(f"Token budget reached: {exc}; the report is finalized")
+            else:
+                # Nothing was left for a report session; the partial report
+                # rendered from the database takes over (``fallback.py``).
+                result.budget_stop = exc
+                self.dashboard.log_gate_fail(f"Token budget reached: {exc}; no report finalized")
             logger.warning("Token budget reached in the report phase: %s", exc)
-            report_result = PhaseResult(phase_name=REPORT.name, success=False)
+            report_result = PhaseResult(
+                phase_name=REPORT.name,
+                success=written,
+                turns_used=self._session.turns_run - turns_before,
+            )
         result.phases.append(report_result)
         self._accumulate(result, report_result)
 

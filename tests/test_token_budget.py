@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -22,8 +23,10 @@ from claude_agent_sdk.types import AssistantMessage, ResultMessage, TextBlock, T
 from click.testing import CliRunner
 from rich.console import Console
 
+import mulder.server.app as server_app
 from mulder.cli import cli, investigate
 from mulder.db import CaseDB
+from mulder.models import Finding
 from mulder.orchestrator.budget import (
     REPORT_RESERVE_FLOOR,
     TokenBudget,
@@ -31,7 +34,7 @@ from mulder.orchestrator.budget import (
     report_reserve,
 )
 from mulder.orchestrator.display import InvestigationDashboard
-from mulder.orchestrator.fallback import incomplete_notice
+from mulder.orchestrator.fallback import incomplete_notice, write_fallback_report
 from mulder.orchestrator.gates import GateResult
 from mulder.orchestrator.models import ModelConfig
 from mulder.orchestrator.phases import (
@@ -454,7 +457,8 @@ class _Run:
         db_dir: Path,
         max_tokens: int | None,
         cost: dict[str, int],
-        catalog_subtype: str = "success",
+        subtypes: dict[str, str] | None = None,
+        systems: tuple[str, ...] = ("host-a", "host-b"),
     ) -> None:
         with patch("mulder.orchestrator.runner.InvestigationDashboard"):
             self.orch = Orchestrator(
@@ -465,7 +469,8 @@ class _Run:
                 max_tokens=max_tokens,
             )
         self.cost = cost
-        self.catalog_subtype = catalog_subtype
+        self.subtypes = subtypes or {}
+        self.systems = systems
         self.sessions: list[str] = []
         self.prompts: dict[str, str] = {}
 
@@ -475,8 +480,12 @@ class _Run:
         self.prompts[role] = prompt
         phase, _, kind = role.partition(".")
         if role == "catalog":
-            systems = [{"name": "host-a"}, {"name": "host-b"}]
+            systems = [{"name": name} for name in self.systems]
             text = json.dumps({"case_id": CASE, "evidence_root": "/evidence", "systems": systems})
+        elif role == "report":
+            # What a report session that gets through ``finalize_report`` leaves.
+            (self.orch._db_dir / f"{CASE}.report.md").write_text("# Report")
+            text = "done"
         elif kind == "planner":
             task = {"tool": _PLAN_TOOL[phase], "args": {}, "purpose": "test"}
             text = json.dumps({"tasks": [task]})
@@ -496,7 +505,7 @@ class _Run:
             model_usage={
                 options.model: {"inputTokens": 10, "cacheReadInputTokens": self.cost[role] - 10}
             },
-            subtype=self.catalog_subtype if role == "catalog" else "success",
+            subtype=self.subtypes.get(role, "success"),
         )
 
     async def gate(self, phase: PhaseConfig, _result: PhaseResult) -> GateResult:
@@ -509,8 +518,32 @@ class _Run:
             patch.object(self.orch, "_start_proxy_if_needed"),
             patch.object(self.orch._log_tailer, "start"),
             patch.object(self.orch._server, "build_consistency_report", return_value=""),
+            # The readiness check after a budget stop is the real one, against
+            # this run's directory; the server's module state is put back.
+            patch.object(server_app, "_cfg", None),
         ):
             return await self.orch.run()
+
+
+def _case(db_dir: Path, findings: int) -> None:
+    """A real case database with one source and *findings* findings."""
+    with CaseDB.create(case_id=CASE, evidence_root="/evidence", db_dir=db_dir) as db:
+        db.register_source("volatility.pslist", "/evidence/mem.raw", "h", "vol", 1)
+        for n in range(findings):
+            db.insert_finding(
+                Finding(
+                    finding_id=f"f-{n}",
+                    case_id=CASE,
+                    title=f"Suspicious process {n}",
+                    description="spinlock.exe spawned from cmd.exe",
+                    severity="high",
+                    confidence="confirmed",
+                    evidence_refs=["tc_aabbccdd"],
+                    sources=["volatility.pslist"],
+                    event_time_start="2025-01-15T08:00:00Z",
+                    submitted_at="2025-01-15T12:00:00Z",
+                )
+            )
 
 
 def _costs(**override: int) -> dict[str, int]:
@@ -671,7 +704,7 @@ class TestPipeline:
     @pytest.mark.asyncio()
     async def test_a_stop_during_the_catalog_runs_no_report_phase(self, tmp_path: Path) -> None:
         """The catalog hit its turn limit; its continuation is refused."""
-        run = _Run(tmp_path, 10_000, _costs(catalog=6_000), catalog_subtype="error_max_turns")
+        run = _Run(tmp_path, 10_000, _costs(catalog=6_000), {"catalog": "error_max_turns"})
         result = await run.run()
 
         assert run.sessions == ["catalog"]
@@ -683,6 +716,125 @@ class TestPipeline:
             "Reason: token budget reached: 6,000 of 10,000 tokens used; "
             "5,000 are held back for the report",
         ]
+
+    @pytest.mark.asyncio()
+    @pytest.mark.parametrize("findings", [2, 3])
+    async def test_a_case_with_too_few_findings_to_finalize_gets_no_report_phase(
+        self, tmp_path: Path, findings: int
+    ) -> None:
+        """The report role cannot submit findings: its sessions would only spend the reserve.
+
+        The check is the real ``check_finalize_readiness`` on a real case
+        database; ``finalize_report`` enforces the same gates.
+        """
+        started = time.time()
+        _case(tmp_path, findings)
+        # host-a's executor takes the run into the reserve: no analyst ever runs.
+        run = _Run(tmp_path, 10_000, _costs(**{"extraction.executor": 4_500}))
+        result = await run.run()
+
+        analysis = ["catalog", "extraction.planner", "extraction.executor"]
+        assert not result.success
+        if findings == 3:
+            assert run.sessions == [*analysis, "report"]
+            return
+        assert run.sessions == analysis
+        assert [p.phase_name for p in result.phases] == ["catalog"]
+        assert run.orch.budget.used == 6_000  # the reserve was not spent on it
+        run.orch.dashboard.log_info.assert_any_call(  # type: ignore[attr-defined]
+            "Too few findings for finalize_report; skipping the report phase"
+        )
+        # The partial report takes over, with the budget as its reason.
+        written = write_fallback_report(run.orch, CASE, tmp_path, started, result.budget_stop)
+        assert written is not None and written.findings == 2
+        banner = written.markdown.read_text()
+        assert (
+            "Reason: token budget reached: 6,000 of 10,000 tokens used; "
+            "5,000 are held back for the report"
+        ) in banner
+        assert (
+            "Not completed: extraction (2 of 2 systems: host-a, host-b); cross_system; "
+            "alternative_narrative; report"
+        ) in banner
+
+    @pytest.mark.asyncio()
+    async def test_a_report_finalized_before_its_continuation_was_refused_is_kept(
+        self, tmp_path: Path
+    ) -> None:
+        """The report session wrote the report, ran out of turns and spent the budget."""
+        started = time.time()
+        costs = _costs(**{"extraction.analyst": 3_500}, report=6_000)
+        run = _Run(tmp_path, 10_000, costs, {"report": "error_max_turns"})
+        result = await run.run()
+
+        assert run.sessions[-1] == "report" and run.sessions.count("report") == 1
+        assert run.orch.budget.used == 11_500
+        assert [(p.phase_name, p.success, p.turns_used) for p in result.phases] == [
+            ("catalog", True, 1),
+            ("extraction", True, 3),
+            ("report", True, 1),
+        ]
+        # Still the stop that cut the analysis short, so still not a success.
+        assert not result.success
+        assert str(result.budget_stop) == (
+            "5,500 of 10,000 tokens used; 5,000 are held back for the report"
+        )
+        assert write_fallback_report(run.orch, CASE, tmp_path, started, result.budget_stop) is None
+        dashboard, buf = _dashboard(run.orch.budget)
+        dashboard.print_summary(result)
+        assert "MISSING" not in buf.getvalue()
+
+    @pytest.mark.asyncio()
+    async def test_a_refused_continuation_of_a_finished_run_is_not_a_budget_stop(
+        self, tmp_path: Path
+    ) -> None:
+        """Every phase passed and the report is finalized: nothing was cut short."""
+        costs = {**_costs(**dict.fromkeys(_FULL_RUN[1:-1], 300)), "report": 6_000}
+        run = _Run(tmp_path, 10_000, costs, {"report": "error_max_turns"})
+        result = await run.run()
+
+        assert run.sessions == _FULL_RUN
+        assert run.orch.budget.used == 10_600
+        assert (result.success, result.budget_stop) == (True, None)
+
+    @pytest.mark.asyncio()
+    async def test_turns_of_the_phase_that_was_cut_short_are_counted(self, tmp_path: Path) -> None:
+        """host-a's planner and executor ran; its analyst was refused."""
+        run = _Run(tmp_path, 10_000, _costs(**{"extraction.executor": 4_500}))
+        result = await run.run()
+
+        assert run.sessions == ["catalog", "extraction.planner", "extraction.executor", "report"]
+        # No extraction row: that phase returned nothing. Its two turns are in the total.
+        assert [(p.phase_name, p.turns_used) for p in result.phases] == [
+            ("catalog", 1),
+            ("report", 1),
+        ]
+        assert result.total_turns == 4
+
+    @pytest.mark.asyncio()
+    async def test_turns_are_what_the_phases_add_up_to_without_a_budget_stop(
+        self, tmp_path: Path
+    ) -> None:
+        run = _Run(tmp_path, 10**9, _costs())
+        result = await run.run()
+        assert result.total_turns == sum(p.turns_used for p in result.phases) == len(_FULL_RUN)
+
+    @pytest.mark.asyncio()
+    async def test_a_single_system_case_does_not_list_cross_system_as_left(
+        self, tmp_path: Path
+    ) -> None:
+        """One system: there was never anything to correlate, so the budget cut nothing there."""
+        costs = _costs(**{"extraction.executor": 4_500})
+        run = _Run(tmp_path, 10_000, costs, systems=("host-a",))
+        result = await run.run()
+
+        assert run.sessions[-1] == "report"
+        assert (
+            "extraction (1 of 1 systems: host-a); alternative_narrative\n" in run.prompts["report"]
+        )
+        assert "cross_system" not in run.prompts["report"]
+        # The partial report's banner uses the same list.
+        assert "cross_system" not in incomplete_notice(run.orch, result.budget_stop)[2]
 
     @pytest.mark.asyncio()
     async def test_hostile_system_names_reach_the_report_prompt_bounded(
@@ -770,6 +922,22 @@ class TestDisplay:
         assert "Tokens: 120" in buf.getvalue()
         assert "Budget: 43.1K / 10.0M" in buf.getvalue()
 
+    def test_the_budget_does_not_reflow_the_header_at_80_columns(self) -> None:
+        """It sits in the panel's border, so no column of the grid gets wider."""
+
+        def header(limit: int | None) -> list[str]:
+            dashboard, buf = _dashboard(self._budget(limit))
+            dashboard._console = Console(file=buf, width=80, no_color=True)
+            dashboard._psutil_cache, dashboard._psutil_cache_time = (0.0, 2.8, 16.0), 1e18
+            dashboard.set_phase("catalog", 1, 5, "claude-opus-4-6", 10)
+            dashboard._console.print(dashboard._build_stats_panel())
+            return buf.getvalue().splitlines()
+
+        plain, limited = header(None), header(10_000_000)
+        assert any("MEM: 2.8/16 GB (18%)" in line for line in plain)
+        assert limited[:-1] == plain[:-1]
+        assert "Budget: 43.1K / 10.0M" in limited[-1]
+
     def test_header_is_unchanged_without_a_budget(self) -> None:
         dashboard, buf = _dashboard(self._budget(None))
         dashboard._console.print(dashboard._build_stats_panel())
@@ -792,6 +960,25 @@ class TestDisplay:
         dashboard.print_summary(InvestigationResult(budget_stop=TokenBudgetReached("x")))
         assert "REACHED (43.1K of 50.0K used, cached input included)" in buf.getvalue()
         assert "analysis stopped early" in buf.getvalue()
+
+    def test_phase_table_accounts_for_turns_outside_a_finished_phase(self) -> None:
+        """After a budget stop the phase that was cut short has no row of its own."""
+        phases = [
+            PhaseResult(phase_name="catalog", success=True, turns_used=3),
+            PhaseResult(phase_name="report", success=True, turns_used=5),
+        ]
+        stopped = InvestigationResult(
+            phases=phases, total_turns=20, budget_stop=TokenBudgetReached("x")
+        )
+        dashboard, buf = _dashboard(self._budget(50_000))
+        dashboard.print_summary(stopped)
+        assert ["(cut", "short)", "12"] in [
+            line.replace("│", " ").split() for line in buf.getvalue().splitlines()
+        ]
+
+        dashboard, buf = _dashboard(self._budget(50_000))
+        dashboard.print_summary(InvestigationResult(phases=phases, total_turns=8, success=True))
+        assert "cut short" not in buf.getvalue()
 
     def test_summary_without_cached_input_or_a_budget_has_no_new_rows(self) -> None:
         budget = TokenBudget()

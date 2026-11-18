@@ -99,6 +99,10 @@ def not_completed(orchestrator: Orchestrator) -> list[str]:
                 f"{name} ({len(pending)} of {len(orchestrator.systems_done)} systems: {shown}"
                 + (f", +{more} more)" if more > 0 else ")")
             )
+        elif name == CROSS_SYSTEM.name and len(orchestrator.systems_done) == 1:
+            # One system: the pipeline skips cross-system correlation, so it
+            # is not something the run left undone.
+            continue
         elif not results:
             left.append(name)
         elif not all(p.success for p in results):

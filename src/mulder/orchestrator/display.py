@@ -831,12 +831,20 @@ class InvestigationDashboard:
             f"[dim]CPU: {cpu:.0f}%[/]",
             f"[dim]MEM: {mem_used_gb:.1f}/{mem_total_gb:.0f} GB ({mem_pct:.0f}%)[/]",
             f"[dim]{elapsed}[/]",
-            self._budget_cell(),
+            "",
         )
 
-        return Panel(table, title="Mulder", border_style="blue", height=_HEADER_SIZE)
+        # In the border, not the grid: a fourth-row cell this wide makes the
+        # grid wrap its other columns on an 80-column terminal.
+        return Panel(
+            table,
+            title="Mulder",
+            subtitle=self._budget_text(),
+            border_style="blue",
+            height=_HEADER_SIZE,
+        )
 
-    def _budget_cell(self) -> str:
+    def _budget_text(self) -> str:
         """Tokens of every kind used so far against ``--max-tokens``, if set."""
         if self._budget.limit is None:
             return ""
@@ -1000,5 +1008,10 @@ class InvestigationDashboard:
                 Text(status_text, style=status_style),
                 str(phase.turns_used),
             )
+        # A phase the token budget cut short has no row above; its sessions'
+        # turns are in the total, so show them and let the table add up.
+        cut = result.total_turns - sum(p.turns_used for p in result.phases)
+        if result.budget_stop is not None and cut > 0:
+            phases_table.add_row("(cut short)", "", str(cut))
 
         self._console.print(phases_table)

@@ -510,6 +510,9 @@ class SessionExecutor:
         #: had none. A partial report quotes it next to a failed gate, which
         #: otherwise names only the symptom (``orchestrator/fallback.py``).
         self.last_query_error = ""
+        #: Turns of every role session so far. A phase the token budget cuts
+        #: short returns no result to add up, so the run's total is read here.
+        self.turns_run = 0
 
     def _stderr_callback(self, label: str) -> Callable[[str], None]:
         """Keep diagnostics scoped to their query and inside the live dashboard."""
@@ -841,6 +844,7 @@ class SessionExecutor:
                 phase_out_tokens,
             )
 
+        self.turns_run += turns_used
         return PhaseResult(
             phase_name="query",
             success=False,
