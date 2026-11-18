@@ -1,0 +1,21 @@
+title: GCP Federated Token Exchanged
+id: 8b1f4d5a-63c2-4a7e-b2a1-4c9d7e2f5a22
+status: experimental
+description: Detects an external identity token (for example a GitHub Actions OIDC token) being exchanged for a Google federated token through Workload or Workforce Identity Federation. Logged only when Data Access audit logs are enabled for the Security Token Service API.
+references:
+    - https://cloud.google.com/iam/docs/audit-logging/examples-workload-identity
+author: mulder
+date: 2026-11-17
+tags:
+    - attack.initial-access
+    - attack.t1078.004
+logsource:
+    product: gcp
+    service: gcp.audit
+detection:
+    selection:
+        gcp.audit.method_name|endswith: 'SecurityTokenService.ExchangeToken'
+    condition: selection
+falsepositives:
+    - Every CI run that authenticates through federation; review the pool provider and subject of each exchange
+level: low

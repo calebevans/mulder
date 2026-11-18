@@ -5,10 +5,13 @@ from __future__ import annotations
 import importlib.util
 import json
 import logging
+import os
 import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Sequence
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
@@ -44,15 +47,29 @@ def _default_linux_rules() -> Path:
     return asset_display_path(_ZIRCOLITE_DIRNAME, "rules", "linux")
 
 
-# Zircolite 2.20.0's unguarded top-level third-party imports, i.e. the modules
-# without which zircolite.py cannot start at all.  Every other import in
-# Zircolite (aiohttp, evtx, lxml, requests, elasticsearch, pysigma, yaml,
-# jinja2) sits inside a try/except feeding its own ImportErrorHandler and is
-# optional.  Inside the container these come from the Dockerfile's pip install;
-# under ``pipx install mulder-dfir`` they come from the ``forensics`` extra.
-# Keep this list short: a missing entry only weakens the preflight, an extra
-# entry blocks a working install.
-_ZIRCOLITE_MODULES = ("orjson", "xxhash", "colorama", "tqdm")
+# ``import name -> PyPI distribution`` for what Zircolite 2.20.0 needs to do
+# the job run_zircolite asks of it.  The first four are its unguarded top-level
+# imports, without which zircolite.py cannot start.  pySigma and its SQLite
+# backend are imported inside a try/except, so Zircolite starts without them,
+# but it then cannot compile a Sigma YAML ruleset: it logs "No rules to
+# execute", exits 0 and writes no results, which reads as a clean scan.  Every
+# ruleset mulder ships is Sigma YAML, so they are required here.  Inside the
+# container these come from the Dockerfile's pip install; under ``pipx install
+# mulder-dfir`` they come from the ``forensics`` extra.
+_ZIRCOLITE_MODULES = {
+    "orjson": "orjson",
+    "xxhash": "xxhash",
+    "colorama": "colorama",
+    "tqdm": "tqdm",
+    "sigma": "pysigma",
+    "sigma.backends.sqlite": "pysigma-backend-sqlite",
+    # Sysmon-for-Linux events are XML inside syslog lines. Without lxml
+    # Zircolite swallows the parse error for every event and scans nothing.
+    "lxml": "lxml",
+}
+
+# What Zircolite logs, while still exiting 0, when a ruleset compiled to nothing.
+_NO_RULES_MARKER = "No rules to execute"
 
 _FORMAT_FLAGS: dict[str, list[str]] = {
     "auditd": ["--auditd"],
@@ -62,6 +79,47 @@ _FORMAT_FLAGS: dict[str, list[str]] = {
 }
 
 _LEVEL_ORDER = ["informational", "low", "medium", "high", "critical"]
+
+# Sigma tags under "attack." also name groups (g0032) and software (s0002).
+_ATTACK_TACTICS = frozenset(
+    {
+        "reconnaissance",
+        "resource-development",
+        "initial-access",
+        "execution",
+        "persistence",
+        "privilege-escalation",
+        "defense-evasion",
+        "credential-access",
+        "discovery",
+        "lateral-movement",
+        "collection",
+        "command-and-control",
+        "exfiltration",
+        "impact",
+    }
+)
+
+# Where a matched event keeps its time, by input format: auditd (set by
+# Zircolite), then Sysmon's two fields.
+_TIME_FIELDS = ("timestamp", "UtcTime", "SystemTime")
+
+
+def _event_time(match: dict[str, Any]) -> object:
+    """A matched event's time; epoch numbers become ISO 8601 UTC.
+
+    Logs such as GitHub's audit log carry epoch milliseconds, which the index
+    cannot place on a timeline.
+    """
+    value = next((match[k] for k in _TIME_FIELDS if match.get(k) not in (None, "")), "")
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return value
+    seconds = value / 1000 if value > 1e11 else value
+    try:
+        return datetime.fromtimestamp(seconds, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except (OverflowError, OSError, ValueError):
+        return value
+
 
 # How many detections the tool response carries back. The index is not bounded
 # by this: every detection is indexed, and the list is truncated only for the
@@ -76,7 +134,6 @@ _DETECTION_FIELDS = (
     "rule_level",
     "rule_title",
     "rule_id",
-    "count",
     "mitre_attack",
     "rule_description",
     "matched_fields",
@@ -116,8 +173,16 @@ def _detection_lines(detections: list[dict[str, Any]]) -> list[str]:
 
 
 def _missing_zircolite_modules() -> list[str]:
-    """Return Zircolite dependencies not importable from mulder's interpreter."""
-    return [m for m in _ZIRCOLITE_MODULES if importlib.util.find_spec(m) is None]
+    """Return the PyPI names of Zircolite dependencies mulder's interpreter lacks."""
+    missing: list[str] = []
+    for module, distribution in _ZIRCOLITE_MODULES.items():
+        try:
+            found = importlib.util.find_spec(module) is not None
+        except ModuleNotFoundError:  # the parent package of a dotted name is absent
+            found = False
+        if not found:
+            missing.append(distribution)
+    return missing
 
 
 def _run_zircolite_process(
@@ -126,6 +191,8 @@ def _run_zircolite_process(
     log_format: str,
     ruleset_path: Path,
     output_dir: Path,
+    extra_rulesets: Sequence[Path] = (),
+    config: Path | None = None,
 ) -> tuple[Path, subprocess.CompletedProcess[str]]:
     """Execute Zircolite against event logs.
 
@@ -135,6 +202,8 @@ def _run_zircolite_process(
         log_format: Log format identifier.
         ruleset_path: Path to the Sigma ruleset directory.
         output_dir: Output directory for results.
+        extra_rulesets: Further rulesets to apply in the same run.
+        config: Field-mapping file to use instead of Zircolite's own.
 
     Returns:
         Tuple of (path to the JSON results file, the completed process). The
@@ -147,15 +216,22 @@ def _run_zircolite_process(
     output_file = output_dir / "zircolite_results.json"
     format_flags = _FORMAT_FLAGS.get(log_format, [])
 
+    # Zircolite resolves its field mappings, log file and scratch directory
+    # against the working directory.  Name the mappings explicitly and run in
+    # the output directory, or it exits 1 ("Cannot find mapping file") whenever
+    # mulder was not started from Zircolite's own checkout.
     cmd = [
         sys.executable,
-        script,
+        str(Path(script).resolve()),
         "--events",
-        str(events_path),
+        str(events_path.resolve()),
         "--ruleset",
-        str(ruleset_path),
+        str(ruleset_path.resolve()),
+        *(str(r.resolve()) for r in extra_rulesets),
         "--outfile",
         str(output_file),
+        "--config",
+        str(config or Path(script).resolve().parent / "config" / "fieldMappings.json"),
         *format_flags,
     ]
 
@@ -165,6 +241,9 @@ def _run_zircolite_process(
         text=True,
         timeout=_ZIRCOLITE_TIMEOUT,
         check=False,
+        cwd=output_dir,
+        # Zircolite renders auditd epochs in the host's local time.
+        env={**os.environ, "TZ": "UTC"},
     )
     return output_file, proc
 
@@ -183,7 +262,7 @@ def _build_detection_timeline(
     timeline: list[dict[str, Any]] = []
     for d in detections:
         ts = d.get("timestamp", "")
-        if ts:
+        if ts not in ("", None):
             timeline.append(
                 {
                     "timestamp": ts,
@@ -191,7 +270,7 @@ def _build_detection_timeline(
                     "rule_level": d.get("rule_level", ""),
                 }
             )
-    return sorted(timeline, key=lambda x: x.get("timestamp", ""))
+    return sorted(timeline, key=lambda x: str(x.get("timestamp", "")))
 
 
 def _parse_zircolite_output(
@@ -217,7 +296,6 @@ def _parse_zircolite_output(
             "log_format": log_format,
             "detections": [],
             "total_detections": 0,
-            "total_events_processed": 0,
             "level_counts": {},
             "mitre_coverage": {},
             "timeline": [],
@@ -231,7 +309,6 @@ def _parse_zircolite_output(
             "log_format": log_format,
             "detections": [],
             "total_detections": 0,
-            "total_events_processed": 0,
             "level_counts": {},
             "mitre_coverage": {},
             "timeline": [],
@@ -246,45 +323,47 @@ def _parse_zircolite_output(
 
     detections: list[dict[str, Any]] = []
     level_counts: dict[str, int] = {}
-    mitre_coverage: dict[str, list[str]] = {}
+    tactics: set[str] = set()
+    techniques: set[str] = set()
 
+    # Zircolite writes one object per rule that fired, carrying every event the
+    # rule matched: {"title", "id", "description", "rule_level", "tags",
+    # "count", "matches": [...]}.  One detection per matched event, so each
+    # keeps its own timestamp.  The array is padded with an empty object.
     for entry in raw_results:
-        level = entry.get("rule_level", "informational")
-        level_counts[level] = level_counts.get(level, 0) + 1
-
-        level_idx = _LEVEL_ORDER.index(level) if level in _LEVEL_ORDER else 0
-        if level_idx < min_idx:
+        if not isinstance(entry, dict) or not entry.get("title"):
             continue
+        level = str(entry.get("rule_level") or "informational")
+        level_idx = _LEVEL_ORDER.index(level) if level in _LEVEL_ORDER else 0
+        # Sigma tags: "attack.t1059.004" is a technique, "attack.execution" a tactic.
+        mitre_attack = [
+            name.upper() if name[:1] == "t" and name[1:2].isdigit() else name
+            for tag in entry.get("tags") or []
+            if (name := str(tag).removeprefix("attack.")) != str(tag)
+        ]
 
-        mitre_refs = entry.get("rule_mitre", [])
-        if isinstance(mitre_refs, list):
-            for ref in mitre_refs:
-                if isinstance(ref, dict):
-                    tactic = ref.get("tactic", "unknown")
-                    technique = ref.get("technique", "")
-                    if tactic not in mitre_coverage:
-                        mitre_coverage[tactic] = []
-                    if technique and technique not in mitre_coverage[tactic]:
-                        mitre_coverage[tactic].append(technique)
+        matches = [m for m in entry.get("matches") or [] if isinstance(m, dict)]
+        for match in matches or [{}]:
+            # Counted before the filter, so the caller can see what it hid.
+            level_counts[level] = level_counts.get(level, 0) + 1
+            if level_idx < min_idx:
+                continue
+            # Coverage describes the detections reported, not the ones filtered out.
+            techniques.update(n for n in mitre_attack if n[:1] == "T" and n[1:2].isdigit())
+            tactics.update(n for n in mitre_attack if n in _ATTACK_TACTICS)
+            detections.append(
+                {
+                    "timestamp": _event_time(match),
+                    "rule_title": entry.get("title", ""),
+                    "rule_id": entry.get("id", ""),
+                    "rule_level": level,
+                    "rule_description": entry.get("description", ""),
+                    "mitre_attack": mitre_attack,
+                    "matched_fields": match,
+                }
+            )
 
-        mitre_attack: list[str] = []
-        if isinstance(mitre_refs, list):
-            for r in mitre_refs:
-                if isinstance(r, dict):
-                    mitre_attack.append(f"{r.get('technique', '')} ({r.get('tactic', '')})")
-
-        detections.append(
-            {
-                "timestamp": entry.get("timestamp", ""),
-                "rule_title": entry.get("rule_title", ""),
-                "rule_id": entry.get("rule_id", ""),
-                "rule_level": level,
-                "rule_description": entry.get("rule_description", ""),
-                "mitre_attack": mitre_attack,
-                "matched_fields": entry.get("matched_fields", {}),
-                "count": entry.get("count", 1),
-            }
-        )
+    mitre_coverage = {"tactics": sorted(tactics), "techniques": sorted(techniques)}
 
     timeline = _build_detection_timeline(detections)
 
@@ -295,7 +374,6 @@ def _parse_zircolite_output(
         # bounding the list for the response.
         "detections": detections,
         "total_detections": len(detections),
-        "total_events_processed": sum(level_counts.values()),
         "level_counts": level_counts,
         "mitre_coverage": mitre_coverage,
         "timeline": timeline[:200],
@@ -442,9 +520,23 @@ def run_zircolite(
                 error_type="os_error",
             )
 
-        if proc.returncode != 0 and not results_path.exists():
+        if _NO_RULES_MARKER in f"{proc.stdout or ''}{proc.stderr or ''}":
+            return error_response(
+                tc_id,
+                "run_zircolite",
+                params,
+                f"Zircolite loaded no rules from {effective_ruleset}, so nothing was scanned",
+                (time.monotonic() - t0) * 1000,
+                error_type="tool_failed",
+                suggestion="Point ruleset_path at Sigma YAML rules or a Zircolite JSON ruleset.",
+            )
+
+        # Zircolite writes a results file even when nothing matched, so a
+        # missing one means it never got as far as scanning, whatever it exited.
+        if not results_path.exists():
+            # The tail: Zircolite opens with a banner and ends with the cause.
             detail = ((proc.stderr or "").strip() or (proc.stdout or "").strip())[
-                :_STDERR_PREVIEW_CHARS
+                -_STDERR_PREVIEW_CHARS:
             ]
             return error_response(
                 tc_id,
@@ -460,14 +552,12 @@ def run_zircolite(
         text_parts = [
             f"Zircolite {log_format} analysis of {events_path}",
             f"Total detections: {result['total_detections']}",
-            f"Events processed: {result['total_events_processed']}",
         ]
         for level, count in result.get("level_counts", {}).items():
             text_parts.append(f"  {level}: {count}")
-        if result.get("mitre_coverage"):
-            text_parts.append("MITRE coverage:")
-            for tactic, techniques in result["mitre_coverage"].items():
-                text_parts.append(f"  {tactic}: {', '.join(techniques[:5])}")
+        for kind, names in result["mitre_coverage"].items():
+            if names:
+                text_parts.append(f"MITRE {kind}: {', '.join(names)}")
 
         # Index the detections themselves, not just how many there were: the
         # source is called "zircolite.detections", so a search over the case

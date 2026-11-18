@@ -777,6 +777,76 @@ def _human_bytes(count: int) -> str:
     return f"{count / 1024**2:.0f} MB"
 
 
+@cli.command()
+@click.argument("provider", type=click.Choice(["github", "gcp"]))
+@click.option(
+    "--out",
+    "out_dir",
+    required=True,
+    type=click.Path(file_okay=False),
+    help="Directory to write the export into, e.g. a new folder in the evidence directory.",
+)
+@click.option(
+    "--scope",
+    default=None,
+    help="One organization (github) or project (gcp). Default: every one configured.",
+)
+@click.option("--since", default=None, help="Start of the window, ISO 8601 (UTC if no offset).")
+@click.option("--until", default=None, help="End of the window, ISO 8601. Default: now.")
+@click.option(
+    "--days", default=30, show_default=True, help="Window length when --since is not given."
+)
+def collect(
+    provider: str,
+    out_dir: str,
+    scope: str | None,
+    since: str | None,
+    until: str | None,
+    days: int,
+) -> None:
+    """Export cloud audit logs with read-only credentials you supply.
+
+    Writes JSON lines that `mulder investigate` recognises, plus a manifest
+    with the query, the event count and the SHA-256 of the export.
+
+    \b
+    github  MULDER_GITHUB_TOKEN  a token with the read:audit_log scope only
+            MULDER_GITHUB_ORGS   comma-separated organizations
+    gcp     MULDER_GCP_CREDENTIALS  path to a service account key file
+            MULDER_GCP_PROJECTS     comma-separated projects (default: the key's)
+
+    Only these variables are read. Your own gh or gcloud login is never used.
+    """
+    from mulder import collect as collector
+
+    configured = collector.targets().get(provider, [])
+    scopes = [scope] if scope else configured
+    if not scopes:
+        raise click.ClickException(
+            f"No {provider} collection is configured. See `mulder collect --help`."
+        )
+    try:
+        start, end = collector.window(since, until, days)
+    except collector.CollectError as exc:
+        raise click.ClickException(str(exc)) from None
+
+    failed = False
+    for target in scopes:
+        try:
+            done = collector.collect(provider, target, start, end, Path(out_dir))
+        except collector.CollectError as exc:
+            click.echo(f"{provider} {target}: {exc}", err=True)
+            failed = True
+            continue
+        state = "complete" if done.complete else "PARTIAL"
+        click.echo(f"{provider} {target}: {done.events} events ({state}) -> {done.path}")
+        click.echo(f"  sha256 {done.sha256}")
+        for warning in done.warnings:
+            click.echo(f"  warning: {warning}", err=True)
+    if failed:
+        raise SystemExit(1)
+
+
 @cli.command("export-iocs")
 @click.argument("case_id")
 @click.option(

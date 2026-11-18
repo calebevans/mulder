@@ -293,6 +293,46 @@ RUN mkdir -p /opt/floss \
         && rm /tmp/floss.zip; \
     fi
 
+# gitleaks: download pre-built binary (multi-arch)
+FROM ubuntu:22.04 AS gitleaks-fetch
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG TARGETARCH
+ARG GITLEAKS_VERSION=8.30.1
+RUN case "${TARGETARCH}" in \
+        arm64) GITLEAKS_ARCH="arm64" ;; \
+        *)     GITLEAKS_ARCH="x64" ;; \
+    esac \
+    && mkdir -p /opt/gitleaks \
+    && curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_${GITLEAKS_ARCH}.tar.gz" \
+        | tar xz -C /opt/gitleaks \
+    && chmod +x /opt/gitleaks/gitleaks
+
+# zizmor: download pre-built binary (multi-arch; needs GLIBC 2.34, jammy has 2.35)
+FROM ubuntu:22.04 AS zizmor-fetch
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG TARGETARCH
+ARG ZIZMOR_VERSION=1.32.0
+RUN case "${TARGETARCH}" in \
+        arm64) ZIZMOR_ARCH="aarch64" ;; \
+        *)     ZIZMOR_ARCH="x86_64" ;; \
+    esac \
+    && mkdir -p /opt/zizmor \
+    && curl -fsSL "https://github.com/zizmorcore/zizmor/releases/download/v${ZIZMOR_VERSION}/zizmor-${ZIZMOR_ARCH}-unknown-linux-gnu.tar.gz" \
+        | tar xz -C /opt/zizmor \
+    && chmod +x /opt/zizmor/zizmor
+
 # Chainsaw: download pre-built binary (multi-arch), Sigma rules, and mappings
 FROM ubuntu:22.04 AS chainsaw-fetch
 
@@ -505,6 +545,10 @@ COPY --from=hayabusa-fetch /opt/hayabusa /opt/hayabusa
 COPY --from=capa-fetch /opt/capa/ /opt/capa/
 RUN ln -sf /opt/capa/capa /usr/local/bin/capa
 COPY --from=floss-fetch /opt/floss/ /opt/floss/
+COPY --from=gitleaks-fetch /opt/gitleaks/ /opt/gitleaks/
+RUN ln -sf /opt/gitleaks/gitleaks /usr/local/bin/gitleaks
+COPY --from=zizmor-fetch /opt/zizmor/ /opt/zizmor/
+RUN ln -sf /opt/zizmor/zizmor /usr/local/bin/zizmor
 COPY --from=chainsaw-fetch /opt/chainsaw/ /opt/chainsaw/
 RUN ln -sf /opt/chainsaw/chainsaw /usr/local/bin/chainsaw
 COPY --from=chainsaw-fetch /opt/sigma-rules/ /opt/sigma-rules/
@@ -582,7 +626,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install pure Python forensic tool dependencies
 RUN uv pip install --system --no-cache \
-        stix2 evtx jsonpath-ng colorama tqdm aiohttp lark
+        stix2 evtx jsonpath-ng colorama tqdm aiohttp lark \
+        orjson xxhash pysigma pysigma-backend-sqlite lxml
 
 # Keep real Git metadata for setup --verify, excluding mobile test fixtures
 # from both the working tree and the partial clone's object store.
@@ -659,6 +704,8 @@ ENV MULDER_CWD=/mulder-investigation
 # consequently exits 1 -- /opt is root:root 0755 and the process runs as
 # `mulder` -- which is correct; there is nothing for it to do here.
 ENV MULDER_ASSET_ROOT=/opt
+# Mount a directory of your own YARA rules here to have them used in every scan.
+ENV MULDER_YARA_RULES=/rules/yara
 
 HEALTHCHECK --interval=60s --timeout=5s --start-period=10s --retries=3 \
     CMD ["mulder", "--version"]

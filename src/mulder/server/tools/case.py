@@ -290,7 +290,9 @@ def _scan_evidence_inner(ev_path: Path, case_id: str, replace: bool) -> dict[str
             rel = str(mi["path"])
         depth = rel.count("/") + rel.count("\\")
         indent = "  " * depth
-        name = Path(rel).name
+        # The path relative to the evidence root, not the bare name: which
+        # directory a file sits in is how systems are told apart.
+        name = rel
         size_label = mi.get("size_human", "")
         atype = mi["artifact_type"]
         if "media" in mi:

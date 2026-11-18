@@ -101,6 +101,11 @@ FINDING CONSOLIDATION (MANDATORY):
 - When the same artifact appears across multiple systems, consolidate
   into a single finding using update_finding. Title pattern:
   "Environment-Wide [artifact] Across N Systems".
+- Leave findings whose title starts with [NEGATIVE] (a hypothesis ruled
+  out) or [COLLECT] (evidence that exists outside the case) as they are: do
+  not merge, re-rank or delete them. If several systems point at an account
+  or service whose logs are not in the case and no [COLLECT] finding names
+  it, submit one, citing the tool calls that showed the trace.
 - To merge two findings that describe the same thing, carry the
   detail of both into one with update_finding (description,
   evidence_refs, sources), then delete_finding the other. Never delete

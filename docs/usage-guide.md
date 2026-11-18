@@ -34,6 +34,7 @@ Try-it-out instructions for running Mulder, the forensic investigation platform.
     - [How It Works](#how-it-works)
     - [Example](#example)
   - [Artifact Awareness](#artifact-awareness)
+  - [Cloud Audit Logs](#cloud-audit-logs)
   - [CLI Reference](#cli-reference)
     - [`mulder investigate`](#mulder-investigate)
     - [`mulder setup`](#mulder-setup)
@@ -97,8 +98,8 @@ mulder setup                     # everything mulder owns - no sudo
 #### What `mulder setup` installs
 
 Everything mulder owns, in one run: MITRE ATT&CK data, Sigma rules, the YARA signature-base,
-the Didier Stevens suite, Chainsaw 2.16.0, Hayabusa 3.8.1, Zircolite 2.20.0, capa 9.4.0,
-FLOSS 3.1.0, the six EZ Tools mulder invokes, ALEAPP, iLEAPP, and the Volatility 3 symbol packs.
+the Didier Stevens suite, Chainsaw 2.16.0, Hayabusa 3.8.1, Zircolite 2.20.0, zizmor 1.32.0, capa 9.4.0,
+FLOSS 3.1.0, gitleaks 8.30.1, the six EZ Tools mulder invokes, ALEAPP, iLEAPP, and the Volatility 3 symbol packs.
 About **2.2 GB on disk**; it prints the total and asks before downloading more than 1 GB.
 
 Versions are pinned to match the container image exactly, and a test fails the build if the two
@@ -322,6 +323,28 @@ Model IDs are passed through to the SDK exactly as specified, with no automatic 
 | `AWS_SECRET_ACCESS_KEY` | AWS secret key |
 
 If you prefer file-based credentials, mount your whole `~/.aws` directory read-write at `/home/mulder/.aws` (as in the example above) instead of passing keys. This works for both static profiles in `~/.aws/credentials` and `aws login` sessions from AWS CLI 2.36+: the login token cache lives under `~/.aws/login/cache`, so the mount must be writable for the container to refresh it. The same mount serves `bedrock/` models routed through the LiteLLM proxy (see [Using Non-Anthropic Models via LiteLLM](#using-non-anthropic-models-via-litellm)).
+
+### Using Your Own YARA Rules
+
+Mulder scans with the [signature-base](https://github.com/Neo23x0/signature-base) rules by default. To add your own, point `MULDER_YARA_RULES` at a rule file or a directory of `.yar` / `.yara` files (several paths can be given, separated like `PATH`). Directories are searched recursively.
+
+In the container that variable is already set to `/rules/yara`, so mounting a directory there is enough:
+
+```bash
+docker run ... \
+  -v /path/to/my-yara-rules:/rules/yara:ro \
+  ghcr.io/calebevans/mulder ...
+```
+
+On a native install, set the variable before running mulder:
+
+```bash
+export MULDER_YARA_RULES=~/rules/yara:/srv/team-rules/apt.yar
+```
+
+Your rules are then used alongside signature-base in every YARA scan (files, memory, and per-process with Volatility), and the agent can scan with yours alone by choosing the `custom` ruleset. A rule file that does not compile is left out rather than failing the scan; the others still run. The audit log records how many of your rule files each scan used.
+
+Rule files that happen to be in the evidence directory are never loaded.
 
 ## Starting an Investigation
 
@@ -553,6 +576,81 @@ The extraction planner adapts its tool selection based on what the evidence actu
 **Investigator briefing keywords** also influence tool selection. Briefings mentioning hacking or intrusion trigger searches for exploit tool configs and PCAPs. Briefings about insider threats or data theft prioritize USB history and cloud storage artifacts. Briefings about communications prioritize email and chat application data.
 
 The analyst receives complementary guidance: when execution artifacts show communication tools were used, the analyst searches indexed application files for contacts, server addresses, and credentials, then cross-references those with network connection data.
+
+## Cloud Audit Logs
+
+Mulder's agents work offline, so it does not call cloud APIs. Export the audit logs yourself, put the JSON files in the evidence directory, and `run_cloud_audit_logs` indexes every event and applies Sigma rules. JSON arrays, JSON lines and CloudTrail `Records` files are all read, with or without a byte-order mark; the log type is recognised from the events.
+
+| Log | One way to export it |
+|-----|----------------------|
+| GitHub organization audit log (Enterprise Cloud) | `gh api --paginate "/orgs/ORG/audit-log?include=all&per_page=100&phrase=created:>=2026-01-01" > github-audit.json` |
+| GCP Cloud Audit Logs | `gcloud logging read 'logName:"cloudaudit.googleapis.com"' --project=PROJECT --freshness=30d --format=json > gcp-audit.json` |
+| AWS CloudTrail | `aws s3 sync s3://BUCKET/AWSLogs/ACCOUNT/CloudTrail/ cloudtrail/ && gunzip -r cloudtrail/` |
+
+Set the GitHub `created:` date and the gcloud `--freshness` to cover the incident; without a date filter GitHub returns only recent months. `aws cloudtrail lookup-events` output is not recognised; use the S3 log files. Do not put the exports in a directory named `logs` or `log`: mulder treats that as a host log directory and does not look inside for audit logs.
+
+Events land in `cloudlog.github`, `cloudlog.gcp` and `cloudlog.aws`, one per line with time, actor, action, source IP and target ahead of the raw event, so `search` finds them. Sigma matches land in `cloudlog.<type>.detections`. The result names any file that was damaged, truncated or empty.
+
+GCP token exchanges, service account impersonation and Secret Manager reads appear only if Data Access audit logs were enabled for those APIs before the incident. Any other JSON log is indexed as `cloudlog.generic`; pass `ruleset_path` to scan it with your own Sigma rules.
+
+### Laying out cloud and CI evidence
+
+Give each kind of evidence its own directory under the evidence root. Mulder recognises three kinds, lists each for the planner with its path and the tool to run, and checks afterwards that the tool was run:
+
+| Evidence | How it is recognised | Tools planned |
+|----------|----------------------|---------------|
+| Cloud audit log exports | `.json`, `.jsonl` or `.ndjson` files that carry audit-log keys | `run_cloud_audit_logs` |
+| Repository checkout | a directory containing `.github/workflows` | `run_workflow_audit`, `run_secret_scan` |
+| CI run logs | a directory of GitHub Actions run logs as downloaded (`1_build.txt`, timestamped lines) | `run_secret_scan` |
+
+For example:
+
+```
+evidence/
+  ws-042.E01                 a host image, as before
+  acme-org-audit/            gh api ... > github-audit.json
+  acme-prod-gcp/             gcloud logging read ... > gcp-audit.json
+  acme-app/                  git clone of the repository
+  run-18234/                 unzipped "Download log archive" of a workflow run
+```
+
+Each directory becomes its own "system" in the investigation, named after the directory, so name it for what it holds. A zip of any of these works too; it is unpacked first and recognised where it lands. Other CI systems' logs and artifacts are not recognised automatically: name them in the case briefing and the planner can still run `run_secret_scan` on them.
+
+### Collecting with read-only credentials
+
+Instead of exporting by hand, you can give mulder credentials that can only read audit logs and let it fetch them. Two things are yours to get right: create a dedicated identity for this, and grant it nothing but log reading.
+
+| Provider | Create | Set |
+|----------|--------|-----|
+| GitHub (Enterprise Cloud) | A classic personal access token with **only** the `read:audit_log` scope, from an organization owner | `MULDER_GITHUB_TOKEN`, and `MULDER_GITHUB_ORGS=org1,org2` |
+| Google Cloud | A service account with `roles/logging.viewer` on the project, plus `roles/logging.privateLogViewer` if you need Data Access logs (secret reads, token exchanges); download its key file | `MULDER_GCP_CREDENTIALS=/path/key.json`, and optionally `MULDER_GCP_PROJECTS=p1,p2` (default: the key's own project) |
+
+Then either collect before the investigation:
+
+```
+mulder collect github --out evidence/acme-org-audit --since 2026-11-01 --until 2026-11-12
+mulder collect gcp    --out evidence/acme-prod-gcp  --days 30
+mulder investigate evidence case-1
+```
+
+or let the investigation collect what it needs, by also setting `MULDER_AGENT_COLLECTION=1`. The planner is then told which organizations and projects it may collect from, and the analyst can ask for a log it finds it needs.
+
+What mulder does to keep this safe:
+
+- **Only `MULDER_*` variables are read.** Your own `gh` or `gcloud` login, `GH_TOKEN` and `GOOGLE_APPLICATION_CREDENTIALS` are never used, since those can usually write.
+- **The targets are fixed by you.** An investigation chooses a time window. It cannot name an organization or project that is not in your configuration.
+- **Google tokens are requested for log reading only** (`logging.read`), so even an over-privileged service account yields a token that can do nothing else.
+- **A GitHub token that can do more than read is called out** in the result, and a fine-grained or app token, whose scopes cannot be checked, is flagged as unverified.
+- **Only audit-log read endpoints are called.** The GitHub token is sent to the GitHub API host and nowhere else.
+- **Nothing is written to the evidence directory** during an investigation. Collected logs go under the case's own directory. Each export has a manifest beside it with the query, the time, the event count and the SHA-256.
+
+It cannot check that a Google service account or a fine-grained GitHub token is read-only; that part is on you. AWS is not supported yet; export CloudTrail as above.
+
+GitHub keeps audit events for about six months and Git events for seven days, so collect early.
+
+### Evidence that was not provided
+
+When the evidence shows that more evidence exists elsewhere, for example a host image whose user ran a cloud CLI, and the corresponding logs are not in the case, the analyst records it as a `[COLLECT]` finding citing where it saw the trace. These are not counted as findings. The report lists them under **Evidence To Collect**, with the account or project and the time range worth exporting, so you can add the export and run again.
 
 ## CLI Reference
 

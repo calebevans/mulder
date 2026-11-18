@@ -54,6 +54,9 @@ WHEN MODIFYING FINDINGS:
   ambiguous but part of a convergent pattern).
 - Do NOT create separate counter-analysis findings.
 
+[COLLECT] findings name evidence that exists outside the case and was not
+examined. They need no timestamp. Do not challenge, downgrade or delete them.
+
 WHEN NO COUNTER-EVIDENCE EXISTS:
 - Submit [NEGATIVE] findings ONLY for hypotheses you investigated from
   scratch that found no supporting evidence.

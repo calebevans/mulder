@@ -214,15 +214,27 @@ class TestZircolite:
         with patch("mulder.server.tools.zircolite.subprocess.run") as mock_run:
             _run_zircolite_process(script, tmp_path / "events.log", "auditd", tmp_path, tmp_path)
         assert mock_run.call_args[0][0][0] == sys.executable
-        assert mock_run.call_args[0][0][1] == script
+        # Absolute: Zircolite runs in a temp directory, so a script path relative
+        # to mulder's own working directory would not be found.
+        assert mock_run.call_args[0][0][1] == str(Path(script).resolve())
 
     def test_module_list_matches_upstream(self) -> None:
         """Pinned against Zircolite 2.20.0's requirements.txt and import block.
 
         A longer list would block a working install, which is the one failure
-        mode this gate must never have.
+        mode this gate must never have. pySigma and its SQLite backend are
+        "optional" upstream, but without them no Sigma YAML rule compiles and
+        every scan comes back empty, so they belong here.
         """
-        assert set(_ZIRCOLITE_MODULES) == {"orjson", "xxhash", "colorama", "tqdm"}
+        assert set(_ZIRCOLITE_MODULES) == {
+            "orjson",
+            "xxhash",
+            "colorama",
+            "tqdm",
+            "sigma",
+            "sigma.backends.sqlite",
+            "lxml",
+        }
 
     def test_reports_missing_modules(self) -> None:
         from mulder.server.tools.zircolite import run_zircolite

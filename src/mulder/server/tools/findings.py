@@ -87,6 +87,11 @@ def is_evidence_source(source: SourceRow) -> bool:
 # Findings the timestamp_coverage gate leaves alone: negative findings and
 # state-not-event severities. Keep in step with _evaluate_finalize_gates.
 _NEGATIVE_PREFIX = "[NEGATIVE]"
+# A lead, not a finding: evidence that exists outside the case (a cloud audit
+# log, CI run logs) and should be exported and added. Cites the tool call that
+# showed it exists. Kept out of the finding count, the timeline and the IOCs.
+_COLLECT_PREFIX = "[COLLECT]"
+_NON_EVENT_PREFIXES = (_NEGATIVE_PREFIX, _COLLECT_PREFIX)
 _TS_EXEMPT_SEVERITIES = ("info", "informational")
 
 
@@ -99,7 +104,7 @@ def _timestamp_gap(title: str, severity: str, event_time_start: str | None) -> s
     first and timestamping via ``update_finding`` is how existing runs work,
     and a hard reject would push a weaker model to fabricate a timestamp.
     """
-    if event_time_start or title.startswith(_NEGATIVE_PREFIX):
+    if event_time_start or title.startswith(_NON_EVENT_PREFIXES):
         return None
     if severity in _TS_EXEMPT_SEVERITIES:
         return None
@@ -127,7 +132,7 @@ def _evaluate_finalize_gates(
     (which reports all gates).
     """
     gates: list[dict[str, object]] = []
-    non_negative = [f for f in findings if not f.title.startswith(_NEGATIVE_PREFIX)]
+    non_negative = [f for f in findings if not f.title.startswith(_NON_EVENT_PREFIXES)]
 
     # Gate 1: Minimum non-negative finding count
     count = len(non_negative)
@@ -321,6 +326,12 @@ def submit_finding(
     auto-nullified. A non-negative finding above 'info' severity needs
     event_time_start before finalize_report will run; the response says
     so in timestamp_warnings when it is missing.
+
+    Two title prefixes mark statements that are not findings of activity and
+    need no timestamp: "[NEGATIVE] " for a hypothesis you tested and ruled
+    out, and "[COLLECT] " for evidence that exists outside the case and
+    should be obtained (cite the call that showed it exists). Neither counts
+    toward the minimum number of findings.
 
     Returns finding_id on acceptance. Severity must be
     critical/high/medium/low/info. Confidence must be "confirmed"
@@ -972,6 +983,11 @@ def _compute_similarity(a: Finding, b: Finding) -> float:
     )
 
 
+def _kind(finding: Finding) -> str:
+    """The title prefix that says what kind of statement a finding is, or ""."""
+    return next((p for p in _NON_EVENT_PREFIXES if finding.title.startswith(p)), "")
+
+
 def _group_duplicates(
     findings: list[Finding],
     threshold: float,
@@ -1002,6 +1018,12 @@ def _group_duplicates(
             if candidate.finding_id in assigned:
                 continue
             for member in group:
+                # A ruled-out hypothesis, a collection lead and a finding are
+                # different kinds of statement even when they cite the same
+                # tool call. Merging across kinds would turn a finding into a
+                # negative, or delete the lead into the trace it came from.
+                if _kind(member) != _kind(candidate):
+                    continue
                 if _compute_similarity(member, candidate) >= threshold:
                     group.append(candidate)
                     assigned.add(candidate.finding_id)

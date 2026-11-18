@@ -899,6 +899,22 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
   </div>
   {% endfor %}
   </div>
+  {% if collect_findings %}
+  <div class="card mt-2">
+    <div class="card-header">Evidence To Collect</div>
+    <div class="card-body">
+      <p style="opacity:0.7;margin-bottom:1em;">The evidence examined points to these sources outside the case. They were not available to this investigation, so nothing in them has been ruled in or out.</p>
+      <ul style="list-style:none;padding:0;">
+        {% for cf in collect_findings %}
+        <li style="padding:0.5em 0;border-bottom:1px solid var(--border);">
+          <strong>{{ cf.title | replace("[COLLECT] ", "") }}</strong>
+          <div style="opacity:0.85;font-size:0.88em;margin-top:0.5em;line-height:1.6;">{{ cf.description_html if cf.description_html is defined else cf.description }}</div>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+  {% endif %}
   {% if negative_findings %}
   <div class="card mt-2">
     <div class="card-header">&#10003; Ruled Out (Negative Findings)</div>

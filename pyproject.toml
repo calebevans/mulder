@@ -64,12 +64,19 @@ dependencies = [
 [project.optional-dependencies]
 pdf = ["weasyprint>=60.0"]
 stix = ["stix2>=3.0"]
+# `mulder collect gcp` signs a token request with the service account key.
+# GitHub collection needs nothing beyond httpx.
+cloud = ["pyjwt[crypto]>=2.8"]
 # Zircolite's runtime dependencies. Verified against
 # https://github.com/wagga40/Zircolite/blob/2.20.0/requirements.txt (the four
 # required entries) plus `evtx`, which Zircolite imports optionally and which
 # mulder needs for the "evtx" input format exposed in zircolite.py:_FORMAT_FLAGS.
 # NOT included: aiohttp / urllib3 / requests / elasticsearch (remote forwarding),
-# lxml (XML input), pysigma* (rule compilation) - mulder uses none of those paths.
+# mulder uses none of those paths.  pysigma and its SQLite backend are
+# "optional" upstream but compile Sigma YAML into the queries Zircolite runs;
+# without them it loads no rules and reports a clean scan.  lxml is likewise
+# "optional" but parses Sysmon-for-Linux events; without it every event of the
+# "sysmon_linux" format is dropped.
 # jinja2 and pyyaml, which Zircolite also imports optionally, are already
 # mulder dependencies above.
 # NOT covered by this extra: ALEAPP and iLEAPP. Their upstream requirements.txt
@@ -82,6 +89,9 @@ forensics = [
     "colorama>=0.4.4",
     "tqdm>=4.58.0",
     "evtx>=0.6.2",
+    "pysigma>=0.10.10",
+    "pysigma-backend-sqlite>=0.1.1",
+    "lxml>=4.6",
 ]
 dev = [
     "pytest",

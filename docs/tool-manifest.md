@@ -594,10 +594,73 @@ Apply Sigma detection rules to Linux logs using Zircolite.
 | sigma_level_filter | Literal['informational', 'low', 'medium', 'high', 'critical'] \| None | no | Minimum Sigma level (default "medium") |
 | force | bool | no | Re-run extraction even if sources already exist |
 
-**Returns:** `total_detections`, `level_counts{}`, `mitre_coverage{}`, `timeline[]`
+**Returns:** `total_detections`, `level_counts{}`, `mitre_coverage{tactics[], techniques[]}`, `timeline[]`
 
 Matched detection records, including rule names and matched fields, are indexed
 in `zircolite.detections`; the response preview may be shorter than the index.
+
+**Roles:** `EXTRACT_EXECUTOR`
+
+### run_cloud_audit_logs
+
+Index exported cloud audit logs and apply Sigma detection rules to them.
+
+Reads JSON arrays, JSON lines and CloudTrail `{"Records": [...]}` files, and
+recognises GitHub audit logs, GCP Cloud Audit Logs and AWS CloudTrail per
+event. Any other JSON is indexed as `cloudlog.generic` and scanned only when
+`ruleset_path` is given. Nothing is fetched: export the logs first (see the
+[usage guide](usage-guide.md#cloud-audit-logs)).
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| evidence_path | str | yes | JSON log file, or a directory searched for .json/.jsonl/.ndjson |
+| ruleset_path | str \| None | no | Sigma rules to use instead of the defaults |
+| sigma_level_filter | Literal['informational', 'low', 'medium', 'high', 'critical'] \| None | no | Minimum Sigma level (default "low") |
+| force | bool | no | Re-run even if these logs were already indexed |
+
+**Returns:** `files_read`, `files_with_problems{}`, `log_types{<type>: events, source, sigma, detections, level_counts{}, rules_matched{}, mitre_coverage{}}`
+
+Events are indexed one per line in `cloudlog.<type>` (time, actor, action,
+source IP, target, raw event) and Sigma matches in `cloudlog.<type>.detections`.
+`sigma` is `ok`, or says why the scan was skipped or failed; events are indexed
+either way. Default rules are the SigmaHQ `rules/cloud` set for the log type,
+plus mulder's own GCP rules for service account key creation, federated token
+exchange, service account impersonation, IAM policy changes and Secret Manager
+reads.
+
+A file that was damaged or truncated, or that held no events, is named in
+`files_with_problems`; complete events before the damage are kept. Events are
+indexed in time order, and the index keeps one time per window of lines (a few
+events), so a time-range query finds a window by its earliest event. Sigma
+matches on full field paths (`userIdentity.type`), so a nested key cannot
+stand in for a top-level field. If the events hold more than about 2,000
+distinct field paths, the least-used deep ones are left out of the scan and
+`sigma` says how many. Symlinks under a directory are not followed.
+
+**Roles:** `EXTRACT_EXECUTOR`
+
+### collect_cloud_audit_logs
+
+Fetch and index cloud audit logs for a time window, using read-only credentials the investigator configured.
+
+Disabled unless the investigator sets `MULDER_AGENT_COLLECTION=1` and
+configures a provider (see the [usage guide](usage-guide.md#collecting-with-read-only-credentials));
+otherwise it returns `not_enabled` and the missing log belongs in a `[COLLECT]`
+finding. The organizations and projects read are fixed by that configuration
+and cannot be chosen by the caller.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| provider | str | yes | `github` or `gcp` |
+| start | str \| None | no | Start of the window, ISO 8601 (default: `days` before `end`) |
+| end | str \| None | no | End of the window, ISO 8601 (default: now) |
+| days | int | no | Window length when `start` is not given (default 30) |
+
+**Returns:** `scopes{<org or project>: status, events, window, sha256, warnings[], path, indexed{}}`
+
+Exports are written under the case directory, never the evidence directory,
+each with a manifest. Events are indexed exactly as `run_cloud_audit_logs`
+does. A window already collected is not fetched again.
 
 **Roles:** `EXTRACT_EXECUTOR`
 
@@ -1093,7 +1156,9 @@ Scan a mounted filesystem or extracted directory for malware using YARA rules.
 |-----------|------|----------|-------------|
 | target_path | str | yes | Path to scan (file or directory) |
 | rules | str \| None | no | Custom YARA rule source (file, directory, or inline) |
-| ruleset | str | no | "builtin" (default), "standard", or "full" |
+| ruleset | str | no | "builtin" (default): signature-base plus the investigator's own rules. "custom": the investigator's rules alone. "standard" and "full" are aliases of "builtin". |
+
+The investigator's own rules come from `MULDER_YARA_RULES` (see the [usage guide](usage-guide.md#using-your-own-yara-rules)).
 
 **Returns:** `source` (yara.files), `result_count`, `hit_metadata{}`
 
@@ -1106,7 +1171,7 @@ Scan the memory dump with YARA rules for malware signatures.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | rules | str \| None | no | Custom YARA rule source |
-| ruleset | str | no | "builtin" (default), "standard", or "full" |
+| ruleset | str | no | "builtin" (default): signature-base plus the investigator's own rules. "custom": the investigator's rules alone. |
 
 **Returns:** `source` (yara.memory), `result_count`, `hit_metadata{}`
 
@@ -1136,6 +1201,114 @@ Scan files for malware signatures using ClamAV.
 **Returns:** `source_name` (clamav.scan), `detections`, `windows_indexed`
 
 **Roles:** `EXTRACT_EXECUTOR`
+
+### run_secret_scan
+
+Find leaked credentials in CI run logs, build artifacts, repository checkouts or any other files, using gitleaks.
+
+Scans files as they are on disk (no git history) and looks inside archives up
+to two levels deep. Secrets are redacted before they are indexed or returned:
+at most the first 12 characters remain, enough to identify the key without
+disclosing it.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| evidence_path | str | yes | File or directory to scan |
+| force | bool | no | Re-run even if this path was already scanned |
+
+**Returns:** `total_findings`, `by_rule{}`, `files_with_findings`, `by_file{}` (50 files with the most findings), `source` (secrets.findings), `not_scanned{reason: count}`, `not_scanned_source` (secrets.not_scanned)
+
+Each finding is one line in `secrets.findings`: time, rule, file:line, redacted
+secret, description. The time is the timestamp on the line the secret sits on,
+which in a CI run log is when it was printed; `-` when the line has none or the
+file is inside an archive. Dated findings come first in time order. The index
+keeps one time per window of lines, so a finding is placed on the timeline at
+the time of the earliest finding in its window, not exactly at its own.
+
+**What a clean result does and does not mean.** Suppression planted in the
+scanned tree is not honoured: inline `gitleaks:allow` comments, a
+`.gitleaks.toml` and a `.gitleaksignore` all have no effect. But gitleaks
+leaves some content unscanned by its own rules, and file names and content are
+attacker-influenced:
+
+- files whose path matches its built-in allowlist (images, PDFs, lock files,
+  `node_modules/`, `vendor/`, `.git/` and similar);
+- files whose first bytes look like a binary format (PDF, ELF, zip, gzip);
+- archives it does not recognise by extension (`.jar`, `.whl`, `.nupkg`), and
+  text files named like an archive (`run.log.gz`);
+- archives nested more than two levels deep, and unreadable files.
+
+Every one of these that gitleaks reports is listed in `secrets.not_scanned`
+with the reason, and counted in `not_scanned`. A secret in a listed file is
+not ruled out. Two gaps are not reported: a secret that straddles gitleaks'
+125,000-byte read boundary in a file with no blank lines, and the
+`generic-api-key` rule's own line-level exceptions.
+
+**Roles:** `EXTRACT_EXECUTOR`
+
+-----------|------|----------|-------------|
+| target_path | str | yes | File or directory to scan |
+| force | bool | no | Re-run even if this path was already scanned |
+
+**Returns:** `total_findings`, `by_rule{}`, `files_with_findings`, `by_file{}` (50 files with the most findings), `source` (secrets.findings)
+
+Each finding is one line in `secrets.findings`: time, rule, file:line, redacted
+secret, description. The time is the timestamp on the line the secret sits on,
+which in a CI run log is when it was printed; `-` when the line has none.
+
+**Roles:** `EXTRACT_EXECUTOR`
+
+### run_workflow_audit
+
+Audit GitHub Actions workflows for exploitable weaknesses using zizmor, and list the secrets each workflow refers to.
+
+Runs offline. Finds template injection of attacker-controlled input,
+dangerous triggers (`pull_request_target`, `workflow_run`), unpinned actions,
+excessive permissions and credential persistence.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| evidence_path | str | yes | A repository checkout (or a directory of several), a directory of workflow YAML files, or one workflow file |
+| force | bool | no | Re-run even if this path was already audited |
+
+**Returns:** `workflows_audited`, `total_findings`, `by_severity{}`, `by_audit{}`, `suppressed_in_source`, `secrets_by_workflow{}`, `not_audited_count`, `not_audited{}`, `sources[]`
+
+mulder picks the files itself and audits each in its own zizmor run: every
+workflow in a `.github/workflows` folder at any depth, and every composite
+action under or beside a `.github` folder. A directory with no such folder is
+treated as a folder of exported workflows and its own YAML files are audited.
+Nothing in the audited tree can narrow that: a `.git` or `.gitignore`, a
+`zizmor.yml`, and inline `zizmor: ignore[...]` comments have no effect, and a
+finding an ignore comment tried to hide is marked `suppressed-in-source`.
+
+A file that could not be audited (not valid YAML, not UTF-8, a byte-order
+mark, a symlink, slower than 60 seconds) is listed in `workflow.not_audited`
+with the reason; a weakness in it is not ruled out. If no file could be
+audited the call is an error.
+
+Findings are indexed in `workflow.findings`, highest severity first: severity,
+confidence, audit, file:line, annotation, description, suppression marker, the
+offending YAML. `workflow.secrets` holds one line per file with the secrets
+its text refers to (`secrets.NAME`, `secrets['NAME']`, `secrets: inherit`,
+and `toJSON(secrets)` or a computed name, which reach all of them). It is per
+file, not per job, counts a reference inside a comment, and does not follow a
+secret passed through an environment variable or a reusable workflow.
+
+**Roles:** `EXTRACT_EXECUTOR`
+
+-----------|------|----------|-------------|
+| repo_path | str | yes | A repository checkout (or a directory of several), a directory of workflow YAML files, or one workflow file |
+| force | bool | no | Re-run even if this path was already audited |
+
+**Returns:** `workflows_audited`, `total_findings`, `by_severity{}`, `by_audit{}`, `suppressed_in_source`, `secrets_by_workflow{}`, `sources[]`
+
+Findings are indexed in `workflow.findings`, highest severity first: severity,
+confidence, audit, file:line, annotation, description, suppression marker, the
+offending YAML. `workflow.secrets` holds one line per workflow with the
+`secrets.NAME` references found in its text; it is per file, not per job.
+
+**Roles:** `EXTRACT_EXECUTOR`
+
 
 ---
 
@@ -2142,12 +2315,12 @@ Run multiple tool calls in parallel and return all results. `open_case` and `sca
 
 ### enrich_iocs
 
-Enrich IOCs against public threat intelligence APIs (VirusTotal, AbuseIPDB, OTX, ip-api). ip-api uses HTTPS with `IP_API_KEY`; without a key it is skipped unless `MULDER_IP_API_ALLOW_HTTP=1` allows the plaintext free endpoint.
+Enrich IOCs against public threat intelligence APIs (VirusTotal, AbuseIPDB, OTX, GreyNoise, urlscan.io, ip-api). Each source runs only when its key is set (`VIRUSTOTAL_API_KEY`, `ABUSEIPDB_API_KEY`, `OTX_API_KEY`, `GREYNOISE_API_KEY`, `URLSCAN_API_KEY`). GreyNoise says whether an IP is a known internet-wide scanner; urlscan is searched for existing scans of pages on that host and never asked to scan; it contributes a scan count for the window the plan can search (30 days on the free plan) and the latest scan time, and a score only on plans that return verdicts. GreyNoise's classification is a tag; only `malicious` scores. Domains are also checked offline against a built-in list of exfiltration-capable services (request catchers, tunnels, paste sites, file drops, messaging webhooks), reported as source `exfil-list` with tags and no score. Every indicator is reduced to a host, IP or hash before any lookup: defanging (`hxxps://evil[.]example`) is undone and a URL's scheme, credentials, port, path and query are dropped, so they are never sent to a third party. The indicator as given is still stored in the case index. ip-api uses HTTPS with `IP_API_KEY`; without a key it is skipped unless `MULDER_IP_API_ALLOW_HTTP=1` allows the plaintext free endpoint.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | case_id | str | yes | Active case identifier |
-| iocs | list[str] | yes | IOC strings (IPs, domains, hashes) |
+| iocs | list[str] | yes | IOC strings (IPs, domains, hashes, URLs) |
 | skip_sources | list[str] \| None | no | Source names to skip |
 
 **Returns:** list of enrichment dicts with `ioc`, `ioc_type`, `sources[]`, `aggregate_score`

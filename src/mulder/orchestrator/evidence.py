@@ -15,8 +15,10 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from mulder import collect as collector
 from mulder.extractors.classifier import (
     RAW_CONTAINER_EXTS,
+    EvidenceClassifier,
     _dir_has_named_nfcapd,
     has_disk_signature,
     is_nfcapd,
@@ -31,6 +33,26 @@ from mulder.patterns import (
 )
 
 logger = logging.getLogger(__name__)
+
+# artifact type -> (heading, the instruction the planner is given for it)
+_CI_CLOUD_TYPES: dict[str, tuple[str, str]] = {
+    "cloud_audit_log": (
+        "Cloud audit logs",
+        'Plan one run_cloud_audit_logs(evidence_path=<path>) task, group "foundation", '
+        "for each path above.",
+    ),
+    "repository": (
+        "Repository checkouts",
+        "Plan run_workflow_audit(evidence_path=<directory>) and "
+        'run_secret_scan(evidence_path=<directory>), group "foundation", '
+        "for each directory above.",
+    ),
+    "ci_run_logs": (
+        "CI run logs",
+        'Plan one run_secret_scan(evidence_path=<directory>) task, group "foundation", '
+        "for each directory above.",
+    ),
+}
 
 _MAX_SIMPLE_SYSTEMS_PER_SESSION: int = 4
 
@@ -219,6 +241,8 @@ class EvidenceContext:
         unclaimed = {d: v for d, v in netflow_dirs.items() if not _claimed_by_other(d)}
         shown = mine if mine else (unclaimed if catalog_says_netflow else {})
 
+        ci_cloud = self._ci_cloud_lines(sys_lower)
+
         lines: list[str] = [f"System: {system_name}"]
         if disk_images:
             lines.append("Disk images:")
@@ -236,10 +260,7 @@ class EvidenceContext:
             for p in sorted(memory_dumps):
                 lines.append(f"  {p}")
         if nested_archives:
-            lines.append(
-                "NESTED ARCHIVES (must be extracted before analysis; "
-                "likely contain raw memory dumps):"
-            )
+            lines.append("NESTED ARCHIVES (must be extracted before analysis):")
             for p in sorted(nested_archives):
                 lines.append(f"  {p}")
         if shown:
@@ -265,13 +286,93 @@ class EvidenceContext:
                 "other run_netflow_* tool (the targeted tools are follow-ups for the analyst)."
             )
 
-        if not disk_images and not memory_dumps and not nested_archives and not shown:
+        lines.extend(ci_cloud)
+        # Not evidence paths, so they do not stand in for the fallback below.
+        collection = self._collection_lines()
+
+        if (
+            not disk_images
+            and not memory_dumps
+            and not nested_archives
+            and not shown
+            and not ci_cloud
+        ):
             lines.append(
                 "(No pre-populated paths available. "
                 f"Call list_directory on {self.evidence_path} to discover files.)"
             )
 
+        lines.extend(collection)
         return "\n".join(lines)
+
+    @staticmethod
+    def _collection_lines() -> list[str]:
+        """Tell the planner which audit logs it may fetch, when it may at all."""
+        configured = collector.targets()
+        if not collector.agent_collection_enabled() or not configured:
+            return []
+        lines = ["Live collection is enabled for the audit logs of:"]
+        lines += [f"  {provider}: {', '.join(scopes)}" for provider, scopes in configured.items()]
+        lines.append(
+            "  If this system or the briefing involves one of these and no export of its "
+            "audit log is listed above, plan collect_cloud_audit_logs(provider=<provider>, "
+            'start=<ISO time>, end=<ISO time>) covering the incident window, group "foundation". '
+            "Otherwise do not plan it."
+        )
+        return lines
+
+    def _ci_cloud_lines(self, sys_lower: str) -> list[str]:
+        """Planner lines for cloud audit logs, repository checkouts and CI run logs.
+
+        These are evidence of a kind the planner cannot recognise from a file
+        listing, so each is named with its type, its path and the tool to plan.
+        Looked for in the evidence directory and in unpacked archives.
+
+        An item belongs to this system when the system's name appears in its
+        path. Failing that, when the catalog assigned that evidence type to the
+        system, the items no other system's name claims are shown: a cloud
+        "system" is an organization or account, whose name is rarely a path.
+        """
+        found: dict[str, dict[str, int]] = {t: {} for t in _CI_CLOUD_TYPES}
+        roots = [Path(self.evidence_path), self.extracted_dir]
+        for root in roots:
+            if not root.is_dir():
+                continue
+            for item in EvidenceClassifier().classify(root):
+                if item.artifact_type not in found:
+                    continue
+                # Loose audit log files are planned once, by their directory.
+                # One at the top of the evidence is planned by itself: its
+                # "directory" is the whole evidence root, which the tool would
+                # then search recursively, for every system that owns a file.
+                is_file = item.artifact_type == "cloud_audit_log"
+                grouped = is_file and item.path.parent.resolve() != root.resolve()
+                target = str(item.path.parent if grouped else item.path)
+                found[item.artifact_type][target] = found[item.artifact_type].get(target, 0) + 1
+
+        catalog_ev = self._catalog_systems.get(sys_lower, {}).get("evidence", [])
+        catalog_types = (
+            {str(e).lower() for e in catalog_ev} if isinstance(catalog_ev, list) else set()
+        )
+        others = [n for n in self._catalog_systems if n and n != sys_lower]
+
+        lines: list[str] = []
+        for artifact_type, (label, plan) in _CI_CLOUD_TYPES.items():
+            targets = found[artifact_type]
+            mine = {p: n for p, n in targets.items() if sys_lower in p.lower()}
+            if not mine and artifact_type in catalog_types:
+                mine = {
+                    p: n for p, n in targets.items() if not any(o in p.lower() for o in others)
+                }
+            if not mine:
+                continue
+            lines.append(f'{label} (type "{artifact_type}"):')
+            for path, count in sorted(mine.items()):
+                is_dir = artifact_type == "cloud_audit_log" and Path(path).is_dir()
+                suffix = f"  ({count} files)" if is_dir else ""
+                lines.append(f"  {path}{suffix}")
+            lines.append(f"  {plan}")
+        return lines
 
     def identify_systems(
         self,

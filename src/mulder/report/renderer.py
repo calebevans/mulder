@@ -1096,8 +1096,15 @@ class ReportRenderer:
             [_normalize_source(s) for s in sources_list] if sources_list else None
         )
         _NEG_PREFIX = "[NEGATIVE]"
-        positive_findings = [f for f in normalized_findings if not f.title.startswith(_NEG_PREFIX)]
+        # Leads to evidence outside the case; reported in their own section.
+        _COLLECT_PREFIX = "[COLLECT]"
+        positive_findings = [
+            f
+            for f in normalized_findings
+            if not f.title.startswith((_NEG_PREFIX, _COLLECT_PREFIX))
+        ]
         negative_findings = [f for f in normalized_findings if f.title.startswith(_NEG_PREFIX)]
+        collect_findings = [f for f in normalized_findings if f.title.startswith(_COLLECT_PREFIX)]
 
         sorted_findings = sorted(
             positive_findings, key=lambda f: _SEVERITY_ORDER.get(f.severity, 99)
@@ -1190,6 +1197,7 @@ class ReportRenderer:
             "evidence_root": case_metadata.evidence_root,
             "finding_count": len(positive_findings),
             "negative_findings": negative_findings,
+            "collect_findings": collect_findings,
             "negative_count": len(negative_findings),
             "confirmed_count": confirmed,
             "inference_count": inference,
