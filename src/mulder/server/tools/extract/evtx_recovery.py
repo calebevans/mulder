@@ -21,6 +21,7 @@ from typing import Any
 
 from mulder.assets.paths import asset_path
 from mulder.extractors.optical import OpticalError, raw_image
+from mulder.patterns import fls_file_entries
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
@@ -31,7 +32,7 @@ from mulder.server.helpers import (
     tool_response,
 )
 from mulder.server.tool_access import Role, tool_access
-from mulder.server.tools.extract.evtx import _extract_evtx_from_image
+from mulder.server.tools.extract.tsk import _KV_SOURCE_OFFSET_PREFIX, _resolve_partition_offset
 
 __all__ = ["run_evtx_recovery"]
 
@@ -171,21 +172,56 @@ def _evtx_files(root: Path) -> list[Path]:
     return sorted(p for p in found if not p.is_symlink() and p.is_file())
 
 
-def _image_logs(image: str, dest: Path) -> list[Path]:
-    """The event logs inside a disk image, extracted to *dest*, or [].
+def _image_logs(
+    image: str, out: Path, deadline: float, stats: Counter[str]
+) -> Iterator[tuple[str, bool]]:
+    """Write each allocated event log of a disk image to *out*, one at a time.
 
-    Their records say which carved records are still live. They are read
-    through the file listing run_fls indexed for this image, here and now:
-    run_evtx_parser's own extraction is a temporary directory that is gone
-    once its MCP server exits. With no listing (a memory dump, a file of
-    unallocated space, an image run_fls was not run on) there is nothing to
-    compare with.
+    Yields the log's path in the image and whether ``icat`` extracted it.
+    Their records say which carved records are still live. The logs are found
+    in the file listings run_fls indexed for this image and extracted here
+    and now: run_evtx_parser's own extraction is a temporary directory that
+    is gone once its MCP server exits. With no listing (a memory dump, a file
+    of unallocated space, an image run_fls was not run on) nothing is yielded.
+
+    Only this image's listings are read: every image's are indexed under one
+    source name, and another image's inode numbers name other files here.
+    Deleted entries are left out: a deleted log is what carving is for, and
+    its entry can carry the path of the log that replaced it.
+
+    Raises:
+        TimeoutError: When *deadline* passes.
     """
-    if not sources_already_indexed(["tsk.filelist"], evidence_path=image):
-        return []
-    dest.mkdir()
-    # Two logs of one name are written to one file, and listed twice.
-    return sorted(set(_extract_evtx_from_image(image, str(dest))))
+    db = get_ctx().db
+    found: dict[tuple[int, str], str] = {}
+    for src in db.get_sources():
+        if not src.source_name.startswith("tsk.filelist") or src.source_path != image:
+            continue
+        stored = db.get_kv(f"{_KV_SOURCE_OFFSET_PREFIX}{src.source_name}:{image}")
+        offset = int(stored) if stored and stored.isdigit() else _resolve_partition_offset(image)
+        for window in db.get_windows_by_source(src.source_name):
+            if window.source_id != src.source_id:
+                continue
+            for entry in fls_file_entries(window.raw_text):
+                if not entry.deleted and entry.path.lower().endswith(".evtx"):
+                    found.setdefault((offset, entry.base_inode), entry.path)
+    stats["image_logs_listed"] = len(found)
+    for (offset, inode), path in list(found.items())[:_MAX_EVTX_FILES]:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError
+        cmd = ["icat", *(["-o", str(offset)] if offset else []), image, inode]
+        status = 1
+        try:
+            with open(out, "wb") as sink:
+                status = subprocess.run(
+                    cmd, stdout=sink, stderr=subprocess.DEVNULL, timeout=remaining, check=False
+                ).returncode
+        except subprocess.TimeoutExpired:
+            raise TimeoutError from None
+        except OSError:  # no icat here
+            pass
+        yield path, status == 0
 
 
 def _file_header() -> bytes:
@@ -572,20 +608,23 @@ def run_evtx_recovery(
     target = Path(evidence_path)
     run = _Recovery(patterns, start, end, max_records)
     logs: list[Path] = []
+    # Of a disk image's own logs: how many were read, of how many listed.
+    compared = listed = 0
     unread: list[str] = []
     cut_short: list[str] = []
     warnings: list[str] = []
     carving = False
     deadline = t0
 
-    def read(evtx: Path, carved: bool) -> None:
+    def read(evtx: Path, carved: bool, name: str = "") -> bool:
         status, failed = _dump(evtx_dump, evtx, deadline, lambda record: run.take(record, carved))
         run.stats["records_not_parsed"] += failed
         if status != 0:
-            unread.append("carved chunks" if carved else _flat(evtx.name))
+            unread.append("carved chunks" if carved else _flat(name or evtx.name))
         # evtx_dump reads whole chunks only: the rest of such a log is left out.
         elif not carved and (evtx.stat().st_size - _HEADER_SIZE) % _CHUNK_SIZE:
-            cut_short.append(_flat(evtx.name))
+            cut_short.append(_flat(name or evtx.name))
+        return status == 0
 
     try:
         if not target.exists():
@@ -624,11 +663,21 @@ def run_evtx_recovery(
                         "(for an EnCase image, pass its first segment, .E01)."
                     )
                 # The image's own logs say which carved records are still live.
-                logs = _image_logs(evidence_path, Path(tmp, "live"))
-                if not logs:
+                live = Path(tmp, "live.evtx")
+                for name, extracted in _image_logs(evidence_path, live, deadline, run.stats):
+                    if extracted:
+                        compared += read(live, carved=False, name=name)
+                    else:
+                        unread.append(_flat(name))
+                listed = run.stats["image_logs_listed"]
+                if not listed:
                     warnings.append(_NOT_COMPARED)
-                for log in logs[:_MAX_EVTX_FILES]:
-                    read(log, carved=False)
+                elif compared < listed:
+                    warnings.append(
+                        f"{listed - compared} of the {listed} event logs listed in this "
+                        "image were not read (not_parsed and truncated say which), so "
+                        "[carved] records include any that are still live in those logs."
+                    )
                 for batch in _carved(raw, Path(tmp) / "carved.evtx", deadline, run.stats):
                     read(batch, carved=True)
     except TimeoutError:
@@ -647,7 +696,7 @@ def run_evtx_recovery(
     mode = (
         f"carved {run.stats['chunks_carved']} event log chunks out of "
         f"{run.stats['bytes_scanned']} bytes"
-        + (f" and compared them with {len(logs)} event logs extracted from it" if logs else "")
+        + (f" and compared them with {compared} event logs extracted from it" if compared else "")
         if carving
         else f"read {min(len(logs), _MAX_EVTX_FILES)} event log files"
     )
@@ -702,8 +751,8 @@ def run_evtx_recovery(
         truncated["records_over_max_records"] = sum(run.over_cap.values())
     if run.stats["records_over_channel_limit"]:
         truncated["records_in_channels_over_limit"] = run.stats["records_over_channel_limit"]
-    if len(logs) > _MAX_EVTX_FILES:
-        truncated["evtx_files_not_read"] = len(logs) - _MAX_EVTX_FILES
+    if max(len(logs), listed) > _MAX_EVTX_FILES:
+        truncated["evtx_files_not_read"] = max(len(logs), listed) - _MAX_EVTX_FILES
     if len(run.clearings_seen) > len(run.cleared):
         truncated["log_clearing_events_not_listed"] = len(run.clearings_seen) - len(run.cleared)
     if run.stats["chunks_carved"] >= _MAX_CARVED_CHUNKS:
@@ -759,7 +808,7 @@ def run_evtx_recovery(
         "channels": {slug: per_channel[slug] for slug in shown[:_MAX_RESPONSE_CHANNELS]},
         "channels_not_listed": max(len(shown) - _MAX_RESPONSE_CHANNELS, 0),
         # None: no live log was read, so there was nothing to find one in.
-        "live_log_cleared": run.live_log_cleared if logs else None,
+        "live_log_cleared": run.live_log_cleared if logs or compared else None,
         "log_clearing_events": run.cleared,
         "duplicates_of_live_dropped": run.stats["duplicates_of_live"],
         "truncated": truncated,
@@ -771,7 +820,8 @@ def run_evtx_recovery(
         summary["records_without_channel"] = without_channel
     if carving:
         summary["duplicate_chunks_skipped"] = run.stats["duplicate_chunks"]
-        summary["compared_with_live_logs"] = bool(logs)
+        # True only when every allocated log the image lists was read.
+        summary["compared_with_live_logs"] = 0 < listed == compared
     if warnings:
         summary["warning"] = " ".join(warnings)
     # Returned in full: it is bounded, and the counts are what the caller acts on.

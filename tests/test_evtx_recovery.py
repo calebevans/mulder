@@ -6,6 +6,7 @@ import inspect
 import io
 import json
 import os
+import subprocess
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -124,6 +125,32 @@ def _recover(target: Path | str, **kwargs: Any) -> dict[str, Any]:
             str(target), **kwargs
         )
     return result
+
+
+_LOGS = "Windows/System32/winevt/Logs/"
+
+
+def _list_image(case: CaseDB, image: Path, *rows: str) -> None:
+    """What run_fls leaves for *image*: its file listing and its partition offset."""
+    extract_and_index("\n".join(rows), "tsk.filelist", str(image), "sleuthkit")
+    case.set_kv(f"tsk_source_offset:tsk.filelist:{image}", "0")
+
+
+@contextmanager
+def _icat(files: dict[tuple[Path, str], bytes]) -> Iterator[list[list[str]]]:
+    """Stands in for icat: writes the file an (image, inode) names; yields the calls."""
+    calls: list[list[str]] = []
+
+    def run(cmd: list[str], stdout: Any = None, **_: object) -> subprocess.CompletedProcess[bytes]:
+        data = files.get((Path(cmd[-2]), cmd[-1])) if cmd[0] == "icat" else None
+        if cmd[0] == "icat":
+            calls.append(cmd)
+        if data and stdout:
+            stdout.write(data)
+        return subprocess.CompletedProcess(cmd, data is None, data or b"")
+
+    with patch("mulder.server.tools.extract.evtx_recovery.subprocess.run", run):
+        yield calls
 
 
 def _lines(case: CaseDB, source: str) -> list[str]:
@@ -424,37 +451,114 @@ def test_carved_records_still_live_in_the_image_are_dropped_in_a_later_session(
     # the name of an extraction directory that went when its server exited.
     extract_and_index("Security.evtx\t1 MB\tHIGH", "evtx.manifest", str(image), "evtx-extract")
     case.set_kv(f"evtx_extract_dir:{image}", str(tmp_path / "mulder_evtx_extract_gone"))
-    extracted_to: list[Path] = []
+    log = _HEADER + _chunk(_rec(1), _rec(2), _rec(3), _rec(9, recovered=True))
 
-    def icat(image_path: str, dest: str) -> list[Path]:
-        assert image_path == str(image)
-        extracted_to.append(Path(dest))
-        log = _log(
-            Path(dest) / "Windows_System32_winevt_Logs_Security.evtx",
-            _chunk(_rec(1), _rec(2), _rec(3), _rec(9, recovered=True)),
-        )
-        return [log, log]  # two logs of one name land in one file
-
-    with patch.object(evtx_recovery, "_extract_evtx_from_image", icat):
+    with _icat({(image, "66"): log}) as calls:
         # Without run_fls's listing of this image there is nothing to extract by.
         early = _recover(image)["results"]
-        assert extracted_to == []
+        assert calls == []
         assert early["compared_with_live_logs"] is False
         assert early["recovered_records"] == 5
 
-        extract_and_index("r/r 66-128-2:\tSecurity.evtx", "tsk.filelist", str(image), "fls")
+        _list_image(case, image, f"r/r 66-128-2:\t{_LOGS}Security.evtx")
         summary = _recover(image, force=True)["results"]
 
+    assert calls == [["icat", str(image), "66"]]
     assert summary["compared_with_live_logs"] is True
     assert summary["duplicates_of_live_dropped"] == 3
     assert summary["channels"]["security"]["recovered"] == 3
     assert summary["channels"]["security"]["live_records"] == 3
     assert summary["mode"].endswith("and compared them with 1 event logs extracted from it")
     assert "warning" not in summary
-    # The logs were extracted to a place of the tool's own, removed afterwards.
-    assert len(extracted_to) == 1 and not extracted_to[0].exists()
-    assert image.parent not in extracted_to[0].parents
+    # The log was extracted to a place of the tool's own, removed afterwards.
+    extracted_to = Path(_FakeEvtxDump.calls[0][-1])
+    assert extracted_to.name == "live.evtx" and not extracted_to.parent.exists()
     assert list(image.parent.iterdir()) == [image]
+
+
+def test_only_the_images_own_file_listing_says_which_logs_are_live(
+    case: CaseDB, tmp_path: Path
+) -> None:
+    # Two hosts in one case. The same path has another inode number on each,
+    # and run_fls indexes both listings under one source name.
+    image, other = tmp_path / "disk2.raw", tmp_path / "disk.raw"
+    image.write_bytes(_chunk(_rec(1), _rec(2), _rec(3)))
+    other.write_bytes(b"")
+    _list_image(case, image, "r/r 68-128-2:\tfiller1.txt", f"r/r 72-128-2:\t{_LOGS}Security.evtx")
+    _list_image(case, other, f"r/r 68-128-2:\t{_LOGS}Security.evtx")
+    files = {(image, "72"): _HEADER + _chunk(_rec(1), _rec(2)), (image, "68"): b"filler-one\n"}
+
+    with _icat(files) as calls:
+        summary = _recover(image)["results"]
+
+    assert summary["compared_with_live_logs"] is True
+    assert summary["duplicates_of_live_dropped"] == 2
+    assert summary["channels"]["security"]["live_records"] == 2
+    assert [ln.split("] ")[0][-8:] for ln in _lines(case, "evtx_recovered.security")] == [
+        "record 3"
+    ]
+    assert summary["not_parsed"] == {}
+    assert calls == [["icat", str(image), "72"]], "inode 68 is the other image's log"
+
+
+def test_a_deleted_log_is_not_taken_for_the_live_log_that_replaced_it(
+    case: CaseDB, tmp_path: Path
+) -> None:
+    old = _chunk(*(_rec(i, when=f"2016-07-08T18:12:5{i}.0000000Z") for i in (1, 2, 3)))
+    wiped = _rec(1, eid=1102, provider="Microsoft-Windows-Eventlog")
+    wiped["Event"]["UserData"] = {"LogFileCleared": {"SubjectUserName": "user01"}}
+    new = _chunk(wiped, _rec(2))
+    image = tmp_path / "disk.raw"
+    image.write_bytes(b"\x00" * 512 + old + new)
+    # The log was deleted and a new one created under its name: fls lists both.
+    _list_image(
+        case,
+        image,
+        f"r/r 72-128-2:\t{_LOGS}Security.evtx",
+        f"r/r * 68-128-2:\t{_LOGS}Security.evtx",
+    )
+
+    with _icat({(image, "72"): _HEADER + new, (image, "68"): _HEADER + old}) as calls:
+        summary = _recover(image)["results"]
+
+    # The deleted log's records are what recovery is for, and they are indexed.
+    lines = _lines(case, "evtx_recovered.security")
+    assert [ln[:4] for ln in lines] == ["2016"] * 3
+    assert all("[carved record " in ln for ln in lines)
+    security = summary["channels"]["security"]
+    assert (security["live_records"], security["recovered"]) == (2, 3)
+    assert summary["duplicates_of_live_dropped"] == 2
+    assert summary["live_log_cleared"] is True
+    assert summary["log_clearing_events"][0]["read_from"] == "live log"
+    assert calls == [["icat", str(image), "72"]]
+
+
+def test_a_listed_log_that_was_not_read_means_the_comparison_is_not_complete(
+    case: CaseDB, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    image = tmp_path / "disk.raw"
+    image.write_bytes(_chunk(_rec(1), _rec(2)))
+    names = ("Security.evtx", "System.evtx", "broken\tname.evtx", "Application.evtx")
+    _list_image(case, image, *(f"r/r {66 + i}-128-2:\t{_LOGS}{n}" for i, n in enumerate(names)))
+    # icat fails on System.evtx, evtx_dump on the third, and the fourth is over the limit.
+    files = {(image, "66"): _HEADER + _chunk(_rec(1)), (image, "68"): b"not an event log"}
+    monkeypatch.setattr(evtx_recovery, "_MAX_EVTX_FILES", 3)
+
+    with _icat(files):
+        summary = _recover(image)["results"]
+
+    assert summary["compared_with_live_logs"] is False
+    assert summary["warning"].startswith("3 of the 4 event logs listed in this image were not ")
+    assert summary["not_parsed"] == {
+        "files": [f"{_LOGS}System.evtx", f"{_LOGS}broken name.evtx"],
+        "file_count": 2,
+    }
+    assert summary["truncated"] == {"evtx_files_not_read": 1}
+    # What was read still counts: the live copy of record 1 is dropped.
+    assert summary["mode"].endswith("and compared them with 1 event logs extracted from it")
+    assert summary["live_log_cleared"] is False
+    assert summary["duplicates_of_live_dropped"] == 1
+    assert any("3 of the 4" in ln for ln in _lines(case, "evtx_recovered.summary"))
 
 
 def test_an_e01_is_carved_through_its_raw_view_and_never_copied(

@@ -451,13 +451,18 @@ What it does depends on what `evidence_path` is:
 
 A recovered record is dropped when a live record has the same channel, record
 ID and time. On a disk image the live records are those of the image's own
-event logs, which the tool extracts for the length of the call through the file
-listing `run_fls` indexed for that image (the same `icat` extraction
-`run_evtx_parser` does, deleted logs included), so run `run_fls` first. It
-does not need `run_evtx_parser` or the directory that tool extracted to. When
-no log can be extracted (a memory dump, a file of unallocated space, an image
-`run_fls` did not list) the response says `compared_with_live_logs: false` and
-`[carved]` records include any that are still in a live log.
+allocated event logs, which the tool extracts with `icat`, one at a time for
+the length of the call, through the file listing `run_fls` indexed for that
+image, so run `run_fls` first. Another image's listing in the same case is not
+read. A deleted log is not live: where its chunks are still in the image its
+records come out as `[carved]`, also when a new log was created under its
+name. It does not need `run_evtx_parser` or the directory that tool extracted
+to. `compared_with_live_logs` is true only when every allocated log the image
+lists was read. When one could not be extracted or read, `warning` gives the
+count and `not_parsed.files` names it. When there is none to extract (a memory
+dump, a file of unallocated space, an image `run_fls` did not list) nothing is
+compared. Either way `[carved]` records include any that are still in a live
+log that was not read.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -468,7 +473,7 @@ no log can be extracted (a memory dump, a file of unallocated space, an image
 | max_records | int | no | Most records kept per channel (default 10000, limit 100000) |
 | force | bool | no | Re-run even if this path was already recovered, for example with other channels or another time window. The earlier run's sources stay in the index |
 
-**Returns:** `evidence_path`, `mode`, `scope{}` (the channel patterns, time window and `max_records` applied), `recovered_records`, `earliest_recovered`, `latest_recovered`, `channels{}` (per channel: `source`, `recovered`, `earliest`, `latest`, `event_ids{}` (ten most frequent), `live_records`, `live_earliest`, `live_latest`, `not_indexed_over_max_records`; the twenty with most records), `channels_not_listed`, `live_log_cleared`, `log_clearing_events[]` (the first twenty), `duplicates_of_live_dropped`, `truncated{}`, `not_parsed{}`, `summary_source`, `interpretation`; `records_without_channel{}` when the channel patterns left such records out; when carving also `compared_with_live_logs`, `duplicate_chunks_skipped`; `warning` when carved records were not compared with live logs or the file looks like a container. A call that is skipped because the path was already recovered returns `scope_of_prior_run{}`, so the caller can see whether that run covered what it now asks for.
+**Returns:** `evidence_path`, `mode`, `scope{}` (the channel patterns, time window and `max_records` applied), `recovered_records`, `earliest_recovered`, `latest_recovered`, `channels{}` (per channel: `source`, `recovered`, `earliest`, `latest`, `event_ids{}` (ten most frequent), `live_records`, `live_earliest`, `live_latest`, `not_indexed_over_max_records`; the twenty with most records), `channels_not_listed`, `live_log_cleared`, `log_clearing_events[]` (the first twenty), `duplicates_of_live_dropped`, `truncated{}`, `not_parsed{}`, `summary_source`, `interpretation`; `records_without_channel{}` when the channel patterns left such records out; when carving also `compared_with_live_logs`, `duplicate_chunks_skipped`; `warning` when carved records were not compared with every live log or the file looks like a container. A call that is skipped because the path was already recovered returns `scope_of_prior_run{}`, so the caller can see whether that run covered what it now asks for.
 
 `truncated{}` counts what was left out: `records_over_max_records`,
 `records_in_channels_over_limit` (more than 40 channels), `evtx_files_not_read`,
@@ -476,8 +481,9 @@ no log can be extracted (a memory dump, a file of unallocated space, an image
 `not_parsed{}` counts what could not be read: `records` (lines of evtx_dump's
 output that are not JSON, records it reported it could not dump, and records
 without a usable time, event ID or record ID), `files` (logs evtx_dump failed
-on) and `files_ending_in_a_partial_chunk` (evtx_dump reads whole 64 KiB chunks
-only, so the tail of such a log was not read).
+on, and logs of a disk image `icat` could not extract) and
+`files_ending_in_a_partial_chunk` (evtx_dump reads whole 64 KiB chunks only, so
+the tail of such a log was not read).
 
 Records are indexed per channel as `evtx_recovered.<channel>` (`evtx_recovered.security`,
 `evtx_recovered.powershell-operational`), in time order, one per line:
