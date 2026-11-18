@@ -621,7 +621,7 @@ usually exported to), Entra ID sign-in logs and Entra ID audit logs: see
 | sigma_level_filter | Literal['informational', 'low', 'medium', 'high', 'critical'] \| None | no | Minimum Sigma level (default "low") |
 | force | bool | no | Re-run even if these logs were already indexed |
 
-**Returns:** `files_read`, `files_with_problems{}`, `log_types{<type>: events, source, log_table, log_table_note, summary_source, summary{}, export_warnings[], sigma, detections, level_counts{}, rules_matched{}, mitre_coverage{}}`
+**Returns:** `files_read`, `files_with_problems{}`, `log_types{<type>: events, duplicates_skipped, source, log_table, log_table_note, summary_source, summary{}, export_warnings[], sigma, detections, level_counts{}, rules_matched{}, mitre_coverage{}}`
 
 Events are indexed one per line in `cloudlog.<type>` (time, actor, action,
 source IP, target, raw event) and Sigma matches in `cloudlog.<type>.detections`.
@@ -670,7 +670,16 @@ events), so a time-range query finds a window by its earliest event. Sigma
 matches on full field paths (`userIdentity.type`), so a nested key cannot
 stand in for a top-level field. If the events hold more than about 2,000
 distinct field paths, the least-used deep ones are left out of the scan and
-`sigma` says how many. Symlinks under a directory are not followed.
+`sigma` says how many. Symlinks under a directory are not followed, and a path
+that is itself a symlinked file is refused. An event nested about as deep as the
+JSON decoder allows cannot be written back as a line: it is counted in
+`files_with_problems` ("events nested too deeply to index") and as not parsed.
+
+One call reads at most 512 MiB of files. Every event of a call is held in memory,
+at about nine times the size of the files, so past that limit the tool reads
+nothing and returns an error that names the largest files: run it once per file
+or subdirectory. A single file over the limit has to be exported again over
+shorter date ranges, or split.
 
 **Microsoft 365 and Entra ID.** Three log types, told apart per record:
 
@@ -684,14 +693,24 @@ A Graph response page (`{"@odata.context": ..., "value": [...]}`) and an Azure
 Monitor diagnostic-settings stream (`{"records": [...]}`, each record's event in
 `properties`) are unwrapped. Key case is ignored for the two Entra logs. What is
 indexed is the record itself, without its wrapper. A `.csv` in a directory is
-read only when its header has an `AuditData` column.
+read only when its header has an `AuditData` column; it may be separated by
+commas, semicolons or tabs (`Export-Csv -UseCulture`). A date that Windows
+PowerShell 5.1 wrote as `\/Date(<milliseconds>)\/` is read as the time it is.
+
+A record that the files hold more than once, with the same `Id` and the same
+content, is kept once: `Search-UnifiedAuditLog` returns records on more than one
+page, and exports overlap. `duplicates_skipped` counts the repeats, and the
+summary's first line says how many there were. A record without an `Id`, or one
+that differs in any value, is never taken for a repeat.
 
 The fields come from wherever the workload puts them: the source IP from
 `ClientIP`, `ClientIPAddress` or `ActorIpAddress`, without a port or brackets
 and with an IPv4-mapped address unmapped; the user agent from `UserAgent`, from
 `ExtendedProperties` (also inside its `additionalDetails`) or from
 `ClientInfoString`; the session from `SessionId`, `AppAccessContext.AADSessionId`
-or `DeviceProperties`. For a sign-in, the action is the application signed in to
+or `DeviceProperties`. An actor or mailbox that is a user principal name is stored
+in lower case, because the workloads write one user in different case. For a
+sign-in, the action is the application signed in to
 and the target the resource. `country` is the sign-in record's own; nothing looks
 an address up.
 
@@ -704,13 +723,18 @@ no model involved, one tab-separated fact per line:
 | `session` | a session seen from more than one source IP, with each address's events and times (loopback addresses, which Exchange records for its own work, are not counted) |
 | `persistence` | an operation that leaves access behind or hides it, with its parameters folded into one object: inbox rules, mailbox forwarding, mailbox permissions, application consent, application credentials, a registered sign-in method, audit logging changes, transport rules. Operations by Exchange's own service account are counted, not listed |
 | `mailbox` | MailItemsAccessed per mailbox, `Sync` and `Bind` apart: events, messages listed, throttled records, folders, who, source IPs, sessions (`m365` only) |
-| `WARNING` | a file whose unified audit record count is exactly 5,000, 10,000, 50,000 or 1,000,000, the sizes at which `Search-UnifiedAuditLog` and the Purview export stop: it is probably incomplete. Also returned as `export_warnings` |
+| `WARNING` | a file whose unified audit record count is exactly 100, 5,000, 10,000, 50,000 or 1,000,000, the sizes at which `Search-UnifiedAuditLog` (100 when no `ResultSize` is given) and the Purview export stop: it is probably incomplete. The rows of a CSV count whether or not they could be read. Also returned as `export_warnings` |
 
 Sign-in summaries have `user` and `session` lines, audit summaries `user` and
-`persistence` lines. Each section is capped (50 users, the 10 least frequent
-values per user and field, 200 sessions, 300 operations, 200 mailboxes) and says
-when it was, with the `log_top` call that counts the rest. `summary` in the
-result gives the section counts.
+`persistence` lines. Each section is capped and says when it was, with the
+`log_top` or `log_rows` call that covers the rest: 50 users (first those named in
+a listed session or persistence line, then those with the most source IPs), the
+10 least frequent values per user and field, 200 sessions, 200 mailboxes, and
+the newest 40 operations of each kind, so that many of one kind cannot push
+another off the list; the section's first line counts every kind. A line is at
+most 4,000 characters, which fits one window of the index: a value in a list is
+cut at 120 characters and a longer line ends in `…`. `summary` in the result
+gives the section counts.
 
 Default Sigma rules for `m365` are SigmaHQ's `rules/cloud/m365/audit` (the two
 that match raw audit records) and eight of mulder's own: inbox rule created or

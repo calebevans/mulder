@@ -3,7 +3,7 @@ tables, the summary and the rules, and mailbox files reach parse_pst.
 
 The records are hand-written after Microsoft's schema documentation and real records
 (field names, value forms and the places a value hides in), with documentation
-addresses and an invented tenant.
+addresses, an invented tenant and generated identifiers.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ import json
 import os
 import sqlite3
 import subprocess
+from collections import Counter
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -31,6 +32,7 @@ from mulder.orchestrator.evidence import EvidenceContext
 from mulder.orchestrator.types import PhaseResult
 from mulder.server import app
 from mulder.server.app import _tool_dispatch_sync
+from mulder.server.extract_helpers import _WINDOW_CHAR_BUDGET
 from mulder.server.tool_access import Role, get_tools_for_role
 from mulder.server.tools import cloudlogs, review
 from mulder.server.tools.cloudlogs import (
@@ -40,9 +42,9 @@ from mulder.server.tools.cloudlogs import (
     run_cloud_audit_logs,
 )
 
-_TENANT = "8d4121ed-0008-406d-bff9-0d5bb312183c"
+_TENANT = "3ebe6a93-c972-4720-8a1d-4e8c66419917"
 _ATTACKER_IP = "203.0.113.9"
-_SESSION = "902fdad0-3905-464b-a862-c1e64f13c374"
+_SESSION = "793195b2-2fc4-4264-905f-77f8c41932da"
 _CHROME = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/114.0.0.0"
 _SYSTEM = "NT AUTHORITY\\SYSTEM (Microsoft.Exchange.ServiceHost)"
 
@@ -58,7 +60,7 @@ def _exchange_admin(
         "OrganizationId": _TENANT,
         "RecordType": 1,
         "ResultStatus": "True",
-        "UserKey": "1003200280FF7557",
+        "UserKey": "1003200075E8231E",
         "UserType": 2,
         "Version": 1,
         "Workload": "Exchange",
@@ -91,11 +93,11 @@ def _directory(operation: str, when: str, modified: dict[str, str], **more: Any)
         "OrganizationId": _TENANT,
         "RecordType": 8,
         "ResultStatus": "Success",
-        "UserKey": "10032002643F6746@contoso.example",
+        "UserKey": "100320001D2AB3BA@contoso.example",
         "UserType": 0,
         "Version": 1,
         "Workload": "AzureActiveDirectory",
-        "ObjectId": "a62919b8-3d73-4b3f-ab2a-3790b3cb8550",
+        "ObjectId": "be8658b1-f384-4439-9b82-7d20c8ee272c",
         "UserId": "alice@contoso.example",
         "AzureActiveDirectoryEventType": 1,
         "ExtendedProperties": [
@@ -107,7 +109,7 @@ def _directory(operation: str, when: str, modified: dict[str, str], **more: Any)
         ],
         "Actor": [{"ID": "alice@contoso.example", "Type": 5}],
         "ActorContextId": _TENANT,
-        "Target": [{"ID": "ServicePrincipal_2383a669", "Type": 2}],
+        "Target": [{"ID": "ServicePrincipal_62d940e3", "Type": 2}],
         **more,
     }
 
@@ -121,7 +123,7 @@ def _logon(operation: str, when: str, ip: str, session: str, **more: Any) -> dic
         "OrganizationId": _TENANT,
         "RecordType": 15,
         "ResultStatus": "Success" if operation == "UserLoggedIn" else "Failed",
-        "UserKey": "f23cb258-50ca-4092-9027-5c4ca2f1d999",
+        "UserKey": "8ca9b00c-290a-40d3-9f18-8d6b7725b374",
         "UserType": 0,
         "Version": 1,
         "Workload": "AzureActiveDirectory",
@@ -160,7 +162,7 @@ def _mail_access(when: str, how: str, ip: str, session: str, **more: Any) -> dic
         "Workload": "Exchange",
         "UserId": "alice@contoso.example",
         "AppId": "00000002-0000-0ff1-ce00-000000000000",
-        "ClientAppId": "3c8e478f-21ca-493a-b87c-c7366d664d54",
+        "ClientAppId": "11c0913d-9fe8-460b-9a28-88c4b4df919a",
         "ClientIPAddress": ip,
         "ClientInfoString": "Client=OWA;Action=ViaProxy",
         "ExternalAccess": False,
@@ -170,7 +172,7 @@ def _mail_access(when: str, how: str, ip: str, session: str, **more: Any) -> dic
             {"Name": "MailAccessType", "Value": how},
             {"Name": "IsThrottled", "Value": "False"},
         ],
-        "AppAccessContext": {"AADSessionId": session, "ClientAppId": "3c8e478f"},
+        "AppAccessContext": {"AADSessionId": session, "ClientAppId": "11c0913d"},
         **more,
     }
 
@@ -237,7 +239,7 @@ _APP_SECRET = _directory(
     "Update application – Certificates and secrets management ",
     "2026-10-05T12:44:41",
     {"KeyDescription": '[\r\n  "[KeyIdentifier=bf0bc63d,KeyType=Password,KeyUsage=Verify]"\r\n]'},
-    ObjectId="Application_9cb8c87d-30db-43e7-993d-be7095f1c90c",
+    ObjectId="Application_1da54bcb-978f-4d88-99b9-985e63760e88",
 )
 _SP_SECRET = _directory(
     "Add service principal credentials.",
@@ -306,7 +308,7 @@ _GRAPH_SIGNIN = {  # Microsoft Graph v1.0 signIn: no user agent, no session id
     "createdDateTime": "2026-10-05T12:13:13.1234567Z",
     "userDisplayName": "Alice Example",
     "userPrincipalName": "alice@contoso.example",
-    "userId": "f23cb258-50ca-4092-9027-5c4ca2f1d999",
+    "userId": "8ca9b00c-290a-40d3-9f18-8d6b7725b374",
     "appId": "de8bc8b5-d9f9-48b1-a8ad-b748da725064",
     "appDisplayName": "Graph Explorer",
     "ipAddress": _ATTACKER_IP,
@@ -352,7 +354,7 @@ _LA_SIGNIN = {  # Log Analytics SigninLogs: PascalCase, dynamic columns as JSON 
 _GRAPH_AUDIT = {  # Microsoft Graph directoryAudit
     "id": "Directory_a1b2c3",
     "category": "ApplicationManagement",
-    "correlationId": "5d5d89bf-37bf-4998-b2e4-a61216904754",
+    "correlationId": "83069a8d-357f-457e-93ca-5cdf8a1a2c46",
     "result": "success",
     "resultReason": "",
     "activityDisplayName": "Consent to application",
@@ -361,7 +363,7 @@ _GRAPH_AUDIT = {  # Microsoft Graph directoryAudit
     "operationType": "Assign",
     "initiatedBy": {
         "user": {
-            "id": "f23cb258",
+            "id": "8ca9b00c",
             "userPrincipalName": "alice@contoso.example",
             "ipAddress": _ATTACKER_IP,
         },
@@ -369,7 +371,7 @@ _GRAPH_AUDIT = {  # Microsoft Graph directoryAudit
     },
     "targetResources": [
         {
-            "id": "2383a669-0671-49c4-a7e6-a15950eccc2e",
+            "id": "62d940e3-fd5b-47c3-8fe7-131abb360587",
             "displayName": "PerfectData Software",
             "type": "ServicePrincipal",
             "modifiedProperties": [
@@ -545,7 +547,7 @@ def test_every_unified_audit_log_export_yields_the_same_record(tmp_path: Path) -
         "operation": "New-InboxRule",
         "organizationId": _TENANT,
         "userType": "admin",
-        "userId": "1003200280FF7557",
+        "userId": "1003200075E8231E",
         "service": "Exchange",
         "objectId": "alice",
         "userPrincipalName": "alice@contoso.example",
@@ -760,7 +762,7 @@ def test_directory_audits_are_read_in_graph_and_log_analytics_spelling() -> None
             "category": "ApplicationManagement",
             "service": "Core Directory",
             "target_type": "ServicePrincipal",
-            "correlation_id": "5d5d89bf-37bf-4998-b2e4-a61216904754",
+            "correlation_id": "83069a8d-357f-457e-93ca-5cdf8a1a2c46",
         },
     }
     # An application acted, and the nested columns arrived as JSON strings.
@@ -1041,9 +1043,10 @@ def test_the_summary_says_who_came_from_where_what_they_left_and_what_they_read(
         "[] => [[Scope: Mail.Read"
     )
     assert (
-        "# operations that leave access behind or hide it: 5; 1 more by Exchange's own"
-        in "".join(lines)
-    )
+        "# operations that leave access behind or hide it: 5 (application consent 1, "
+        "authentication method 1, inbox rule 1, mailbox forwarding 1, mailbox permission 1)"
+        "; 1 more by Exchange's own"
+    ) in "".join(lines)
     # What was read: a bind names its messages, a sync the folder that was copied.
     mailbox = {line.split("\t")[3]: line.split("\t") for line in lines if "\tmailbox\t" in line}
     assert mailbox["Bind"] == [
@@ -1093,17 +1096,19 @@ def test_a_graph_v1_sign_in_export_says_it_cannot_link_sessions(
     assert "user_agent" not in fields and "session_id" not in fields
 
 
-@pytest.mark.parametrize(("count", "flagged"), [(5000, True), (4999, False)])
+@pytest.mark.parametrize(
+    ("count", "unreadable", "flagged"),
+    # 100 is what Search-UnifiedAuditLog returns when no ResultSize is given, and a row
+    # that cannot be read is still a row of the export.
+    [(5000, 0, True), (4999, 0, False), (4999, 1, True), (100, 0, True), (99, 0, False)],
+)
 def test_an_export_of_exactly_the_size_at_which_exports_stop_is_flagged(
-    case: CaseDB, tmp_path: Path, count: int, flagged: bool
+    case: CaseDB, tmp_path: Path, count: int, unreadable: int, flagged: bool
 ) -> None:
     file = tmp_path / "ual.csv"
     record = json.dumps({"CreationTime": "2026-10-05T12:00:00", "Operation": "FileAccessed"})
-    file.write_text(
-        _csv(
-            ["CreationDate", "UserIds", "Operations", "AuditData"], [["", "", "", record]] * count
-        )
-    )
+    rows = [["", "", "", record]] * count + [["", "", "", ""]] * unreadable
+    file.write_text(_csv(["CreationDate", "UserIds", "Operations", "AuditData"], rows))
 
     entry = _run(file)["results"]["log_types"]["m365"]
 
@@ -1111,7 +1116,7 @@ def test_an_export_of_exactly_the_size_at_which_exports_stop_is_flagged(
     assert entry["events"] == count
     if flagged:
         (warning,) = entry["export_warnings"]
-        assert warning.startswith(f"{file}: exactly 5000 unified audit records")
+        assert warning.startswith(f"{file}: exactly {count + unreadable} unified audit records")
         assert "probably incomplete" in warning
         assert f"WARNING\t{warning}" in summary.splitlines()
     else:
@@ -1151,12 +1156,58 @@ def test_a_csv_field_that_never_ends_costs_what_follows_it_and_says_so(tmp_path:
     good = _purview_csv([_INBOX_RULE])
     file.write_text(good + '"x","x","x","x","x","{' + "A" * (33 * 1024 * 1024))
 
-    events, damaged, _ = m365.read_csv(file)
+    events, damaged, stopped = m365.read_csv(file)
 
-    assert ([e["Operation"] for e in events], damaged) == (["New-InboxRule"], 1)
+    assert ([e["Operation"] for e in events], damaged, stopped) == (["New-InboxRule"], 1, 3)
     # A CSV that is not an audit export holds no events, and that is no damage.
     file.write_text("host,owner\nws-01,alice\n")
     assert m365.read_csv(file) == ([], 0, 0)
+
+
+def test_a_csv_that_cannot_be_read_to_its_end_says_where_reading_stopped(
+    case: CaseDB, tmp_path: Path
+) -> None:
+    """Four rows follow the one the csv module cannot get past: "one unreadable row"
+    alone would be a wrong account of what was lost."""
+    file = tmp_path / "ual.csv"
+    rows = [["", "", "", json.dumps(_INBOX_RULE | {"Id": str(n)})] for n in range(6)]
+    rows[1][3] = json.dumps(_INBOX_RULE | {"Blob": "x" * (33 * 1024 * 1024)})
+    file.write_text(_csv(["CreationDate", "UserIds", "Operations", "AuditData"], rows))
+
+    result = _run(file)["results"]
+
+    assert result["log_types"]["m365"]["events"] == 1
+    assert result["files_with_problems"] == {
+        str(file): "rows without a readable AuditData event: 1; events read: 1; "
+        "reading stopped at line 3: the rest of the file was not read"
+    }
+
+
+@pytest.mark.parametrize("separator", [";", "\t"])
+def test_a_csv_with_the_hosts_list_separator_is_recognised_and_read(
+    case: CaseDB, tmp_path: Path, separator: str
+) -> None:
+    """Export-Csv -UseCulture writes a semicolon on a host with a European locale."""
+    out = io.StringIO()
+    header = ["CreationDate", "UserIds", "Operations", "AuditData"]
+    row = ["2026-10-05", "alice@contoso.example", "New-InboxRule", json.dumps(_INBOX_RULE)]
+    csv.writer(out, delimiter=separator).writerows([header, row])
+    root = tmp_path / "export"
+    root.mkdir()
+    (root / "ual.csv").write_text(out.getvalue())
+
+    found = [c.artifact_type for c in EvidenceClassifier().classify(root)]
+    assert found == ["cloud_audit_log"]
+    assert _run(root)["results"]["log_types"]["m365"]["events"] == 1
+
+
+def test_a_csv_whose_header_is_longer_than_a_page_is_recognised(tmp_path: Path) -> None:
+    header = [f"column{n:04d}_of_the_powershell_object" for n in range(300)] + ["AuditData"]
+    (tmp_path / "ual.csv").write_text(_csv(header, [["x"] * 300 + [json.dumps(_INBOX_RULE)]]))
+
+    assert len(",".join(header)) > 8192
+    found = [c.artifact_type for c in EvidenceClassifier().classify(tmp_path)]
+    assert found == ["cloud_audit_log"]
 
 
 def test_an_export_and_the_directory_that_holds_it_are_loaded_once(
@@ -1183,6 +1234,14 @@ def test_a_symlinked_export_is_not_followed_out_of_the_evidence(
 
     assert _run(bec)["results"]["files_read"] == 3
     assert "New-TransportRule" not in _text(case, "cloudlog.m365")
+    # Nor when the link is the path itself: it is not classified, so it is never planned,
+    # and the tool refuses it when it is named all the same.
+    (bec / "link.json").symlink_to(bec / "signins.json")
+    classified = {c.path.name for c in EvidenceClassifier().classify(bec)}
+    assert classified == {"ual.csv", "signins.json", "directory-audit.json"}
+    refused = _run(bec / "link.csv", force=True)
+    assert refused["status"] == "error" and "symlink" in refused["error_message"]
+    assert "New-TransportRule" not in _text(case, "cloudlog.m365")
 
 
 def test_the_summary_is_bounded_and_says_what_it_left_out() -> None:
@@ -1200,14 +1259,238 @@ def test_the_summary_is_bounded_and_says_what_it_left_out() -> None:
 
     assert counts["users"] == 131 and counts["persistence_operations"] == 400
     assert len(lines) < 2500
-    assert max(len(line) for line in lines) < 4096  # a line fits one index window
-    assert sum("\tpersistence\t" in line for line in lines) == 300
-    assert "400 (the first 300 are listed)" in "".join(lines)
+    assert max(len(line) for line in lines) < _WINDOW_CHAR_BUDGET  # fits one index window
+    assert sum("\tpersistence\t" in line for line in lines) == 40
+    assert "it: 400 (inbox rule 400). Time" in "".join(lines)
+    assert "# inbox rule: the newest 40 of 400 are listed; log_rows(" in "".join(lines)
     assert "# 81 more users are not listed" in "".join(lines)
     note = next(line for line in lines if "least frequent" in line)
     assert 'log_top(table="cloudlog.m365", fields=["src_ip"], filters=[{"field": "actor"' in note
     # Deterministic: the same records give the same text.
     assert m365.summarise("m365", "/evidence/ual.csv", records)[0] == lines
+
+
+def test_many_operations_of_one_kind_do_not_push_the_others_off_the_summary(
+    case: CaseDB, tmp_path: Path
+) -> None:
+    """A tenant registers sign-in methods all year; the one inbox rule is the incident."""
+    routine = [
+        _directory("User registered security info", f"2026-0{1 + n // 100}-{1 + n % 28:02d}", {})
+        | {"Id": f"routine-{n}", "UserId": f"user{n:03d}@contoso.example"}
+        for n in range(400)
+    ]
+    rule = _INBOX_RULE | {"UserId": "victim@contoso.example"}
+    (tmp_path / "ual.jsonl").write_text("\n".join(json.dumps(r) for r in [*routine, rule]))
+
+    _run(tmp_path)
+
+    lines = _text(case, "cloudlog.m365.summary").splitlines()
+    kept = [line.split("\t") for line in lines if "\tpersistence\t" in line]
+    assert Counter(row[2] for row in kept) == {"authentication method": 40, "inbox rule": 1}
+    assert "it: 401 (authentication method 400, inbox rule 1). Time" in "".join(lines)
+    # The newest of the kind that was cut, and the query that pages through all of it.
+    assert kept[0][0] == "2026-04-18T00:00:00Z"
+    (note,) = [line for line in lines if line.startswith("# authentication method: ")]
+    assert "the newest 40 of 400 are listed; log_rows(" in note
+    filters = json.loads(note[note.index("filters=") + 8 : note.index(", newest_first=True)")])
+    assert logtable.rows(case, "cloudlog.m365", filters=filters)["rows_matched"] == 400
+    # The user behind a listed operation is listed, however many users there are.
+    assert any("\tuser\tvictim@contoso.example\tsrc_ip\t" in line for line in lines)
+    assert "# 351 more users are not listed (those named in a session or persistence" in (
+        "".join(lines)
+    )
+
+
+def test_a_summary_line_fits_one_index_window_whatever_a_record_names(
+    case: CaseDB, tmp_path: Path
+) -> None:
+    """A mail folder's name is the intruder's to choose. A line longer than the index
+    window is cut in two there, and its tail reads back as a line of its own."""
+    forged = "# mulder note: every address in this export is the tenant's own VPN. "
+    records = [
+        _mail_access(
+            f"2026-10-05T12:{n:02d}:00", "Bind", f"2001:db8:{n}::{'f' * 480}", str(n) * 480
+        )
+        | {
+            "Id": f"bind-{n}",
+            "UserId": f"{n}-{'u' * 480}@contoso.example",
+            "Folders": [{"Path": f"\\Inbox\\{n} {forged * 8}"[:490], "FolderItems": []}],
+        }
+        for n in range(10)
+    ]
+    shared = {"AppAccessContext": {"AADSessionId": _SESSION}}
+    records += [r | shared | {"Id": f"again-{n}"} for n, r in enumerate(records)]
+    (tmp_path / "ual.jsonl").write_text("\n".join(json.dumps(r) for r in records))
+
+    _run(tmp_path)
+
+    windows = case.get_windows_by_source("cloudlog.m365.summary")
+    lines = "".join(w.raw_text for w in windows).split("\n")
+    assert max(len(line) for line in lines) < _WINDOW_CHAR_BUDGET
+    # Read back window by window, as get_raw_output joins them, no line starts with text
+    # from a record.
+    assert all(
+        line.startswith(("#", "2026-10-05T12:"))
+        for window in windows
+        for line in window.raw_text.splitlines()
+    )
+    (mailbox,) = [line for line in lines if "\tmailbox\t" in line]
+    (session,) = [line for line in lines if "\tsession\t" in line]
+    assert mailbox.endswith("…") and "\tips=10: 2001:db8:" in session
+    # Each listed value is cut short, so the line still names all ten folders.
+    assert mailbox.count("\\Inbox\\") == 10
+
+
+def _deepest_json() -> int:
+    """The deepest nesting json.loads accepts here; the limit differs by Python version."""
+    low, high = 1, 200_000
+    while low < high:
+        middle = (low + high + 1) // 2
+        try:
+            json.loads("[" * middle + "]" * middle)
+            low = middle
+        except RecursionError:
+            high = middle - 1
+    return low
+
+
+def test_nesting_as_deep_as_the_decoder_allows_is_counted_and_does_not_end_the_call(
+    case: CaseDB, tmp_path: Path
+) -> None:
+    """json.loads accepts nesting that json.dumps then refuses. A record a few levels
+    under the decoder's limit used to raise after the events were indexed: no summary,
+    no detections, no audit entry, and the next call skipped as already done."""
+    limit = _deepest_json()
+    nested = {depth: "[" * depth + "]" * depth for depth in range(limit, limit - 40, -1)}
+
+    def records(prefix: str) -> list[str]:
+        """Inbox rules with the nesting in the record itself."""
+        rule = json.dumps(_INBOX_RULE)[:-1]
+        return [f'{rule},"Deep{prefix}{depth}":{text}}}' for depth, text in nested.items()]
+
+    # As a parameter value (20 KB of text the intruder chooses), which the summary decodes.
+    rules = [
+        _INBOX_RULE | {"Parameters": [{"Name": f"BodyContainsWords{depth}", "Value": text}]}
+        for depth, text in nested.items()
+    ]
+    (tmp_path / "parameters.jsonl").write_text("\n".join(json.dumps(rule) for rule in rules))
+    # In the record itself, as JSON lines and in a CSV's AuditData column.
+    (tmp_path / "records.jsonl").write_text("\n".join([*records("j"), json.dumps(_FORWARDING)]))
+    (tmp_path / "records.csv").write_text(_csv(["AuditData"], [[r] for r in records("c")]))
+    # And arrays inside arrays, which hold no event at all.
+    (tmp_path / "arrays.json").write_text("[" * 3000 + "]" * 3000)
+
+    result = _run(tmp_path)
+
+    assert result["status"] == "success", result
+    entry = result["results"]["log_types"]["m365"]
+    table = {t["table"]: t for t in logtable.tables(case)}["cloudlog.m365"]
+    # Every record is in the table or counted as not parsed, and the summary was written.
+    assert table["rows"] + table["rows_not_parsed"] == 40 + 41 + 40 + 1
+    assert entry["events"] == table["rows"] >= 41
+    assert entry["summary"]["persistence_operations"] == entry["events"]
+    summary = _text(case, "cloudlog.m365.summary")
+    assert summary.count("\tpersistence\tinbox rule\t") == 40
+    assert "\tpersistence\tmailbox forwarding\t" in summary
+    assert set(result["results"]["files_with_problems"]) >= {str(tmp_path / "arrays.json")}
+    assert _run(tmp_path)["results"]["status"] == "skipped"
+
+
+def test_a_powershell_5_date_is_read_as_the_event_time(case: CaseDB, tmp_path: Path) -> None:
+    """Windows PowerShell 5.1's ConvertTo-Json writes a DateTime as "\\/Date(ms)\\/", the
+    Graph SDK's objects are PascalCase, and ">" writes UTF-16."""
+    signin = {
+        "Id": "s1",
+        "CreatedDateTime": "/Date(1791203595000)/",
+        "UserPrincipalName": "Alice@Contoso.example",
+        "AppId": "00000002-0000-0ff1-ce00-000000000000",
+        "AppDisplayName": "Office 365 Exchange Online",
+        "IPAddress": _ATTACKER_IP,
+        "ClientAppUsed": "Browser",
+        "ConditionalAccessStatus": "notApplied",
+        "Status": {"ErrorCode": 0, "FailureReason": None},
+    }
+    audit = {
+        "Id": "a1",
+        "ActivityDateTime": "/Date(1791203595000)/",
+        "ActivityDisplayName": "Consent to application",
+        "Result": "success",
+        "InitiatedBy": {"User": {"UserPrincipalName": "alice@contoso.example"}},
+        "TargetResources": [{"DisplayName": "Mail Sync", "Type": "ServicePrincipal"}],
+    }
+    for name, record in (("signins.json", signin), ("audit.json", audit)):
+        text = json.dumps([record], indent=4).replace("/", "\\/")
+        (tmp_path / name).write_bytes(text.encode("utf-16"))
+
+    _run(tmp_path)
+
+    tables = {t["table"]: t for t in logtable.tables(case)}
+    for table in ("cloudlog.entra_signin", "cloudlog.entra_audit"):
+        assert tables[table]["rows_without_time"] == 0
+        assert tables[table]["first_time"] == "2026-10-05T12:33:15Z"
+    assert (
+        f"2026-10-05T12:33:15Z\tuser\talice@contoso.example\tsrc_ip\t{_ATTACKER_IP}"
+        "\tevents=1\tlast=2026-10-05T12:33:15Z"
+    ) in _text(case, "cloudlog.entra_signin.summary").splitlines()
+    assert (
+        _recognise(signin | {"CreatedDateTime": "/Date(" + "9" * 5000 + ")/"}).fields["event_time"]
+        == ""
+    )
+
+
+def test_one_user_and_one_record_are_counted_once_however_they_are_written(
+    case: CaseDB, tmp_path: Path
+) -> None:
+    """Exchange and Entra spell one user principal name in different case, an overlapping
+    or paged export holds a record twice, and Exchange's loopback address has other forms."""
+    session = "5d0f3c1e-8a52-4f0b-9d3e-6f1f0a7c2b11"
+    logon = _logon("UserLoggedIn", "2026-10-05T12:00:00", _ATTACKER_IP, session)
+    records = [
+        logon | {"UserId": "Alice@Contoso.example"},
+        _mail_access("2026-10-05T12:05:00", "Bind", _ATTACKER_IP, session)
+        | {"MailboxOwnerUPN": "ALICE@contoso.example"},
+        _exchange_admin("Set-Mailbox", "2026-10-05T12:06:00", {"AuditEnabled": "False"})
+        | {"ClientIP": "127.0.0.2", "SessionId": session},
+        _exchange_admin("Set-Mailbox", "2026-10-05T12:07:00", {"AuditEnabled": "False"})
+        | {"ClientIP": "[::ffff:127.0.0.1]:443", "SessionId": session},
+    ]
+    (tmp_path / "page1.jsonl").write_text("\n".join(json.dumps(r) for r in records))
+    # The second page repeats the first record, and holds one that differs in content
+    # under the same Id: that one is not a repeat, and is kept.
+    changed = logon | {"UserId": "alice@contoso.example", "ResultStatus": "Failed"}
+    (tmp_path / "page2.jsonl").write_text(json.dumps(records[0]) + "\n" + json.dumps(changed))
+
+    entry = _run(tmp_path)["results"]["log_types"]["m365"]
+
+    assert (entry["events"], entry["duplicates_skipped"]) == (5, 1)
+    summary = _text(case, "cloudlog.m365.summary")
+    assert f"summary of {tmp_path}: 5 events (and 1 repeats of them, counted once), " in summary
+    assert entry["summary"] == {
+        "users": 1,
+        "sessions_from_several_ips": 0,
+        "persistence_operations": 2,
+        "mailboxes_accessed": 1,
+    }
+    actors = logtable.top(case, "cloudlog.m365", fields=["actor"])["rows"]
+    assert [(row["actor"], row["count"]) for row in actors] == [("alice@contoso.example", 5)]
+    assert "\tmailbox\talice@contoso.example\tBind\t" in summary
+
+
+def test_a_call_reads_no_more_than_its_memory_allows_and_names_the_files(
+    case: CaseDB, bec: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every event of a call is held in memory, so a tenant-sized export is refused
+    before it is read, with the files to run one at a time."""
+    monkeypatch.setattr(cloudlogs, "_MAX_EXPORT_BYTES", (bec / "ual.csv").stat().st_size)
+
+    refused = _run(bec)
+
+    assert refused["status"] == "error" and refused["error_type"] == "invalid_argument"
+    assert "Nothing was read. Call the tool once per file" in refused["error_message"]
+    assert f"{bec / 'ual.csv'} (0 MiB)" in refused["error_message"]
+    assert case.get_sources() == []
+    # One file of it at a time is within the limit.
+    assert _run(bec / "ual.csv")["results"]["log_types"]["m365"]["events"] == len(_BEC)
 
 
 # --- detection rules ------------------------------------------------------------------

@@ -13,8 +13,10 @@ import csv
 import io
 import ipaddress
 import json
+import re
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -38,17 +40,21 @@ TYPES = {
 }
 
 #: Record counts at which an export stops without saying so. Search-UnifiedAuditLog
-#: returns at most 5,000 results sorted and 50,000 with ReturnLargeSet (10,000 when the
-#: two session commands are mixed); a Purview export stops at 50,000 rows, or at
-#: 1,000,000 with Audit (Premium).
-EXPORT_CAPS = frozenset({5_000, 10_000, 50_000, 1_000_000})
+#: returns 100 results unless ResultSize asks for more, at most 5,000 sorted and 50,000
+#: with ReturnLargeSet (10,000 when the two session commands are mixed); a Purview
+#: export stops at 50,000 rows, or at 1,000,000 with Audit (Premium).
+EXPORT_CAPS = frozenset({100, 5_000, 10_000, 50_000, 1_000_000})
 
 _VALUE_CHARS = 500
+_LISTED_CHARS = 120  # one value among several listed on a line
 _DETAIL_CHARS = 1000
+# The index cuts a line longer than its 4,096-character window in two, and the second
+# piece reads back as a line of its own that begins with text taken from a record.
+_LINE_CHARS = 4000
 _MAX_USERS = 50
 _MAX_VALUES = 10
 _MAX_SESSIONS = 200
-_MAX_OPERATIONS = 300
+_MAX_OPERATIONS = 40  # of each kind
 _MAX_MAILBOXES = 200
 
 # One AuditData value can list every message of a two-minute window. The limit is the
@@ -58,7 +64,8 @@ csv.field_size_limit(32 * 1024 * 1024)
 # Exchange Online's own service accounts ("NT AUTHORITY\SYSTEM (Microsoft.Exchange.
 # ServiceHost)"): they provision every mailbox with the cmdlets an intruder also uses.
 _SYSTEM = "NT AUTHORITY\\"
-_LOOPBACK = {"::1", "127.0.0.1"}
+# Windows PowerShell 5.1's ConvertTo-Json writes a DateTime as "\/Date(<epoch ms>)\/".
+_PS_DATE = re.compile(r"/Date\((-?\d{1,15})(?:[+-]\d{4})?\)/")
 
 # Graph audit-query field -> the Management Activity API name of the same value.
 _GRAPH_AUDIT = {
@@ -118,6 +125,11 @@ def _line(value: object) -> str:
         return "true" if value else "false"
     text = " ".join(str(value)[: 4 * _VALUE_CHARS].split())
     return "".join(ch for ch in text if ch.isprintable())[:_VALUE_CHARS]
+
+
+def _cut(text: str, limit: int) -> str:
+    """*text* in at most *limit* characters; one that was cut short ends in "…"."""
+    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 def _first(*values: object) -> object:
@@ -184,6 +196,15 @@ def _ip(value: object) -> str:
     except ValueError:
         return text
     return str(getattr(address, "ipv4_mapped", None) or address)
+
+
+@lru_cache(maxsize=4096)
+def _loopback(ip: str) -> bool:
+    """Whether *ip* is a loopback address; text that is not an address is not one."""
+    try:
+        return ipaddress.ip_address(ip).is_loopback
+    except ValueError:
+        return False
 
 
 def _unified(e: Mapping[str, Any]) -> tuple[dict[str, object], dict[str, object]]:
@@ -345,8 +366,16 @@ def recognise(event: dict[str, Any]) -> Record | None:
     found = Record(record)
     found.kind = kind
     found.fields = {name: _line(value) for name, value in columns.items()}
-    found.fields["event_time"] = normalise_time(columns["event_time"]) or ""
+    when = columns["event_time"]
+    if isinstance(when, str) and (stamp := _PS_DATE.fullmatch(when.strip())):
+        when = int(stamp[1]) / 1000
+    found.fields["event_time"] = normalise_time(when) or ""
     found.fields["extra"] = {key: text for key, value in extra.items() if (text := _line(value))}
+    # A user principal name is compared without case and the workloads spell one user
+    # differently: in lower case the index, the table and the summary count one user.
+    for where, name in ((found.fields, "actor"), (found.fields["extra"], "mailbox")):
+        if "@" in where.get(name, ""):
+            where[name] = where[name].lower()
     return found
 
 
@@ -354,25 +383,28 @@ def read_csv(path: Path) -> tuple[list[dict[str, Any]], int, int]:
     """Read a Unified Audit Log CSV export: each row's event is the JSON in its
     ``AuditData`` column (Purview's export, ``Search-UnifiedAuditLog | Export-Csv``).
 
-    Returns what ``cloudlogs._read_events`` returns: the events, the rows that held no
-    event (a lower bound when the CSV itself is damaged: what follows an unreadable
-    field is lost), and 0. A file without an ``AuditData`` column holds no events.
+    Returns the events, the rows that held no event, and the line at which reading
+    stopped: 0 when the file was read to its end, else the line of a field the csv module
+    cannot get past, after which nothing was read or counted. A file without an
+    ``AuditData`` column holds no events.
     """
     raw = path.read_bytes()
     # Windows PowerShell's Out-File writes UTF-16; Export-Csv -Encoding UTF8 a BOM.
     utf16 = raw[:2] in (b"\xff\xfe", b"\xfe\xff")
     text = raw.decode("utf-16" if utf16 else "utf-8-sig", errors="replace")
+    del raw
     events: list[dict[str, Any]] = []
-    damaged = 0
+    damaged = stopped = 0
     column: int | None = None
+    reader = csv.reader(io.StringIO(text, newline=""), delimiter=_delimiter(text[:65536]))
     try:
-        for row in csv.reader(io.StringIO(text, newline="")):
+        for row in reader:
             if not row:
                 continue
             if column is None:
                 if row[0].startswith("#TYPE"):  # Export-Csv without -NoTypeInformation
                     continue
-                names = [name.strip().lower() for name in row]
+                names = [name.strip(' "').lower() for name in row]
                 if "auditdata" not in names:
                     return [], 0, 0
                 column = names.index("auditdata")
@@ -383,18 +415,28 @@ def read_csv(path: Path) -> tuple[list[dict[str, Any]], int, int]:
             else:
                 damaged += 1
     except csv.Error:  # a field past the size limit, or a quote that is never closed
-        damaged += 1
-    return events, damaged, 0
+        damaged, stopped = damaged + 1, reader.line_num
+    return events, damaged, stopped
+
+
+def _delimiter(head: str) -> str:
+    """The separator of the CSV that begins with *head*: the commonest of comma,
+    semicolon and tab in its header line. ``Export-Csv -UseCulture`` writes the host's
+    list separator, a semicolon in much of Europe."""
+    lines = (line for line in head.splitlines() if line.strip())
+    header = next((line for line in lines if not line.startswith("#TYPE")), "")
+    return max(",;\t", key=header.count)
 
 
 def export_warnings(counts: Mapping[str, int]) -> list[str]:
     """One sentence per file whose unified audit record count is exactly a size at
-    which an export stops. *counts* maps a file to the records read from it."""
+    which an export stops. *counts* maps a file to the records in it, read or not."""
     return [
         f"{_line(file)}: exactly {count} unified audit records, a size at which an export "
-        "stops without saying so (Search-UnifiedAuditLog at 5,000, 10,000 or 50,000; a "
-        "Purview export at 50,000 or 1,000,000). This export is probably incomplete: "
-        "events after the last one in it may exist and are not here."
+        "stops without saying so (Search-UnifiedAuditLog at 100 unless ResultSize asks for "
+        "more, and at 5,000, 10,000 or 50,000; a Purview export at 50,000 or 1,000,000). "
+        "This export is probably incomplete: events after the last one in it may exist "
+        "and are not here."
         for file, count in sorted(counts.items())
         if count in EXPORT_CAPS
     ]
@@ -423,8 +465,12 @@ def _details(record: Record) -> str:
             **fold(record.get("OperationProperties")),
             **fold(record.get("Parameters")),
         }
-    text = json.dumps({name: _obj(value) for name, value in pairs.items()}, default=str)
-    return text if len(text) <= _DETAIL_CHARS else text[: _DETAIL_CHARS - 1] + "…"
+    try:
+        text = json.dumps({name: _obj(value) for name, value in pairs.items()}, default=str)
+    except (RecursionError, ValueError):
+        # A value nested about as deep as the decoder allows cannot be written back.
+        text = json.dumps({name: _line(value) for name, value in pairs.items()})
+    return _cut(text, _DETAIL_CHARS)
 
 
 def _bump(span: list[Any], when: str) -> None:
@@ -435,21 +481,26 @@ def _bump(span: list[Any], when: str) -> None:
         span[1] = max(span[1], when)
 
 
-def _listed(total: int, limit: int) -> str:
-    """Say so when only the first *limit* of *total* lines are listed."""
-    return f" (the first {limit} are listed)" if total > limit else ""
+def _listed(total: int, limit: int, rest: str) -> str:
+    """Say so when only the first *limit* of *total* lines are listed, and name the log
+    table query (*rest*) that counts them all."""
+    return f" (the first {limit} are listed; {rest} counts all)" if total > limit else ""
 
 
 def _top(counts: Counter[str]) -> str:
     """The commonest values with their event counts, and how many more there are."""
     named = [(value, n) for value, n in counts.most_common() if value]
-    shown = ", ".join(f"{value} ({n})" for value, n in named[:_MAX_VALUES])
+    shown = ", ".join(f"{_cut(value, _LISTED_CHARS)} ({n})" for value, n in named[:_MAX_VALUES])
     more = len(named) - _MAX_VALUES
     return f"{shown}, and {more} more" if more > 0 else shown
 
 
 def summarise(
-    kind: str, path: str, records: Sequence[Record], warnings: Sequence[str] = ()
+    kind: str,
+    path: str,
+    records: Sequence[Record],
+    warnings: Sequence[str] = (),
+    repeats: int = 0,
 ) -> tuple[list[str], dict[str, int]]:
     """The lines of the ``cloudlog.<kind>.summary`` source, and the counts to return.
 
@@ -457,8 +508,10 @@ def summarise(
     agents and sessions with first seen, last seen and events; sessions seen from more
     than one source IP; operations that leave access behind, with their parameters
     folded; for the unified audit log, MailItemsAccessed per mailbox and access type.
-    Lines are tab-separated and lead with a first-seen time. Where a section is cut
-    short the output says so, and names the log table query that is not.
+    Lines are tab-separated, lead with a first-seen time and fit one index window.
+    Where a section is cut short the output says so, and names the log table query that
+    is not. *repeats* is how many further records repeated one of *records* and were
+    left out.
     """
     table = f"cloudlog.{kind}"
     seen: dict[tuple[str, str], dict[str, list[Any]]] = {}  # (user, field) -> value -> span
@@ -474,7 +527,7 @@ def summarise(
             if user and f[name]:
                 _bump(seen.setdefault((user, name), {}).setdefault(f[name], ["", "", 0]), when)
         # Exchange records the loopback address for its own work inside a user's session.
-        if session and ip and ip not in _LOOPBACK:
+        if session and ip and not _loopback(ip):
             _bump(sessions.setdefault(session, {}).setdefault(ip, ["", "", 0]), when)
             session_users.setdefault(session, set()).add(user)
         label = _persistence(record) if kind != "entra_signin" else ""
@@ -487,7 +540,7 @@ def summarise(
             props = fold(record.get("OperationProperties"))
             how = _line(props.get("MailAccessType")) or "unknown"
             box = mail.setdefault(
-                (_line(record.get("MailboxOwnerUPN")) or user, how),
+                (f["extra"].get("mailbox") or user, how),
                 {"span": ["", "", 0], "items": 0, "throttled": 0}
                 | {name: Counter() for name in ("folders", "by", "ips", "sessions")},
             )
@@ -508,8 +561,9 @@ def summarise(
 
     times = sorted(r.fields["event_time"] for r in records if r.fields["event_time"])
     span = f", {times[0]} to {times[-1]}" if times else ""
+    again = f" (and {repeats} repeats of them, counted once)" if repeats else ""
     lines = [
-        f"# {TYPES[kind]} summary of {_line(path)}: {len(records)} events{span}",
+        f"# {TYPES[kind]} summary of {_line(path)}: {len(records)} events{again}{span}",
         f"# Computed by mulder from the events in {table}, not by a model. It describes the "
         "records in this export only: what was not logged, not retained or not exported "
         "is not here.",
@@ -524,8 +578,23 @@ def summarise(
                 "by it. That is not a finding that they differ or agree."
             )
 
+    several = sorted(  # most source IPs first
+        ((s, ips) for s, ips in sessions.items() if len(ips) > 1),
+        key=lambda item: (-len(item[1]), item[0]),
+    )
+    # The newest operations of each kind, so that many of one kind (sign-in methods are
+    # registered daily) cannot push the one inbox rule off the list.
+    by_kind: dict[str, list[tuple[str, ...]]] = {}
+    for row in sorted(operations):
+        by_kind.setdefault(row[1], []).append(row)
+    kept = sorted(row for rows in by_kind.values() for row in rows[-_MAX_OPERATIONS:])
+
+    # First the users behind a line listed below, whom the analyst will ask about, then
+    # those with the most source IPs.
+    named = {row[2] for row in kept}.union(*(session_users[s] for s, _ in several[:_MAX_SESSIONS]))
     users = sorted(
-        {user for user, _ in seen}, key=lambda u: (-len(seen.get((u, "src_ip"), ())), u)
+        {user for user, _ in seen},
+        key=lambda u: (u not in named, -len(seen.get((u, "src_ip"), ())), u),
     )
     counts = {"users": len(users)}
     lines.append(
@@ -551,25 +620,23 @@ def summarise(
                 )
     if len(users) > _MAX_USERS:
         lines.append(
-            f"# {len(users) - _MAX_USERS} more users are not listed (those with the most "
-            f'source IPs are); log_top(table="{table}", fields=["actor", "src_ip"]) counts all.'
+            f"# {len(users) - _MAX_USERS} more users are not listed (those named in a "
+            "session or persistence line below come first, then those with the most "
+            f'source IPs); log_top(table="{table}", fields=["actor", "src_ip"]) counts all.'
         )
 
     if kind != "entra_audit":
-        several = sorted(  # most source IPs first
-            ((s, ips) for s, ips in sessions.items() if len(ips) > 1),
-            key=lambda item: (-len(item[1]), item[0]),
-        )
         counts["sessions_from_several_ips"] = len(several)
+        rest = f'log_top(table="{table}", fields=["session_id", "src_ip"])'
         lines.append(
             f"# sessions seen from more than one source IP: {len(several)}"
-            f"{_listed(len(several), _MAX_SESSIONS)}. First seen, 'session', session, users, "
-            "source IPs with their events and times. Loopback addresses are not counted."
+            f"{_listed(len(several), _MAX_SESSIONS, rest)}. First seen, 'session', session, "
+            "users, source IPs with their events and times. Loopback addresses are not counted."
         )
         for session, ips in several[:_MAX_SESSIONS]:
             first = min((s[0] for s in ips.values() if s[0]), default="")
             shown = "; ".join(
-                f"{ip} (events={s[2]}, {s[0]} to {s[1]})"
+                f"{_cut(ip, _LISTED_CHARS)} (events={s[2]}, {s[0]} to {s[1]})"
                 for ip, s in sorted(ips.items(), key=lambda kv: (kv[1][0], kv[0]))[:_MAX_VALUES]
             )
             who = ", ".join(sorted(filter(None, session_users[session])))[:_VALUE_CHARS]
@@ -577,21 +644,36 @@ def summarise(
 
     if kind != "entra_signin":
         counts["persistence_operations"] = len(operations)
+        each = ", ".join(f"{label} {len(rows)}" for label, rows in sorted(by_kind.items()))
         system = f"; {by_system} more by Exchange's own service account are not listed"
         lines.append(
             f"# operations that leave access behind or hide it: {len(operations)}"
-            f"{_listed(len(operations), _MAX_OPERATIONS)}{system if by_system else ''}. Time, "
+            f"{f' ({each})' if each else ''}{system if by_system else ''}. Time, "
             "'persistence', kind, actor, operation, source IP, session, target, parameters."
         )
-        for row in sorted(operations)[:_MAX_OPERATIONS]:
-            lines.append("\t".join((row[0], "persistence", *row[1:])))
+        for label, rows in sorted(by_kind.items()):
+            if len(rows) > _MAX_OPERATIONS:
+                names = Counter(row[3] for row in rows).most_common(_MAX_VALUES)
+                only = json.dumps(
+                    [{"field": "action", "op": "in", "value": [n for n, _ in names]}]
+                )
+                lines.append(
+                    f"# {label}: the newest {_MAX_OPERATIONS} of {len(rows)} are listed; "
+                    f'log_rows(table="{table}", filters={only}, newest_first=True) pages '
+                    "through every event of these operations."
+                )
+        lines += ["\t".join((row[0], "persistence", *row[1:])) for row in kept]
 
     if kind == "m365":
         counts["mailboxes_accessed"] = len({mailbox for mailbox, _ in mail})
+        rest = (
+            f'log_top(table="{table}", fields=["mailbox", "access_type"], filters='
+            '[{"field": "action", "op": "eq", "value": "MailItemsAccessed"}])'
+        )
         lines.append(
             f"# MailItemsAccessed by mailbox and access type: {len(mail)}"
-            f"{_listed(len(mail), _MAX_MAILBOXES)}. A Sync record means a folder was copied "
-            "to a mail client; a Bind record lists the messages read (items)."
+            f"{_listed(len(mail), _MAX_MAILBOXES, rest)}. A Sync record means a folder was "
+            "copied to a mail client; a Bind record lists the messages read (items)."
         )
         for (mailbox, how), box in sorted(mail.items())[:_MAX_MAILBOXES]:
             first, last, events = box["span"]
@@ -602,4 +684,4 @@ def summarise(
                 f"\tips={_top(box['ips'])}\tsessions={_top(box['sessions'])}"
             )
 
-    return lines, counts
+    return [_cut(line, _LINE_CHARS) for line in lines], counts

@@ -157,7 +157,10 @@ tab-separated. "user" lines give each user's source IPs, user agents and
 sessions with first seen, last seen and events; "session" lines are sessions
 seen from more than one source IP; "persistence" lines are operations that
 leave access behind, with their parameters; "mailbox" lines are
-MailItemsAccessed per mailbox, Sync and Bind apart. A WARNING line means the
+MailItemsAccessed per mailbox, Sync and Bind apart. The summary is bounded: where
+it lists only some users, sessions, operations or mailboxes it says so and
+names the log_top or log_rows call that covers the rest, so what is not
+listed is not absent. A WARNING line means the
 export has exactly the size at which exports stop, so later events are
 probably missing: say so in every finding that rests on that log.
 Work through four questions, each answered from events you have read:

@@ -249,13 +249,15 @@ def is_cloud_audit_log(path: Path) -> bool:
 
 
 def _head(path: Path, size: int) -> bytes:
-    """The first *size* bytes of a regular file as UTF-8; empty when it cannot be read.
+    """The first *size* bytes of a regular file as UTF-8; empty when it cannot be read
+    or is a symlink, which could point outside the evidence.
 
     Windows PowerShell's ``>`` and ``Out-File`` write UTF-16, and PowerShell is how
     Microsoft 365 logs are usually exported.
     """
     try:
-        if not path.is_file():  # a FIFO named x.json would block the open
+        # A FIFO named x.json would block the open.
+        if path.is_symlink() or not path.is_file():
             return b""
         with path.open("rb") as f:
             head = f.read(size)
@@ -289,10 +291,12 @@ def is_audit_log_csv(path: Path) -> bool:
     """A Unified Audit Log CSV export: its header names an ``AuditData`` column, which
     carries each event as JSON (Purview's export, ``Search-UnifiedAuditLog | Export-Csv``).
     """
-    lines = _head(path, 4096).decode(errors="replace").lstrip("\ufeff").splitlines()
+    lines = _head(path, 65536).decode(errors="replace").lstrip("\ufeff").splitlines()
     # Export-Csv without -NoTypeInformation puts a "#TYPE ..." line before the header.
     header = next((line for line in lines[:2] if not line.startswith("#TYPE")), "")
-    return "auditdata" in {name.strip(' "').lower() for name in header.split(",")}
+    # Export-Csv -UseCulture writes the host's list separator: a semicolon in much of Europe.
+    separator = max(",;\t", key=header.count)
+    return "auditdata" in {name.strip(' "').lower() for name in header.split(separator)}
 
 
 def has_nfdump_magic(path: Path) -> bool:
