@@ -77,6 +77,11 @@ context>") once per exporter directory, group "foundation", and no other run_net
 tool (they are follow-ups for the analyst); plan it only for the system whose directory
 holds the files, never from another system's plan.
 
+When the evidence includes CLOUD AUDIT LOGS (JSON exports of GitHub audit
+logs, GCP Cloud Audit Logs or AWS CloudTrail, type "cloud_audit_log"), always
+plan run_cloud_audit_logs(evidence_path="<the file, or the directory holding the
+exports>"), group "foundation". It indexes every event and applies Sigma rules.
+
 When the evidence includes MOBILE DATA, plan:
 - run_aleapp (Android, 300+ artifacts) or run_ileapp (iOS, 200+)
 - run_mvt_android/ios (spyware detection)

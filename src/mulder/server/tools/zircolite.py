@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -190,6 +191,8 @@ def _run_zircolite_process(
     log_format: str,
     ruleset_path: Path,
     output_dir: Path,
+    extra_rulesets: Sequence[Path] = (),
+    config: Path | None = None,
 ) -> tuple[Path, subprocess.CompletedProcess[str]]:
     """Execute Zircolite against event logs.
 
@@ -199,6 +202,8 @@ def _run_zircolite_process(
         log_format: Log format identifier.
         ruleset_path: Path to the Sigma ruleset directory.
         output_dir: Output directory for results.
+        extra_rulesets: Further rulesets to apply in the same run.
+        config: Field-mapping file to use instead of Zircolite's own.
 
     Returns:
         Tuple of (path to the JSON results file, the completed process). The
@@ -222,10 +227,11 @@ def _run_zircolite_process(
         str(events_path.resolve()),
         "--ruleset",
         str(ruleset_path.resolve()),
+        *(str(r.resolve()) for r in extra_rulesets),
         "--outfile",
         str(output_file),
         "--config",
-        str(Path(script).resolve().parent / "config" / "fieldMappings.json"),
+        str(config or Path(script).resolve().parent / "config" / "fieldMappings.json"),
         *format_flags,
     ]
 

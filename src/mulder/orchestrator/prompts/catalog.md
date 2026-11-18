@@ -35,9 +35,11 @@ OUTPUT REQUIREMENTS:
   NetFlow (nfdump "nfcapd.*" files, type "netflow_capture": the exporter
   directory is the system, platform "Network"; its "name" MUST be that
   directory's name exactly as it appears in the path, e.g. "edge-router", not a
-  description), event logs, phone dump (Android/iOS), compressed archive, log
-  directory, database files, documents, executables, images/media files
-  (potential steganography targets), or other.
+  description), cloud audit log (JSON exports of GitHub, GCP or AWS audit
+  logs, type "cloud_audit_log": the organization, project or account is the
+  system, platform "Cloud"), event logs, phone dump (Android/iOS), compressed
+  archive, log directory, database files, documents, executables, images/media
+  files (potential steganography targets), or other.
 
 FINAL OUTPUT (MANDATORY):
 Your FINAL message MUST be ONLY valid JSON. No text before or after it.
