@@ -93,6 +93,26 @@ exactly as listed, group "foundation":
 If the briefing or a directory listing shows such evidence that the context
 did not list, plan the same tools on it.
 
+When the evidence context lists TRIAGE COLLECTIONS (type "triage_collection":
+KAPE target output, a Velociraptor offline collection, UAC output or a Windows
+volume directory), each is a directory of files copied from a live system, not
+a disk. Plan the tools named under the heading, with the directory spelled
+exactly as listed:
+- index_triage_collection, group "foundation": it indexes the list of
+  collected files and the collector's own records about them.
+- The Windows artifact tools take the directory as image_path, as they would
+  take a disk image; put them in group "dependent". A parser whose artifact
+  was not collected reports it as not found, which means "not collected".
+- Do NOT plan run_mmls, run_fsstat, run_bulk_extractor, run_foremost,
+  run_scalpel, run_photorec or detect_masquerading on a collection: it has no
+  partition table, no unallocated space and no deleted files.
+- The collected files are ordinary files, so the file and directory scanners
+  below can be pointed at the directory.
+A .vhd or .vhdx that KAPE wrote is planned as a disk image, with two
+differences: paths inside begin with the drive letter (C/Windows/...), and the
+container's own file system ($MFT, file times, deleted entries) describes the
+copies, not the system they came from.
+
 When the evidence includes MOBILE DATA, plan:
 - run_aleapp (Android, 300+ artifacts) or run_ileapp (iOS, 200+)
 - run_mvt_android/ios (spyware detection)
