@@ -12,15 +12,22 @@ Contains two collaborators extracted from the Orchestrator:
 from __future__ import annotations
 
 import logging
+import os
+import re
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
 from mulder import collect as collector
+from mulder.dirroot import Collection, detect_collection
 from mulder.extractors.classifier import (
     LOOSE_LOG_TYPES,
+    MAX_AUDIT_LOG_BYTES,
     RAW_CONTAINER_EXTS,
+    ClassifiedEvidence,
     EvidenceClassifier,
     _dir_has_named_nfcapd,
+    audit_log_files,
     has_disk_signature,
     is_esxi_bundle,
     is_nfcapd,
@@ -33,6 +40,13 @@ from mulder.patterns import (
     case_extract_dir,
     extract_iocs_from_text,
     resolve_db_dir,
+)
+from mulder.questions import (
+    ID_LABELS,
+    MAX_QUESTION_CHARS,
+    MAX_QUESTIONS_PER_PLAN,
+    MAX_SYSTEM_CHARS,
+    clean,
 )
 
 logger = logging.getLogger(__name__)
@@ -70,7 +84,16 @@ _CI_CLOUD_TYPES: dict[str, tuple[str, str]] = {
         'Plan one run_loose_logs(evidence_path=<directory>) task, group "foundation", '
         "for each bundle above: it reads the bundle's logs.",
     ),
+    "mailbox": (
+        "Mailbox files (Outlook .pst/.ost)",
+        'Plan one parse_pst(case_id=<case id>, file_path=<file>) task, group "foundation", '
+        "for each file above.",
+    ),
 }
+
+# How many files of a directory too large for one run_cloud_audit_logs call are planned
+# one by one: each is a task the planner has to write out.
+_MAX_AUDIT_LOG_FILES_PLANNED = 50
 
 _MAX_SIMPLE_SYSTEMS_PER_SESSION: int = 4
 
@@ -84,6 +107,43 @@ _MEMORY_EXTENSIONS: frozenset[str] = frozenset(
 _ARCHIVE_EXTENSIONS: frozenset[str] = frozenset(
     (".7z", ".zip", ".gz", ".tar", ".xz", ".bz2", ".rar", ".zst")
 )
+
+
+def _unprintable(path: object) -> bool:
+    """Whether *path* holds a control character, which would start a prompt line of its own."""
+    return any(ch < " " or ch == "\x7f" for ch in str(path))
+
+
+def _audit_log_paths(target: Path, files: list[Path]) -> tuple[list[str], list[str]]:
+    """The planner lines for one cloud audit log target, a file or a directory holding
+    *files*: (the paths to plan, what cannot be read).
+
+    One run_cloud_audit_logs call refuses more than MAX_AUDIT_LOG_BYTES, and the executor
+    runs the plan as written, so a directory over the limit is planned file by file here.
+    A file over the limit by itself, and the files of such a directory beyond the number a
+    plan can name, are listed apart: the planner then says they were not examined instead
+    of planning a call that reads nothing.
+    """
+
+    def size(path: Path) -> int:
+        try:
+            return path.stat().st_size
+        except OSError:
+            return 0
+
+    if not target.is_dir():
+        files = [target]
+    elif sum(size(f) for f in audit_log_files(target)) <= MAX_AUDIT_LOG_BYTES:
+        return [f"  {target}  ({len(files)} files)"], []
+    fits = sorted(  # the largest first: as much of the evidence as the plan can hold
+        (f for f in files if size(f) <= MAX_AUDIT_LOG_BYTES), key=lambda f: (-size(f), f)
+    )
+    rest = fits[_MAX_AUDIT_LOG_FILES_PLANNED:]
+    unread = [f"  {f}  ({size(f) // 2**20} MiB)" for f in sorted(set(files) - set(fits))]
+    if rest:
+        total = sum(size(f) for f in rest) // 2**20
+        unread.append(f"  {len(rest)} more files in {target}  ({total} MiB)")
+    return [f"  {f}" for f in sorted(fits[:_MAX_AUDIT_LOG_FILES_PLANNED])], unread
 
 
 def _is_raw_disk(path: Path) -> bool:
@@ -182,10 +242,29 @@ class EvidenceContext:
 
         sys_lower = system_name.lower()
 
+        # One walk of each directory, shared by the passes that classify.
+        classified = {
+            base: EvidenceClassifier().classify(base)
+            for base in (evidence_path, extracted_dir)
+            if base.is_dir()
+        }
+        # A file below a triage collection's top level is one of the collected
+        # files, not a loose image, dump or archive: the collection is listed
+        # as a whole further down.
+        collections = self._collections(classified)
+        claimed = self._claimed(sys_lower, collections)
+        inside = tuple(f"{c.root}{os.sep}" for c in collections)
+
+        def collected(f: Path) -> bool:
+            path = str(f)
+            return any(path.startswith(p) and os.sep in path[len(p) :] for p in inside)
+
         disk_images: list[str] = []
         if evidence_path.is_dir():
             for f in evidence_path.rglob("*"):
                 if not f.is_file() or f.suffix.lower() not in DISK_IMAGE_EXTS:
+                    continue
+                if collected(f):
                     continue
                 try:
                     rel = str(f.relative_to(evidence_path)).lower()
@@ -200,6 +279,8 @@ class EvidenceContext:
         if evidence_path.is_dir():
             for f in evidence_path.rglob("*"):
                 if not f.is_file():
+                    continue
+                if collected(f):
                     continue
                 try:
                     rel = str(f.relative_to(evidence_path)).lower()
@@ -220,16 +301,28 @@ class EvidenceContext:
                     for f in subdir.rglob("*"):
                         if not f.is_file() or _is_log(f, extracted_dir):
                             continue
+                        if collected(f):
+                            continue
                         ext = f.suffix.lower()
                         if ext in _ARCHIVE_EXTENSIONS:
                             nested_archives.append(str(f))
-                        elif _is_raw_disk(f):
-                            # A disk unpacked from an archive, not a memory dump.
+                        elif _is_raw_disk(f) or ext in (".vhd", ".vhdx"):
+                            # A disk unpacked from an archive, not a memory dump
+                            # (KAPE zips the VHD or VHDX it writes).
                             disk_images.append(str(f))
                         elif (
                             ext in _MEMORY_EXTENSIONS or f.stat().st_size > 100 * 1024 * 1024
                         ) and str(f) not in memory_dumps:
                             memory_dumps.append(str(f))
+
+        # Memory and crash dumps a collector copied (KAPE takes MEMORY.DMP and
+        # *.dmp) belong to the system the collection belongs to.
+        memory_dumps += [
+            dump
+            for c in claimed
+            for dump in collections[c]
+            if dump not in memory_dumps and not _unprintable(dump)
+        ]
 
         # parent dir -> (file count, first name, last name, matches system name)
         netflow_dirs: dict[str, tuple[int, str, str, bool]] = {}
@@ -286,7 +379,8 @@ class EvidenceContext:
         unclaimed = {d: v for d, v in netflow_dirs.items() if not _claimed_by_other(d)}
         shown = mine if mine else (unclaimed if catalog_says_netflow else {})
 
-        ci_cloud = self._ci_cloud_lines(sys_lower)
+        ci_cloud = self._ci_cloud_lines(sys_lower, classified)
+        triage = self._triage_lines(claimed)
 
         lines: list[str] = [f"System: {system_name}"]
         if disk_images:
@@ -332,6 +426,7 @@ class EvidenceContext:
             )
 
         lines.extend(ci_cloud)
+        lines.extend(triage)
         # Not evidence paths, so they do not stand in for the fallback below.
         collection = self._collection_lines()
 
@@ -341,6 +436,7 @@ class EvidenceContext:
             and not nested_archives
             and not shown
             and not ci_cloud
+            and not triage
         ):
             lines.append(
                 "(No pre-populated paths available. "
@@ -368,9 +464,11 @@ class EvidenceContext:
         )
         return lines
 
-    def _ci_cloud_lines(self, sys_lower: str) -> list[str]:
-        """Planner lines for cloud audit logs, repository checkouts, CI run logs and
-        loose logs (log directories, log files, ESXi support bundles).
+    def _ci_cloud_lines(
+        self, sys_lower: str, classified: dict[Path, list[ClassifiedEvidence]]
+    ) -> list[str]:
+        """Planner lines for cloud audit logs, repository checkouts, CI run logs, loose
+        logs (log directories, log files, ESXi support bundles) and mailbox files.
 
         These are evidence of a kind the planner cannot recognise from a file
         listing, so each is named with its type, its path and the tool to plan.
@@ -381,15 +479,13 @@ class EvidenceContext:
         system, the items no other system's name claims are shown: a cloud
         "system" is an organization or account, whose name is rarely a path.
         """
-        found: dict[str, dict[str, int]] = {t: {} for t in _CI_CLOUD_TYPES}
-        roots = [Path(self.evidence_path), self.extracted_dir]
-        for root in roots:
-            if not root.is_dir():
-                continue
-            items = EvidenceClassifier().classify(root)
+        found: dict[str, dict[str, list[Path]]] = {t: {} for t in _CI_CLOUD_TYPES}
+        log_files: dict[str, int] = {}  # run_loose_logs target -> the log files it covers
+        for root, items in classified.items():
             # Loose logs are planned per run_loose_logs target, not per classified file.
             for log_path, (kind, count) in loose_log_targets(items, root).items():
-                found[kind][str(log_path)] = count
+                found[kind][str(log_path)] = []
+                log_files[str(log_path)] = count
             for item in items:
                 if item.artifact_type not in found or item.artifact_type in LOOSE_LOG_TYPES:
                     continue
@@ -400,7 +496,7 @@ class EvidenceContext:
                 is_file = item.artifact_type == "cloud_audit_log"
                 grouped = is_file and item.path.parent.resolve() != root.resolve()
                 target = str(item.path.parent if grouped else item.path)
-                found[item.artifact_type][target] = found[item.artifact_type].get(target, 0) + 1
+                found[item.artifact_type].setdefault(target, []).append(item.path)
 
         catalog_ev = self._catalog_systems.get(sys_lower, {}).get("evidence", [])
         catalog_types = (
@@ -419,17 +515,137 @@ class EvidenceContext:
             if not mine:
                 continue
             lines.append(f'{label} (type "{artifact_type}"):')
-            for path, count in sorted(mine.items())[:_MAX_LISTED]:
-                by_directory = artifact_type in ("cloud_audit_log", "log_file")
-                is_dir = by_directory and Path(path).is_dir()
-                suffix = f"  ({count} files)" if is_dir else ""
-                lines.append(f"  {path}{suffix}")
+            planned: list[str] = []
+            unread: list[str] = []
+            for path, files in sorted(mine.items())[:_MAX_LISTED]:
+                if artifact_type == "cloud_audit_log":
+                    paths, left = _audit_log_paths(Path(path), files)
+                    planned += paths
+                    unread += left
+                elif artifact_type == "log_file" and Path(path).is_dir():
+                    planned.append(f"  {path}  ({log_files[path]} files)")
+                else:
+                    planned.append(f"  {path}")
             if len(mine) > _MAX_LISTED:
-                lines.append(
+                planned.append(
                     f"  ({len(mine) - _MAX_LISTED} more are not listed here: "
                     "list_directory shows them)"
                 )
-            lines.append(f"  {plan}")
+            if planned:
+                lines += [*planned, f"  {plan}"]
+            if unread:
+                lines.append(
+                    "  NOT READ, do not plan these: one run_cloud_audit_logs call reads at "
+                    f"most {MAX_AUDIT_LOG_BYTES // 2**20} MiB, and of a directory over that at "
+                    f"most {_MAX_AUDIT_LOG_FILES_PLANNED} files are planned one by one. Name "
+                    "each in investigation_questions as evidence that was not examined. A file "
+                    "has to be split or exported again over shorter date ranges, and many files "
+                    f"laid out in subdirectories of at most {MAX_AUDIT_LOG_BYTES // 2**20} MiB."
+                )
+                lines += unread
+        return lines
+
+    @staticmethod
+    def _collections(
+        classified: dict[Path, list[ClassifiedEvidence]],
+    ) -> dict[Collection, list[str]]:
+        """Triage collections in the evidence directory and in unpacked archives.
+
+        Each keeps the spelling of the directory it was found under, as the
+        other paths the planner is given do, and comes with the memory and
+        crash dumps found inside it.
+        """
+        found: dict[Collection, list[str]] = {}
+        for base, items in classified.items():
+            resolved = base.resolve()
+            for item in items:
+                if item.artifact_type != "triage_collection":
+                    continue
+                collection = detect_collection(base / item.path.relative_to(resolved))
+                if collection is not None:
+                    found[collection] = [
+                        str(base / dump.path.relative_to(resolved))
+                        for dump in items
+                        if dump.artifact_type == "memory_dump" and item.path in dump.path.parents
+                    ]
+        return found
+
+    def _claimed(self, sys_lower: str, found: Iterable[Collection]) -> list[Collection]:
+        """The collections among *found* that belong to this system.
+
+        One whose stated host name is the system's name, compared on the first
+        DNS label, or whose path below the evidence or extraction directory
+        holds the name as a whole word: PC1 does not claim PC10's collection,
+        and a name that occurs in the path to the evidence claims nothing.
+        Failing that, as for cloud evidence, the ones no other system claims
+        when the catalog assigned the type to this system.
+        """
+        bases = (Path(self.evidence_path), self.extracted_dir)
+
+        def below(root: Path) -> str:
+            base = next((b for b in bases if root.is_relative_to(b)), root.parent)
+            return str(root.relative_to(base)).lower()
+
+        def claims(name: str, collection: Collection) -> bool:
+            host = collection.host.lower().split(".")[0]
+            if host and host == name.split(".")[0]:
+                return True
+            whole = rf"(?<![a-z0-9]){re.escape(name)}(?![a-z0-9])"
+            return bool(name) and re.search(whole, below(collection.root)) is not None
+
+        found = list(found)
+        mine = [c for c in found if claims(sys_lower, c)]
+        catalog_ev = self._catalog_systems.get(sys_lower, {}).get("evidence", [])
+        if not mine and isinstance(catalog_ev, list) and "triage_collection" in catalog_ev:
+            others = [n for n in self._catalog_systems if n and n != sys_lower]
+            mine = [c for c in found if not any(claims(o, c) for o in others)]
+        return mine
+
+    @staticmethod
+    def _triage_lines(mine: list[Collection]) -> list[str]:
+        """Planner lines for this system's triage collections: where each is and how to pass it."""
+        if not mine:
+            return []
+        lines = [
+            'Triage collections (type "triage_collection": files copied from a live system, '
+            "not a disk image):"
+        ]
+        listed = [c for c in mine if not _unprintable(c.root)]
+        # The tools do not take a symlink for a collection, so one is spelled out.
+        lines += sorted(
+            f"  {c.root.resolve() if c.root.is_symlink() else c.root}  ({c.description})"
+            for c in listed
+        )
+        if len(listed) < len(mine):
+            lines.append(
+                f"  ({len(mine) - len(listed)} left out: the directory name holds control "
+                "characters, so its path cannot be given to a tool.)"
+            )
+        if not listed:
+            return lines
+        mine = listed
+        lines.append(
+            "  Plan index_triage_collection(evidence_path=<directory>), group "
+            '"foundation", for each directory above.'
+        )
+        if any(c.windows for c in mine):
+            lines.append(
+                "  Windows files: plan the Windows artifact tools with the same directory as "
+                "image_path (run_registry_parser, run_prefetch_parser, run_amcache_parser, "
+                "run_shimcache_parser, run_mft_parser, query_registry_value), as evtx_path of "
+                "run_evtx_parser, as evtx_dir of run_hayabusa and as evidence_path of "
+                "run_chainsaw."
+            )
+        if any(c.layout == "uac" for c in mine):
+            lines.append(
+                "  UAC: plan run_mactime(image_path=<directory>) for a timeline from the body "
+                "file the collector wrote."
+            )
+        lines.append(
+            "  Do not plan run_mmls, run_bulk_extractor, carving tools or detect_masquerading "
+            "on a collection: it has no partition table, no unallocated space and no deleted "
+            "files."
+        )
         return lines
 
     def identify_systems(
@@ -619,6 +835,51 @@ class ServerBridge:
         except Exception:
             logger.warning("get_readiness failed", exc_info=True)
             return None
+
+    def record_questions(self, phase: str, system: str, questions: list[Any]) -> list[Any]:
+        """Store a plan's investigation questions and label them with their ids.
+
+        Writes straight to the case database: no LLM call. Each question
+        that was stored comes back as ``"[q_1a2b3c4d] <question>"`` so the
+        analyst can name it to ``resolve_question``. Anything that cannot be
+        stored (not a string, or past the per-plan cap) is passed through as
+        the planner wrote it, and so is everything when the write fails:
+        the analyst then gets its questions exactly as it did before they
+        were recorded.
+
+        Args:
+            phase: Phase the plan belongs to.
+            system: System the plan is for, or "" when it covers the case.
+            questions: ``investigation_questions`` from the planner's JSON.
+
+        Returns:
+            The questions to hand the analyst, in the planner's order.
+        """
+        if not isinstance(questions, list):
+            return questions
+        # A follow-up planner is shown the analyst's request, which quotes
+        # questions with their labels: store the question, not the label, so
+        # an echoed one is the question already on record.
+        cleaned = [
+            clean(ID_LABELS.sub("", q) if isinstance(q, str) else q, MAX_QUESTION_CHARS)
+            for q in questions
+        ]
+        try:
+            self.ensure_context()
+            from mulder.server.app import get_ctx
+
+            rows = get_ctx().db.record_questions(
+                phase,
+                clean(system, MAX_SYSTEM_CHARS),
+                [c for c in cleaned if c][:MAX_QUESTIONS_PER_PLAN],
+            )
+        except Exception:
+            logger.warning("Failed to record investigation questions", exc_info=True)
+            return questions
+        ids = {row.question: row.question_id for row in rows}
+        return [
+            f"[{ids[c]}] {c}" if c in ids else q for q, c in zip(questions, cleaned, strict=True)
+        ]
 
     def build_consistency_report(self) -> str:
         """Build a consistency report identifying dedup clusters.

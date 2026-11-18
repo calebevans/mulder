@@ -15,6 +15,7 @@ import subprocess
 import threading
 import time
 
+from mulder.dirroot import LISTING_EXTRACTOR, dir_root, icat
 from mulder.models import WindowRow
 from mulder.patterns import parse_mmls_rows
 from mulder.server import source_names as _sn
@@ -22,6 +23,7 @@ from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
     _PREVIEW_CHAR_LIMIT,
+    error_response,
     hash_output,
     make_tool_call_id,
     windowed_response,
@@ -161,8 +163,8 @@ def _resolve_image_and_offset(
     querying different images within a case invalidates stale data.
 
     Raises:
-        ValueError: If *image_path* is specified but no ``tsk.partitions``
-            source with a matching ``source_path`` exists.
+        ValueError: If *image_path* is specified but the case holds neither
+            a ``tsk.partitions`` source nor a file listing for it.
     """
     ctx = get_ctx()
     cache_key = (ctx.case_id, image_path)
@@ -181,7 +183,12 @@ def _resolve_image_and_offset(
             ),
             None,
         )
-        if tsk_source is None:
+        # An image that run_fls listed but that has no partition table is read
+        # at offset 0 below, as it is when image_path is omitted.
+        if tsk_source is None and not any(
+            s.source_name.startswith(_SRC_FILELIST) and s.source_path == image_path
+            for s in sources
+        ):
             raise ValueError(
                 f"No tsk.partitions source found for image_path={image_path!r}. "
                 f"Available tsk.partitions sources: "
@@ -372,6 +379,34 @@ def get_fs_timeline(t_start: str, t_end: str) -> dict[str, object]:
     )
 
 
+def _listing_root(image_path: str | None) -> tuple[str | None, str | None]:
+    """Which directory listing an inode is a row of: ``(directory, problem)``.
+
+    The listing of a triage collection numbers its rows, so that number read
+    from a disk image is some other file. ``(None, None)`` means a disk image,
+    resolved as before. Without *image_path* the directory is only known when
+    its listing is the one listing in the case; otherwise *problem* asks for it.
+    """
+    if image_path is not None:
+        return (image_path if dir_root(image_path) is not None else None), None
+    sources = get_ctx().db.get_sources()
+    directories = {s.source_path for s in sources if s.extractor == LISTING_EXTRACTOR}
+    if not directories:
+        return None, None
+    listed = {
+        s.source_path
+        for s in sources
+        if s.source_name.startswith((_SRC_FILELIST, _SRC_PARTITIONS))
+    }
+    if len(listed) == 1:
+        return next(iter(directories)), None
+    return None, (
+        "This case holds more than one file listing, and the inode column of a triage "
+        "collection's listing is a row number: pass image_path, the disk image or collection "
+        f"directory whose listing the inode came from ({', '.join(sorted(listed))})."
+    )
+
+
 def _build_tsk_cmd(
     tool: str,
     image_path: str,
@@ -406,16 +441,24 @@ def extract_file_by_inode(
         filesystem_type: Optional TSK filesystem type (e.g. "ntfs", "ext",
             "fat", "hfs").  Auto-detected via ``fsstat`` when omitted.
             Specify manually if auto-detection fails on raw DD images.
-        image_path: Path to the specific disk image containing this inode.
-            Required when multiple disk images have been ingested into the
-            same case. When omitted, the first
+        image_path: Path to the specific disk image containing this inode,
+            or the triage collection directory whose listing the inode is a
+            row of. Required when the case holds more than one disk image, or
+            a collection beside another listing. When omitted, the first
             ingested image is used (safe for single-image cases).
     """
     ctx = get_ctx()
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
+    params = {"inode": inode, "filesystem_type": filesystem_type, "image_path": image_path}
 
-    if not shutil.which("icat"):
+    directory, problem = _listing_root(image_path)
+    if problem:
+        return error_response(
+            tc_id, "extract_file_by_inode", params, problem, error_type="image_path_required"
+        )
+
+    if directory is None and not shutil.which("icat"):
         error_msg = "icat not found on PATH"
         elapsed = (time.monotonic() - t0) * 1000
         ctx.audit.log_tool_call(
@@ -435,17 +478,24 @@ def extract_file_by_inode(
             "result_count": 0,
         }
 
-    image_path_resolved, offset, detected_fs = _resolve_image_and_offset(image_path)
-    fs_type = filesystem_type or detected_fs
-    cmd = _build_tsk_cmd("icat", image_path_resolved, offset, fs_type)
-    cmd.append(str(inode))
-
     try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            timeout=_ICAT_TIMEOUT,
-            check=False,
+        if directory is not None:
+            image_path_resolved = directory
+            proc = icat(directory, 0, str(inode), _ICAT_TIMEOUT)
+        else:
+            image_path_resolved, offset, detected_fs = _resolve_image_and_offset(image_path)
+            fs_type = filesystem_type or detected_fs
+            cmd = _build_tsk_cmd("icat", image_path_resolved, offset, fs_type)
+            cmd.append(str(inode))
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                timeout=_ICAT_TIMEOUT,
+                check=False,
+            )
+    except ValueError as exc:  # image_path is not an image this case has listed
+        return error_response(
+            tc_id, "extract_file_by_inode", params, str(exc), error_type="image_not_found"
         )
     except subprocess.TimeoutExpired:
         error_msg = f"icat timed out after {_ICAT_TIMEOUT}s for inode {inode}"
@@ -547,12 +597,31 @@ def get_file_metadata(
             "fat", "hfs").  Auto-detected via ``fsstat`` when omitted.
         image_path: Path to the specific disk image containing this inode.
             Required when multiple disk images have been ingested into the
-            same case. When omitted, the first ingested image is used
-            (safe for single-image cases).
+            same case, or a triage collection beside one. When omitted, the
+            first ingested image is used (safe for single-image cases).
+            A triage collection has no inode metadata.
     """
     ctx = get_ctx()
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
+    params = {"inode": inode, "filesystem_type": filesystem_type, "image_path": image_path}
+
+    directory, problem = _listing_root(image_path)
+    if directory is not None:
+        problem = (
+            "A triage collection has no inode metadata: the inode column of its listing is a "
+            "row number, and the timestamps on the copies are those of the copy. Original "
+            "timestamps are in $MFT when it was collected (run_mft_parser), in "
+            "triage.kape.copylog, or in the upload metadata under triage.velociraptor.*."
+        )
+    if problem:
+        return error_response(
+            tc_id,
+            "get_file_metadata",
+            params,
+            problem,
+            error_type="not_applicable" if directory is not None else "image_path_required",
+        )
 
     if not shutil.which("istat"):
         error_msg = "istat not found on PATH"
@@ -574,7 +643,12 @@ def get_file_metadata(
             "result_count": 0,
         }
 
-    image_path_resolved, offset, detected_fs = _resolve_image_and_offset(image_path)
+    try:
+        image_path_resolved, offset, detected_fs = _resolve_image_and_offset(image_path)
+    except ValueError as exc:  # image_path is not an image this case has listed
+        return error_response(
+            tc_id, "get_file_metadata", params, str(exc), error_type="image_not_found"
+        )
     fs_type = filesystem_type or detected_fs
     cmd = _build_tsk_cmd("istat", image_path_resolved, offset, fs_type)
     cmd.append(str(inode))

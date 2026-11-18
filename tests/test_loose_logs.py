@@ -916,6 +916,50 @@ def test_the_planner_is_given_each_log_target_and_the_tool(tmp_path: Path) -> No
         assert "No pre-populated paths available" not in text
 
 
+def test_logs_that_other_evidence_claims_are_not_planned_or_loaded_a_second_time(
+    evidence: Path,
+) -> None:
+    """A log inside a triage collection is one of the collected files, and a cloud audit
+    export is for run_cloud_audit_logs: neither is a run_loose_logs target. A loose log
+    beside an export is read by itself, so no event is in two log tables."""
+    uac = evidence / "uac-web01-linux-20261112093000"
+    (uac / "[root]" / "var" / "log").mkdir(parents=True)
+    (uac / "uac.log").write_text("uac\n")
+    (uac / "[root]" / "var" / "log" / "auth.log").write_text(_SYSLOG)
+    tenant = evidence / "contoso"
+    tenant.mkdir()
+    record = {"CreationTime": "2026-10-05T12:00:00", "Id": "1", "Operation": "New-InboxRule"}
+    record.update(Workload="Exchange", UserId="alice@example.com")
+    (tenant / "ual.json").write_text(json.dumps([record]))
+    (tenant / "ual.csv").write_text("RecordId,CreationDate,Operation,AuditData\n")
+    (tenant / "eve.json").write_text(_EVE)
+
+    assert _types(evidence) == {
+        "uac-web01-linux-20261112093000": "triage_collection",
+        "contoso/ual.csv": "cloud_audit_log",
+        "contoso/ual.json": "cloud_audit_log",
+        "contoso/eve.json": "log_file",
+    }
+    targets = loose_log_targets(EvidenceClassifier().classify(evidence), evidence)
+    assert list(targets) == [tenant.resolve() / "eve.json"]
+
+    cloud = _context(evidence, "contoso", ["cloud_audit_log", "log_file"])
+    assert f"  {tenant.resolve()}  (2 files)\n  Plan one run_cloud_audit_logs(" in cloud
+    assert f"  {tenant.resolve() / 'eve.json'}\n  Plan one run_loose_logs(" in cloud
+    host = _context(evidence, "web01", ["triage_collection", "log_directory"])
+    assert "index_triage_collection" in host and "run_loose_logs" not in host
+
+    # Pointed at the directory all the same, the tool leaves the export alone.
+    assert _tool_dispatch_sync["run_cloud_audit_logs"](str(tenant))["status"] == "success"
+    summary = _ok(tenant)
+    assert summary["files_not_read"][looselogs._NOT_A_LOG]["files"] == 2
+    assert {t["table"]: t["rows"] for t in logtable.tables(app.get_ctx().db)} == {
+        "cloudlog.m365": 1,
+        "logs.suricata.alert": 1,
+        "logs.suricata.dns": 1,
+    }
+
+
 def test_logs_delivered_in_an_archive_are_planned_where_they_were_unpacked(tmp_path: Path) -> None:
     root = tmp_path / "evidence"
     root.mkdir()

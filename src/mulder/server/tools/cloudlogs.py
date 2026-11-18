@@ -1,8 +1,10 @@
-"""Cloud audit log MCP tool: index exported JSON audit logs and run Sigma over them.
+"""Cloud audit log MCP tool: index exported audit logs and run Sigma over them.
 
 Mulder's agents stay offline, so nothing here calls a cloud API. The logs are
 exported beforehand (``gh api``, ``gcloud logging read``, an S3 copy of
-CloudTrail) and dropped into the evidence directory as JSON.
+CloudTrail, a Purview or ``Search-UnifiedAuditLog`` export, Microsoft Graph) and
+dropped into the evidence directory as JSON, or for the Microsoft 365 unified
+audit log as the CSV it is usually exported to.
 """
 
 from __future__ import annotations
@@ -13,15 +15,20 @@ import re
 import subprocess
 import tempfile
 import time
+from collections import Counter
 from datetime import UTC, datetime
 from itertools import chain, repeat
 from operator import itemgetter
 from pathlib import Path
 from typing import Any, Literal
 
-from mulder import logtable
+from mulder import logtable, m365
 from mulder.assets.paths import asset_path
-from mulder.extractors.classifier import JSON_LOG_EXTS
+from mulder.extractors.classifier import (
+    MAX_AUDIT_LOG_BYTES,
+    audit_log_files,
+    is_audit_log_file,
+)
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
@@ -51,6 +58,9 @@ _SIGMA_RULE_DIRS: dict[str, tuple[str, ...]] = {
     "github": ("rules", "cloud", "github"),
     "gcp": ("rules", "cloud", "gcp", "audit"),
     "aws": ("rules", "cloud", "aws", "cloudtrail"),
+    # The two SigmaHQ rules that match raw audit records. The rest of rules/cloud/m365
+    # match Defender alert names through SIEM field names, which an export does not have.
+    "m365": ("rules", "cloud", "m365", "audit"),
 }
 
 # Sigma's GCP rules call protoPayload.methodName "gcp.audit.method_name"; the
@@ -66,6 +76,7 @@ _TIME_FIELD = "mulder.event_time"
 _UNSAFE_FIELD_CHARS = re.compile(r"[^A-Za-z0-9_.@-]")
 _TOP_LEVEL_START = re.compile(r"\n(?=[\[{])")
 _SUMMARY_CHARS = 500
+_MAX_FILES_NAMED = 20
 
 _GENERIC_TIME_KEYS = ("timestamp", "@timestamp", "time", "eventTime", "created_at", "date")
 
@@ -114,6 +125,9 @@ def _dig(event: dict[str, Any], *path: str) -> object:
 
 def _summary(log_type: str, event: dict[str, Any]) -> tuple[str, object, object, object, object]:
     """Return (time, actor, action, source IP, target) for one event."""
+    if isinstance(event, m365.Record):
+        f = event.fields
+        return (f["event_time"], f["actor"], f["action"], f["src_ip"], f["target"])
     if log_type == "github":
         return (
             _iso(event.get("@timestamp") or event.get("created_at")),
@@ -202,19 +216,26 @@ def _log_row(log_type: str, event: dict[str, Any], line: int) -> dict[str, objec
                 "country": _dig(event, "actor_location", "country_code"),
             },
         )
+    elif isinstance(event, m365.Record):
+        row.update(event.fields)
     return row
 
 
 def _events_in(value: object) -> list[dict[str, Any] | None]:
-    """The events in one decoded JSON value: a dict, a list of them, or CloudTrail Records.
+    """The events in one decoded JSON value: a dict, a list of them, or an envelope
+    around a list (CloudTrail ``Records``, an Azure diagnostic setting's ``records``, a
+    Microsoft Graph page's ``value``).
 
     None stands for a record that is not an object, so that it can be counted.
     """
     if isinstance(value, list):
         return [event for item in value for event in _events_in(item)]
     if isinstance(value, dict):
-        records = value.get("Records")
-        return _events_in(records) if isinstance(records, list) else [value]
+        for key in ("Records", "records", "value"):
+            inner = value.get(key)
+            if isinstance(inner, list) and (key != "value" or "@odata.context" in value):
+                return _events_in(inner)
+        return [value]
     return [None]
 
 
@@ -263,13 +284,14 @@ def _read_events(path: Path) -> tuple[list[dict[str, Any]], int, int]:
             continue
         try:
             # ValueError: malformed, or an integer too long to convert.
-            # RecursionError: nesting deeper than the decoder allows.
+            # RecursionError: nesting deeper than the decoder allows, or arrays inside
+            # arrays deeper than _events_in can follow.
             value, pos = decoder.raw_decode(text, pos)
+            found = _events_in(value)
         except (ValueError, RecursionError):
             damaged, in_array = damaged + 1, False
             pos = resync(pos)
             continue
-        found = _events_in(value)
         events.extend(event for event in found if event is not None)
         not_objects += found.count(None)
 
@@ -292,8 +314,13 @@ def _flatten(event: dict[str, Any]) -> dict[str, object]:
                 # Field names end up in SQL, and they come from the evidence.
                 name = _UNSAFE_FIELD_CHARS.sub("_", str(key)) or "_"
                 stack.append((f"{prefix}.{name}" if prefix else name, value))
+        elif isinstance(node, list):
+            try:
+                flat[prefix] = json.dumps(node, default=str)
+            except RecursionError:  # nested about as deep as the decoder allows
+                continue
         elif node is not None and node != "":
-            flat[prefix] = json.dumps(node, default=str) if isinstance(node, list) else node
+            flat[prefix] = node
     return flat
 
 
@@ -387,9 +414,11 @@ def run_cloud_audit_logs(
 ) -> dict[str, object]:
     """Index exported cloud audit logs and apply Sigma detection rules to them.
 
-    Call when the evidence holds JSON audit log exports (type "cloud_audit_log"):
-    GitHub audit logs, GCP Cloud Audit Logs or AWS CloudTrail. Reads JSON arrays,
-    JSON lines and CloudTrail Records files, and recognises the log type per event.
+    Call when the evidence holds audit log exports (type "cloud_audit_log"):
+    GitHub audit logs, GCP Cloud Audit Logs, AWS CloudTrail, the Microsoft 365
+    unified audit log (type m365), Entra ID sign-in logs (entra_signin) or Entra
+    ID audit logs (entra_audit). Reads JSON arrays, JSON lines, CloudTrail Records
+    files and unified audit log CSV exports, and recognises the log type per event.
 
     Returns per-type event and detection counts. Events are indexed one per line
     in cloudlog.<type> (time, actor, action, source IP, target, raw event) and
@@ -397,13 +426,25 @@ def run_cloud_audit_logs(
     cloudlog.generic and scanned only when ruleset_path is given. Files that
     were damaged, truncated, held no events or held JSON values that are not
     objects are named in files_with_problems.
-    GitHub, GCP and AWS events are also loaded as rows into a log table of the
+    One call reads at most 512 MiB of files, because every event is held in
+    memory: past that it returns an error naming the files, to be run one per
+    call. A file that is a symlink is not read.
+    Every type but generic is also loaded as rows into a log table of the
     source's name, which log_top, log_histogram and log_rows count over. A path
     inside one that was already loaded adds no rows (log_table_note says so).
+    The three Microsoft types also get cloudlog.<type>.summary (summary_source):
+    per user the source IPs, user agents and sessions, sessions seen from more
+    than one source IP, operations that leave access behind, and mailbox access.
+    export_warnings names a unified audit log file whose record count is exactly
+    a size at which exports stop: it is probably incomplete. A Microsoft record
+    that the files of this call hold twice (the same Id and content) is kept
+    once, and duplicates_skipped counts the rest; a record that another call
+    already loaded is not recognised as a repeat. The two Entra types have no
+    default Sigma rules.
 
     Args:
-        evidence_path: A JSON log file, or a directory searched recursively for
-            .json, .jsonl and .ndjson files.
+        evidence_path: A log file, or a directory searched recursively for
+            .json, .jsonl and .ndjson files and unified audit log .csv exports.
         ruleset_path: Sigma rules to use instead of the defaults for every
             log type found.
         sigma_level_filter: Minimum Sigma rule level to include. Set None
@@ -436,37 +477,65 @@ def run_cloud_audit_logs(
             tc_id, name, params, f"Path not found: {evidence_path}", error_type="file_not_found"
         )
     if root.is_dir():
-        # Symlinks are not followed: one planted in the evidence could point anywhere.
-        files = sorted(
-            f
-            for f in root.rglob("*")
-            if f.suffix.lower() in JSON_LOG_EXTS and f.is_file() and not f.is_symlink()
-        )
-    elif root.is_file():
+        files = audit_log_files(root)
+    elif root.is_file() and not root.is_symlink():
         files = [root]
     else:
         return error_response(
             tc_id,
             name,
             params,
-            f"Not a regular file: {evidence_path}",
+            f"Not a regular file (a symlink is not followed): {evidence_path}",
             error_type="invalid_argument",
         )
 
-    # ponytail: every event is held in memory; stream per file if exports outgrow RAM.
-    by_type: dict[str, list[dict[str, Any]]] = {}
+    sizes = {str(f): f.stat().st_size for f in files}
+    if sum(sizes.values()) > MAX_AUDIT_LOG_BYTES:
+        largest = sorted(sizes.items(), key=lambda kv: (-kv[1], kv[0]))[:_MAX_FILES_NAMED]
+        return error_response(
+            tc_id,
+            name,
+            params,
+            f"{evidence_path} holds {sum(sizes.values()) // 2**20} MiB of log files in "
+            f"{len(files)} files, and one call reads at most {MAX_AUDIT_LOG_BYTES // 2**20} MiB "
+            "because every event is held in memory. Nothing was read. Call the tool once "
+            "per file or subdirectory instead; a single file over the limit has to be "
+            "exported again over shorter date ranges, or split by the investigator (each "
+            "part of a CSV needs the header line). The largest files: "
+            + "; ".join(f"{_flat(file)} ({size // 2**20} MiB)" for file, size in largest),
+            error_type="invalid_argument",
+        )
+
+    by_type: dict[str, list[tuple[str, dict[str, Any]]]] = {}  # type -> (index line, event)
     problems: dict[str, str] = {}
     # What was not read, per log type of the file it was in ("" when the file shows
     # none): the log tables report it, so a count over a damaged export says so.
     lost: dict[str, int] = {}
+    unified: dict[str, int] = {}  # file -> unified audit log records in it
+    lines_seen: set[str] = set()
+    duplicates: Counter[str] = Counter()
     for file in files:
+        is_csv = file.suffix.lower() == ".csv"
+        not_objects = stopped = 0
         try:
-            events, damaged, not_objects = _read_events(file)
+            if is_csv:
+                events, damaged, stopped = m365.read_csv(file)
+            else:
+                events, damaged, not_objects = _read_events(file)
         except (OSError, MemoryError) as exc:
             problems[str(file)] = f"unreadable: {exc}"
-            events, damaged, not_objects = [], 1, 0
+            events, damaged = [], 1
         else:
-            if damaged:
+            if damaged and is_csv:
+                problems[str(file)] = (
+                    f"rows without a readable AuditData event: {damaged}; "
+                    f"events read: {len(events)}"
+                )
+                if stopped:
+                    problems[str(file)] += (
+                        f"; reading stopped at line {stopped}: the rest of the file was not read"
+                    )
+            elif damaged:
                 problems[str(file)] = f"damaged or truncated JSON; {len(events)} events recovered"
             elif not_objects:
                 problems[str(file)] = (
@@ -474,14 +543,37 @@ def run_cloud_audit_logs(
                 )
             elif not events:
                 problems[str(file)] = "no events"
-        kinds = set()
+        kinds: Counter[str] = Counter()
+        too_deep = 0
         for event in events:
             kind = _log_type(event)
-            kinds.add(kind)
-            by_type.setdefault(kind, []).append(event)
+            if kind == "generic" and (record := m365.recognise(event)) is not None:
+                kind, event = record.kind, record
+            kinds[kind] += 1
+            try:
+                line = _event_line(kind, event)
+            except RecursionError:  # nested about as deep as the JSON decoder allows
+                too_deep += 1
+                continue
+            # Search-UnifiedAuditLog returns a record on more than one page, and exports
+            # overlap. Only a record with an Id that is the same in every byte is a repeat.
+            if isinstance(event, m365.Record) and event.fields["extra"].get("event_id"):
+                if line in lines_seen:
+                    duplicates[kind] += 1
+                    continue
+                lines_seen.add(line)
+            by_type.setdefault(kind, []).append((line, event))
+        # The rows of a CSV, read or not: an export that stopped at a limit is that long
+        # whatever was in its rows.
+        unified[str(file)] = len(events) + damaged if is_csv else kinds["m365"]
+        if too_deep:
+            note = f"events nested too deeply to index: {too_deep}"
+            problems[str(file)] = "; ".join(filter(None, (problems.get(str(file)), note)))
+            damaged += too_deep
         # A value that is not an object is a lost record of the log around it. In a file
-        # with no events it is no sign of a log at all (a list of tags, a number).
-        for kind in kinds or {""}:
+        # with no events it is no sign of a log at all (a list of tags, a number). A CSV
+        # is read for one log only, so what it lost is that log's even when all was lost.
+        for kind in kinds or {"m365" if is_csv else ""}:
             lost[kind] = lost.get(kind, 0) + damaged + (not_objects if kinds else 0)
 
     if not by_type:
@@ -489,7 +581,7 @@ def run_cloud_audit_logs(
             tc_id,
             name,
             params,
-            f"No JSON events found in {evidence_path}",
+            f"No events found in {evidence_path}",
             (time.monotonic() - t0) * 1000,
             error_type="no_data",
         )
@@ -500,13 +592,16 @@ def run_cloud_audit_logs(
     if problems:
         summary["files_with_problems"] = problems
     per_type: dict[str, object] = {}
-    for log_type, events in sorted(by_type.items()):
+    for log_type, pairs in sorted(by_type.items()):
         source = f"cloudlog.{log_type}"
-        ordered = sorted(((_event_line(log_type, e), e) for e in events), key=itemgetter(0))
+        ordered = sorted(pairs, key=itemgetter(0))
+        events = [event for _, event in ordered]
         indexed = extract_and_index(
             "\n".join(line for line, _ in ordered), source, evidence_path, "cloudlogs"
         )
         entry: dict[str, object] = {"events": len(events), "source": source}
+        if duplicates[log_type]:
+            entry["duplicates_skipped"] = duplicates[log_type]
         if log_type != "generic":
             # The same events as rows, so log_top and log_histogram can count them. A
             # generic event has a time and nothing else to count on. What a file of this
@@ -523,7 +618,7 @@ def run_cloud_audit_logs(
                 # was already loaded; its events are then in the table once, not twice.
                 # Not so a file that reading a directory skips for its suffix: nothing
                 # above it holds its events, and nothing above it may replace them.
-                nested=root.is_dir() or root.resolve().suffix.lower() in JSON_LOG_EXTS,
+                nested=root.is_dir() or is_audit_log_file(root.resolve()),
             )
             entry["log_table"] = source
             if "covered_by" in loaded:
@@ -531,6 +626,20 @@ def run_cloud_audit_logs(
                     "no rows added: these events are already in the table from "
                     f"{loaded['covered_by']}, which contains this path"
                 )
+        if log_type in m365.TYPES:
+            # What the events add up to, worked out here so that no model has to count.
+            warnings = m365.export_warnings(unified) if log_type == "m365" else []
+            lines, counts = m365.summarise(
+                log_type,
+                evidence_path,
+                [e for e in events if isinstance(e, m365.Record)],
+                warnings,
+                duplicates[log_type],
+            )
+            extract_and_index("\n".join(lines), f"{source}.summary", evidence_path, "cloudlogs")
+            entry.update(summary_source=f"{source}.summary", summary=counts)
+            if warnings:
+                entry["export_warnings"] = warnings
 
         status, parsed = _sigma_scan(
             log_type, events, evidence_path, ruleset_path, sigma_level_filter

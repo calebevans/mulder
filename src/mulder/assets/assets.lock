@@ -31,6 +31,18 @@
       "bytes": 8014924,
       "generated_at": "2026-08-16T17:15:28Z"
     },
+    "evtx-dump:amd64": {
+      "url": "https://github.com/omerbenamram/evtx/releases/download/v0.15.1/evtx_dump-v0.15.1-x86_64-unknown-linux-musl",
+      "sha256": "ccdf22d15e74f6cf69447f33208123e0fa7c43d36ed8dd0760cc98b514289670",
+      "bytes": 3040520,
+      "generated_at": "2026-11-18T18:19:53Z"
+    },
+    "evtx-dump:arm64": {
+      "url": "https://github.com/omerbenamram/evtx/releases/download/v0.15.1/evtx_dump-v0.15.1-aarch64-unknown-linux-gnu",
+      "sha256": "fb1c70716ea6dff26d6b067a2511e1dbed94327eea982a5e93f30e236f4a20b4",
+      "bytes": 2534240,
+      "generated_at": "2026-11-18T18:19:53Z"
+    },
     "floss:amd64": {
       "url": "https://github.com/mandiant/flare-floss/releases/download/v3.1.0/floss-v3.1.0-linux.zip",
       "sha256": "8cdd05d78e3ffa59360425c6b846a2f22933fd1923bdd326fceff82f7549d40a",
@@ -54,6 +66,12 @@
       "sha256": "93c7fc5820151d1b8308987a47f0231a7f286d726478bea226adf2bc6d05bcee",
       "bytes": 45415511,
       "generated_at": "2026-08-16T17:15:28Z"
+    },
+    "lolrmm:any": {
+      "url": "https://raw.githubusercontent.com/magicsword-io/LOLRMM/0c2d56639673a232ff9d2548e16c6d045d3a1217/website/public/api/rmm_tools.json",
+      "sha256": "607f5195c0a16f8dcc2e382c91557cd1c0d7fe21d07fcd64df4c45dad1731e20",
+      "bytes": 2291837,
+      "generated_at": "2026-11-18T18:11:53Z"
     },
     "zizmor:amd64": {
       "url": "https://github.com/zizmorcore/zizmor/releases/download/v1.32.0/zizmor-x86_64-unknown-linux-gnu.tar.gz",

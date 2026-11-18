@@ -38,6 +38,11 @@ analyze_execution_timeline, assess_recovery, correlate_pcap_with_host.
 Plan only tools whose input exists in this case (list_sources): when every
 source is network evidence (packet captures, NetFlow), do not plan disk,
 MFT, registry, memory or plaso-timeline tools.
+When ransomware is suspected (encrypted files, ransom notes, the
+briefing), plan find_encryption_activity and find_remote_access_tools
+(each reads every indexed system), find_data_exfiltration_indicators and
+find_file_staging (data is usually taken before it is encrypted), and
+find_defense_evasion (cleared logs, deleted backups).
 For NetFlow evidence, netflow.analysis.* (a completed extraction run) or
 netflow.analysis-partial.* (a run with failed or unstarted sections; its section
 rows say which) indexes what extraction produced (list_sources); have the executor
@@ -51,6 +56,17 @@ often, events per hour, first and last seen) as log_top(table, fields),
 log_histogram(table, bucket) or log_rows(table), with table = that source
 name and filters = [{"field": "actor", "op": "eq", "value": "..."}]; do not
 plan a search to count.
+cloudlog.m365, cloudlog.entra_signin and cloudlog.entra_audit (Microsoft 365
+and Entra ID) are counted the same way. For an account compromise, plan
+log_top(table, fields=["actor"]) filtered on the src_ip, session_id or
+user_agent of a sign-in a finding attributes to the intruder, to find the
+other accounts that share it.
+When list_sources shows evtx_recovered.* sources, they hold event records
+recovered after a log was cleared. The composite tools read the live logs
+and do not read these: also plan a search of them by name
+(source="evtx_recovered" covers them all) for the logons, service installs
+and other events in question. They are a partial remainder: no recovered
+record for an event or a period does not show it did not happen.
 
 OUTPUT (MANDATORY):
 Your FINAL message MUST be ONLY valid JSON. No text before or after it.

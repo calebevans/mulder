@@ -20,15 +20,18 @@ import markdown
 from markdown.extensions import Extension
 from markdown.treeprocessors import Treeprocessor
 
-from mulder.models import AuditSummary, CaseMetadataRow, Finding, SourceRow
+from mulder.models import AuditSummary, CaseMetadataRow, Finding, Question, SourceRow
 from mulder.patterns import (
     EMAIL_RE,
     IP_RE,
     SEVERITY_ORDER,
     classify_ip,
     format_token_count,
+    is_evidence_source,
     is_external_ip,
+    source_is_cited,
 )
+from mulder.questions import NO_EVIDENCE_TOOLS, backs, no_incident, statuses
 
 logger = logging.getLogger(__name__)
 
@@ -750,6 +753,129 @@ def _build_executive_summary_md(
     return "\n".join(lines)
 
 
+_QUESTION_LABELS = {
+    "open": "Open",
+    "answered": "Answered",
+    "ruled_out": "Ruled out",
+    "undetermined": "Undetermined",
+}
+
+_NO_INCIDENT_STATEMENT = (
+    "No evidence of an incident was found in the evidence examined. This describes "
+    "that evidence only; it does not establish that nothing happened."
+)
+_MAX_UNAVAILABLE_SHOWN = 10
+
+
+def _build_question_rows(
+    questions: Sequence[Question], findings: Sequence[Finding]
+) -> list[dict[str, Any]]:
+    """One row per investigation question: its status and what the answer rests on.
+
+    Only findings that still exist and are the kind the resolution needs are
+    listed, so a question reopened by a deleted finding shows no basis.
+    """
+    by_id = {f.finding_id: f for f in findings}
+    return [
+        {
+            "question": q.question,
+            "asked_in": q.phase.replace("_", " ") + (f", {q.system}" if q.system else ""),
+            "status": status,
+            "label": _QUESTION_LABELS[status],
+            "reason": q.reason if status != "open" else "",
+            "findings": [
+                by_id[fid]
+                for fid in q.finding_ids
+                if status != "open" and fid in by_id and backs(status, by_id[fid])
+            ],
+        }
+        for q, status in zip(questions, statuses(questions, findings), strict=True)
+    ]
+
+
+def _build_no_incident_summary(
+    question_rows: Sequence[dict[str, Any]],
+    collect_findings: Sequence[Finding],
+    observation_count: int,
+    evidence_sources: Sequence[SourceRow],
+    cited_sources: int,
+    total_tool_calls: int,
+    evidence_tool_calls: int,
+    total_duration_ms: float,
+) -> tuple[str, str]:
+    """Executive summary (HTML, markdown) for a case that found no incident.
+
+    States the outcome as a claim about the evidence examined, then what was
+    examined, then what was not available: questions left undetermined, with
+    their reasons, and evidence known to exist outside the case. It says how
+    many evidence sources the findings cite and how many tool calls went to
+    tools that touch evidence, because a negative conclusion reaches no
+    further than the sources someone read. The audit summary counts calls
+    by tool name whatever their status, so the line says failed calls are
+    in that figure.
+
+    ``evidence_sources`` and ``cited_sources`` are the citation gate's
+    figures: one row per distinct evidence-bearing source name, and how many
+    of those names a finding cites.
+    """
+    memory, disk, other = _classify_sources(evidence_sources)
+    kinds = [
+        f"{count} {kind}"
+        for count, kind in ((memory, "memory"), (disk, "disk"), (other, "other"))
+        if count
+    ]
+    resolved = [row["status"] for row in question_rows]
+    examined = (
+        f"{len(evidence_sources)} evidence sources"
+        + (f" ({', '.join(kinds)})" if kinds else "")
+        + f", {cited_sources} of them cited by a finding; {total_tool_calls} tool calls, "
+        f"{evidence_tool_calls} of them to tools that extract, search or read evidence "
+        "(failed calls included); "
+        f"{_format_duration(total_duration_ms)}. "
+        f"{len(resolved)} investigation questions: {resolved.count('ruled_out')} ruled out, "
+        f"{resolved.count('answered')} answered, {resolved.count('undetermined')} undetermined."
+    )
+    if observation_count:
+        examined += (
+            f" {observation_count} low-severity or informational observation(s) "
+            "are listed as findings."
+        )
+
+    unavailable = [
+        f"{row['question']}: {row['reason']}"
+        for row in question_rows
+        if row["status"] == "undetermined"
+    ]
+    unavailable += [f.title.removeprefix("[COLLECT]").strip() for f in collect_findings]
+    if not unavailable:
+        unavailable = [
+            "No question was left undetermined and no evidence outside the case was identified."
+        ]
+    elif len(unavailable) > _MAX_UNAVAILABLE_SHOWN:
+        more = len(unavailable) - _MAX_UNAVAILABLE_SHOWN
+        unavailable = unavailable[:_MAX_UNAVAILABLE_SHOWN]
+        unavailable.append(f"{more} more: see Investigation Questions and Evidence To Collect.")
+
+    summary_md = "\n".join(
+        [
+            f"**Outcome:** {_NO_INCIDENT_STATEMENT}",
+            "",
+            f"**Examined:** {examined}",
+            "",
+            "**Not available:**",
+            *(f"- {item}" for item in unavailable),
+        ]
+    )
+    summary_html = (
+        f"<p><strong>{_NO_INCIDENT_STATEMENT}</strong></p>"
+        f"<p><strong>Examined:</strong> {html.escape(examined)}</p>"
+        '<div class="exec-threats"><strong>Not available</strong><ul>'
+        + "".join(f"<li>{html.escape(item)}</li>" for item in unavailable)
+        + "</ul></div>"
+    )
+    return summary_html, summary_md
+
+
 def _build_related_findings(
     findings: Sequence[Finding],
 ) -> dict[str, list[str]]:
@@ -1073,6 +1199,8 @@ class ReportRenderer:
         evidence_integrity: list[dict[str, object]] | None = None,
         source_windows: dict[str, list[dict[str, Any]]] | None = None,
         enrichment_windows: list[dict[str, Any]] | None = None,
+        incomplete: Sequence[str] = (),
+        questions: Sequence[Question] | None = None,
     ) -> dict[str, Any]:
         """Assemble template variables from case metadata, findings, audit trail, and sources.
 
@@ -1087,6 +1215,11 @@ class ReportRenderer:
             source_windows: Per-source raw text windows for the HTML report.
             enrichment_windows: Raw windows from the ``enrichment.iocs``
                 DB source containing threat intel metadata for IOCs.
+            incomplete: Plain-text lines saying where and why the
+                investigation stopped. When non-empty both templates open
+                with an INCOMPLETE banner listing them.
+            questions: Recorded investigation questions. With none, the
+                report is what it was before questions were recorded.
 
         Returns:
             Dict of template variables ready for Jinja2 rendering.
@@ -1180,6 +1313,36 @@ class ReportRenderer:
         executive_summary = _build_executive_summary(**_summary_kwargs)
         executive_summary_md = _build_executive_summary_md(**_summary_kwargs)
 
+        question_rows = _build_question_rows(questions or [], normalized_findings)
+        # The test the gates and the summary tool use, so the report cannot
+        # state an outcome the case did not pass on.
+        is_no_incident = no_incident(
+            questions or [], normalized_findings, audit_summary.tool_call_counts
+        )
+        if is_no_incident:
+            # Counted the way the evidence_citation_coverage gate counts:
+            # distinct evidence-bearing names (rows repeat per device, and
+            # run bookkeeping is not evidence), matched as the gate matches.
+            evidence_sources = list(
+                {
+                    s.source_name: s for s in normalized_sources or [] if is_evidence_source(s)
+                }.values()
+            )
+            executive_summary, executive_summary_md = _build_no_incident_summary(
+                question_rows,
+                collect_findings,
+                len(positive_findings),
+                evidence_sources,
+                sum(source_is_cited(s.source_name, all_sources) for s in evidence_sources),
+                audit_summary.total_tool_calls,
+                sum(
+                    count
+                    for tool, count in audit_summary.tool_call_counts.items()
+                    if tool not in NO_EVIDENCE_TOOLS
+                ),
+                audit_summary.wall_clock_ms or audit_summary.total_duration_ms,
+            )
+
         related_findings = _build_related_findings(sorted_findings)
         related_titles = _build_related_titles(sorted_findings, related_findings)
         attack_data = _load_attack_tactics()
@@ -1226,6 +1389,8 @@ class ReportRenderer:
             "last_timestamp": audit_summary.last_timestamp,
             "executive_summary": executive_summary,
             "executive_summary_md": executive_summary_md,
+            "questions": question_rows,
+            "no_incident": is_no_incident,
             "related_findings": related_findings,
             "estimated_input_tokens": audit_summary.estimated_input_tokens,
             "estimated_output_tokens": audit_summary.estimated_output_tokens,
@@ -1236,6 +1401,7 @@ class ReportRenderer:
             "mitre_all_tactics": all_tactics,
             "mitre_tactic_groups": active_tactic_groups,
             "source_windows": source_windows or {},
+            "incomplete": list(incomplete),
             "model_token_breakdown": self._load_model_usage(
                 Path(audit_log_path).parent, case_metadata.case_id
             ),
@@ -1256,8 +1422,10 @@ class ReportRenderer:
             case_id: Case identifier.
 
         Returns:
-            List of dicts with model, input, and output keys, or empty
-            list if the sidecar file does not exist.
+            List of dicts with model, input, output, cache_creation and
+            cache_read keys (the last two are 0 for a sidecar written
+            before they were recorded), or empty list if the sidecar file
+            does not exist.
         """
         usage_path = db_dir / f"{case_id}.model_usage.json"
         if not usage_path.exists():
@@ -1270,6 +1438,8 @@ class ReportRenderer:
                         "model": entry.get("model", "unknown"),
                         "input": entry.get("input_tokens", 0),
                         "output": entry.get("output_tokens", 0),
+                        "cache_creation": entry.get("cache_creation_input_tokens", 0),
+                        "cache_read": entry.get("cache_read_input_tokens", 0),
                     }
                     for entry in data
                     if isinstance(entry, dict)
@@ -1428,6 +1598,8 @@ class ReportRenderer:
         sources_list: list[SourceRow] | None = None,
         evidence_integrity: list[dict[str, object]] | None = None,
         enrichment_windows: list[dict[str, Any]] | None = None,
+        incomplete: Sequence[str] = (),
+        questions: Sequence[Question] | None = None,
     ) -> str:
         """Render the markdown report template (``report.md.j2``) to a string.
 
@@ -1444,6 +1616,7 @@ class ReportRenderer:
             evidence_integrity: Evidence registry entries with file hashes.
             enrichment_windows: Raw windows from the ``enrichment.iocs``
                 DB source for threat intel context.
+            incomplete: Lines for the INCOMPLETE banner (see ``build_context``).
 
         Returns:
             Rendered markdown report string.
@@ -1457,6 +1630,8 @@ class ReportRenderer:
             sources_list=sources_list,
             evidence_integrity=evidence_integrity,
             enrichment_windows=enrichment_windows,
+            incomplete=incomplete,
+            questions=questions,
         )
         return self._render_markdown(ctx)
 
@@ -1471,6 +1646,8 @@ class ReportRenderer:
         evidence_integrity: list[dict[str, object]] | None = None,
         source_windows: dict[str, list[dict[str, Any]]] | None = None,
         enrichment_windows: list[dict[str, Any]] | None = None,
+        incomplete: Sequence[str] = (),
+        questions: Sequence[Question] | None = None,
     ) -> str:
         """Render the HTML report with markdown descriptions converted to HTML.
 
@@ -1488,6 +1665,7 @@ class ReportRenderer:
             source_windows: Per-source raw text windows for the HTML report.
             enrichment_windows: Raw windows from the ``enrichment.iocs``
                 DB source for threat intel context.
+            incomplete: Lines for the INCOMPLETE banner (see ``build_context``).
 
         Returns:
             Rendered HTML report string.
@@ -1502,6 +1680,8 @@ class ReportRenderer:
             evidence_integrity=evidence_integrity,
             source_windows=source_windows,
             enrichment_windows=enrichment_windows,
+            incomplete=incomplete,
+            questions=questions,
         )
         return self._render_html(ctx)
 
@@ -1517,6 +1697,7 @@ class ReportRenderer:
         source_windows: dict[str, list[dict[str, Any]]] | None = None,
         generate_pdf: bool = True,
         enrichment_windows: list[dict[str, Any]] | None = None,
+        questions: Sequence[Question] | None = None,
     ) -> tuple[str, str, bytes | None]:
         """Render markdown, HTML, and optionally PDF reports.
 
@@ -1551,6 +1732,7 @@ class ReportRenderer:
             evidence_integrity=evidence_integrity,
             source_windows=source_windows,
             enrichment_windows=enrichment_windows,
+            questions=questions,
         )
         md_text = self._render_markdown(ctx)
         html_text = self._render_html(dict(ctx))

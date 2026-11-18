@@ -1,0 +1,23 @@
+title: Microsoft 365 Application Consent Granted
+id: b9410f88-66c1-4a6c-8571-cf9d1127bbb6
+status: experimental
+description: Detects consent being granted to an application, which lets it act with the granted permissions without the user's password or MFA, also after a password reset.
+references:
+    - https://learn.microsoft.com/en-us/security/operations/incident-response-playbook-app-consent
+    - https://learn.microsoft.com/en-us/entra/identity/monitoring-health/reference-audit-activities
+author: mulder
+date: 2026-11-18
+tags:
+    - attack.persistence
+    - attack.credential-access
+    - attack.t1528
+logsource:
+    product: m365
+    service: audit
+detection:
+    selection:
+        Operation|startswith: 'Consent to application'
+    condition: selection
+falsepositives:
+    - Users and administrators consenting to applications the organisation uses
+level: medium

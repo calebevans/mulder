@@ -138,7 +138,7 @@ List partitions in a disk image using TSK mmls.
 
 ### run_fls
 
-List all files and directories (including deleted) from a disk image. Automatically analyzes all NTFS partitions above 100 MB when multiple partitions are present, indexing each as a separate source. The largest NTFS partition is selected as primary when `partition_offset` is omitted.
+List all files and directories (including deleted) from a disk image. Automatically analyzes all NTFS partitions above 100 MB when multiple partitions are present, indexing each as a separate source. The largest NTFS partition is selected as primary when `partition_offset` is omitted. Given a [triage collection](#index_triage_collection) directory instead, lists the collected files: no deleted entries, and the inode column is the row number.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -164,14 +164,14 @@ Retrieve filesystem metadata (type, block size, volume label) from a disk image.
 
 ### run_mactime
 
-Generate a filesystem MAC timeline from a disk image using TSK fls + mactime.
+Generate a filesystem MAC timeline from a disk image using TSK fls + mactime. Given a UAC collection directory, the timeline is built from the body file the collector wrote; other triage collections have none and get an error saying so.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | image_path | str | yes | Path to the disk image |
 | time_range | str \| None | no | Date range filter (e.g. "2015-08-01..2015-08-05") |
 
-**Returns:** `source_name` (tsk.timeline), `windows_indexed`, `line_count`
+**Returns:** `source_name` (tsk.timeline), `windows_indexed`, `line_count`; for a UAC body file also `body_rows` and `timeline_rows`, and an error (`no_rows`) when mactime wrote none
 
 **Roles:** `EXTRACT_EXECUTOR`
 
@@ -394,13 +394,68 @@ Extract metadata from a FileVault-encrypted macOS volume.
 
 **Roles:** `EXTRACT_EXECUTOR`
 
+### index_triage_collection
+
+Index a triage collection's file list and the collector's own records.
+
+A triage collection is a directory of files copied from a live system: KAPE
+target output, an unpacked Velociraptor offline collection, UAC output, or a
+plain Windows volume directory (see the
+[usage guide](usage-guide.md#triage-collections)). The collected files are read
+by the ordinary tools, which take the collection's directory where they take a
+disk image: `run_fls`, `run_registry_parser`, `query_registry_value`,
+`run_prefetch_parser`, `run_amcache_parser`, `run_shimcache_parser`,
+`run_mft_parser`, `run_evtx_parser`, `index_app_files`, `analyze_disk_pcaps`,
+`parse_browser_history`, `parse_plist`, `query_sqlite_from_image`, and
+`run_mactime` for a UAC body file. This tool indexes the rest.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| evidence_path | str | yes | The collection's directory |
+| force | bool | no | Re-index even if this collection was already indexed |
+
+**Returns:** `layout`, `host`, `volumes[]`, `files_collected`, `listing_truncated`, `collected[]`, `not_collected[]` (`not_seen_in_cut_listing[]` instead when the listing was cut), `sources[]`, `not_indexed[]`, `note`
+
+| Source | Content |
+|--------|---------|
+| `tsk.filelist` | every collected file at its original path, as `fls` rows; the inode column is the row number (`$MFT`, when collected, is 0) |
+| `triage.summary` | layout, host name the collection states, volumes, and which kinds of artifact were and were not collected |
+| `triage.kape.copylog`, `triage.kape.skiplog` | KAPE's record of each file on the source system: original path, SHA-1, size and created/modified/accessed times; files it found and did not copy |
+| `triage.velociraptor.<artifact>` | each `results/<Artifact>.json`, one JSON row per line |
+| `triage.uac.<category>` | the `live_response/<category>` command output, each file under a `=== path ===` header |
+
+A collection is not a disk: it has no unallocated space and no deleted files,
+and the timestamps on the copies are those of the copy. `not_collected` lists
+artifact kinds that are missing from the collection, which does not show they
+were missing from the system.
+
+Bounds: 200,000 files and directories per collection, 8 MiB per indexed source,
+256 KiB per UAC output file, 40 UAC categories, 200 Velociraptor result files,
+and 4 GiB for a file an artifact tool reads (a larger one is refused, not cut);
+whatever was cut or left out is named in `not_indexed` and
+`listing_truncated`. The walk is breadth-first across the volumes, so a cut
+listing keeps the top of each one, and the kinds of artifact not found in it
+are then reported as `not_seen_in_cut_listing`, not as `not_collected`. The
+listing is in the order `fls` gives (by directory, names compared without
+case, the system volume first), so `Windows/...` comes before
+`Windows.old/...` and before a shadow copy. Memory and crash dumps inside a
+collection (`MEMORY.DMP`, `*.dmp`) stay `memory_dump` evidence items. Symlinks inside a
+collection are never followed, a symlink is not accepted as the collection, and Velociraptor's percent-encoded names are
+decoded only for display. Layout details: KAPE's `$Extend/$J`, `$Extend/$Max`
+and `$Secure_$SDS` are listed as the streams they hold (`$Extend/$UsnJrnl:$J`,
+...); a Velociraptor drive collected through two accessors
+(`uploads/ntfs/%5C%5C.%5CC%3A`, `uploads/auto/C%3A`) is one volume; files of a
+second volume are listed under its label (`D/...`).
+
+**Roles:** `EXTRACT_EXECUTOR`
+
 ---
 
 ## 4. Extraction: Windows Artifacts
 
 ### run_evtx_parser
 
-Extract .evtx files from a disk image and return a prioritized manifest.
+Extract .evtx files from a disk image and return a prioritized manifest. A triage collection directory is handled the same way; any other directory or a single .evtx file is parsed at once.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -429,6 +484,112 @@ When indexing a Security log, automatically indexes System.evtx and PowerShell o
 
 **Roles:** `EXTRACT_EXECUTOR`
 
+### run_evtx_recovery
+
+Recover Windows event log records left behind after a log was cleared, using evtx_dump.
+
+What it does depends on what `evidence_path` is:
+
+- **A `.evtx` file, or a directory of them** (searched at any depth; symlinks
+  are not followed; at most 2,000 files): reads the stale records still inside
+  each log, in chunks whose header was reset and in the slack after a chunk's
+  last record (`evtx_dump --recover-records`).
+- **Any other file** (a raw or E01 disk image, a memory dump, a file of
+  unallocated space, a log whose file header is gone): carves event log chunks
+  out of the raw bytes and reads every record in them, slack included. The file
+  is read once and never copied; an E01 is read through xmount's flat view,
+  which needs FUSE. Exact copies of a chunk are skipped, and the scan stops
+  after one million chunks (64 GiB of event log). A file that starts like an
+  EnCase segment that is not the first, a VMDK, qcow2 or VHDX image, or a zip
+  or gzip file is still scanned as it is, and the response carries a `warning`
+  that what it stores compressed was not read.
+
+A recovered record is dropped when a live record has the same channel, record
+ID and time. On a disk image the live records are those of the image's own
+allocated event logs, which the tool extracts with `icat`, one at a time for
+the length of the call, through the file listing `run_fls` indexed for that
+image, so run `run_fls` first. Another image's listing in the same case is not
+read. A deleted log is not live: where its chunks are still in the image its
+records come out as `[carved]`, also when a new log was created under its
+name. It does not need `run_evtx_parser` or the directory that tool extracted
+to. `compared_with_live_logs` is true only when every allocated log the image
+lists was read. When one could not be extracted or read, `warning` gives the
+count and `not_parsed.files` names it. When there is none to extract (a memory
+dump, a file of unallocated space, an image `run_fls` did not list) nothing is
+compared. Either way `[carved]` records include any that are still in a live
+log that was not read.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| evidence_path | str | yes | A .evtx file, a directory of .evtx files, or a raw file to carve |
+| channels | list[str] \| None | no | Channel name patterns, case-insensitive, `*` allowed. Default: `Security`, `System`, `Microsoft-Windows-PowerShell/Operational`, `Microsoft-Windows-TaskScheduler/Operational`, `Microsoft-Windows-TerminalServices-*`. `["*"]` keeps every channel, and the records recovered without a channel name |
+| t_start | str \| None | no | Keep records at or after this UTC time (`2024-03-01` or `2024-03-01T14:30:00`) |
+| t_end | str \| None | no | Keep records at or before this UTC time; a date covers its whole day |
+| max_records | int | no | Most records kept per channel (default 10000, limit 100000) |
+| force | bool | no | Re-run even if this path was already recovered, for example with other channels or another time window. The earlier run's sources stay in the index |
+
+**Returns:** `evidence_path`, `mode`, `scope{}` (the channel patterns, time window and `max_records` applied), `recovered_records`, `earliest_recovered`, `latest_recovered`, `channels{}` (per channel: `source`, `recovered`, `earliest`, `latest`, `event_ids{}` (ten most frequent), `live_records`, `live_earliest`, `live_latest`, `not_indexed_over_max_records`; the twenty with most records), `channels_not_listed`, `live_log_cleared`, `log_clearing_events[]` (the first twenty), `duplicates_of_live_dropped`, `truncated{}`, `not_parsed{}`, `summary_source`, `interpretation`; `records_without_channel{}` when the channel patterns left such records out; when carving also `compared_with_live_logs`, `duplicate_chunks_skipped`; `warning` when carved records were not compared with every live log or the file looks like a container. A call that is skipped because the path was already recovered returns `scope_of_prior_run{}`, so the caller can see whether that run covered what it now asks for.
+
+`truncated{}` counts what was left out: `records_over_max_records`,
+`records_in_channels_over_limit` (more than 40 channels), `evtx_files_not_read`,
+`log_clearing_events_not_listed`, `carving_stopped_at_chunk_limit`.
+`not_parsed{}` counts what could not be read: `records` (lines of evtx_dump's
+output that are not JSON, records it reported it could not dump, and records
+without a usable time, event ID or record ID), `files` (logs evtx_dump failed
+on, and logs of a disk image `icat` could not extract) and
+`files_ending_in_a_partial_chunk` (evtx_dump reads whole 64 KiB chunks only, so
+the tail of such a log was not read).
+
+Records are indexed per channel as `evtx_recovered.<channel>` (`evtx_recovered.security`,
+`evtx_recovered.powershell-operational`), in time order, one per line:
+
+```
+2024-03-01T14:30:00.1234567Z | 4624 | security | [recovered record 51234] {"System":{...},"EventData":{...}}
+```
+
+These are the fields a live log's lines carry when it is indexed without EZ
+Tools (`time | EventID | channel | event`), with the event as JSON. `[recovered]`
+means stale space inside a log; `[carved]` means a chunk found in raw data. The
+channel is the record's own, not the file's name: stale space in one log can
+hold another log's records. `evtx_recovered.summary` is written on every run,
+including one that recovered nothing, and lists per channel what was recovered
+beside what is live, the scope applied, the clearing events, and what was cut
+or not parsed.
+
+evtx_dump recovers some records with their time, event ID, record ID and
+computer but without provider, channel or event data. `["*"]` indexes them as
+`evtx_recovered.no-channel` (less those whose record ID and time match a live
+record). With any other patterns they are not indexed, and
+`records_without_channel{}` gives their count, time range and most frequent
+event IDs; that count is not compared with live records. An event ID without
+its provider does not say which log or program wrote the record.
+
+`log_clearing_events` lists Security 1102 and System 104 records written by
+Microsoft-Windows-Eventlog, with the log that was cleared and the account;
+`live_log_cleared` is true when one of them is in a live log (and `null` when
+no live log was read).
+
+**What a result does and does not mean.** Recovered records are what happened
+to survive in cleared or reused space. A recovered record shows that event was
+logged. No recovered record for an event or a period does not show it did not
+happen, and recovering nothing does not show the log was never cleared. Carving
+takes any 64 KiB that starts with a chunk signature and has a record where the
+first record belongs; nothing ties such a chunk to the system under
+investigation, so corroborate what a carved record says.
+
+Past its time limit (ten minutes, plus two for each GiB of evidence over 4)
+the tool returns a timeout and indexes nothing. A search scoped to
+`evtx.<channel>` does not read `evtx_recovered.*`, and neither does a composite
+tool while the live source it queries exists: search the recovered sources by
+name (`source="evtx_recovered"` covers them all).
+
+The binary is the one `mulder setup` and the image install under the asset
+directory (`evtx-dump/evtx_dump`). It is never looked up on `PATH`: python-evtx,
+a mulder dependency, installs a console script of the same name there, and it
+is a different program.
+
+**Roles:** `EXTRACT_EXECUTOR`
+
 ### run_hayabusa
 
 Detect threats in EVTX files using 3,700+ Sigma rules via Hayabusa.
@@ -441,6 +602,22 @@ Detect threats in EVTX files using 3,700+ Sigma rules via Hayabusa.
 | force | bool | no | Re-run extraction even if sources already exist |
 
 **Returns:** `total_alerts`, `by_severity{}`, `top_rules[]`, `mitre_techniques[]`
+
+**Roles:** `EXTRACT_EXECUTOR`
+
+### run_hayabusa_logon_summary
+
+Summarise successful and failed Windows logons from EVTX files using Hayabusa's `logon-summary` command.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| evtx_dir | str | no | Directory containing .evtx files |
+| image_path | str | no | Disk image path for extraction directory lookup |
+| force | bool | no | Re-run even if the summary is already indexed |
+
+**Returns:** `source` (logon.summary), and for `successful` and `failed`: `logons`, `combinations`, `by_logon_type{}`, `with_source_address[]` (at most 15 rows that name a source address, external addresses first: count, target account, domain and computer, logon type, source computer, source IP, and `external`: true, false, or null when the source is not an address that can be classified; IPv6 and IPv4-mapped addresses are classified), `with_source_address_not_listed`; plus `log_period` (first and last timestamp and the number of event records read) and `note`. The full tables are indexed; when there is no logon row nothing is indexed, so a later call reads the logs again.
+
+Hayabusa 3.8.1 counts each combination of account, logon type and source over the whole log and gives no first or last time per row; `log_period` is the span the counts cover. With `image_path`, only that image's event logs are used (extracted if they are not yet), never another image's. A logon is not a compromise, and no rows is not no logons: the Security log may be cleared, rolled over or absent. The command needs Hayabusa's `rules/config` directory; without it the tool returns `error_type: asset_missing` instead of zero logons.
 
 **Roles:** `EXTRACT_EXECUTOR`
 
@@ -570,6 +747,21 @@ Parse the $MFT from a disk image using MFTECmd (EZ Tools).
 
 **Roles:** `EXTRACT_EXECUTOR`
 
+### run_usn_parser
+
+Parse the NTFS change journal (`$Extend\$UsnJrnl:$J`) from a disk image using MFTECmd (EZ Tools).
+
+The journal records each recent create, rename, overwrite and delete with its time; `find_encryption_activity`, `find_defense_evasion` and `assess_recovery` read it. The stream is located by listing `$Extend` (MFT entry 11) and read with `icat` by its full stream inode. Its leading sparse region is not copied, and at most the newest 256 MiB of records are parsed; `truncated` says when older records were left out.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| image_path | str | yes | Path to the disk image |
+| force | bool | no | Re-run extraction even if sources already exist |
+
+**Returns:** `source_name` (ez.usnjrnl), `windows_indexed`, `journal_bytes_parsed`, `truncated`. A volume without a journal returns `error_type: no_journal`: journaling may be off, or the journal was deleted, which is not evidence that nothing changed.
+
+**Roles:** `EXTRACT_EXECUTOR`
+
 ### run_pasco
 
 Parse an Internet Explorer index.dat file for browser history.
@@ -607,18 +799,21 @@ Index exported cloud audit logs and apply Sigma detection rules to them.
 
 Reads JSON arrays, JSON lines and CloudTrail `{"Records": [...]}` files, and
 recognises GitHub audit logs, GCP Cloud Audit Logs and AWS CloudTrail per
-event. Any other JSON is indexed as `cloudlog.generic` and scanned only when
+event. It also reads the Microsoft 365 unified audit log (JSON, or the CSV it is
+usually exported to), Entra ID sign-in logs and Entra ID audit logs: see
+"Microsoft 365 and Entra ID" below. Any other JSON is indexed as
+`cloudlog.generic` and scanned only when
 `ruleset_path` is given. Nothing is fetched: export the logs first (see the
 [usage guide](usage-guide.md#cloud-audit-logs)).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| evidence_path | str | yes | JSON log file, or a directory searched for .json/.jsonl/.ndjson |
+| evidence_path | str | yes | Log file, or a directory searched for .json/.jsonl/.ndjson and unified audit log .csv exports |
 | ruleset_path | str \| None | no | Sigma rules to use instead of the defaults |
 | sigma_level_filter | Literal['informational', 'low', 'medium', 'high', 'critical'] \| None | no | Minimum Sigma level (default "low") |
 | force | bool | no | Re-run even if these logs were already indexed |
 
-**Returns:** `files_read`, `files_with_problems{}`, `log_types{<type>: events, source, log_table, log_table_note, sigma, detections, level_counts{}, rules_matched{}, mitre_coverage{}}`
+**Returns:** `files_read`, `files_with_problems{}`, `log_types{<type>: events, duplicates_skipped, source, log_table, log_table_note, summary_source, summary{}, export_warnings[], sigma, detections, level_counts{}, rules_matched{}, mitre_coverage{}}`
 
 Events are indexed one per line in `cloudlog.<type>` (time, actor, action,
 source IP, target, raw event) and Sigma matches in `cloudlog.<type>.detections`.
@@ -628,7 +823,7 @@ plus mulder's own GCP rules for service account key creation, federated token
 exchange, service account impersonation, IAM policy changes and Secret Manager
 reads.
 
-GitHub, GCP and AWS events are also loaded as rows into a [log table](#log-tables)
+Every type but `generic` is also loaded as rows into a [log table](#log-tables)
 named after the source (`log_table` in the result), so `log_top`, `log_histogram`
 and `log_rows` can count them. Each row has the time, actor, action, source IP and
 target of the text line (for AWS the target is the region), plus:
@@ -638,13 +833,17 @@ target of the text line (for AWS the target is the region), plus:
 | AWS | `status` (the `errorCode`; `Failure` when there is only an `errorMessage`; otherwise `Success`), `user_agent`, `session_id` (the access key id), `bytes` (`bytesTransferredOut`), `event_id`, `identity_type`, `account`, `read_only` |
 | GCP | `status` (the `google.rpc` status code, `OK` when there is none), `user_agent`, `event_id` (`insertId`) |
 | GitHub | `user_agent`, `session_id` (`hashed_token`), `event_id` (`_document_id`), `country` |
+| Microsoft 365 (`m365`) | `status` (`ResultStatus`), `user_agent`, `session_id`, `event_id` (`Id`), `workload`, `app_id`, `error` (`ErrorNumber` or `ErrorCode`, when not 0), `mailbox` (`MailboxOwnerUPN`), `access_type` (`Sync` or `Bind`, for MailItemsAccessed) |
+| Entra sign-ins (`entra_signin`) | `status` (`Success`, or the error code), `user_agent`, `session_id`, `event_id`, `app_id`, `client_app`, `interactive`, `auth_requirement`, `conditional_access`, `risk`, `country`, `asn`, `token_id` |
+| Entra audit (`entra_audit`) | `status` (`result`), `user_agent`, `event_id`, `category`, `service`, `target_type`, `correlation_id` |
 
 `cloudlog.generic` gets no table: such an event has a time and nothing to count on.
 A forced re-run replaces the rows it loaded before. Because a directory is read
 recursively, evidence paths can overlap, and the table holds each path's events once:
 a path inside one already loaded adds no rows (`log_table_note` names the path that
 contains it), and a directory replaces the rows of paths inside it. A file without
-a `.json`, `.jsonl` or `.ndjson` suffix is read only when it is named itself, so it is
+a `.json`, `.jsonl` or `.ndjson` suffix (other than a unified audit log `.csv`) is
+read only when it is named itself, so it is
 neither covered nor replaced by a directory. The text index is not deduplicated: both
 runs are indexed as `cloudlog.<type>` sources.
 
@@ -663,7 +862,90 @@ events), so a time-range query finds a window by its earliest event. Sigma
 matches on full field paths (`userIdentity.type`), so a nested key cannot
 stand in for a top-level field. If the events hold more than about 2,000
 distinct field paths, the least-used deep ones are left out of the scan and
-`sigma` says how many. Symlinks under a directory are not followed.
+`sigma` says how many. Symlinks under a directory are not followed, and a path
+that is itself a symlinked file is refused. An event nested about as deep as the
+JSON decoder allows cannot be written back as a line: it is counted in
+`files_with_problems` ("events nested too deeply to index") and as not parsed.
+
+One call reads at most 512 MiB of files. Every event of a call is held in memory,
+at eight to nine times the size of the files (a 533 MB export peaked at 4.4 GB),
+so past that limit the tool reads nothing and returns an error that names the
+largest files: run it once per file or subdirectory. A single file over the limit
+has to be exported again over shorter date ranges, or split. An investigation
+does not plan the call that would be refused: the planner's evidence context
+lists a directory over the limit file by file (the 50 largest that fit), and
+lists apart, as not read, a file over the limit and the files beyond those 50.
+`audit_tool_coverage` does not count a call that returned an error, so what was
+not read is reported there as a gap.
+
+**Microsoft 365 and Entra ID.** Three log types, told apart per record:
+
+| Type | Recognised shapes |
+|------|-------------------|
+| `m365`, the unified audit log | A CSV with an `AuditData` column (the Purview portal's export; `Search-UnifiedAuditLog \| Export-Csv`, with or without the `#TYPE` line; UTF-16 or UTF-8). JSON or JSON lines of Management Activity API records (`CreationTime`, `Operation`, ...). `Search-UnifiedAuditLog \| ConvertTo-Json`, where `AuditData` is an object or a JSON string. Microsoft Graph audit query records (`auditData`). |
+| `entra_signin` | Microsoft Graph `signIn` objects (v1.0 or beta) and Log Analytics `SigninLogs` rows. |
+| `entra_audit` | Microsoft Graph `directoryAudit` objects and Log Analytics `AuditLogs` rows. |
+
+A Graph response page (`{"@odata.context": ..., "value": [...]}`) and an Azure
+Monitor diagnostic-settings stream (`{"records": [...]}`, each record's event in
+`properties`) are unwrapped. Key case is ignored for the two Entra logs. What is
+indexed is the record itself, without its wrapper. A `.csv` in a directory is
+read only when its header has an `AuditData` column; it may be separated by
+commas, semicolons or tabs (`Export-Csv -UseCulture`). A date that Windows
+PowerShell 5.1 wrote as `\/Date(<milliseconds>)\/` is read as the time it is.
+
+A record that the files of one call hold more than once, with the same `Id` and
+the same content, is kept once: `Search-UnifiedAuditLog` returns records on more
+than one page, and exports overlap. `duplicates_skipped` counts the repeats, and
+the summary's first line says how many there were. A record without an `Id`, or
+one that differs in any value, is never taken for a repeat. Repeats are found
+within one call only: a record that two files hold is counted twice when the
+files are read by separate calls.
+
+The fields come from wherever the workload puts them: the source IP from
+`ClientIP`, `ClientIPAddress` or `ActorIpAddress`, without a port or brackets
+and with an IPv4-mapped address unmapped; the user agent from `UserAgent`, from
+`ExtendedProperties` (also inside its `additionalDetails`) or from
+`ClientInfoString`; the session from `SessionId`, `AppAccessContext.AADSessionId`
+or `DeviceProperties`. An actor or mailbox that is a user principal name is stored
+in lower case, because the workloads write one user in different case. For a
+sign-in, the action is the application signed in to
+and the target the resource. `country` is the sign-in record's own; nothing looks
+an address up.
+
+`cloudlog.<type>.summary` (`summary_source`) is computed from the events, with
+no model involved, one tab-separated fact per line:
+
+| Line | Content |
+|------|---------|
+| `user` | per user, each source IP, user agent and session: first seen, events, last seen |
+| `session` | a session seen from more than one source IP, with each address's events and times (loopback addresses, which Exchange records for its own work, are not counted) |
+| `persistence` | an operation that leaves access behind or hides it, with its parameters folded into one object: inbox rules, mailbox forwarding, mailbox permissions, application consent, application credentials, a registered sign-in method, audit logging changes, transport rules. Operations by Exchange's own service account are counted, not listed |
+| `mailbox` | MailItemsAccessed per mailbox, `Sync` and `Bind` apart: events, messages listed, throttled records, folders, who, source IPs, sessions (`m365` only) |
+| `WARNING` | a file whose unified audit record count is exactly 100, 5,000, 10,000, 50,000 or 1,000,000, the sizes at which `Search-UnifiedAuditLog` (100 when no `ResultSize` is given) and the Purview export stop: it is probably incomplete. The rows of a CSV count whether or not they could be read. Also returned as `export_warnings` |
+
+Sign-in summaries have `user` and `session` lines, audit summaries `user` and
+`persistence` lines. Each section is capped and says when it was, with the
+`log_top` or `log_rows` call that covers the rest: 50 users (first those named in
+a listed persistence line, then those named in a listed session line, then those
+with the most source IPs), the
+10 least frequent values per user and field, 200 sessions, 200 mailboxes, and
+the newest 40 operations of each kind, so that many of one kind cannot push
+another off the list; the section's first line counts every kind. A line is at
+most 4,000 characters, which fits one window of the index: a value in a list is
+cut at 120 characters and a longer line ends in `…`. `summary` in the result
+gives the section counts.
+
+Default Sigma rules for `m365` are SigmaHQ's `rules/cloud/m365/audit` (the two
+that match raw audit records) and eight of mulder's own: inbox rule created or
+changed, mailbox forwarding set, mailbox permission granted, application consent
+granted, credentials added to an application or service principal,
+authentication method registered, audit logging bypassed or disabled, and
+transport rule created or changed. The rules that match Exchange cmdlets leave
+out Exchange's own service account (`NT AUTHORITY\SYSTEM ...`). The two Entra
+types have no default rules (`sigma` says so); their `persistence` lines list
+the same operations. A Sigma scan sees `Parameters` and the other name/value
+arrays as one JSON text per record.
 
 **Roles:** `EXTRACT_EXECUTOR`
 
@@ -1259,6 +1541,10 @@ RFC 2047 encoded headers are decoded, quoted recipient names are preserved,
 HTML-only messages get a searchable text body, and named inline MIME parts count
 as attachments.
 
+A `.pst` or `.ost` file in the evidence directory, or unpacked from an archive,
+is classified as `mailbox`: the planner is given its path with this tool, and
+`audit_tool_coverage` reports a mailbox it was not run on.
+
 **Roles:** `EXTRACT_EXECUTOR`
 
 ---
@@ -1566,7 +1852,8 @@ Retrieve IOC data carved by bulk_extractor from the case database.
 ### Log tables
 
 `search` finds text in a log; it cannot count. Logs that an extractor also loads as rows
-(today `run_cloud_audit_logs`: `cloudlog.github`, `cloudlog.gcp`, `cloudlog.aws`; and
+(today `run_cloud_audit_logs`: `cloudlog.github`, `cloudlog.gcp`, `cloudlog.aws`,
+`cloudlog.m365`, `cloudlog.entra_signin`, `cloudlog.entra_audit`; and
 `run_loose_logs`: `logs.web`, `logs.firewall`, `logs.zeek.*`, `logs.suricata.*`,
 `logs.esxi`, `logs.syslog`) can be counted with the four tools below. A row has a UTC time, the fields `actor`, `src_ip`,
 `action`, `target`, `status`, `user_agent`, `session_id` and `bytes` where the log has
@@ -1722,9 +2009,11 @@ Extract a file from the disk image by inode number using TSK icat.
 |-----------|------|----------|-------------|
 | inode | int | yes | Inode number of the file to extract |
 | filesystem_type | str \| None | no | TSK filesystem type (auto-detected if omitted) |
-| image_path | str \| None | no | Path to the specific disk image (required for multi-image cases) |
+| image_path | str \| None | no | Path to the specific disk image (required for multi-image cases), or the triage collection directory whose listing the inode is a row of |
 
 **Returns:** text files: `source_name`, `windows_indexed`; binary files: `sha256`, `size_bytes`
+
+The inode column of a triage collection's listing is a row number. When the case holds a collection beside another file listing and `image_path` is omitted, the call is refused (`image_path_required`) rather than reading that number from a disk image.
 
 **Roles:** `EXTRACT_EXECUTOR`
 
@@ -1739,6 +2028,8 @@ Return file metadata (MAC times, size, blocks) for an inode using TSK istat.
 | image_path | str \| None | no | Path to the specific disk image (required for multi-image cases) |
 
 **Returns:** `source_name`, `windows_indexed`
+
+A triage collection has no inode metadata: for one, the call returns `not_applicable` and says where the original timestamps are.
 
 **Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR`
 
@@ -1942,6 +2233,54 @@ Cross-reference PCAP network events with host artifacts.
 **Returns:** `results[]` (type, matched_ips[], pid, process)
 
 **Roles:** `CROSS_EXECUTOR`
+
+### find_encryption_activity
+
+Find bursts of file renames to one extension that may be ransomware encryption.
+
+Reads the indexed change journal (`ez.usnjrnl`, from `run_usn_parser`), and the MFT (`ez.mft`) when no journal is indexed or the journal holds no candidate: the journal is a ring, and encryption older than its first record is still in the MFT. A burst is a run of minutes in which at least 50 files (not rename records) were renamed to the same extension, plus the slower minutes up to two minutes either side, which hold a run's first and last seconds. Every burst of an extension on a volume is reported as one candidate (`active_periods` lists them), so a run that pauses on large files is one run and starts where it started. A burst becomes a candidate when it carries a signal: the extension follows three or more kinds of data file on at least half the burst's files (`extension_appended`), a known ransom note name was created in two or more directories (`known_note_name`), or, from the journal only, the MFT shows no file with the extension before the burst and the same file was created in five or more directories (`extension_new_to_volume` with `repeated_file_across_directories`). Thresholds are named constants in `composite/ransomware.py`, set against the journal of a real WannaCry infection in which Windows servicing renamed seven times more files a minute than the ransomware.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| image_path | str | no | Analyse only this image (path or file name, as passed to `run_usn_parser`); empty analyses every indexed volume |
+
+Each indexed volume is analysed on its own rows. With more than three volumes, the three where a candidate begins earliest are returned in full and the rest as one line each (`volumes_in_brief`); every volume is indexed in full.
+
+**Returns:** `results.volumes[]`, each with `evidence`, `basis` (`usn_journal` or `mft`), `records_examined`, `journal_window`, `journal_note` (when a journal is indexed but the candidates come from the MFT), `candidates[]` (at most 3; more are counted in `candidates_not_listed` and named in `candidates_not_listed_first[]`), `busiest_periods[]` (the 3 largest bursts of any kind), counts of bursts found and not examined, and `rows_unparsed`; plus `results.caveats[]` and `missing_sources[]`. A candidate carries `extension`, `first_time`, `last_time`, `duration_seconds`, `files_affected`, `peak_files_per_minute`, `active_periods[]`, `signals[]`, `appended_to_extensions`, `appended_share`, `original_extensions[]`, `related_extensions[]`, `directories_affected`, `top_directories[]`, `first_directories[]`, `note_candidates[]`, `note_excerpt` (at most 1,200 characters, read with a bounded `icat` from up to three copies in the burst's own directories, keeping the one most like a known note) or `note_not_read`, `family_hints[]`, `mft_cross_check`, `starts_at_journal_start`, `older_than_journal` and `inspect_with` (a `search` call that returns rows of the burst). Indexed as `composite.encryption_activity`.
+
+**What it does not establish:** a candidate is a lead. Compression, backup and bulk renames give many files one new extension too, and neither source names the process or the account. No candidate is not no encryption: in-place encryption, a different extension per file and a rate under the threshold are not flagged. The journal pass counts renames, so ransomware that creates each file under its new name and deletes the original (Dharma, Phobos), like activity older than the journal, is found only from the MFT; without an indexed MFT it is not flagged, and it shows only under `busiest_periods`. A slow start or tail more than two minutes from a burst is outside `first_time` and `last_time`.
+
+**Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR` `NARRATIVE_EXECUTOR`
+
+### ransomware_family_hints
+
+Suggest ransomware families for a file extension, a ransom note name or note text, offline.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| extension | str | no | Extension added to encrypted files, e.g. `.lockbit` |
+| note_name | str | no | File name of the ransom note |
+| note_text | str | no | Text of the ransom note |
+
+At least one is required. The extension is looked up in Splunk's `ransomware_extensions_lookup.csv` (vendored under `server/data/ransomware`, Apache-2.0). The note name is checked against Splunk's `ransomware_notes_lookup.csv`, which has no family column and so only says the name is a known ransom note name, and against the file names in the ThreatLabz ransom note corpus (the `ransomware-notes` asset, MIT). The note text is compared to that corpus by word-sequence similarity, best note per family.
+
+**Returns:** `hints[]` (family, basis, score, detail; at most 5), `hints_found`, `known_note_name`, `caveat`, and `corpus` when the corpus is not installed. A score only ranks the hints. Families share extensions, note names and note templates, so a hint is a family to check, never an identification.
+
+**Roles:** `EXTRACT_ANALYST` `CROSS_ANALYST` `NARRATIVE_ANALYST` `CROSS_EXECUTOR`
+
+### find_remote_access_tools
+
+Find remote access and management tools (AnyDesk, TeamViewer, ScreenConnect and several hundred others).
+
+Matches the executable names and domains in the LOLRMM catalog (the `lolrmm` asset, Apache-2.0, pinned to a commit) against the indexed file listing, Prefetch, Amcache, ShimCache, registry, autoruns and DNS/HTTP/TLS sources. Names that are not a tool's own are left out: stems under four characters, names four or more catalog tools share, and a short list of Windows and common-software names; `mstsc.exe` and `quickassist.exe` count only where they ran, not where they sit on disk. A program counts as run from Prefetch only by the `ExecutableName` of its own Prefetch file, not by appearing among the files another program loaded. Logs of AnyDesk (`ad.trace`, `ad_svc.trace`, `connection_trace.txt`), TeamViewer, Splashtop, ScreenConnect and RustDesk found on the image are read (the newest 8 MiB of each) and indexed as `rmm.<tool>.<file>.<inode>`, one source per file, so each user profile's log is searchable. At most 20 log files are listed, the tools taking turns; deleted ones are listed and not read.
+
+*No parameters.*
+
+**Returns:** `results.tools_found`, `results.tools[]` (at most 12: tool, matched names, and per source the evidence path, line count and one sample line), `tools_not_listed[]`, `tool_logs[]` (tool, path, source, bytes indexed, `truncated`, `external_addresses[]` with one sample line each, or `not_read`), `tool_logs_not_read` (log files found beyond those listed), `sources_searched[]`, `what_a_source_establishes{}`, `caveats[]`, `missing_sources[]`. Indexed as `composite.remote_access_tools`.
+
+**What it does not establish:** presence is not abuse; these are common IT tools. Abuse is established by installation or first run inside the incident window, by a compromised account, or by a session in the tool's own log from an address the organisation does not use. A match is a file name or a domain: unrelated software can share a name.
+
+**Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR` `NARRATIVE_EXECUTOR`
 
 ---
 
@@ -2235,6 +2574,7 @@ Extract a SQLite database from a disk image and run a SQL query.
 | inode | int | yes | Inode number of the SQLite database |
 | query | str | yes | SQL SELECT query to execute |
 | description | str | no | Label for the indexed source name |
+| image_path | str \| None | no | The disk image or triage collection directory whose listing the inode came from; needed only when the case holds a collection beside another file listing |
 
 **Returns:** `source` (sqlite.\<description\>), `result_count`
 
@@ -2397,6 +2737,21 @@ Generate the final investigation report from all submitted findings.
 
 **Roles:** `REPORT`
 
+### resolve_question
+
+Record how an investigation question was resolved and what the answer rests on. The orchestrator stores each plan's questions in the case database; question ids (`q_1a2b3c4d`) prefix the questions the analyst is given, and `get_investigation_summary` lists the open ones. `answered` must name at least one finding that is not `[NEGATIVE]` or `[COLLECT]`; `ruled_out` must name at least one `[NEGATIVE]` finding. To count, a named finding must exist, be that kind, and cite only logged, successful calls to tools other than the findings tools; at least one of those calls must be to a tool that extracts, searches or reads evidence, so a finding that cites only bookkeeping (`open_case`, `list_sources`, `get_investigation_summary`, `get_ioc_summary`, `get_bookmarks`, the audits, job polling) answers nothing and rules nothing out. Other ids named alongside one that counts are ignored and listed in the response. `undetermined` needs a reason. The id is accepted with or without the square brackets it is displayed in. A resolution holds only while a finding it names still exists and is still that kind; otherwise the question is open again. Calling again replaces the earlier resolution. `ruled_out` records that the sources examined did not show something, not that it did not happen.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| question_id | str | yes | The question to resolve |
+| resolution | str | yes | "answered", "ruled_out" or "undetermined" |
+| finding_ids | list[str] \| None | no | Findings the answer rests on; required for "answered" and "ruled_out", ignored for "undetermined" |
+| reason | str | no | Required for "undetermined": what evidence is missing (kept to 1,000 characters) |
+
+**Returns:** `question_id`, `resolution`, `finding_ids[]` (the findings the resolution was recorded against), `open_questions` (count still open), and `ignored_finding_ids` (the first 10 named ids that did not count, each with the reason) when there are any
+
+**Roles:** `EXTRACT_ANALYST` `CROSS_ANALYST` `NARRATIVE_ANALYST` `REPORT`
+
 ---
 
 ## 18. Review & Audit
@@ -2407,7 +2762,7 @@ Return a compact progress dashboard for the current investigation.
 
 *No parameters.*
 
-**Returns:** `sources_indexed`, `findings_submitted`, `findings_by_severity{}`, `remaining_work[]`, `ready_to_finalize`
+**Returns:** `sources_indexed`, `findings_submitted`, `findings_by_severity{}`, `remaining_work[]`, `ready_to_finalize`. When investigation questions were recorded, also `questions{}` (recorded, open, answered, ruled_out, undetermined), `open_questions[]` (question_id, phase, system, question; the 15 oldest across every phase and system, each cut to 200 characters, with `open_questions_note` when there are more), `significant_findings` (findings of activity at medium severity or above) and `no_incident: true` when every question is resolved and at least one is answered or ruled out, both audits have run, there are fewer than three findings of activity and none is medium or above.
 
 **Roles:** `EXTRACT_ANALYST` `CROSS_PLANNER` `CROSS_ANALYST` `NARRATIVE_PLANNER` `NARRATIVE_ANALYST` `REPORT`
 

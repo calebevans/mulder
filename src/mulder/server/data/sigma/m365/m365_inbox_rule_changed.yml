@@ -1,0 +1,27 @@
+title: Microsoft 365 Inbox Rule Created Or Changed
+id: 9f7fd436-ceda-468a-9239-8a990b5f6384
+status: experimental
+description: Detects an inbox rule being created or changed (New-InboxRule, Set-InboxRule, or UpdateInboxRules from a mail client). Intruders use rules to forward mail out or to hide replies and security notices from the owner.
+references:
+    - https://learn.microsoft.com/en-us/purview/audit-log-activities
+    - https://learn.microsoft.com/en-us/defender-office-365/responding-to-a-compromised-email-account
+author: mulder
+date: 2026-11-18
+tags:
+    - attack.defense-evasion
+    - attack.t1564.008
+    - attack.collection
+    - attack.t1114.003
+logsource:
+    product: m365
+    service: audit
+detection:
+    selection:
+        Operation:
+            - 'New-InboxRule'
+            - 'Set-InboxRule'
+            - 'UpdateInboxRules'
+    condition: selection
+falsepositives:
+    - Users organising their own mail
+level: medium

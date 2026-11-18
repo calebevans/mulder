@@ -42,7 +42,9 @@ OUTPUT REQUIREMENTS:
   NetFlow (nfdump "nfcapd.*" files, type "netflow_capture": the exporter
   directory is the system, platform "Network"; its "name" MUST be that
   directory's name exactly as it appears in the path, e.g. "edge-router", not a
-  description), cloud audit log (type "cloud_audit_log", platform "Cloud"),
+  description), cloud audit log (type "cloud_audit_log", platform "Cloud";
+  Microsoft 365 and Entra ID exports are of this type, as JSON or CSV),
+  mailbox file (Outlook .pst or .ost, type "mailbox"),
   repository checkout (type "repository", platform "CI"), CI run logs (type
   "ci_run_logs", platform "CI"), as scan_evidence labels them,
   event logs, phone dump (Android/iOS), compressed archive, log directory,
@@ -54,6 +56,9 @@ OUTPUT REQUIREMENTS:
   top of the evidence directory, the file name without its extension), so
   later phases can find it. Say which organization, project, account or
   repository it covers in "description".
+- A mailbox file in a host's directory belongs to that host. One exported from
+  a mail service follows the rule above (platform "Cloud"), together with any
+  audit logs in the same directory.
 - Loose logs (types "log_file" and "log_directory": web server, VPN,
   firewall, Zeek, Suricata and syslog files) and ESXi support bundles (type
   "esxi_bundle", platform "ESXi") belong to the system whose directory holds
@@ -62,6 +67,17 @@ OUTPUT REQUIREMENTS:
   export, a sensor's logs, a hypervisor bundle), give that device its own
   system, named after the directory that holds them in the same way
   (platform "Network" for a firewall, VPN gateway or sensor).
+- A triage collection (type "triage_collection": KAPE target output, a
+  Velociraptor offline collection, UAC output or a Windows volume directory,
+  as scan_evidence and extract_archive label it) is the files copied from ONE
+  live system. Give it one system, however many files it holds, with
+  "triage_collection" in "evidence". Its "name" MUST be the host name shown
+  after "host" in its label when there is one, otherwise the name of the
+  collection's directory exactly as it appears in the path. "type" is Windows
+  for KAPE and for a Windows volume directory; for Velociraptor and UAC use
+  the platform the paths and names show, or Unknown. A memory_dump listed
+  inside the collection's directory (a crash dump the collector copied)
+  belongs to that same system.
 
 FINAL OUTPUT (MANDATORY):
 Your FINAL message MUST be ONLY valid JSON. No text before or after it.

@@ -12,6 +12,7 @@ import os
 import re
 import time
 from collections import defaultdict
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from mulder.db import CaseDB
@@ -22,6 +23,7 @@ from mulder.extractors.classifier import (
     EvidenceClassifier,
     loose_log_targets,
 )
+from mulder.models import Finding, Question
 from mulder.patterns import (
     EMAIL_RE,
     IP_RE,
@@ -31,6 +33,7 @@ from mulder.patterns import (
     classify_ip,
     source_is_cited,
 )
+from mulder.questions import SIGNIFICANT_SEVERITIES, no_incident, open_questions, statuses
 from mulder.server.app import get_cfg, get_ctx, mcp
 from mulder.server.helpers import hash_output, make_tool_call_id
 from mulder.server.tool_access import ANALYSTS, Role, tool_access
@@ -79,6 +82,9 @@ _EVIDENCE_TOOL_MAP: dict[str, list[str]] = {
     "esxi_bundle": [
         "run_loose_logs",
     ],
+    "mailbox": [
+        "parse_pst",
+    ],
     "evtx": [
         "run_evtx_parser",
         "run_hayabusa",
@@ -101,12 +107,20 @@ _EVIDENCE_TOOL_MAP: dict[str, list[str]] = {
         "run_fls",
         "run_bulk_extractor",
     ],
+    # A directory of collected files, read where a disk image would be. Which
+    # artifact parsers apply depends on what was collected, so only the tool
+    # that always does is audited (it also writes the file listing).
+    "triage_collection": [
+        "index_triage_collection",
+    ],
 }
 
 # Types audited inside the case's extracted-archives directory as well as in
 # the evidence root. Disk and memory images found there are handled by their
 # own planner listings and stay out, as before.
-_UNPACKED_EVIDENCE_TYPES = frozenset({"cloud_audit_log", "repository", "ci_run_logs"})
+_UNPACKED_EVIDENCE_TYPES = frozenset(
+    {"cloud_audit_log", "repository", "ci_run_logs", "mailbox", "triage_collection"}
+)
 
 # Parameters that name the evidence a mapped tool reads. Output locations
 # such as extract_to and auxiliary inputs such as ssl_keylog_path are left
@@ -117,6 +131,8 @@ _EVIDENCE_INPUT_PARAMS: dict[str, tuple[str, ...]] = {
     "run_secret_scan": ("evidence_path",),
     "run_workflow_audit": ("evidence_path",),
     "run_loose_logs": ("evidence_path",),
+    "parse_pst": ("file_path",),
+    "index_triage_collection": ("evidence_path",),
     "run_volatility": ("memory_path",),
     "run_volatility_batch": ("memory_path",),
     "run_fls": ("image_path",),
@@ -275,7 +291,8 @@ def audit_tool_coverage() -> dict[str, object]:
     skipped. Re-classifies the evidence directory and compares applicable
     tools against the audit log. A call counts for an evidence item only
     when one of the tool's evidence-input parameters names that item or a
-    directory holding it; a path that matches no item counts for none.
+    directory holding it; a path that matches no item counts for none, and
+    so does a run_cloud_audit_logs call that returned an error.
     Tools that can pick their input themselves count by name only while
     none of their calls names an input path or a source image.
 
@@ -336,6 +353,10 @@ def audit_tool_coverage() -> dict[str, object]:
     for entry in ctx.audit.tool_call_entries():
         params = entry.get("params")
         tool_name = str(entry.get("tool_name"))
+        # A run_cloud_audit_logs call that failed indexed nothing: a path over the size
+        # one call reads is refused whole. It is no coverage of the files under that path.
+        if tool_name == "run_cloud_audit_logs" and entry.get("status") == "error":
+            continue
         hits = targets[tool_name]
         if not isinstance(params, dict):
             continue
@@ -462,7 +483,9 @@ def check_finalize_readiness() -> dict[str, object]:
     sources = ctx.db.get_sources()
     audit_summary = ctx.audit.summary()
 
-    gate_results = _evaluate_finalize_gates(findings, case_metadata, sources, audit_summary)
+    gate_results = _evaluate_finalize_gates(
+        findings, case_metadata, sources, audit_summary, ctx.db.get_questions()
+    )
     all_passed = all(g["passed"] for g in gate_results)
 
     if all_passed:
@@ -564,7 +587,9 @@ def get_investigation_summary() -> dict[str, object]:
     compaction to recover overall investigation state. No prerequisites.
 
     Returns sources indexed, findings by severity, finalize readiness
-    gates, and a remaining_work checklist of outstanding tasks.
+    gates, and a remaining_work checklist of outstanding tasks. When the
+    planners' investigation questions were recorded, also returns how many
+    are resolved and lists the open ones with the ids resolve_question takes.
     """
     ctx = get_ctx()
     tc_id = make_tool_call_id()
@@ -591,8 +616,11 @@ def get_investigation_summary() -> dict[str, object]:
 
     case_metadata = ctx.db.get_case_metadata()
     audit_summary = ctx.audit.summary()
+    questions = ctx.db.get_questions()
 
-    gate_results = _evaluate_finalize_gates(findings, case_metadata, sources, audit_summary)
+    gate_results = _evaluate_finalize_gates(
+        findings, case_metadata, sources, audit_summary, questions
+    )
     all_passed = all(g["passed"] for g in gate_results)
     blockers: list[str] = [f"{g['name']}: {g['detail']}" for g in gate_results if not g["passed"]]
 
@@ -644,7 +672,65 @@ def get_investigation_summary() -> dict[str, object]:
         "finalize_blockers": blockers if blockers else "none",
         "elapsed_ms": round(elapsed, 1),
         **({"invalid_findings": invalid} if invalid else {}),
+        **_question_summary(questions, findings, non_negative, tool_counts),
     }
+
+
+_MAX_OPEN_QUESTIONS_SHOWN = 15
+_MAX_QUESTION_CHARS_SHOWN = 200
+
+
+def _question_summary(
+    questions: Sequence[Question],
+    findings: Sequence[Finding],
+    non_negative: Sequence[Finding],
+    tool_counts: Mapping[str, int],
+) -> dict[str, object]:
+    """The investigation-question part of the summary; empty with no questions.
+
+    Bounded for small context windows: at most ``_MAX_OPEN_QUESTIONS_SHOWN``
+    open questions, each cut to ``_MAX_QUESTION_CHARS_SHOWN`` characters, and
+    the response says when there are more. Resolved ones are only counted.
+    """
+    if not questions:
+        return {}
+    status = statuses(questions, findings)
+    still_open = open_questions(questions, findings)
+    listed: list[dict[str, str]] = []
+    for q in still_open[:_MAX_OPEN_QUESTIONS_SHOWN]:
+        text = q.question
+        if len(text) > _MAX_QUESTION_CHARS_SHOWN:
+            text = text[:_MAX_QUESTION_CHARS_SHOWN] + "... [truncated]"
+        entry = {
+            "question_id": q.question_id,
+            "phase": q.phase,
+            "system": q.system,
+            "question": text,
+        }
+        if q.resolution:
+            entry["note"] = (
+                f"Was {q.resolution}, but the finding(s) it named no longer exist or changed "
+                "kind. Resolve it again."
+            )
+        listed.append(entry)
+    summary: dict[str, object] = {
+        "questions": {
+            "recorded": len(questions),
+            **{s: status.count(s) for s in ("open", "answered", "ruled_out", "undetermined")},
+        },
+        "open_questions": listed,
+        # Findings of activity at medium severity or above: with any of these
+        # the case is not a no-incident one, however its questions resolve.
+        "significant_findings": sum(f.severity in SIGNIFICANT_SEVERITIES for f in non_negative),
+    }
+    if len(still_open) > len(listed):
+        summary["open_questions_note"] = (
+            f"Showing {len(listed)} of {len(still_open)} open questions, oldest first, from "
+            "every phase and system. The others are listed once these are closed."
+        )
+    if no_incident(questions, findings, tool_counts):
+        summary["no_incident"] = True
+    return summary
 
 
 _URL_RE = re.compile(r"https?://[^\s\"'>]+")

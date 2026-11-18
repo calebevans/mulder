@@ -10,8 +10,11 @@ from __future__ import annotations
 import json
 import logging
 import re
+import subprocess
 import threading
 import time
+from collections import deque
+from collections.abc import Iterator
 from datetime import datetime
 from typing import Any
 
@@ -20,9 +23,11 @@ from mulder.server import source_names as _sn
 from mulder.server.app import get_ctx
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
+    cli_path,
     extract_pid,
     hash_output,
     make_tool_call_id,
+    require_binary,
 )
 
 logger = logging.getLogger(__name__)
@@ -46,6 +51,8 @@ _TOOL_SOURCE_MAP: dict[str, str] = {
     "analyze_execution_timeline": "composite.timeline",
     "assess_recovery": "composite.recovery",
     "correlate_pcap_with_host": "composite.pcap_correlation",
+    "find_encryption_activity": "composite.encryption_activity",
+    "find_remote_access_tools": "composite.remote_access_tools",
 }
 
 # ---------------------------------------------------------------------------
@@ -394,6 +401,86 @@ def _parse_event_time(ts: str | None) -> datetime | None:
         return datetime.fromisoformat(ts)
     except (ValueError, TypeError):
         return None
+
+
+def iter_source_text(source: SourceRow, page: int = 500) -> Iterator[str]:
+    """Yield one source's window texts in file order, a page of windows at a time.
+
+    Reads by ``source_id``, so on a multi-image case a name shared by several
+    images (``tsk.filelist``, ``ez.mft``) yields only this image's rows, and a
+    source of any size costs one page of memory.
+    """
+    ctx = get_ctx()
+    after = 0
+    while True:
+        windows, _total = ctx.db.get_windows_page(
+            None, after_id=after, limit=page, source_ids=[source.source_id or 0]
+        )
+        if not windows:
+            return
+        for window in windows:
+            yield window.raw_text
+        after = windows[-1].window_id or after + page
+
+
+_INODE_RE = re.compile(r"[0-9]+(?:-[0-9]+-[0-9]+)?")  # ASCII digits only; \d takes any script
+_ICAT_TIMEOUT = 60
+_ICAT_CHUNK = 1024 * 1024
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def read_image_file(
+    image_path: str, inode: str, offset: int, limit: int, *, tail: bool = False
+) -> tuple[bytes, bool] | None:
+    """The first *limit* bytes of a file inside a disk image, and whether it held more.
+
+    With *tail*, the last *limit* bytes instead (a log's newest lines): the
+    whole file is streamed through a window of that size. ``icat`` is killed
+    once the limit is reached (head) or after ``_ICAT_TIMEOUT`` seconds, so a
+    file of any size on the image costs about *limit* bytes of memory.
+    Returns None when nothing could be read, or when the end of the file was
+    not reached in time.
+    """
+    if not _INODE_RE.fullmatch(inode) or not require_binary("icat"):
+        return None
+    cmd = ["icat", *(["-o", str(offset)] if offset > 0 else []), cli_path(image_path), inode]
+    try:
+        with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as proc:
+            timer = threading.Timer(_ICAT_TIMEOUT, proc.kill)
+            timer.start()
+            try:
+                if not tail:
+                    data = proc.stdout.read(limit + 1) if proc.stdout else b""
+                    return (data[:limit], len(data) > limit) if data else None
+                window: deque[bytes] = deque(maxlen=limit // _ICAT_CHUNK + 2)
+                total = 0
+                while proc.stdout and (chunk := proc.stdout.read(_ICAT_CHUNK)):
+                    window.append(chunk)
+                    total += len(chunk)
+                if proc.wait() != 0 or not total:
+                    return None
+                return b"".join(window)[-limit:], total > limit
+            finally:
+                timer.cancel()
+                proc.kill()
+    except OSError:
+        return None
+
+
+def decode_evidence_text(data: bytes) -> str | None:
+    """Decode a text file from evidence, or None when it is binary.
+
+    Handles UTF-8 and BOM-marked UTF-16 (Windows tools write both). Control
+    characters other than tab and newline are dropped: the text is shown to a
+    model and to a terminal.
+    """
+    if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        text = data.decode("utf-16", errors="replace")
+    elif b"\x00" in data[:1024]:
+        return None
+    else:
+        text = data.decode("utf-8", errors="replace")
+    return _CONTROL_CHARS_RE.sub("", text.replace("\r\n", "\n").replace("\r", "\n"))
 
 
 def _invalidate_sources_cache() -> None:
