@@ -701,21 +701,31 @@ When mulder scans the evidence it looks at the first sectors of each partition. 
 What to keep in mind when reading the report:
 
 - **The listing is not the export.** `linux.filelist` shows that a file exists, with its owner, size and three timestamps, whether or not it was exported. To read a listed file that was not exported, the analyst asks for it and `export_linux_files` is run again with `paths`.
-- **Password hashes and private keys are never exported**: `/etc/shadow`, `/etc/gshadow`, SSH host and user private keys, TLS private keys. They are listed, and the report should say "not exported" rather than "absent".
+- **Password hashes and private keys are not exported, by their well-known names**: `/etc/shadow`, `/etc/gshadow`, Debian's copies under `/var/backups`, SSH host and user private keys, TLS private keys. They are listed, and the report should say "not exported" rather than "absent". A copy under another name is exported like any file; a private key is still kept out of the index by its first line.
 - **No deleted files.** dfVFS lists allocated files only, and nothing here reads unallocated space except `run_bulk_extractor`.
-- **Volumes are kept apart.** Each volume gets its own directory in the export (`p5_lvm1/`). The one that holds `etc/passwd` is the root; `/home`, `/var` and `/var/log` on a volume of their own are recognised from their top-level names so that their files are exported too, and the result says that this is a guess. Any other separately mounted volume is listed, and its files are exported only when asked for by path.
+- **The export is one tree.** The volume that holds `etc/passwd` is the root. `/home`, `/var`, `/var/log` and `/boot` on a volume of their own are recognised from their top-level names and their files are put at that place in the tree, so `home/alice/.bash_history` is where the tools look for it; the result says that this is a guess. Any other separately mounted volume is listed, sits under a directory named after the volume, and has its files exported only when asked for by path.
+- **An export can be incomplete, and says so.** One file name that is not valid UTF-8 stops dfVFS from reading the rest of its directory. The result then has `status: incomplete`, names the directory under `listing_incomplete` and the files that could not be copied under `not_exported`, and `run_linux_persistence` repeats both. The rest of the volume is listed and exported; only that directory is not examined, and the report should say so.
 - **The persistence sweep is an inventory.** Nearly every row is the distribution's own file. It marks nothing as malicious and does not show that anything ran.
 - **Syslog lines have no year.** plaso takes it from the file's own times; the systemd journal, wtmp and dpkg.log carry full dates.
 
-What cannot be read is said, not skipped: an encrypted (LUKS) volume, btrfs, and a volume group spread over several disks of which the image is one. For those the planner is told to plan `run_mmls` and `run_bulk_extractor` only, and `export_linux_files` names them under `not_read` when it reads the rest of the image.
+What cannot be read is said, not skipped: an encrypted (LUKS) volume, btrfs, and a volume group spread over several disks of which the image is one. What is planned then depends on what else the disk holds:
 
-A Linux image Sleuth Kit can read (ext2/3/4 on a plain partition) is handled as any disk image; `run_linux_persistence`, `index_app_files` and `run_plaso` with `linux_logs` take the image itself.
+| The image holds | What is planned |
+|-----------------|-----------------|
+| LVM or XFS, with or without `/boot` or an EFI partition beside it | the four tools above; `run_fls` and the Windows parsers are not planned |
+| LVM or XFS beside NTFS or exFAT | the usual disk tools for the rest of the image, and the four tools above for the Linux volume |
+| a volume no tool reads, beside a file system Sleuth Kit reads (NTFS, FAT, exFAT, ext2/3/4) | the usual disk tools for the rest of the image; the volume is reported as not examined |
+| nothing but a volume no tool reads | `run_mmls` and `run_bulk_extractor` only |
 
-A directory that holds a Linux file tree is recognised by its `etc/passwd`: an unpacked root file system, the `[root]` of a UAC collection, a Velociraptor collection of a Unix host. It is one evidence item, labelled `Linux file tree` with the name from `etc/hostname`, and the three tools above take the directory.
+`export_linux_files` and `run_plaso` pass an encrypted partition by and read the others, naming it under `not_read`; when the encrypted volume is all there is, the call is an error that says so.
+
+A Linux image Sleuth Kit can read (ext2/3/4 on a plain partition) is handled as any disk image; `run_linux_persistence`, `index_app_files` and `run_plaso` with `linux_logs` take the image itself. Each image is read through its own file listing: with several images in a case, one never borrows another's.
+
+A directory that holds a Linux file tree is recognised by its `etc/passwd`: an unpacked root file system, the `[root]` of a UAC collection, a Velociraptor collection of a Unix host. It is one evidence item, labelled `Linux file tree` with the name from `etc/hostname`, and the three tools above take the directory. No file in such a tree changes that: mulder's own exports are told apart by where they are (a hidden directory under the case's extraction directory), never by a file an intruder could have left on the system.
 
 ```
 evidence/
-  web01.E01            LVM: exported to <cases>/extracted/<case>/web01.E01.files-<digest>/
+  web01.E01            LVM: exported to <cases>/extracted/<case>/.linux-exports/web01.E01-<digest>/files/
   db02-rootfs/         a Linux file tree: etc/, var/, home/, ...
   uac-app03-linux-20261112093000.tar.gz
 ```
