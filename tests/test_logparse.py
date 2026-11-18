@@ -717,9 +717,17 @@ def test_which_files_are_taken_for_esxi_logs() -> None:
     assert isinstance(sniff("collected.log", [hostd, hostd, *dump]), logparse.Esxi)  # by its marks
     assert isinstance(sniff("hostd.1", dump), logparse.Esxi)
     assert isinstance(sniff("notes.txt", dump), logparse.Text)
-    # A Linux file of one of those names is still syslog.
+    # A shell.log is mostly the lines of pasted scripts: one ESXi line says what it is.
+    script = [
+        "2025-05-06T14:12:00Z shell[288199]: [root]: for i in 1 2 3; do",
+        "  echo $i",
+        "done",
+    ]
+    assert isinstance(sniff("shell.log", script), logparse.Esxi)
+    # A Linux file of one of those names is still syslog, whatever one line opens with.
     linux = "Mar  4 12:38:02 web01 sshd[1234]: Accepted password for root from 203.0.113.9"
-    assert isinstance(sniff("auth.log", [linux, linux], _MTIME), logparse.Syslog)
+    stray = "Mar  4 12:38:03 web01 2025-03-04T12:38:03Z app[7]: started"
+    assert isinstance(sniff("auth.log", [linux, linux, stray], _MTIME), logparse.Syslog)
 
 
 def test_unknown_text_is_not_parsed_and_most_lines_decide() -> None:

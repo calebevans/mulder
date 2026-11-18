@@ -348,9 +348,9 @@ class EvidenceContext:
             )
 
         lines.extend(collection)
-        # A path is a name from the evidence: one with a line break in it must not
-        # start a line of its own in the prompt.
-        return "\n".join("".join(c if c.isprintable() else " " for c in line) for line in lines)
+        # A path is a name from the evidence: one with a line break in it (of any of
+        # the kinds str.splitlines knows) must not start a line of its own in the prompt.
+        return "\n".join(" ".join(line.splitlines()) for line in lines)
 
     @staticmethod
     def _collection_lines() -> list[str]:

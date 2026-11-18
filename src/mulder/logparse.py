@@ -865,10 +865,12 @@ def sniff(
         return Web()
     # hostd writes an object over many "-->" lines: they are the rest of one entry, and
     # a file may open with fifty of them. Where the file's name or its place in a
-    # bundle already says ESXi, one line in ESXi's form is enough.
+    # bundle already says ESXi, one line in ESXi's form is enough (a shell.log is
+    # mostly pasted scripts), unless more of the lines are another system's syslog.
     entries = [line for line in lines if not line.startswith("-->")]
     if esxi or name.lower().split(".")[0] in _ESXI_NAMES:
-        if not entries or any(_ESXI.match(line) for line in entries):
+        found = sum(1 for line in entries if _ESXI.match(line))
+        if not entries or (found and found >= sum(map(_is_syslog, entries))):
             return Esxi(name)
     elif _most(entries, _ESXI.match) and any(_ESXI_MARK.search(line) for line in entries):
         return Esxi(name)
