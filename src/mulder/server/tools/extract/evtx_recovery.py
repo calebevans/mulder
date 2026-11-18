@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from mulder.assets.paths import asset_path
 from mulder.extractors.optical import OpticalError, raw_image
 from mulder.server.app import get_ctx, has_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
@@ -27,7 +28,6 @@ from mulder.server.helpers import (
     cli_path,
     error_response,
     make_tool_call_id,
-    require_binary,
     sources_already_indexed,
     tool_response,
 )
@@ -84,8 +84,22 @@ _INTERPRETATION = (
 _NOT_COMPARED = (
     "No extracted live logs were available to compare with, so [carved] records "
     "include any that are still in the live logs. For a disk image, run "
-    "run_evtx_parser on it first, then this tool with force=True."
+    "run_evtx_parser on it first (with force=True if it reports the image as "
+    "already extracted), then this tool with force=True."
 )
+
+
+def _evtx_dump_binary() -> str | None:
+    """The evtx_dump that ``mulder setup`` and the image install, or None.
+
+    Looked up in the asset root only, never on PATH: python-evtx, which mulder
+    depends on, installs a console script called ``evtx_dump`` there, and it
+    is a different program.
+    """
+    candidate = asset_path("evtx-dump", "evtx_dump")
+    if candidate is not None and os.access(candidate, os.X_OK):
+        return str(candidate)
+    return None
 
 
 def _flat(value: object, limit: int = 120) -> str:
@@ -360,12 +374,15 @@ class _Recovery:
         if not isinstance(detail, dict):
             detail = {}
         self.live_log_cleared = self.live_log_cleared or is_live
-        if len(self.cleared) < _MAX_LISTED:
+        log_cleared = _flat(detail.get("Channel") or system["Channel"])
+        # The same record is met again as a stale or carved copy: list it once.
+        known = any(c["time"] == when and c["log_cleared"] == log_cleared for c in self.cleared)
+        if not known and len(self.cleared) < _MAX_LISTED:
             self.cleared.append(
                 {
                     "time": when,
                     "event_id": event_id,
-                    "log_cleared": _flat(detail.get("Channel") or system["Channel"]),
+                    "log_cleared": log_cleared,
                     "by": _flat(detail.get("SubjectUserName") or "?"),
                     "read_from": "live log"
                     if is_live
@@ -461,10 +478,10 @@ def run_evtx_recovery(
             }
             return tool_response(tc_id, _NAME, params, skipped, None, 0.0)
 
-    evtx_dump = require_binary("evtx_dump")
+    evtx_dump = _evtx_dump_binary()
     if not evtx_dump:
         return fail(
-            "evtx_dump not found on PATH",
+            "evtx_dump is not installed in mulder's asset directory",
             "binary_missing",
             "Run 'mulder setup' (installs evtx_dump).",
         )

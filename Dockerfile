@@ -569,8 +569,8 @@ COPY --from=gitleaks-fetch /opt/gitleaks/ /opt/gitleaks/
 RUN ln -sf /opt/gitleaks/gitleaks /usr/local/bin/gitleaks
 COPY --from=zizmor-fetch /opt/zizmor/ /opt/zizmor/
 RUN ln -sf /opt/zizmor/zizmor /usr/local/bin/zizmor
+# Not linked onto PATH: python-evtx installs its own "evtx_dump" script there.
 COPY --from=evtx-dump-fetch /opt/evtx-dump/ /opt/evtx-dump/
-RUN ln -sf /opt/evtx-dump/evtx_dump /usr/local/bin/evtx_dump
 COPY --from=chainsaw-fetch /opt/chainsaw/ /opt/chainsaw/
 RUN ln -sf /opt/chainsaw/chainsaw /usr/local/bin/chainsaw
 COPY --from=chainsaw-fetch /opt/sigma-rules/ /opt/sigma-rules/

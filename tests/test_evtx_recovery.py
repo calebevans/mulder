@@ -28,6 +28,7 @@ from mulder.server.tools.extract.evtx_recovery import run_evtx_recovery
 _HEADER = b"ElfFile\x00".ljust(4096, b"\x00")
 _CHUNK = 65536
 _SIGNATURE = b"ElfChnk\x00"
+_BINARY = "/opt/evtx-dump/evtx_dump"
 _T = "2024-03-01T10:00:0{}.0000000Z"
 
 
@@ -113,7 +114,7 @@ class _FakeEvtxDump:
 def _recover(target: Path | str, **kwargs: Any) -> dict[str, Any]:
     _FakeEvtxDump.calls = []
     with (
-        patch.object(evtx_recovery, "require_binary", return_value="/usr/bin/evtx_dump"),
+        patch.object(evtx_recovery, "_evtx_dump_binary", return_value=_BINARY),
         patch("mulder.server.tools.extract.evtx_recovery.subprocess.Popen", _FakeEvtxDump),
     ):
         result: dict[str, Any] = run_evtx_recovery.__wrapped__(  # type: ignore[attr-defined]
@@ -145,9 +146,7 @@ def test_recovered_records_are_indexed_per_channel_marked_and_in_time_order(
 
     summary = _recover(log)["results"]
 
-    assert _FakeEvtxDump.calls == [
-        ["/usr/bin/evtx_dump", "--recover-records", "-o", "jsonl", str(log)]
-    ]
+    assert _FakeEvtxDump.calls == [[_BINARY, "--recover-records", "-o", "jsonl", str(log)]]
     assert summary["recovered_records"] == 3
     assert summary["earliest_recovered"] == _T.format(1)
     assert summary["latest_recovered"] == _T.format(7)
@@ -277,6 +276,8 @@ def test_a_live_log_that_records_its_own_clearing_is_reported(
             cleared(2, "System", 104, SubjectUserName="mallory", Channel="Windows PowerShell"),
             # Another provider's event 104 in System is not a clearing.
             _rec(3, channel="System", eid=104, provider="Some-Driver"),
+            # A stale copy of the same clearing record is not a second clearing.
+            {**cleared(1, "Security", 1102, SubjectUserName="mallory"), "recovered": True},
         ),
     )
 
@@ -527,12 +528,31 @@ def test_a_path_is_recovered_once_even_when_nothing_was_found(
     assert tool_already_indexed("run_evtx_parser", str(log)) == []
 
 
-def test_a_missing_binary_or_path_is_an_error(case: CaseDB, tmp_path: Path) -> None:
-    assert _recover(tmp_path / "gone.evtx")["error_type"] == "file_not_found"
-    with patch.object(evtx_recovery, "require_binary", return_value=None):
-        missing = run_evtx_recovery.__wrapped__(str(tmp_path))  # type: ignore[attr-defined]
+def test_the_binary_comes_from_the_asset_root_and_never_from_path(
+    case: CaseDB, tmp_path: Path, asset_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """python-evtx, a mulder dependency, installs a console script called
+    ``evtx_dump``. In the container image that script is what PATH finds."""
+    on_path = tmp_path / "bin"
+    on_path.mkdir()
+    (on_path / "evtx_dump").write_text("#!/bin/sh\nexit 0\n")
+    (on_path / "evtx_dump").chmod(0o755)
+    monkeypatch.setenv("PATH", str(on_path))
+
+    missing = run_evtx_recovery.__wrapped__(str(tmp_path))  # type: ignore[attr-defined]
     assert missing["error_type"] == "binary_missing"
     assert "mulder setup" in missing["suggestion"]
+
+    installed = asset_root / "evtx-dump" / "evtx_dump"
+    installed.parent.mkdir()
+    installed.write_text("#!/bin/sh\nexit 0\n")
+    assert evtx_recovery._evtx_dump_binary() is None, "not executable yet"
+    installed.chmod(0o755)
+    assert evtx_recovery._evtx_dump_binary() == str(installed)
+
+
+def test_a_missing_path_is_an_error(case: CaseDB, tmp_path: Path) -> None:
+    assert _recover(tmp_path / "gone.evtx")["error_type"] == "file_not_found"
 
 
 def test_guidance_says_when_to_recover_and_what_recovery_does_not_show() -> None:
@@ -557,4 +577,6 @@ def test_the_binary_is_pinned_for_both_architectures() -> None:
     assert set(asset.digests) == {"amd64", "arm64"}
     # amd64 takes the static build: upstream's x86_64-gnu one needs GLIBC 2.34.
     assert asset.urls["amd64"].endswith(f"evtx_dump-v{asset.version}-x86_64-unknown-linux-musl")
-    assert asset.shims == asset.chmod_x == ("evtx_dump",)
+    assert asset.chmod_x == ("evtx_dump",)
+    # No link onto PATH, where python-evtx's script of the same name lives.
+    assert asset.shims == ()

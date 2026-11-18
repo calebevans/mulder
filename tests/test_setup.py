@@ -297,7 +297,8 @@ class TestProvisioning:
         binary = roots[0] / "evtx-dump" / "evtx_dump"
         assert _by_key(result)["evtx-dump"].status == "installed"
         assert os.access(binary, os.X_OK)
-        assert (roots[1] / "evtx_dump").resolve() == binary.resolve()
+        # Not linked into the shim directory: python-evtx owns that name on PATH.
+        assert not (roots[1] / "evtx_dump").exists()
 
 
 class TestVerify:

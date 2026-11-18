@@ -369,7 +369,8 @@ _ASSETS: tuple[Asset, ...] = (
         pinnable=True,
         size_estimate=4 * _MB,
         chmod_x=("evtx_dump",),
-        shims=("evtx_dump",),
+        # No shim: python-evtx, a mulder dependency, puts its own "evtx_dump"
+        # console script on PATH. run_evtx_recovery reads this one from here.
         validate="none",
         note="event log record recovery after a log was cleared",
     ),

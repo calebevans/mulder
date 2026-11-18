@@ -447,9 +447,10 @@ What it does depends on what `evidence_path` is:
 
 A recovered record is dropped when a live record has the same channel, record
 ID and time. On a disk image the live records are those of the logs
-`run_evtx_parser` extracted from that image, so run that first; without them
-the response says `compared_with_live_logs: false` and `[carved]` records
-include any that are still in the live logs.
+`run_evtx_parser` extracted from that image, so run that first. They are read
+from its extraction directory, which is temporary: when it is gone, or was
+never made, the response says `compared_with_live_logs: false` and `[carved]`
+records include any that are still in the live logs.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -472,8 +473,8 @@ Records are indexed per channel as `evtx_recovered.<channel>` (`evtx_recovered.s
 These are the fields a live log's lines carry when it is indexed without EZ
 Tools (`time | EventID | channel | event`), with the event as JSON. `[recovered]`
 means stale space inside a log; `[carved]` means a chunk found in raw data. The
-channel is the record's own, not the file's name: stale space in one log often
-holds another log's records. `evtx_recovered.summary` is written on every run,
+channel is the record's own, not the file's name: stale space in one log can
+hold another log's records. `evtx_recovered.summary` is written on every run,
 including one that recovered nothing, and lists per channel what was recovered
 beside what is live, the clearing events, and what was cut or not parsed.
 
@@ -495,6 +496,11 @@ the tool returns a timeout and indexes nothing. A search scoped to
 `evtx.<channel>` does not read `evtx_recovered.*`, and neither does a composite
 tool while the live source it queries exists: search the recovered sources by
 name (`source="evtx_recovered"` covers them all).
+
+The binary is the one `mulder setup` and the image install under the asset
+directory (`evtx-dump/evtx_dump`). It is never looked up on `PATH`: python-evtx,
+a mulder dependency, installs a console script of the same name there, and it
+is a different program.
 
 **Roles:** `EXTRACT_EXECUTOR`
 
