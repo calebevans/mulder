@@ -618,7 +618,7 @@ event. Any other JSON is indexed as `cloudlog.generic` and scanned only when
 | sigma_level_filter | Literal['informational', 'low', 'medium', 'high', 'critical'] \| None | no | Minimum Sigma level (default "low") |
 | force | bool | no | Re-run even if these logs were already indexed |
 
-**Returns:** `files_read`, `files_with_problems{}`, `log_types{<type>: events, source, sigma, detections, level_counts{}, rules_matched{}, mitre_coverage{}}`
+**Returns:** `files_read`, `files_with_problems{}`, `log_types{<type>: events, source, log_table, sigma, detections, level_counts{}, rules_matched{}, mitre_coverage{}}`
 
 Events are indexed one per line in `cloudlog.<type>` (time, actor, action,
 source IP, target, raw event) and Sigma matches in `cloudlog.<type>.detections`.
@@ -627,6 +627,20 @@ either way. Default rules are the SigmaHQ `rules/cloud` set for the log type,
 plus mulder's own GCP rules for service account key creation, federated token
 exchange, service account impersonation, IAM policy changes and Secret Manager
 reads.
+
+GitHub, GCP and AWS events are also loaded as rows into a [log table](#log-tables)
+named after the source (`log_table` in the result), so `log_top`, `log_histogram`
+and `log_rows` can count them. Each row has the time, actor, action, source IP and
+target of the text line (for AWS the target is the region), plus:
+
+| Log | Further fields |
+|-----|----------------|
+| AWS | `status` (the `errorCode`; `Failure` when there is only an `errorMessage`; otherwise `Success`), `user_agent`, `session_id` (the access key id), `bytes` (`bytesTransferredOut`), `event_id`, `identity_type`, `account`, `read_only` |
+| GCP | `status` (the `google.rpc` status code, `OK` when there is none), `user_agent`, `event_id` (`insertId`) |
+| GitHub | `user_agent`, `session_id` (`hashed_token`), `event_id` (`_document_id`), `country` |
+
+`cloudlog.generic` gets no table: such an event has a time and nothing to count on.
+A forced re-run replaces the rows it loaded before.
 
 A file that was damaged or truncated, or that held no events, is named in
 `files_with_problems`; complete events before the damage are kept. Events are
@@ -1445,6 +1459,119 @@ Retrieve IOC data carved by bulk_extractor from the case database.
 **Returns:** summary mode: `results[]` (source_name, feature, window_count); detail mode: windowed response
 
 **Roles:** `CROSS_EXECUTOR`
+
+### Log tables
+
+`search` finds text in a log; it cannot count. Logs that an extractor also loads as rows
+(today `run_cloud_audit_logs`: `cloudlog.github`, `cloudlog.gcp`, `cloudlog.aws`) can be
+counted with the four tools below. A row has a UTC time, the fields `actor`, `src_ip`,
+`action`, `target`, `status`, `user_agent`, `session_id` and `bytes` where the log has
+them, and a few log-specific fields (`list_log_tables` names them per table).
+
+`filters` is a list of conditions that must all hold, each
+`{"field": "actor", "op": "eq", "value": "alice"}`:
+
+| op | Meaning |
+|----|---------|
+| `eq`, `ne` | exact, case-sensitive; `ne` also keeps rows that have no value |
+| `in` | `value` is a list of 1 to 50 exact values |
+| `contains`, `prefix` | substring / leading text, ignoring ASCII case; `%` and `_` are ordinary characters |
+| `exists`, `missing` | the row has / does not have the field (no `value`) |
+| `gt`, `ge`, `lt`, `le` | `bytes` only |
+
+`t_start` and `t_end` are inclusive UTC times (`2026-01-31T13:00:00Z`; an offset is
+converted). The model supplies field names and values, never SQL: names are checked
+against the table's own fields and every value is a bound parameter. A field the table
+has no values for is refused with the list of fields it does have.
+
+Every result states `filter_applied` (as understood), `rows_matched`, `rows_in_table`,
+`rows_not_parsed` (records the extractor could not read: they are in no count),
+`rows_without_time`, `truncated`, and `notes[]` saying in words what was left out. The
+rows are indexed as source `logtable.<kind>.<id>`, whose first line is a header with the
+`tool_call_id`, the filter and the counts; cite the call's `tool_call_id` and that source.
+At most about 12,000 characters of rows are returned inline; the rest are in the source.
+An identical query over an unchanged table is not indexed twice: it returns
+`status: "skipped"` with the existing source and the same rows. `force=True` indexes it
+again as `<name>-r<k>`. Stored values are one line of at most 512 characters; a longer
+one ends in `…`. A count is of the records in the table: it says nothing about periods
+or systems the log does not cover.
+
+### list_log_tables
+
+List the log tables of this case: logs loaded as rows that can be counted.
+
+*No parameters.*
+
+**Returns:** `tables[]` (table, rows, rows_without_time, rows_not_parsed, first_time, last_time, fields{name: rows with a value}, loaded_from[] (source_path, rows), ingest_incomplete when loading was cut short)
+
+**Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR`
+
+### log_top
+
+Count log events by the values of one to three fields, with first and last seen.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| table | str | yes | A table name from `list_log_tables` |
+| fields | str \| list[str] | yes | One to three fields to group by |
+| filters | list[dict] \| None | no | Conditions, see above |
+| t_start | str \| None | no | Only events at or after this UTC time |
+| t_end | str \| None | no | Only events at or before this UTC time |
+| n | int | no | Groups to return (default 20, 1..200) |
+| order | str | no | `count` (default), `rare` (least frequent first), `bytes`, `first_seen` (earliest first), `last_seen` (latest first) |
+| force | bool | no | Index the result again (default False) |
+
+**Returns:** `rows[]` (the field values, count, first_seen, last_seen, bytes where the table has byte counts), `groups_total`, `row_count`, and the common fields above (source logtable.top.&lt;id&gt;)
+
+Rows without a value form their own group (`null`), so the counts add up to `rows_matched`.
+
+**Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR`
+
+### log_histogram
+
+Count log events per minute, hour or day, optionally split by one field.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| table | str | yes | A table name from `list_log_tables` |
+| bucket | str | no | `minute`, `hour` (default) or `day` |
+| split_by | str \| None | no | A field to break each bucket down by |
+| filters | list[dict] \| None | no | Conditions, see above |
+| t_start | str \| None | no | Only events at or after this UTC time |
+| t_end | str \| None | no | Only events at or before this UTC time |
+| n | int | no | Buckets to return (default 100, 1..200) |
+| order | str | no | `time` (default, earliest bucket first) or `count` (busiest first) |
+| force | bool | no | Index the result again (default False) |
+
+**Returns:** `rows[]` (bucket, count; with `split_by` also by[] (value, count) and other), `buckets_total`, `matched_without_time`, `row_count`, and the common fields above (source logtable.histogram.&lt;id&gt;)
+
+A bucket is named by its UTC start: `2026-01-31T13` is the hour from 13:00. Buckets with
+no events are not listed, and events without a time are in no bucket. `split_by` lists the
+field's five most frequent values over the whole match and sums the rest as `other`.
+
+**Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR`
+
+### log_rows
+
+Read log events that match a filter, one page at a time, in time order.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| table | str | yes | A table name from `list_log_tables` |
+| filters | list[dict] \| None | no | Conditions, see above |
+| t_start | str \| None | no | Only events at or after this UTC time |
+| t_end | str \| None | no | Only events at or before this UTC time |
+| limit | int | no | Rows to return (default 25, 1..200) |
+| offset | int | no | Rows to skip, for the next page (default 0, 0..100000) |
+| newest_first | bool | no | Latest events first (default False) |
+| force | bool | no | Index the result again (default False) |
+
+**Returns:** `rows[]` (time, the fields that have a value, source, line), `offset`, `row_count`, and the common fields above (source logtable.rows.&lt;id&gt;)
+
+`source` and `line` say where the whole event is in the indexed text. Events without a
+time come last. When `truncated`, the next page is `offset + row_count`.
+
+**Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR`
 
 ---
 

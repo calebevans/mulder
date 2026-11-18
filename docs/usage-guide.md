@@ -35,6 +35,7 @@ Try-it-out instructions for running Mulder, the forensic investigation platform.
     - [Example](#example)
   - [Artifact Awareness](#artifact-awareness)
   - [Cloud Audit Logs](#cloud-audit-logs)
+  - [Counting Over Logs](#counting-over-logs)
   - [CLI Reference](#cli-reference)
     - [`mulder investigate`](#mulder-investigate)
     - [`mulder setup`](#mulder-setup)
@@ -589,7 +590,7 @@ Mulder's agents work offline, so it does not call cloud APIs. Export the audit l
 
 Set the GitHub `created:` date and the gcloud `--freshness` to cover the incident; without a date filter GitHub returns only recent months. `aws cloudtrail lookup-events` output is not recognised; use the S3 log files. Do not put the exports in a directory named `logs` or `log`: mulder treats that as a host log directory and does not look inside for audit logs.
 
-Events land in `cloudlog.github`, `cloudlog.gcp` and `cloudlog.aws`, one per line with time, actor, action, source IP and target ahead of the raw event, so `search` finds them. Sigma matches land in `cloudlog.<type>.detections`. The result names any file that was damaged, truncated or empty.
+Events land in `cloudlog.github`, `cloudlog.gcp` and `cloudlog.aws`, one per line with time, actor, action, source IP and target ahead of the raw event, so `search` finds them. Sigma matches land in `cloudlog.<type>.detections`. The result names any file that was damaged, truncated or empty. The GitHub, GCP and AWS events are also loaded as rows, so they can be counted as well as searched: see [Counting Over Logs](#counting-over-logs).
 
 GCP token exchanges, service account impersonation and Secret Manager reads appear only if Data Access audit logs were enabled for those APIs before the incident. Any other JSON log is indexed as `cloudlog.generic`; pass `ruleset_path` to scan it with your own Sigma rules.
 
@@ -651,6 +652,39 @@ GitHub keeps audit events for about six months and Git events for seven days, so
 ### Evidence that was not provided
 
 When the evidence shows that more evidence exists elsewhere, for example a host image whose user ran a cloud CLI, and the corresponding logs are not in the case, the analyst records it as a `[COLLECT]` finding citing where it saw the trace. These are not counted as findings. The report lists them under **Evidence To Collect**, with the account or project and the time range worth exporting, so you can add the export and run again.
+
+## Counting Over Logs
+
+Search answers "is this string in the log". It does not answer "which source IPs signed in as this user, and how often" or "how many events per hour": the index keeps a log as windows of text, a few events per window, and counting by paging through hits is where a model with a small context window gives up or miscounts.
+
+Logs that mulder parses into events are therefore also loaded as rows into a **log table** in the case database, and four tools count over them:
+
+| Tool | Answers |
+|------|---------|
+| `list_log_tables` | which tables exist, their rows, time range and fields |
+| `log_top` | the most (or least) frequent values of one to three fields, with count, first seen, last seen and a byte sum where the log has one |
+| `log_histogram` | events per minute, hour or day, optionally split by one field |
+| `log_rows` | the matching events themselves, a page at a time, in time order |
+
+Today `run_cloud_audit_logs` fills `cloudlog.github`, `cloudlog.gcp` and `cloudlog.aws` (and so does `collect_cloud_audit_logs`, which indexes through it). For example, on a CloudTrail export:
+
+```
+log_top(table="cloudlog.aws", fields=["src_ip"],
+        filters=[{"field": "actor", "op": "contains", "value": "user/backup"}])
+log_histogram(table="cloudlog.aws", bucket="hour",
+              filters=[{"field": "src_ip", "op": "eq", "value": "203.0.113.9"}])
+log_rows(table="cloudlog.aws", t_start="2026-11-10T12:00:00Z", t_end="2026-11-10T13:00:00Z",
+         filters=[{"field": "status", "op": "ne", "value": "Success"}])
+```
+
+The model names fields and gives values; it never writes SQL, and nothing it supplies becomes part of a statement. Every result says which filter was applied, how many rows matched out of how many in the table, how many records could not be parsed, and whether the answer was cut short, and is indexed under its own `logtable.*` source so a finding can cite it. The full reference, with the filter operators, is in the [Tool Manifest](tool-manifest.md#log-tables).
+
+What a count does and does not tell you:
+
+- It counts the records that were exported, parsed and loaded. A service that was not logging, a window the export did not cover, and records listed under `rows_not_parsed` are not in it.
+- Values are compared as written: `Alice@example.com` and `alice@example.com` are two actors unless you filter with `contains`.
+- The same file reached through two different evidence paths is loaded twice; `list_log_tables` shows each path and its rows under `loaded_from`. A forced re-run of the same path replaces its rows.
+- A stored value is one line of at most 512 characters (a longer one ends in `…`), and times are kept to the second. The whole event is in the text index: `log_rows` gives its source and line.
 
 ## CLI Reference
 

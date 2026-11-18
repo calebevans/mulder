@@ -147,6 +147,47 @@ summary = extract_and_index(
 
 The `source_name` is how agents reference this data later (e.g. `search(query, source="mytool.output")`). Use a dotted prefix convention: `toolname.artifact_type`.
 
+### Log tables: `logtable.ingest()`
+
+If the tool parses a log into events, also load them as rows, so the analyst can count with `log_top`, `log_histogram` and `log_rows` instead of paging through `search`. Index the text first, then pass the same events to [`ingest()`](../src/mulder/logtable.py) with the `source_id` that `extract_and_index()` returned:
+
+```python
+from mulder import logtable
+from mulder.server.app import get_ctx
+
+lines = [format_line(event) for event in events]  # one event per line
+indexed = extract_and_index("\n".join(lines), "mylog.access", evidence_path, "mylog")
+
+
+def rows():
+    for number, event in enumerate(events, 1):
+        if event is None:  # a record the parser could not read
+            yield None
+            continue
+        yield {
+            "event_time": event.time,  # ISO 8601, epoch seconds or ms, or a datetime
+            "actor": event.user,
+            "src_ip": event.client,
+            "action": event.method,
+            "target": event.path,
+            "status": event.status,
+            "user_agent": event.agent,
+            "session_id": event.session,
+            "bytes": event.size,
+            "line": number,  # the event's line in the indexed text
+            "extra": {"host": event.vhost},  # other fields worth counting on
+        }
+
+
+logtable.ingest(get_ctx().db, "mylog.access", int(str(indexed["source_id"])), rows())
+```
+
+- Every key is optional. Leave out what the log does not have rather than inventing a value; a field no row fills is not offered to the model.
+- Name the table after the text source, so `list_sources` and `list_log_tables` agree.
+- `extra` keys are constants you choose (`[a-z][a-z0-9_]*`), never names read from the evidence: they become fields the model may filter and group on. Keep them to a handful that answer counting questions.
+- `rows` may be a generator; it is consumed in batches. Values are stored as one printable line of at most 512 characters, and a time `ingest()` cannot read is stored as no time and counted. A time without an offset is taken as UTC, so convert a local time or attach its offset first.
+- `ingest()` returns `{"rows", "rows_no_time", "rows_unparsed"}`. Running it again for a source of the same name and evidence path replaces the earlier rows.
+
 ### `tool_response()` vs `@audited_tool()`
 
 Use **one** of these two patterns for audit logging, not both:

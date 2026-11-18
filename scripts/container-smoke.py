@@ -15,6 +15,7 @@ import os
 import plistlib
 import shlex
 import socket
+import sqlite3
 import struct
 import subprocess
 import tempfile
@@ -135,6 +136,44 @@ def netflow_smoke(work: Path) -> None:
     empty = nfdump(read, ["-c", "10"], core.RAW_FMT, "src ip 203.0.113.99")
     assert core.parse_flow_csv(empty).saw_no_match, empty
     print("PASS NetFlow collection and nfdump csv layouts", flush=True)
+
+
+def logtable_smoke(work: Path) -> None:
+    """Load a few log rows and run every log table query on the image's own SQLite
+    (3.37 on Ubuntu 22.04), so SQL that needs a newer SQLite fails the build and not an
+    investigation."""
+    from mulder import logtable
+    from mulder.db import CaseDB
+
+    rows: list[dict[str, object] | None] = [
+        {"event_time": 1700000000, "actor": "a", "bytes": 5, "extra": {"region": "x"}},
+        {"event_time": "2023-11-14T23:13:20+01:00", "actor": "b", "extra": {"region": "x"}},
+        None,
+    ]
+    with CaseDB.create("logtable-smoke", str(work), work / "logtable-db") as db:
+        source_id = db.register_source("smoke.log", str(work), "blake2b:smoke", "smoke", 3)
+        loaded = logtable.ingest(db, "smoke.log", source_id, rows)
+        assert loaded == {"rows": 2, "rows_no_time": 0, "rows_unparsed": 1}, loaded
+        only_a = [{"field": "actor", "op": "prefix", "value": "A"}]
+        top = logtable.top(db, "smoke.log", ["region", "actor"], filters=only_a)
+        when = "2023-11-14T22:13:20Z"
+        assert top["rows"] == [
+            {
+                "region": "x",
+                "actor": "a",
+                "count": 1,
+                "first_seen": when,
+                "last_seen": when,
+                "bytes": 5,
+            }
+        ], top
+        hist = logtable.histogram(db, "smoke.log", "hour", split_by="region")
+        assert hist["rows"] == [
+            {"bucket": "2023-11-14T22", "count": 2, "by": [{"value": "x", "count": 2}], "other": 0}
+        ], hist
+        page = logtable.rows(db, "smoke.log", newest_first=True, limit=1)
+        assert page["rows_matched"] == 2 and page["truncated"], page
+    print("PASS log table queries on SQLite", sqlite3.sqlite_version, flush=True)
 
 
 def main() -> None:
@@ -294,6 +333,7 @@ def main() -> None:
         assert any(event.get("alert", {}).get("signature_id") == 1000001 for event in events)
 
         netflow_smoke(work)
+        logtable_smoke(work)
 
         evidence = work / "email.raw"
         original = (b"Contact smoke@example.org for the smoke test.\n" * 100).ljust(8192, b"\0")

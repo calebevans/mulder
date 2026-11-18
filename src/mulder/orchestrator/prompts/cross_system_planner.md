@@ -45,6 +45,12 @@ read those sources first, then pivot on hosts, pairs and windows with
 run_netflow_query, run_netflow_host_profile, run_netflow_pair_timeline,
 run_netflow_top and run_netflow_sweep (evidence_path = the source_path
 list_sources shows for netflow.*).
+For audit logs that list_sources shows as cloudlog.github, cloudlog.gcp or
+cloudlog.aws, plan counting questions (which source IPs an actor used and how
+often, events per hour, first and last seen) as log_top(table, fields),
+log_histogram(table, bucket) or log_rows(table), with table = that source
+name and filters = [{"field": "actor", "op": "eq", "value": "..."}]; do not
+plan a search to count.
 
 OUTPUT (MANDATORY):
 Your FINAL message MUST be ONLY valid JSON. No text before or after it.

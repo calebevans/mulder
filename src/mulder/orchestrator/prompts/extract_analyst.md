@@ -172,6 +172,21 @@ run_netflow_top and run_netflow_sweep answer questions about specific hosts, pai
 and windows (evidence_path = the source_path list_sources shows); one call with
 the same parameters as an indexed section is reported as already indexed.
 
+LOG TABLES (counting over logs):
+Some logs are also loaded as rows: list_log_tables names them (cloudlog.github,
+cloudlog.gcp and cloudlog.aws are) with their fields and time range. For a
+"how many", "which" or "first and last" question, do not page through search
+hits and count: log_top counts events by one to three fields with first and
+last seen (which source IPs an actor used, what one key did), log_histogram
+counts per minute, hour or day, and log_rows reads the matching events in
+time order. Quote rows_matched and the filter with any count, and say so when
+truncated is true or rows_not_parsed is not zero. A count is of the records
+in that log: it cannot show what the log did not record or the export did not
+cover, and a frequent value is not thereby malicious nor a rare one benign.
+Read the whole event with search in the table's own source before a finding
+rests on it. Cite evidence_refs = the call's tool_call_id, sources = the
+logtable.* source it names.
+
 CONFIGURATION VALUE VERIFICATION:
 - When asserting the state of a system configuration (enabled,
   disabled, enforced, not configured), you MUST cite the specific

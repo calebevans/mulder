@@ -146,6 +146,37 @@ _IX_WINDOWS_SOURCE_LINE = (
     "CREATE INDEX IF NOT EXISTS ix_windows_source_line ON windows (source_id, line_start)"
 )
 
+# Log tables (mulder.logtable): one normalised row per log event, so counting
+# questions are one grouped query instead of paging through search hits.
+# event_time is fixed-width UTC ("YYYY-MM-DDTHH:MM:SSZ"), so string order is
+# time order; source_id and line point back at the indexed text; extra is a
+# JSON object of strings. log_tables holds one row per ingest.
+_LOG_TABLES_CREATE = (
+    "CREATE TABLE IF NOT EXISTS log_events ("
+    "  event_id INTEGER PRIMARY KEY,"
+    "  log_table TEXT NOT NULL,"
+    "  source_id INTEGER NOT NULL,"
+    "  line INTEGER,"
+    "  event_time TEXT,"
+    "  actor TEXT, src_ip TEXT, action TEXT, target TEXT, status TEXT,"
+    "  user_agent TEXT, session_id TEXT,"
+    "  bytes INTEGER,"
+    "  extra TEXT"
+    ")",
+    "CREATE INDEX IF NOT EXISTS ix_log_events_table_time ON log_events (log_table, event_time)",
+    "CREATE TABLE IF NOT EXISTS log_tables ("
+    "  source_id INTEGER PRIMARY KEY,"
+    "  log_table TEXT NOT NULL,"
+    "  complete INTEGER NOT NULL,"
+    "  row_count INTEGER NOT NULL,"
+    "  rows_no_time INTEGER NOT NULL,"
+    "  rows_unparsed INTEGER NOT NULL,"
+    "  first_time TEXT,"
+    "  last_time TEXT,"
+    "  field_counts TEXT NOT NULL"
+    ")",
+)
+
 # windows_hash of a source whose windows are still being stored. It is replaced
 # by the real hash only after the last batch, so a source left with it was not
 # fully indexed. NULL still means a source from before windows_hash existed.
@@ -473,6 +504,8 @@ class CaseDB:
         with db._engine.begin() as conn:
             conn.execute(text(_FTS_CREATE))
             conn.execute(text(_IX_WINDOWS_SOURCE_LINE))
+            for statement in _LOG_TABLES_CREATE:
+                conn.execute(text(statement))
             now = datetime.now(UTC).isoformat()
             conn.execute(
                 insert(case_metadata_t).values(
@@ -502,6 +535,8 @@ class CaseDB:
             _migrate_add_bookmarks(conn)
             _migrate_add_progress(conn)
             _migrate_add_kv_store(conn)
+            for statement in _LOG_TABLES_CREATE:
+                conn.execute(text(statement))
         return db
 
     def close(self) -> None:
@@ -516,6 +551,15 @@ class CaseDB:
     def __exit__(self, *exc: object) -> None:
         """Close the database when exiting the context."""
         self.close()
+
+    def write(self, fn: Callable[[Connection], _T]) -> _T:
+        """Run *fn* in one transaction on the writer thread and return its result."""
+
+        def _do_write() -> _T:
+            with self._engine.begin() as conn:
+                return fn(conn)
+
+        return self._wq.submit(_do_write)
 
     def register_source(
         self,

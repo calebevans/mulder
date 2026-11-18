@@ -14,12 +14,14 @@ import subprocess
 import tempfile
 import time
 from datetime import UTC, datetime
+from operator import itemgetter
 from pathlib import Path
 from typing import Any, Literal
 
+from mulder import logtable
 from mulder.assets.paths import asset_path
 from mulder.extractors.classifier import JSON_LOG_EXTS
-from mulder.server.app import mcp
+from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
     error_response,
@@ -154,6 +156,52 @@ def _event_line(log_type: str, event: dict[str, Any]) -> str:
     """
     raw = json.dumps(event, default=str, separators=(",", ":"), sort_keys=True)
     return "\t".join([*(_flat(v) for v in _summary(log_type, event)), raw])
+
+
+def _log_row(log_type: str, event: dict[str, Any], line: int) -> dict[str, object]:
+    """The event as a log table row (``mulder.logtable.ingest``); *line* is its line in
+    the indexed text. The first five values are the ones the text line leads with."""
+    when, actor, action, src_ip, target = _summary(log_type, event)
+    row: dict[str, object] = {
+        "event_time": when,
+        "actor": actor,
+        "action": action,
+        "src_ip": src_ip,
+        "target": target,
+        "line": line,
+    }
+    if log_type == "aws":
+        failed = event.get("errorCode") or ("Failure" if event.get("errorMessage") else "")
+        row.update(
+            # CloudTrail records an errorCode or errorMessage only when a call fails.
+            status=failed or "Success",
+            user_agent=event.get("userAgent"),
+            session_id=_dig(event, "userIdentity", "accessKeyId"),
+            bytes=_dig(event, "additionalEventData", "bytesTransferredOut"),
+            extra={
+                "event_id": event.get("eventID"),
+                "identity_type": _dig(event, "userIdentity", "type"),
+                "account": event.get("recipientAccountId"),
+                "read_only": event.get("readOnly"),
+            },
+        )
+    elif log_type == "gcp":
+        row.update(
+            # google.rpc.Status: a missing or zero code is OK.
+            status=_dig(event, "protoPayload", "status", "code") or "OK",
+            user_agent=_dig(event, "protoPayload", "requestMetadata", "callerSuppliedUserAgent"),
+            extra={"event_id": event.get("insertId")},
+        )
+    elif log_type == "github":
+        row.update(
+            user_agent=event.get("user_agent"),
+            session_id=event.get("hashed_token"),
+            extra={
+                "event_id": event.get("_document_id"),
+                "country": _dig(event, "actor_location", "country_code"),
+            },
+        )
+    return row
 
 
 def _events_in(value: object) -> list[dict[str, Any]]:
@@ -340,6 +388,8 @@ def run_cloud_audit_logs(
     Sigma matches in cloudlog.<type>.detections; other JSON is indexed as
     cloudlog.generic and scanned only when ruleset_path is given. Files that
     were damaged, truncated or held no events are named in files_with_problems.
+    GitHub, GCP and AWS events are also loaded as rows into a log table of the
+    source's name, which log_top, log_histogram and log_rows count over.
 
     Args:
         evidence_path: A JSON log file, or a directory searched recursively for
@@ -426,9 +476,22 @@ def run_cloud_audit_logs(
         summary["files_with_problems"] = problems
     per_type: dict[str, object] = {}
     for log_type, events in sorted(by_type.items()):
-        lines = sorted(_event_line(log_type, e) for e in events)
-        extract_and_index("\n".join(lines), f"cloudlog.{log_type}", evidence_path, "cloudlogs")
-        entry: dict[str, object] = {"events": len(events), "source": f"cloudlog.{log_type}"}
+        source = f"cloudlog.{log_type}"
+        ordered = sorted(((_event_line(log_type, e), e) for e in events), key=itemgetter(0))
+        indexed = extract_and_index(
+            "\n".join(line for line, _ in ordered), source, evidence_path, "cloudlogs"
+        )
+        entry: dict[str, object] = {"events": len(events), "source": source}
+        if log_type != "generic":
+            # The same events as rows, so log_top and log_histogram can count them. A
+            # generic event has a time and nothing else to count on.
+            logtable.ingest(
+                get_ctx().db,
+                source,
+                int(str(indexed["source_id"])),
+                (_log_row(log_type, e, n) for n, (_, e) in enumerate(ordered, 1)),
+            )
+            entry["log_table"] = source
 
         status, parsed = _sigma_scan(
             log_type, events, evidence_path, ruleset_path, sigma_level_filter
