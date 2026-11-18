@@ -92,7 +92,10 @@ No timestamped findings to build a timeline from.
 The evidence examined points to these sources outside the case. They were not available to this investigation, so nothing in them has been ruled in or out.
 
 {% for f in collect_findings %}
-- **{{ f.title | replace("[COLLECT] ", "") }}** : {{ f.description }}
+### {{ f.title | replace("[COLLECT] ", "") }}
+
+{{ f.description }}
+
 {% endfor %}
 {% endif %}
 

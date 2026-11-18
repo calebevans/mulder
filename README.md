@@ -72,7 +72,7 @@ On first run mulder creates a working directory at `~/.mulder/workspace` (overri
 ### Run with Docker (everything preinstalled)
 
 ```bash
-docker pull ghcr.io/calebevans/mulder:1.5.11
+docker pull ghcr.io/calebevans/mulder:1.6.0
 ```
 
 ```bash
@@ -82,7 +82,7 @@ docker run -it --privileged \
   -v /path/to/evidence:/evidence:ro \
   -v ~/mulder-cases:/home/mulder/.mulder/cases \
   -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
-  ghcr.io/calebevans/mulder:1.5.11
+  ghcr.io/calebevans/mulder:1.6.0
 ```
 
 ```bash
@@ -139,6 +139,7 @@ Mulder integrates 35+ open-source forensic tools exposed as 140+ typed MCP opera
 | Malware | YARA, CAPA, FLOSS, ClamAV, radare2, Detect-It-Easy&nbsp;\* |
 | Documents | oletools, PDF tools, pst-utils |
 | Mobile | ALEAPP, iLEAPP, MVT |
+| Cloud and CI | Sigma rules over cloud audit logs (GCP, GitHub), gitleaks (secrets in repositories and CI logs), zizmor (GitHub Actions workflows), read-only audit log collection from GitHub and GCP |
 | Other | bulk_extractor, binwalk, ExifTool, ssdeep, hashdeep, steghide, Hindsight |
 
 \* Detect-It-Easy is supported but not bundled: its `.deb` pulls in ten `libqt5*` packages for a CLI that draws nothing. `run_detect_it_easy` uses it if `diec` is on `$PATH`, and reports it as missing otherwise. Packing is still flagged without it — `triage_binary` checks section entropy, RWX permissions, known packer section names and import-table shape.
