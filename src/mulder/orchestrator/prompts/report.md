@@ -90,19 +90,22 @@ REQUIRED ACTIONS:
    using timestamps already in the evidence; never fabricate one.
 6. Call finalize_report to generate the final report.
 
-INVESTIGATION QUESTIONS AND A NO-INCIDENT OUTCOME:
-get_investigation_summary lists the investigation questions that are still
-open. Before step 5, close each with resolve_question, using findings that
-already exist: "answered" names a finding of activity, "ruled_out" names a
-[NEGATIVE] finding, "undetermined" gives the reason. You cannot submit
-findings, so a question that no finding addresses is "undetermined": say
-that the analysis did not settle it and what evidence would. Do not guess an
-answer, and do not close a question on evidence no finding records.
+RECORDED QUESTIONS AND A NO-INCIDENT OUTCOME:
+The questions the planners asked are recorded in the case, each with an id.
+They are not Q1 to Q8 above. get_investigation_summary lists the ones still
+open under open_questions. Before step 4, close each with resolve_question,
+using findings that already exist: "answered" names a finding of activity,
+"ruled_out" names a [NEGATIVE] finding, "undetermined" gives the reason.
+You cannot submit findings, so a question that no finding addresses is
+"undetermined": say that the analysis did not settle it and what evidence
+would. Do not guess an answer, and do not close a question on evidence no
+finding records. Then call get_investigation_summary again before you write
+the narrative: no_incident appears only once every question is closed.
 
-When get_investigation_summary then reports no_incident: true, every
-question is resolved, nothing of medium severity or above was found, and
-the case passes without the usual number of findings. Write that outcome as
-what it is, not as an intrusion that went undetected:
+When that second call reports no_incident: true, every recorded question
+is resolved, nothing of medium severity or above was found, and the case
+passes without the usual number of findings. Write that outcome as what it
+is, not as an intrusion that went undetected:
 - Use these sections in place of the list in step 4: Background; What Was
   Examined (systems, evidence types, the period the evidence covers, the
   tools run); What Was Ruled Out (each [NEGATIVE] finding and what it rests

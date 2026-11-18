@@ -2162,7 +2162,7 @@ Generate the final investigation report from all submitted findings.
 
 ### resolve_question
 
-Record how an investigation question was resolved and what the answer rests on. The orchestrator stores each plan's questions in the case database; question ids (`q_1a2b3c4d`) prefix the questions the analyst is given, and `get_investigation_summary` lists the open ones. `answered` must name at least one finding that is not `[NEGATIVE]` or `[COLLECT]`; `ruled_out` must name at least one `[NEGATIVE]` finding; every named finding must exist, be that kind, and cite successful calls to evidence tools. `undetermined` needs a reason. A resolution holds only while a finding it names still exists and is still that kind; otherwise the question is open again. Calling again replaces the earlier resolution. `ruled_out` records that the sources examined did not show something, not that it did not happen.
+Record how an investigation question was resolved and what the answer rests on. The orchestrator stores each plan's questions in the case database; question ids (`q_1a2b3c4d`) prefix the questions the analyst is given, and `get_investigation_summary` lists the open ones. `answered` must name at least one finding that is not `[NEGATIVE]` or `[COLLECT]`; `ruled_out` must name at least one `[NEGATIVE]` finding. To count, a named finding must exist, be that kind, and cite only logged, successful calls to tools other than the findings tools; for `ruled_out` at least one of those calls must be to a tool that extracts, searches or reads evidence, so a finding that cites only bookkeeping (`open_case`, `list_sources`, `get_investigation_summary`, the audits, job polling) rules nothing out. Other ids named alongside one that counts are ignored and listed in the response. `undetermined` needs a reason. The id is accepted with or without the square brackets it is displayed in. A resolution holds only while a finding it names still exists and is still that kind; otherwise the question is open again. Calling again replaces the earlier resolution. `ruled_out` records that the sources examined did not show something, not that it did not happen.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -2171,7 +2171,7 @@ Record how an investigation question was resolved and what the answer rests on. 
 | finding_ids | list[str] \| None | no | Findings the answer rests on; required for "answered" and "ruled_out", ignored for "undetermined" |
 | reason | str | no | Required for "undetermined": what evidence is missing (kept to 1,000 characters) |
 
-**Returns:** `question_id`, `resolution`, `finding_ids[]`, `open_questions` (count still open)
+**Returns:** `question_id`, `resolution`, `finding_ids[]` (the findings the resolution was recorded against), `open_questions` (count still open), and `ignored_finding_ids` (the first 10 named ids that did not count, each with the reason) when there are any
 
 **Roles:** `EXTRACT_ANALYST` `CROSS_ANALYST` `NARRATIVE_ANALYST` `REPORT`
 
@@ -2185,7 +2185,7 @@ Return a compact progress dashboard for the current investigation.
 
 *No parameters.*
 
-**Returns:** `sources_indexed`, `findings_submitted`, `findings_by_severity{}`, `remaining_work[]`, `ready_to_finalize`. When investigation questions were recorded, also `questions{}` (recorded, open, answered, ruled_out, undetermined), `open_questions[]` (question_id, phase, system, question; the first 15, each cut to 200 characters, with `open_questions_note` when there are more), `significant_findings` (findings of activity at medium severity or above) and `no_incident: true` when every question is resolved and at least one is answered or ruled out, both audits have run, there are fewer than three findings of activity and none is medium or above.
+**Returns:** `sources_indexed`, `findings_submitted`, `findings_by_severity{}`, `remaining_work[]`, `ready_to_finalize`. When investigation questions were recorded, also `questions{}` (recorded, open, answered, ruled_out, undetermined), `open_questions[]` (question_id, phase, system, question; the 15 oldest across every phase and system, each cut to 200 characters, with `open_questions_note` when there are more), `significant_findings` (findings of activity at medium severity or above) and `no_incident: true` when every question is resolved and at least one is answered or ruled out, both audits have run, there are fewer than three findings of activity and none is medium or above.
 
 **Roles:** `EXTRACT_ANALYST` `CROSS_PLANNER` `CROSS_ANALYST` `NARRATIVE_PLANNER` `NARRATIVE_ANALYST` `REPORT`
 

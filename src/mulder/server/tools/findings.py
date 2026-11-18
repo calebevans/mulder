@@ -26,7 +26,7 @@ from pydantic import ValidationError
 
 from mulder.audit import AuditLog
 from mulder.models import AuditSummary, CaseMetadataRow, Finding, Question, SourceRow
-from mulder.patterns import SEVERITY_ORDER, source_is_cited
+from mulder.patterns import SEVERITY_ORDER, is_evidence_source, source_is_cited
 from mulder.questions import MIN_NON_NEGATIVE_FINDINGS, open_questions, resolved_path
 from mulder.report.renderer import ReportRenderer
 from mulder.server.app import get_ctx, get_job_store, mcp
@@ -46,14 +46,6 @@ _MIN_NON_NEGATIVE_FINDINGS = MIN_NON_NEGATIVE_FINDINGS
 _CITATION_ADVISORY_PCT = 25.0
 _MIN_CITED_SOURCES = 3
 
-# Sources that are bookkeeping or derived from the run itself rather than
-# evidence a finding would cite. Excluded from the citation denominator.
-_AUXILIARY_SOURCES = frozenset(
-    {"bulk.bulk_extractor", "bulk.duplicates", "composite.correlation", "enrichment.iocs"}
-)
-_AUXILIARY_PREFIXES = ("registry.query.",)
-_AUXILIARY_SUFFIXES = (".stats", ".manifest", ".manifest.json")
-
 # This module's own tools, and resolve_question, which closes a question on a
 # finding: their output is the investigation's bookkeeping, not evidence, and
 # citing one (even a rejected submission) would let a finding vouch for itself.
@@ -69,22 +61,6 @@ _FINDING_TOOLS = frozenset(
         "resolve_question",
     }
 )
-
-
-def is_evidence_source(source: SourceRow) -> bool:
-    """Return True when *source* is evidence a finding could cite.
-
-    Empty sources, run bookkeeping (extractor reports, stats, manifests),
-    ad-hoc registry query caches, and outputs derived from the findings
-    themselves (IOC enrichment, correlation) are not.
-    """
-    name = source.source_name
-    return (
-        source.line_count > 0
-        and name not in _AUXILIARY_SOURCES
-        and not name.startswith(_AUXILIARY_PREFIXES)
-        and not name.endswith(_AUXILIARY_SUFFIXES)
-    )
 
 
 # Findings the timestamp_coverage gate leaves alone: negative findings and
@@ -275,20 +251,28 @@ def _evaluate_finalize_gates(
     return gates
 
 
-def _is_citable(audit: AuditLog, ref: str, seen: frozenset[str] = frozenset()) -> bool:
+def _is_citable(
+    audit: AuditLog,
+    ref: str,
+    seen: frozenset[str] = frozenset(),
+    refused: frozenset[str] = _FINDING_TOOLS,
+) -> bool:
     """True if *ref* is a logged, successful call to an evidence tool.
 
     An aggregate entry (one that lists ``sub_calls``, such as a ``run_parallel``
     batch) is citable only through its children: at least one of them must be
     citable in turn, so an empty batch, a batch of failed calls or a batch that
     only wrapped a findings tool cannot launder them into evidence.
+
+    ``refused`` names the tools whose calls do not count. ``resolve_question``
+    passes a wider set than a finding is held to.
     """
     entry = audit.get_tool_call(ref)
     if (
         entry is None
         or ref in seen
         or entry.get("status") == "error"
-        or entry.get("tool_name") in _FINDING_TOOLS
+        or entry.get("tool_name") in refused
     ):
         return False
     sub_calls = entry.get("sub_calls")
@@ -296,7 +280,8 @@ def _is_citable(audit: AuditLog, ref: str, seen: frozenset[str] = frozenset()) -
         return True
     children = sub_calls if isinstance(sub_calls, list) else []
     return any(
-        isinstance(child, str) and _is_citable(audit, child, seen | {ref}) for child in children
+        isinstance(child, str) and _is_citable(audit, child, seen | {ref}, refused)
+        for child in children
     )
 
 

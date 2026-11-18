@@ -20,6 +20,7 @@ from click.testing import CliRunner
 
 import mulder.server.app as server_app
 from mulder import questions as rules
+from mulder.audit import AuditLog
 from mulder.cli import cli
 from mulder.db import CaseDB
 from mulder.models import AuditSummary, CaseMetadataRow, Finding, Question, SourceRow
@@ -34,6 +35,7 @@ from mulder.server.app import _tool_dispatch_sync
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.tool_access import ALL_ROLES, ANALYSTS, Role, get_tools_for_role
 from mulder.server.tools.findings import (
+    _FINDING_TOOLS,
     _MIN_NON_NEGATIVE_FINDINGS,
     _NEGATIVE_PREFIX,
     _NON_EVENT_PREFIXES,
@@ -486,16 +488,11 @@ def test_questions_pass_through_unchanged_when_they_cannot_be_recorded(
         ({"resolution": "answered"}, "invalid_params", "must name at least one finding_id"),
         # The report role calls this too and has no submit_finding.
         ({"resolution": "ruled_out", "finding_ids": []}, "invalid_params", "if you cannot submit"),
-        ({"resolution": "answered", "finding_ids": ["f_nope"]}, "invalid_params", "No such"),
+        ({"resolution": "answered", "finding_ids": ["f_nope"]}, "invalid_params", "no such"),
         ({"resolution": "answered", "finding_ids": ["NEG"]}, "invalid_params", "not that kind"),
         ({"resolution": "answered", "finding_ids": ["COL"]}, "invalid_params", "not that kind"),
         ({"resolution": "ruled_out", "finding_ids": ["POS"]}, "invalid_params", "not that kind"),
         ({"resolution": "ruled_out", "finding_ids": ["COL"]}, "invalid_params", "not that kind"),
-        (
-            {"resolution": "ruled_out", "finding_ids": ["NEG", "POS"]},
-            "invalid_params",
-            "not that kind",
-        ),
         ({"resolution": "undetermined", "reason": " \n "}, "invalid_params", "needs a reason"),
     ],
 )
@@ -701,7 +698,7 @@ def test_a_clean_case_passes_the_gates_and_renders(case: _Case) -> None:
         assert STATEMENT in report
         assert "it does not establish that nothing happened" in report
         # how much of the indexed evidence the conclusion rests on
-        assert "3 indexed sources (1 disk, 2 other), 3 of them cited by a finding" in report
+        assert "3 evidence sources (1 disk, 2 other), 3 of them cited by a finding" in report
         assert "3 investigation questions: 2 ruled out, 0 answered, 1 undetermined" in report
         # what was not available: the undetermined question and the lead
         assert "No network capture or firewall log is in the case." in report
@@ -831,7 +828,8 @@ def test_only_the_analysts_and_the_report_role_can_resolve_a_question() -> None:
 def test_every_role_that_can_resolve_questions_is_told_how(name: str) -> None:
     text = getattr(prompts, f"{name}_PROMPT")
 
-    assert "INVESTIGATION QUESTIONS" in text
+    # The report prompt already calls its own Q1 to Q8 "investigation questions".
+    assert ("RECORDED QUESTIONS" if name == "REPORT" else "INVESTIGATION QUESTIONS") in text
     for word in ("resolve_question", '"answered"', '"ruled_out"', '"undetermined"', "[NEGATIVE]"):
         assert word in text, word
     # what a ruled-out answer does and does not establish
@@ -847,3 +845,187 @@ def test_the_report_role_is_told_how_to_write_a_case_with_no_incident() -> None:
     # It cannot submit findings, and is not told to.
     assert "mcp__mulder__submit_finding" not in get_tools_for_role(Role.REPORT)
     assert "You cannot submit" in text
+
+
+# ---------------------------------------------------------------------------
+# What a resolution may rest on, and what a refusal may say
+# ---------------------------------------------------------------------------
+
+
+def _resolve(question_id: str, resolution: str, *finding_ids: str) -> dict[str, Any]:
+    return _tool(
+        "resolve_question",
+        question_id=question_id,
+        resolution=resolution,
+        finding_ids=list(finding_ids),
+    )
+
+
+@pytest.mark.parametrize(
+    ("tool", "kwargs"),
+    [
+        ("open_case", {"case_id": "clean"}),
+        ("list_sources", {}),
+        ("get_investigation_summary", {}),
+        ("check_finalize_readiness", {}),
+        ("audit_tool_coverage", {}),
+    ],
+)
+def test_a_negative_finding_that_examined_no_evidence_cannot_rule_a_question_out(
+    case: _Case, tool: str, kwargs: dict[str, Any]
+) -> None:
+    """A bookkeeping call is a real, successful call, and it looked at nothing."""
+    (question_id,) = case.ask("Was there a remote logon?")
+    bookkeeping = str(_tool(tool, **kwargs)["tool_call_id"])
+    hollow = case.finding("[NEGATIVE] Nothing found", bookkeeping, "evtx.security")
+    # The same call wrapped in a batch: an aggregate is only what its children are.
+    server_app.get_ctx().audit.log_tool_call(
+        "tc_batch", "run_parallel", {}, "hash", sub_calls=[bookkeeping]
+    )
+    batched = case.finding("[NEGATIVE] Nothing found in a batch", "tc_batch", "evtx.security")
+
+    for finding_id in (hollow, batched):
+        refused = _resolve(question_id, "ruled_out", finding_id)
+
+        assert refused["status"] == "error"
+        assert (
+            "cites no call that extracted, searched or read evidence" in refused["error_message"]
+        )
+    assert server_app.get_ctx().db.get_questions()[0].resolution is None
+
+
+def test_one_call_that_examined_evidence_is_what_a_ruled_out_answer_needs(case: _Case) -> None:
+    (question_id,) = case.ask("Was there a remote logon?")
+    refs = [str(_tool("list_sources")["tool_call_id"]), case.searched("4624")]
+    finding_id = _tool(
+        "submit_finding",
+        title="[NEGATIVE] No remote logon on WS01",
+        description="Searched evtx.security for 4624.",
+        severity="info",
+        confidence="inference",
+        evidence_refs=refs,
+        sources=["evtx.security"],
+    )["finding_id"]
+
+    assert _resolve(question_id, "ruled_out", finding_id)["status"] == "resolved"
+
+
+def test_the_tools_that_examine_no_evidence_are_real_and_include_the_findings_tools() -> None:
+    assert set(_tool_dispatch_sync) >= rules.NO_EVIDENCE_TOOLS
+    assert _FINDING_TOOLS <= rules.NO_EVIDENCE_TOOLS
+    assert not {"search", "get_raw_output", "run_fls", "run_parallel"} & rules.NO_EVIDENCE_TOOLS
+
+
+def test_a_finding_another_session_submitted_can_back_a_resolution(case: _Case) -> None:
+    """A server loads the audit log once; calls other sessions' servers log come later."""
+    (question_id,) = case.ask("Was any persistence mechanism installed?")
+    ctx = server_app.get_ctx()
+    other_server = AuditLog(case.db_dir / "clean.audit.jsonl")
+    other_server.log_tool_call("tc_other_search", "search", {"query": "Run"}, "hash")
+    ctx.db.insert_finding(NEGATIVE.model_copy(update={"evidence_refs": ["tc_other_search"]}))
+    assert not ctx.audit.has_tool_call("tc_other_search")
+
+    assert _resolve(question_id, "ruled_out", NEGATIVE.finding_id)["status"] == "resolved"
+
+
+def test_one_finding_of_the_right_kind_is_enough_and_the_rest_are_reported(case: _Case) -> None:
+    (question_id,) = case.ask("Was any persistence mechanism installed?")
+    ref = case.searched("Run")
+    negative = case.finding("[NEGATIVE] No persistence", ref, "registry.software")
+    positive = case.finding("Guest account enabled", ref, "registry.software", "low")
+
+    # The id as the prompts display it, brackets included.
+    resolved = _resolve(f" [{question_id}] ", "ruled_out", negative, positive, "f_nope")
+
+    assert resolved["status"] == "resolved"
+    assert resolved["question_id"] == question_id
+    assert resolved["finding_ids"] == [negative]
+    assert resolved["ignored_finding_ids"] == (
+        f"{positive}: not that kind of finding; f_nope: no such finding"
+    )
+    assert server_app.get_ctx().db.get_questions()[0].finding_ids == [negative]
+
+
+def test_a_refusal_does_not_echo_unbounded_input(case: _Case) -> None:
+    (question_id,) = case.ask("Was any persistence mechanism installed?")
+    huge = "x" * 200_000
+    for kwargs in (
+        {"question_id": huge, "resolution": "undetermined", "reason": "missing"},
+        {"question_id": question_id, "resolution": huge},
+        {"question_id": question_id, "resolution": "answered", "finding_ids": [huge]},
+        {
+            "question_id": question_id,
+            "resolution": "answered",
+            "finding_ids": [f"f_{i:08d}" for i in range(5000)],
+        },
+    ):
+        refused = _tool("resolve_question", **kwargs)
+
+        assert refused["status"] == "error"
+        assert len(refused["error_message"]) < 2000, len(refused["error_message"])
+    assert "and 4990 more" in refused["error_message"]
+
+
+def test_a_question_echoed_back_with_its_label_is_the_same_question(case: _Case) -> None:
+    """A follow-up planner is fed the analyst's request, which quotes labelled questions."""
+    (labelled,) = case.bridge.record_questions(
+        "extraction", "WS01", ["Was persistence installed?"]
+    )
+
+    echoed = case.bridge.record_questions(
+        "extraction", "WS01", [labelled, f" [q_0badc0de] {labelled}"]
+    )
+
+    assert echoed == [labelled, labelled]
+    assert [q.question for q in server_app.get_ctx().db.get_questions()] == [
+        "Was persistence installed?"
+    ]
+
+
+def test_an_analyst_is_told_which_open_questions_are_its_own(case: _Case) -> None:
+    """The summary lists every phase's and system's open questions, oldest first."""
+    case.ask(*(f"Question number {i}?" for i in range(20)))
+
+    note = _tool("get_investigation_summary")["open_questions_note"]
+
+    assert note.startswith("Showing 15 of 20 open questions, oldest first")
+    assert "resolve these" not in note
+    for name in ("EXTRACT_ANALYST", "CROSS_SYSTEM_ANALYST"):
+        assert "Only the questions in the user message are yours" in getattr(
+            prompts, f"{name}_PROMPT"
+        )
+
+
+def test_the_report_role_closes_questions_before_it_writes_the_narrative() -> None:
+    """no_incident decides the narrative's sections and is only true once they are closed."""
+    text = prompts.REPORT_PROMPT
+
+    assert "Before step 4" in text and "Before step 5" not in text
+    assert "call get_investigation_summary again" in text
+
+
+def test_the_examined_line_counts_what_the_citation_gate_counts(case: _Case) -> None:
+    case.clean_case()
+    second_device = str(case.evidence / "ws02.E01")
+    extract_and_index("line\n", "evtx.security", second_device, "test")  # a name twice
+    extract_and_index("line\n", "plaso.stats", second_device, "test")  # run bookkeeping
+    extract_and_index("line\n", "evtx.system", second_device, "test")  # never cited
+    # A blank entry is a prefix of every source name.
+    case.finding("[NEGATIVE] No log clearing", case.searched("1102"), "")
+
+    gates = _tool("check_finalize_readiness")["gates"]
+    citation = next(g for g in gates if g["name"] == "evidence_citation_coverage")
+    markdown = Path(_tool("finalize_report")["report_path"]).read_text()
+
+    assert "(3/4 distinct names)" in citation["detail"]
+    examined = re.search(r"\*\*Examined:\*\* (.*)", markdown)
+    assert examined
+    assert examined.group(1).startswith(
+        "4 evidence sources (1 disk, 3 other), 3 of them cited by a finding; "
+    )
+    # clean_case searched three times and this test once; the audits, the
+    # findings and the resolutions examined nothing.
+    calls = re.search(
+        r"(\d+) tool calls, (\d+) of them extracting, searching or reading", markdown
+    )
+    assert calls and int(calls.group(2)) == 4 < int(calls.group(1))

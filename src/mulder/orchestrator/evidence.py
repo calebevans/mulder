@@ -32,6 +32,7 @@ from mulder.patterns import (
     resolve_db_dir,
 )
 from mulder.questions import (
+    ID_LABELS,
     MAX_QUESTION_CHARS,
     MAX_QUESTIONS_PER_PLAN,
     MAX_SYSTEM_CHARS,
@@ -589,7 +590,13 @@ class ServerBridge:
         """
         if not isinstance(questions, list):
             return questions
-        cleaned = [clean(q, MAX_QUESTION_CHARS) for q in questions]
+        # A follow-up planner is shown the analyst's request, which quotes
+        # questions with their labels: store the question, not the label, so
+        # an echoed one is the question already on record.
+        cleaned = [
+            clean(ID_LABELS.sub("", q) if isinstance(q, str) else q, MAX_QUESTION_CHARS)
+            for q in questions
+        ]
         try:
             self.ensure_context()
             from mulder.server.app import get_ctx

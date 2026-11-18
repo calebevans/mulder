@@ -792,10 +792,10 @@ An investigation can end with the conclusion that the evidence shows no incident
 | Resolution | Meaning | What it must rest on |
 |------------|---------|----------------------|
 | Answered | The evidence shows what happened | A finding of activity |
-| Ruled out | The sources examined do not show it | A `[NEGATIVE]` finding citing the tool calls that were run |
+| Ruled out | The sources examined do not show it | A `[NEGATIVE]` finding that cites at least one tool call that extracted, searched or read evidence |
 | Undetermined | The evidence needed is not in the case or could not be read | A stated reason |
 
-A case normally needs three findings before a report is written. A case with fewer passes instead when every recorded question is resolved and both coverage audits have run. If that case also has no finding of medium severity or above, and at least one question was answered or ruled out, the executive summary opens with "No evidence of an incident was found in the evidence examined", then lists what was examined, how many of the indexed sources the findings cite, and what was not available: the undetermined questions with their reasons, and any `[COLLECT]` leads.
+A case normally needs three findings before a report is written. A case with fewer passes instead when every recorded question is resolved and both coverage audits have run. If that case also has no finding of medium severity or above, and at least one question was answered or ruled out, the executive summary opens with "No evidence of an incident was found in the evidence examined", then lists what was examined (how many evidence sources there are, how many of them the findings cite, and how many of the tool calls extracted, searched or read evidence) and what was not available: the undetermined questions with their reasons, and any `[COLLECT]` leads.
 
 Read that sentence as written. It is a statement about the sources that were indexed and searched, not proof that nothing happened. A ruled-out question whose finding is later deleted or re-titled is open again, so the conclusion cannot outlive its evidence. The report lists the recorded questions under **Investigation Questions** whichever way the case passed; a case investigated before questions were recorded has none and is reported as before.
 

@@ -9,6 +9,7 @@ functions here, so they cannot disagree.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 
 from mulder.models import Finding, Question
@@ -22,6 +23,47 @@ AUDIT_TOOLS = ("audit_evidence_coverage", "audit_tool_coverage")
 # A finding at one of these severities describes activity that needs an
 # explanation; a case holding one is not reported as "no incident".
 SIGNIFICANT_SEVERITIES = ("critical", "high", "medium")
+
+# Tools whose calls examine no evidence: case, job and progress bookkeeping,
+# the audits, reference lookups and the findings tools. A [NEGATIVE] finding
+# that cites only these looked at nothing, so it cannot rule a question out,
+# and the report does not count these calls as examination. A tool missing
+# from this set counts as an evidence tool, which is how every tool was
+# treated before the set existed.
+NO_EVIDENCE_TOOLS = frozenset(
+    {
+        "open_case",
+        "list_cases",
+        "list_sources",
+        "get_source_stats",
+        "get_investigation_summary",
+        "check_finalize_readiness",
+        "audit_evidence_coverage",
+        "audit_tool_coverage",
+        "track_progress",
+        "bookmark_window",
+        "remove_bookmark",
+        "start_extraction_batch",
+        "check_extraction_status",
+        "wait",
+        "wait_all",
+        "get_tool_guide",
+        "lookup_attack_technique",
+        # server/tools/findings.py _FINDING_TOOLS
+        "submit_finding",
+        "update_finding",
+        "delete_finding",
+        "get_findings",
+        "submit_narrative",
+        "finalize_report",
+        "deduplicate_findings",
+        "resolve_question",
+    }
+)
+
+# The id labels a recorded question is handed to its analyst with, as they
+# come back at the start of a question a later planner copied.
+ID_LABELS = re.compile(r"^\s*(?:\[q_[0-9a-f]{8}\]\s*)+")
 
 MAX_QUESTION_CHARS = 500
 MAX_SYSTEM_CHARS = 200

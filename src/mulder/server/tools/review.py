@@ -684,8 +684,8 @@ def _question_summary(
     }
     if len(still_open) > len(listed):
         summary["open_questions_note"] = (
-            f"Showing {len(listed)} of {len(still_open)} open questions; "
-            "resolve these and call again for the rest."
+            f"Showing {len(listed)} of {len(still_open)} open questions, oldest first, from "
+            "every phase and system. The others are listed once these are closed."
         )
     if no_incident(questions, findings, tool_counts):
         summary["no_incident"] = True

@@ -27,9 +27,11 @@ from mulder.patterns import (
     SEVERITY_ORDER,
     classify_ip,
     format_token_count,
+    is_evidence_source,
     is_external_ip,
+    source_is_cited,
 )
-from mulder.questions import backs, no_incident, statuses
+from mulder.questions import NO_EVIDENCE_TOOLS, backs, no_incident, statuses
 
 logger = logging.getLogger(__name__)
 
@@ -795,9 +797,10 @@ def _build_no_incident_summary(
     question_rows: Sequence[dict[str, Any]],
     collect_findings: Sequence[Finding],
     observation_count: int,
-    sources_list: Sequence[SourceRow] | None,
+    evidence_sources: Sequence[SourceRow],
     cited_sources: int,
     total_tool_calls: int,
+    evidence_tool_calls: int,
     total_duration_ms: float,
 ) -> tuple[str, str]:
     """Executive summary (HTML, markdown) for a case that found no incident.
@@ -805,10 +808,15 @@ def _build_no_incident_summary(
     States the outcome as a claim about the evidence examined, then what was
     examined, then what was not available: questions left undetermined, with
     their reasons, and evidence known to exist outside the case. It says how
-    many indexed sources the findings cite, because a negative conclusion
-    reaches no further than the sources someone read.
+    many evidence sources the findings cite and how many tool calls touched
+    evidence, because a negative conclusion reaches no further than the
+    sources someone read.
+
+    ``evidence_sources`` and ``cited_sources`` are the citation gate's
+    figures: one row per distinct evidence-bearing source name, and how many
+    of those names a finding cites.
     """
-    memory, disk, other = _classify_sources(sources_list)
+    memory, disk, other = _classify_sources(evidence_sources)
     kinds = [
         f"{count} {kind}"
         for count, kind in ((memory, "memory"), (disk, "disk"), (other, "other"))
@@ -816,9 +824,10 @@ def _build_no_incident_summary(
     ]
     resolved = [row["status"] for row in question_rows]
     examined = (
-        f"{len(sources_list or [])} indexed sources"
+        f"{len(evidence_sources)} evidence sources"
         + (f" ({', '.join(kinds)})" if kinds else "")
         + f", {cited_sources} of them cited by a finding; {total_tool_calls} tool calls, "
+        f"{evidence_tool_calls} of them extracting, searching or reading evidence; "
         f"{_format_duration(total_duration_ms)}. "
         f"{len(resolved)} investigation questions: {resolved.count('ruled_out')} ruled out, "
         f"{resolved.count('answered')} answered, {resolved.count('undetermined')} undetermined."
@@ -1304,13 +1313,26 @@ class ReportRenderer:
             questions or [], normalized_findings, audit_summary.tool_call_counts
         )
         if is_no_incident:
+            # Counted the way the evidence_citation_coverage gate counts:
+            # distinct evidence-bearing names (rows repeat per device, and
+            # run bookkeeping is not evidence), matched as the gate matches.
+            evidence_sources = list(
+                {
+                    s.source_name: s for s in normalized_sources or [] if is_evidence_source(s)
+                }.values()
+            )
             executive_summary, executive_summary_md = _build_no_incident_summary(
                 question_rows,
                 collect_findings,
                 len(positive_findings),
-                normalized_sources,
-                sum(bool(source["referencing_findings"]) for source in sources_data),
+                evidence_sources,
+                sum(source_is_cited(s.source_name, all_sources) for s in evidence_sources),
                 audit_summary.total_tool_calls,
+                sum(
+                    count
+                    for tool, count in audit_summary.tool_call_counts.items()
+                    if tool not in NO_EVIDENCE_TOOLS
+                ),
                 audit_summary.wall_clock_ms or audit_summary.total_duration_ms,
             )
 
