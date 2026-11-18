@@ -52,6 +52,11 @@ _CI_CLOUD_TYPES: dict[str, tuple[str, str]] = {
         'Plan one run_secret_scan(evidence_path=<directory>) task, group "foundation", '
         "for each directory above.",
     ),
+    "mailbox": (
+        "Mailbox files (Outlook .pst/.ost)",
+        'Plan one parse_pst(case_id=<case id>, file_path=<file>) task, group "foundation", '
+        "for each file above.",
+    ),
 }
 
 _MAX_SIMPLE_SYSTEMS_PER_SESSION: int = 4
@@ -322,7 +327,8 @@ class EvidenceContext:
         return lines
 
     def _ci_cloud_lines(self, sys_lower: str) -> list[str]:
-        """Planner lines for cloud audit logs, repository checkouts and CI run logs.
+        """Planner lines for cloud audit logs, repository checkouts, CI run logs and
+        mailbox files.
 
         These are evidence of a kind the planner cannot recognise from a file
         listing, so each is named with its type, its path and the tool to plan.

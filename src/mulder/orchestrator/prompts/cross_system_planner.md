@@ -51,6 +51,11 @@ often, events per hour, first and last seen) as log_top(table, fields),
 log_histogram(table, bucket) or log_rows(table), with table = that source
 name and filters = [{"field": "actor", "op": "eq", "value": "..."}]; do not
 plan a search to count.
+cloudlog.m365, cloudlog.entra_signin and cloudlog.entra_audit (Microsoft 365
+and Entra ID) are counted the same way. For an account compromise, plan
+log_top(table, fields=["actor"]) filtered on the src_ip, session_id or
+user_agent of a sign-in a finding attributes to the intruder, to find the
+other accounts that share it.
 
 OUTPUT (MANDATORY):
 Your FINAL message MUST be ONLY valid JSON. No text before or after it.

@@ -176,6 +176,56 @@ def logtable_smoke(work: Path) -> None:
     print("PASS log table queries on SQLite", sqlite3.sqlite_version, flush=True)
 
 
+def m365_smoke(work: Path) -> None:
+    """Run mulder's Microsoft 365 rules through the bundled Zircolite and pySigma, one
+    unified audit record per rule plus two that must not match. Zircolite drops a rule
+    it cannot run without a word, which would read as a clean scan in an investigation."""
+    from mulder import m365
+    from mulder.server.tools import cloudlogs
+
+    def record(operation: str, user: str = "alice@example.com", **parameters: str) -> m365.Record:
+        found = m365.recognise(
+            {
+                "CreationTime": "2026-10-05T12:00:00",
+                "Id": operation,
+                "Operation": operation,
+                "Workload": "Exchange",
+                "UserId": user,
+                "Parameters": [{"Name": n, "Value": v} for n, v in parameters.items()],
+            }
+        )
+        assert found is not None, operation
+        return found
+
+    expected = {
+        "Inbox Rule Created Or Changed": record("New-InboxRule", Name="x"),
+        "Mailbox Forwarding Set": record(
+            "Set-Mailbox", ForwardingSmtpAddress="smtp:x@example.org"
+        ),
+        "Mailbox Permission Granted": record("Add-MailboxPermission", AccessRights="FullAccess"),
+        "Application Consent Granted": record("Consent to application."),
+        "Credentials Added To An Application Or Service Principal": record(
+            "Add service principal credentials."
+        ),
+        "Authentication Method Registered": record("User registered security info"),
+        "Audit Logging Bypassed Or Disabled": record(
+            "Set-MailboxAuditBypassAssociation", AuditBypassEnabled="True"
+        ),
+        "Transport Rule Created Or Changed": record(
+            "New-TransportRule", BlindCopyTo="x@example.org"
+        ),
+    }
+    system = "NT AUTHORITY\\SYSTEM (Microsoft.Exchange.ServiceHost)"
+    quiet = [record("Add-MailboxPermission", user=system), record("Set-Mailbox", Identity="x")]
+    status, parsed = cloudlogs._sigma_scan(
+        "m365", [*expected.values(), *quiet], str(work), None, "low"
+    )
+    assert status == "ok" and parsed is not None, status
+    matched = sorted(d["rule_title"] for d in parsed["detections"])
+    assert matched == sorted(f"Microsoft 365 {title}" for title in expected), matched
+    print("PASS Microsoft 365 Sigma rules through Zircolite", flush=True)
+
+
 def main() -> None:
     assert os.getuid() != 0, "Run through the image entrypoint as mulder"
     assert Path.home() == Path("/home/mulder"), "Unexpected HOME"
@@ -334,6 +384,7 @@ def main() -> None:
 
         netflow_smoke(work)
         logtable_smoke(work)
+        m365_smoke(work)
 
         evidence = work / "email.raw"
         original = (b"Contact smoke@example.org for the smoke test.\n" * 100).ljust(8192, b"\0")

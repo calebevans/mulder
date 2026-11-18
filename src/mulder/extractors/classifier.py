@@ -30,6 +30,7 @@ _HEAD_BYTES = 32 * SECTOR
 _NETWORK_CAPTURE_EXTS = {".pcap", ".pcapng", ".cap"}
 _ARCHIVE_EXTS = {".zip", ".gz", ".tar", ".bz2", ".7z", ".rar", ".tgz"}
 _EVTX_EXTS = {".evtx"}
+_MAILBOX_EXTS = {".pst", ".ost"}  # Outlook data files: a mailbox export, or a profile's cache
 _YARA_RULE_EXTS = {".yar", ".yara"}
 _BROWSER_HISTORY_NAMES = {"index.dat"}
 _LOG_FILE_EXTS = {".log", ".txt"}
@@ -229,17 +230,12 @@ def is_cloud_audit_log(path: Path) -> bool:
     """Sniff the head of a JSON file for the keys a cloud audit log export carries.
 
     GCP Cloud Audit Logs have ``protoPayload``, AWS CloudTrail ``eventSource`` and
-    ``eventName``, GitHub audit logs ``action``, ``actor`` and a timestamp key.
+    ``eventName``, GitHub audit logs ``action``, ``actor`` and a timestamp key;
+    for Microsoft 365 and Entra ID see ``_is_microsoft_audit``.
     Deliberately loose: a false positive costs one indexed file, a miss costs
     the log.
     """
-    try:
-        if not path.is_file():  # a FIFO named x.json would block the open
-            return False
-        with path.open("rb") as f:
-            head = f.read(65536)
-    except OSError:
-        return False
+    head = _head(path, 65536)
     return (
         b'"protoPayload"' in head
         or (b'"eventSource"' in head and b'"eventName"' in head)
@@ -248,7 +244,55 @@ def is_cloud_audit_log(path: Path) -> bool:
             and b'"actor"' in head
             and (b'"@timestamp"' in head or b'"created_at"' in head)
         )
+        or _is_microsoft_audit(head.lower())
     )
+
+
+def _head(path: Path, size: int) -> bytes:
+    """The first *size* bytes of a regular file as UTF-8; empty when it cannot be read.
+
+    Windows PowerShell's ``>`` and ``Out-File`` write UTF-16, and PowerShell is how
+    Microsoft 365 logs are usually exported.
+    """
+    try:
+        if not path.is_file():  # a FIFO named x.json would block the open
+            return b""
+        with path.open("rb") as f:
+            head = f.read(size)
+    except OSError:
+        return b""
+    if head[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return head.decode("utf-16", errors="replace").encode()
+    return head
+
+
+def _is_microsoft_audit(low: bytes) -> bool:
+    """Unified audit log records, Entra sign-ins or Entra directory audits, by keys only
+    those logs have. *low* is lower-cased: Graph, Log Analytics and the PowerShell
+    modules spell the same keys in different case."""
+    return (
+        (b'"operation"' in low and b'"creationtime"' in low)  # unified audit log
+        or b'"auditdata"' in low  # the same, wrapped by Search-UnifiedAuditLog or Graph
+        or (b'"initiatedby"' in low and b'"targetresources"' in low)  # directory audit
+        or (  # sign-in
+            b'"appid"' in low
+            and b'"ipaddress"' in low
+            and any(
+                k in low
+                for k in (b'"conditionalaccessstatus"', b'"clientappused"', b'"resulttype"')
+            )
+        )
+    )
+
+
+def is_audit_log_csv(path: Path) -> bool:
+    """A Unified Audit Log CSV export: its header names an ``AuditData`` column, which
+    carries each event as JSON (Purview's export, ``Search-UnifiedAuditLog | Export-Csv``).
+    """
+    lines = _head(path, 4096).decode(errors="replace").lstrip("\ufeff").splitlines()
+    # Export-Csv without -NoTypeInformation puts a "#TYPE ..." line before the header.
+    header = next((line for line in lines[:2] if not line.startswith("#TYPE")), "")
+    return "auditdata" in {name.strip(' "').lower() for name in header.split(",")}
 
 
 def has_nfdump_magic(path: Path) -> bool:
@@ -422,6 +466,10 @@ class EvidenceClassifier:
         if ext in JSON_LOG_EXTS and is_cloud_audit_log(path):
             return ClassifiedEvidence(path=path, artifact_type="cloud_audit_log")
 
+        # And for the CSV a Microsoft 365 unified audit log is usually exported as.
+        if ext == ".csv" and is_audit_log_csv(path):
+            return ClassifiedEvidence(path=path, artifact_type="cloud_audit_log")
+
         if name in _SKIP_FILENAMES or ext in _SKIP_EXTENSIONS:
             return None
 
@@ -455,6 +503,9 @@ class EvidenceClassifier:
 
         if ext in _EVTX_EXTS:
             return ClassifiedEvidence(path=path, artifact_type="evtx")
+
+        if ext in _MAILBOX_EXTS:
+            return ClassifiedEvidence(path=path, artifact_type="mailbox")
 
         if ext in _YARA_RULE_EXTS:
             return ClassifiedEvidence(path=path, artifact_type="yara_rules")

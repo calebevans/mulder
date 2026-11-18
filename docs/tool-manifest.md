@@ -607,18 +607,21 @@ Index exported cloud audit logs and apply Sigma detection rules to them.
 
 Reads JSON arrays, JSON lines and CloudTrail `{"Records": [...]}` files, and
 recognises GitHub audit logs, GCP Cloud Audit Logs and AWS CloudTrail per
-event. Any other JSON is indexed as `cloudlog.generic` and scanned only when
+event. It also reads the Microsoft 365 unified audit log (JSON, or the CSV it is
+usually exported to), Entra ID sign-in logs and Entra ID audit logs: see
+"Microsoft 365 and Entra ID" below. Any other JSON is indexed as
+`cloudlog.generic` and scanned only when
 `ruleset_path` is given. Nothing is fetched: export the logs first (see the
 [usage guide](usage-guide.md#cloud-audit-logs)).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| evidence_path | str | yes | JSON log file, or a directory searched for .json/.jsonl/.ndjson |
+| evidence_path | str | yes | Log file, or a directory searched for .json/.jsonl/.ndjson and unified audit log .csv exports |
 | ruleset_path | str \| None | no | Sigma rules to use instead of the defaults |
 | sigma_level_filter | Literal['informational', 'low', 'medium', 'high', 'critical'] \| None | no | Minimum Sigma level (default "low") |
 | force | bool | no | Re-run even if these logs were already indexed |
 
-**Returns:** `files_read`, `files_with_problems{}`, `log_types{<type>: events, source, log_table, log_table_note, sigma, detections, level_counts{}, rules_matched{}, mitre_coverage{}}`
+**Returns:** `files_read`, `files_with_problems{}`, `log_types{<type>: events, source, log_table, log_table_note, summary_source, summary{}, export_warnings[], sigma, detections, level_counts{}, rules_matched{}, mitre_coverage{}}`
 
 Events are indexed one per line in `cloudlog.<type>` (time, actor, action,
 source IP, target, raw event) and Sigma matches in `cloudlog.<type>.detections`.
@@ -628,7 +631,7 @@ plus mulder's own GCP rules for service account key creation, federated token
 exchange, service account impersonation, IAM policy changes and Secret Manager
 reads.
 
-GitHub, GCP and AWS events are also loaded as rows into a [log table](#log-tables)
+Every type but `generic` is also loaded as rows into a [log table](#log-tables)
 named after the source (`log_table` in the result), so `log_top`, `log_histogram`
 and `log_rows` can count them. Each row has the time, actor, action, source IP and
 target of the text line (for AWS the target is the region), plus:
@@ -638,13 +641,17 @@ target of the text line (for AWS the target is the region), plus:
 | AWS | `status` (the `errorCode`; `Failure` when there is only an `errorMessage`; otherwise `Success`), `user_agent`, `session_id` (the access key id), `bytes` (`bytesTransferredOut`), `event_id`, `identity_type`, `account`, `read_only` |
 | GCP | `status` (the `google.rpc` status code, `OK` when there is none), `user_agent`, `event_id` (`insertId`) |
 | GitHub | `user_agent`, `session_id` (`hashed_token`), `event_id` (`_document_id`), `country` |
+| Microsoft 365 (`m365`) | `status` (`ResultStatus`), `user_agent`, `session_id`, `event_id` (`Id`), `workload`, `app_id`, `error` (`ErrorNumber` or `ErrorCode`, when not 0), `mailbox` (`MailboxOwnerUPN`), `access_type` (`Sync` or `Bind`, for MailItemsAccessed) |
+| Entra sign-ins (`entra_signin`) | `status` (`Success`, or the error code), `user_agent`, `session_id`, `event_id`, `app_id`, `client_app`, `interactive`, `auth_requirement`, `conditional_access`, `risk`, `country`, `asn`, `token_id` |
+| Entra audit (`entra_audit`) | `status` (`result`), `user_agent`, `event_id`, `category`, `service`, `target_type`, `correlation_id` |
 
 `cloudlog.generic` gets no table: such an event has a time and nothing to count on.
 A forced re-run replaces the rows it loaded before. Because a directory is read
 recursively, evidence paths can overlap, and the table holds each path's events once:
 a path inside one already loaded adds no rows (`log_table_note` names the path that
 contains it), and a directory replaces the rows of paths inside it. A file without
-a `.json`, `.jsonl` or `.ndjson` suffix is read only when it is named itself, so it is
+a `.json`, `.jsonl` or `.ndjson` suffix (other than a unified audit log `.csv`) is
+read only when it is named itself, so it is
 neither covered nor replaced by a directory. The text index is not deduplicated: both
 runs are indexed as `cloudlog.<type>` sources.
 
@@ -664,6 +671,57 @@ matches on full field paths (`userIdentity.type`), so a nested key cannot
 stand in for a top-level field. If the events hold more than about 2,000
 distinct field paths, the least-used deep ones are left out of the scan and
 `sigma` says how many. Symlinks under a directory are not followed.
+
+**Microsoft 365 and Entra ID.** Three log types, told apart per record:
+
+| Type | Recognised shapes |
+|------|-------------------|
+| `m365`, the unified audit log | A CSV with an `AuditData` column (the Purview portal's export; `Search-UnifiedAuditLog \| Export-Csv`, with or without the `#TYPE` line; UTF-16 or UTF-8). JSON or JSON lines of Management Activity API records (`CreationTime`, `Operation`, ...). `Search-UnifiedAuditLog \| ConvertTo-Json`, where `AuditData` is an object or a JSON string. Microsoft Graph audit query records (`auditData`). |
+| `entra_signin` | Microsoft Graph `signIn` objects (v1.0 or beta) and Log Analytics `SigninLogs` rows. |
+| `entra_audit` | Microsoft Graph `directoryAudit` objects and Log Analytics `AuditLogs` rows. |
+
+A Graph response page (`{"@odata.context": ..., "value": [...]}`) and an Azure
+Monitor diagnostic-settings stream (`{"records": [...]}`, each record's event in
+`properties`) are unwrapped. Key case is ignored for the two Entra logs. What is
+indexed is the record itself, without its wrapper. A `.csv` in a directory is
+read only when its header has an `AuditData` column.
+
+The fields come from wherever the workload puts them: the source IP from
+`ClientIP`, `ClientIPAddress` or `ActorIpAddress`, without a port or brackets
+and with an IPv4-mapped address unmapped; the user agent from `UserAgent`, from
+`ExtendedProperties` (also inside its `additionalDetails`) or from
+`ClientInfoString`; the session from `SessionId`, `AppAccessContext.AADSessionId`
+or `DeviceProperties`. For a sign-in, the action is the application signed in to
+and the target the resource. `country` is the sign-in record's own; nothing looks
+an address up.
+
+`cloudlog.<type>.summary` (`summary_source`) is computed from the events, with
+no model involved, one tab-separated fact per line:
+
+| Line | Content |
+|------|---------|
+| `user` | per user, each source IP, user agent and session: first seen, events, last seen |
+| `session` | a session seen from more than one source IP, with each address's events and times (loopback addresses, which Exchange records for its own work, are not counted) |
+| `persistence` | an operation that leaves access behind or hides it, with its parameters folded into one object: inbox rules, mailbox forwarding, mailbox permissions, application consent, application credentials, a registered sign-in method, audit logging changes, transport rules. Operations by Exchange's own service account are counted, not listed |
+| `mailbox` | MailItemsAccessed per mailbox, `Sync` and `Bind` apart: events, messages listed, throttled records, folders, who, source IPs, sessions (`m365` only) |
+| `WARNING` | a file whose unified audit record count is exactly 5,000, 10,000, 50,000 or 1,000,000, the sizes at which `Search-UnifiedAuditLog` and the Purview export stop: it is probably incomplete. Also returned as `export_warnings` |
+
+Sign-in summaries have `user` and `session` lines, audit summaries `user` and
+`persistence` lines. Each section is capped (50 users, the 10 least frequent
+values per user and field, 200 sessions, 300 operations, 200 mailboxes) and says
+when it was, with the `log_top` call that counts the rest. `summary` in the
+result gives the section counts.
+
+Default Sigma rules for `m365` are SigmaHQ's `rules/cloud/m365/audit` (the two
+that match raw audit records) and eight of mulder's own: inbox rule created or
+changed, mailbox forwarding set, mailbox permission granted, application consent
+granted, credentials added to an application or service principal,
+authentication method registered, audit logging bypassed or disabled, and
+transport rule created or changed. The rules that match Exchange cmdlets leave
+out Exchange's own service account (`NT AUTHORITY\SYSTEM ...`). The two Entra
+types have no default rules (`sigma` says so); their `persistence` lines list
+the same operations. A Sigma scan sees `Parameters` and the other name/value
+arrays as one JSON text per record.
 
 **Roles:** `EXTRACT_EXECUTOR`
 
@@ -1170,6 +1228,10 @@ RFC 2047 encoded headers are decoded, quoted recipient names are preserved,
 HTML-only messages get a searchable text body, and named inline MIME parts count
 as attachments.
 
+A `.pst` or `.ost` file in the evidence directory, or unpacked from an archive,
+is classified as `mailbox`: the planner is given its path with this tool, and
+`audit_tool_coverage` reports a mailbox it was not run on.
+
 **Roles:** `EXTRACT_EXECUTOR`
 
 ---
@@ -1477,7 +1539,8 @@ Retrieve IOC data carved by bulk_extractor from the case database.
 ### Log tables
 
 `search` finds text in a log; it cannot count. Logs that an extractor also loads as rows
-(today `run_cloud_audit_logs`: `cloudlog.github`, `cloudlog.gcp`, `cloudlog.aws`) can be
+(today `run_cloud_audit_logs`: `cloudlog.github`, `cloudlog.gcp`, `cloudlog.aws`,
+`cloudlog.m365`, `cloudlog.entra_signin`, `cloudlog.entra_audit`) can be
 counted with the four tools below. A row has a UTC time, the fields `actor`, `src_ip`,
 `action`, `target`, `status`, `user_agent`, `session_id` and `bytes` where the log has
 them, and a few log-specific fields (`list_log_tables` names them per table).

@@ -79,11 +79,16 @@ context>") once per exporter directory, group "foundation", and no other run_net
 tool (they are follow-ups for the analyst); plan it only for the system whose directory
 holds the files, never from another system's plan.
 
-When the evidence context lists CLOUD AUDIT LOGS, REPOSITORY CHECKOUTS or CI
-RUN LOGS, plan the tools named under each heading, with the paths spelled
-exactly as listed, group "foundation":
+When the evidence context lists CLOUD AUDIT LOGS, REPOSITORY CHECKOUTS, CI
+RUN LOGS or MAILBOX FILES, plan the tools named under each heading, with the
+paths spelled exactly as listed, group "foundation":
 - run_cloud_audit_logs indexes exported audit log events (type
-  "cloud_audit_log") and applies detection rules to them.
+  "cloud_audit_log") and applies detection rules to them. Microsoft 365 and
+  Entra ID exports (JSON, or the unified audit log's CSV) are read by the same
+  call: plan it once per listed path, not per file or per log. It also writes
+  the summaries and log tables the analyst works from, so plan nothing else
+  for those logs.
+- parse_pst lists the messages in an Outlook mailbox file (type "mailbox").
 - run_workflow_audit finds CI workflows an outsider could drive and lists the
   secrets each refers to (type "repository").
 - run_secret_scan finds credentials printed in run logs or left in artifacts

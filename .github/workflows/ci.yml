@@ -108,6 +108,9 @@ jobs:
           python3 -m zipfile -l dist/*.whl | grep -q 'mulder/py.typed'
           # Without the lock, `mulder setup` refuses every digest-pinned asset.
           python3 -m zipfile -l dist/*.whl | grep -q 'mulder/assets/assets.lock'
+          # Without these, Microsoft 365 audit logs are scanned with two rules, not ten.
+          tar tzf dist/*.tar.gz | grep -q 'mulder/server/data/sigma/m365/m365_inbox_rule_changed.yml'
+          python3 -m zipfile -l dist/*.whl | grep -q 'mulder/server/data/sigma/m365/m365_inbox_rule_changed.yml'
 
   container:
     name: Build container (${{ matrix.arch }})

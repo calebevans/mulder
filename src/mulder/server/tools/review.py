@@ -64,6 +64,9 @@ _EVIDENCE_TOOL_MAP: dict[str, list[str]] = {
     "ci_run_logs": [
         "run_secret_scan",
     ],
+    "mailbox": [
+        "parse_pst",
+    ],
     "evtx": [
         "run_evtx_parser",
         "run_hayabusa",
@@ -91,7 +94,7 @@ _EVIDENCE_TOOL_MAP: dict[str, list[str]] = {
 # Types audited inside the case's extracted-archives directory as well as in
 # the evidence root. Disk and memory images found there are handled by their
 # own planner listings and stay out, as before.
-_UNPACKED_EVIDENCE_TYPES = frozenset({"cloud_audit_log", "repository", "ci_run_logs"})
+_UNPACKED_EVIDENCE_TYPES = frozenset({"cloud_audit_log", "repository", "ci_run_logs", "mailbox"})
 
 # Parameters that name the evidence a mapped tool reads. Output locations
 # such as extract_to and auxiliary inputs such as ssl_keylog_path are left
@@ -101,6 +104,7 @@ _EVIDENCE_INPUT_PARAMS: dict[str, tuple[str, ...]] = {
     "run_cloud_audit_logs": ("evidence_path",),
     "run_secret_scan": ("evidence_path",),
     "run_workflow_audit": ("evidence_path",),
+    "parse_pst": ("file_path",),
     "run_volatility": ("memory_path",),
     "run_volatility_batch": ("memory_path",),
     "run_fls": ("image_path",),

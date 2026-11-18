@@ -1,8 +1,10 @@
-"""Cloud audit log MCP tool: index exported JSON audit logs and run Sigma over them.
+"""Cloud audit log MCP tool: index exported audit logs and run Sigma over them.
 
 Mulder's agents stay offline, so nothing here calls a cloud API. The logs are
 exported beforehand (``gh api``, ``gcloud logging read``, an S3 copy of
-CloudTrail) and dropped into the evidence directory as JSON.
+CloudTrail, a Purview or ``Search-UnifiedAuditLog`` export, Microsoft Graph) and
+dropped into the evidence directory as JSON, or for the Microsoft 365 unified
+audit log as the CSV it is usually exported to.
 """
 
 from __future__ import annotations
@@ -13,15 +15,16 @@ import re
 import subprocess
 import tempfile
 import time
+from collections import Counter
 from datetime import UTC, datetime
 from itertools import chain, repeat
 from operator import itemgetter
 from pathlib import Path
 from typing import Any, Literal
 
-from mulder import logtable
+from mulder import logtable, m365
 from mulder.assets.paths import asset_path
-from mulder.extractors.classifier import JSON_LOG_EXTS
+from mulder.extractors.classifier import JSON_LOG_EXTS, is_audit_log_csv
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
@@ -51,6 +54,9 @@ _SIGMA_RULE_DIRS: dict[str, tuple[str, ...]] = {
     "github": ("rules", "cloud", "github"),
     "gcp": ("rules", "cloud", "gcp", "audit"),
     "aws": ("rules", "cloud", "aws", "cloudtrail"),
+    # The two SigmaHQ rules that match raw audit records. The rest of rules/cloud/m365
+    # match Defender alert names through SIEM field names, which an export does not have.
+    "m365": ("rules", "cloud", "m365", "audit"),
 }
 
 # Sigma's GCP rules call protoPayload.methodName "gcp.audit.method_name"; the
@@ -114,6 +120,9 @@ def _dig(event: dict[str, Any], *path: str) -> object:
 
 def _summary(log_type: str, event: dict[str, Any]) -> tuple[str, object, object, object, object]:
     """Return (time, actor, action, source IP, target) for one event."""
+    if isinstance(event, m365.Record):
+        f = event.fields
+        return (f["event_time"], f["actor"], f["action"], f["src_ip"], f["target"])
     if log_type == "github":
         return (
             _iso(event.get("@timestamp") or event.get("created_at")),
@@ -202,19 +211,26 @@ def _log_row(log_type: str, event: dict[str, Any], line: int) -> dict[str, objec
                 "country": _dig(event, "actor_location", "country_code"),
             },
         )
+    elif isinstance(event, m365.Record):
+        row.update(event.fields)
     return row
 
 
 def _events_in(value: object) -> list[dict[str, Any] | None]:
-    """The events in one decoded JSON value: a dict, a list of them, or CloudTrail Records.
+    """The events in one decoded JSON value: a dict, a list of them, or an envelope
+    around a list (CloudTrail ``Records``, an Azure diagnostic setting's ``records``, a
+    Microsoft Graph page's ``value``).
 
     None stands for a record that is not an object, so that it can be counted.
     """
     if isinstance(value, list):
         return [event for item in value for event in _events_in(item)]
     if isinstance(value, dict):
-        records = value.get("Records")
-        return _events_in(records) if isinstance(records, list) else [value]
+        for key in ("Records", "records", "value"):
+            inner = value.get(key)
+            if isinstance(inner, list) and (key != "value" or "@odata.context" in value):
+                return _events_in(inner)
+        return [value]
     return [None]
 
 
@@ -272,6 +288,13 @@ def _read_events(path: Path) -> tuple[list[dict[str, Any]], int, int]:
         found = _events_in(value)
         events.extend(event for event in found if event is not None)
         not_objects += found.count(None)
+
+
+def _is_log_file(path: Path) -> bool:
+    """Whether a directory run reads *path*: a JSON suffix, or a CSV whose header has
+    the unified audit log's AuditData column."""
+    suffix = path.suffix.lower()
+    return suffix in JSON_LOG_EXTS or (suffix == ".csv" and is_audit_log_csv(path))
 
 
 def _flatten(event: dict[str, Any]) -> dict[str, object]:
@@ -387,9 +410,11 @@ def run_cloud_audit_logs(
 ) -> dict[str, object]:
     """Index exported cloud audit logs and apply Sigma detection rules to them.
 
-    Call when the evidence holds JSON audit log exports (type "cloud_audit_log"):
-    GitHub audit logs, GCP Cloud Audit Logs or AWS CloudTrail. Reads JSON arrays,
-    JSON lines and CloudTrail Records files, and recognises the log type per event.
+    Call when the evidence holds audit log exports (type "cloud_audit_log"):
+    GitHub audit logs, GCP Cloud Audit Logs, AWS CloudTrail, the Microsoft 365
+    unified audit log (type m365), Entra ID sign-in logs (entra_signin) or Entra
+    ID audit logs (entra_audit). Reads JSON arrays, JSON lines, CloudTrail Records
+    files and unified audit log CSV exports, and recognises the log type per event.
 
     Returns per-type event and detection counts. Events are indexed one per line
     in cloudlog.<type> (time, actor, action, source IP, target, raw event) and
@@ -397,13 +422,19 @@ def run_cloud_audit_logs(
     cloudlog.generic and scanned only when ruleset_path is given. Files that
     were damaged, truncated, held no events or held JSON values that are not
     objects are named in files_with_problems.
-    GitHub, GCP and AWS events are also loaded as rows into a log table of the
+    Every type but generic is also loaded as rows into a log table of the
     source's name, which log_top, log_histogram and log_rows count over. A path
     inside one that was already loaded adds no rows (log_table_note says so).
+    The three Microsoft types also get cloudlog.<type>.summary (summary_source):
+    per user the source IPs, user agents and sessions, sessions seen from more
+    than one source IP, operations that leave access behind, and mailbox access.
+    export_warnings names a unified audit log file whose record count is exactly
+    a size at which exports stop: it is probably incomplete. The two Entra types
+    have no default Sigma rules.
 
     Args:
-        evidence_path: A JSON log file, or a directory searched recursively for
-            .json, .jsonl and .ndjson files.
+        evidence_path: A log file, or a directory searched recursively for
+            .json, .jsonl and .ndjson files and unified audit log .csv exports.
         ruleset_path: Sigma rules to use instead of the defaults for every
             log type found.
         sigma_level_filter: Minimum Sigma rule level to include. Set None
@@ -438,9 +469,7 @@ def run_cloud_audit_logs(
     if root.is_dir():
         # Symlinks are not followed: one planted in the evidence could point anywhere.
         files = sorted(
-            f
-            for f in root.rglob("*")
-            if f.suffix.lower() in JSON_LOG_EXTS and f.is_file() and not f.is_symlink()
+            f for f in root.rglob("*") if not f.is_symlink() and _is_log_file(f) and f.is_file()
         )
     elif root.is_file():
         files = [root]
@@ -459,14 +488,21 @@ def run_cloud_audit_logs(
     # What was not read, per log type of the file it was in ("" when the file shows
     # none): the log tables report it, so a count over a damaged export says so.
     lost: dict[str, int] = {}
+    unified: dict[str, int] = {}  # file -> unified audit log records read from it
     for file in files:
+        read = m365.read_csv if file.suffix.lower() == ".csv" else _read_events
         try:
-            events, damaged, not_objects = _read_events(file)
+            events, damaged, not_objects = read(file)
         except (OSError, MemoryError) as exc:
             problems[str(file)] = f"unreadable: {exc}"
             events, damaged, not_objects = [], 1, 0
         else:
-            if damaged:
+            if damaged and read is m365.read_csv:
+                problems[str(file)] = (
+                    f"rows without a readable AuditData event: {damaged}; "
+                    f"events read: {len(events)}"
+                )
+            elif damaged:
                 problems[str(file)] = f"damaged or truncated JSON; {len(events)} events recovered"
             elif not_objects:
                 problems[str(file)] = (
@@ -474,14 +510,18 @@ def run_cloud_audit_logs(
                 )
             elif not events:
                 problems[str(file)] = "no events"
-        kinds = set()
+        kinds: Counter[str] = Counter()
         for event in events:
             kind = _log_type(event)
-            kinds.add(kind)
+            if kind == "generic" and (record := m365.recognise(event)) is not None:
+                kind, event = record.kind, record
+            kinds[kind] += 1
             by_type.setdefault(kind, []).append(event)
+        unified[str(file)] = kinds["m365"]
         # A value that is not an object is a lost record of the log around it. In a file
-        # with no events it is no sign of a log at all (a list of tags, a number).
-        for kind in kinds or {""}:
+        # with no events it is no sign of a log at all (a list of tags, a number). A CSV
+        # is read for one log only, so what it lost is that log's even when all was lost.
+        for kind in kinds or {"m365" if read is m365.read_csv else ""}:
             lost[kind] = lost.get(kind, 0) + damaged + (not_objects if kinds else 0)
 
     if not by_type:
@@ -489,7 +529,7 @@ def run_cloud_audit_logs(
             tc_id,
             name,
             params,
-            f"No JSON events found in {evidence_path}",
+            f"No events found in {evidence_path}",
             (time.monotonic() - t0) * 1000,
             error_type="no_data",
         )
@@ -523,7 +563,7 @@ def run_cloud_audit_logs(
                 # was already loaded; its events are then in the table once, not twice.
                 # Not so a file that reading a directory skips for its suffix: nothing
                 # above it holds its events, and nothing above it may replace them.
-                nested=root.is_dir() or root.resolve().suffix.lower() in JSON_LOG_EXTS,
+                nested=root.is_dir() or _is_log_file(root.resolve()),
             )
             entry["log_table"] = source
             if "covered_by" in loaded:
@@ -531,6 +571,19 @@ def run_cloud_audit_logs(
                     "no rows added: these events are already in the table from "
                     f"{loaded['covered_by']}, which contains this path"
                 )
+        if log_type in m365.TYPES:
+            # What the events add up to, worked out here so that no model has to count.
+            warnings = m365.export_warnings(unified) if log_type == "m365" else []
+            lines, counts = m365.summarise(
+                log_type,
+                evidence_path,
+                [e for _, e in ordered if isinstance(e, m365.Record)],
+                warnings,
+            )
+            extract_and_index("\n".join(lines), f"{source}.summary", evidence_path, "cloudlogs")
+            entry.update(summary_source=f"{source}.summary", summary=counts)
+            if warnings:
+                entry["export_warnings"] = warnings
 
         status, parsed = _sigma_scan(
             log_type, events, evidence_path, ruleset_path, sigma_level_filter

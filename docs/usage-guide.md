@@ -580,7 +580,7 @@ The analyst receives complementary guidance: when execution artifacts show commu
 
 ## Cloud Audit Logs
 
-Mulder's agents work offline, so it does not call cloud APIs. Export the audit logs yourself, put the JSON files in the evidence directory, and `run_cloud_audit_logs` indexes every event and applies Sigma rules. JSON arrays, JSON lines and CloudTrail `Records` files are all read, with or without a byte-order mark; the log type is recognised from the events.
+Mulder's agents work offline, so it does not call cloud APIs. Export the audit logs yourself, put the files in the evidence directory, and `run_cloud_audit_logs` indexes every event and applies Sigma rules. JSON arrays, JSON lines and CloudTrail `Records` files are all read, with or without a byte-order mark; the log type is recognised from the events. For Microsoft 365 and Entra ID, including the CSV export of the unified audit log, see [Microsoft 365 and Entra ID](#microsoft-365-and-entra-id).
 
 | Log | One way to export it |
 |-----|----------------------|
@@ -594,13 +594,50 @@ Events land in `cloudlog.github`, `cloudlog.gcp` and `cloudlog.aws`, one per lin
 
 GCP token exchanges, service account impersonation and Secret Manager reads appear only if Data Access audit logs were enabled for those APIs before the incident. Any other JSON log is indexed as `cloudlog.generic`; pass `ruleset_path` to scan it with your own Sigma rules.
 
+### Microsoft 365 and Entra ID
+
+For a business email compromise, export three logs for the affected accounts and the incident window, and the mailbox if you can. `run_cloud_audit_logs` reads all three logs as they are exported; nothing needs converting.
+
+| Evidence | Ways to export it | What is read |
+|----------|-------------------|--------------|
+| Unified audit log (mail, files, directory changes, sign-ins) | Purview portal: **Audit**, run a search, **Export**. PowerShell: `Search-UnifiedAuditLog -StartDate 2026-10-01 -EndDate 2026-10-15 -UserIds alice@contoso.com -SessionId bec1 -SessionCommand ReturnLargeSet -ResultSize 5000 \| Export-Csv ual.csv -NoTypeInformation -Append`, repeated until it returns nothing. Microsoft-Extractor-Suite: `Get-UAL`. | The CSV (each event is the JSON in its `AuditData` column), or JSON / JSON lines of the same records |
+| Entra sign-in log | Entra admin center: **Sign-in logs**, **Download**, JSON. Graph PowerShell: `Get-MgBetaAuditLogSignIn -All -Filter "createdDateTime ge 2026-10-01T00:00:00Z" \| ConvertTo-Json -Depth 10 > signins.json`. Microsoft-Extractor-Suite: `Get-GraphEntraSignInLogs`. Log Analytics: `SigninLogs` exported as JSON. | JSON |
+| Entra audit log | Entra admin center: **Audit logs**, **Download**, JSON. Graph PowerShell: `Get-MgAuditLogDirectoryAudit -All \| ConvertTo-Json -Depth 10 > directory-audit.json`. Microsoft-Extractor-Suite: `Get-GraphEntraAuditLogs`. Log Analytics: `AuditLogs` exported as JSON. | JSON |
+| Mailbox | A `.pst` from a Purview eDiscovery export or from Outlook, or the `.ost` of the user's Outlook profile | `parse_pst` |
+
+Put them together in one directory named for the tenant, and the investigation treats it as one system:
+
+```
+evidence/
+  contoso-m365/
+    ual.csv                  unified audit log
+    signins.json             Entra sign-ins
+    directory-audit.json     Entra audit log
+    alice.pst                mailbox export
+```
+
+Things that go wrong when exporting:
+
+- **Exports stop without saying so.** `Search-UnifiedAuditLog` returns at most 5,000 results sorted and 50,000 with `ReturnLargeSet` (10,000 if the two session commands are mixed); a Purview export stops at 50,000 rows, or 1,000,000 with Audit (Premium). Mulder flags a file with exactly such a count (`export_warnings`, and a `WARNING` line in the summary), but cannot tell what is missing. Search shorter time ranges, or fewer users, until each result is below the limit.
+- **`ConvertTo-Json` flattens nested objects** below two levels unless you pass `-Depth`; the status, location and device of a sign-in are then lost. Use `-Depth 10`.
+- **The sign-in log's CSV download is not read.** Download JSON.
+- **Graph v1.0 sign-ins have no user agent and no session id** (`Get-MgAuditLogSignIn`). Use the beta endpoint (`Get-MgBetaAuditLogSignIn`) or Microsoft-Extractor-Suite when you need to follow a session; the summary says when an export has neither.
+- **Retention is short.** The unified audit log keeps 180 days by default (90 for records before October 2023, a year with E5 licences); Entra sign-in and audit logs keep 30 days, 7 without a premium licence. Export early, and tell mulder in the briefing what window you exported.
+- **Name JSON exports `.json`, `.jsonl` or `.ndjson`.** Sign-in and audit logs routed through Azure Monitor diagnostic settings (a storage account or an event hub) are read as they are, but a file with another suffix, such as `.log`, is not recognised in a directory.
+- Windows PowerShell's `>` writes UTF-16 and `Export-Csv` may add a `#TYPE` line. Both are read.
+
+Events land in `cloudlog.m365`, `cloudlog.entra_signin` and `cloudlog.entra_audit` and in log tables of the same names. Each also gets `cloudlog.<type>.summary`, computed without a model: per user the source IPs, user agents and sessions with first and last seen; sessions seen from more than one source IP; the operations that leave access behind (inbox rules, forwarding, mailbox permissions, application consent and credentials, registered sign-in methods, audit logging changes, transport rules) with their parameters; and, per mailbox, what MailItemsAccessed recorded, sync and bind apart. Eight Sigma rules for those operations run on the unified audit log, with SigmaHQ's rules for raw audit records; the Entra logs have no rules of their own.
+
+What these logs cannot show: a sync of a mail folder means every message in it was copied to a client, whichever were opened; MailItemsAccessed is recorded only for mailboxes licensed and audited for it, so its absence is not evidence that no mail was read; and a location is only what the sign-in record itself says, since mulder looks no address up.
+
 ### Laying out cloud and CI evidence
 
-Give each kind of evidence its own directory under the evidence root. Mulder recognises three kinds, lists each for the planner with its path and the tool to run, and checks afterwards that the tool was run:
+Give each kind of evidence its own directory under the evidence root. Mulder recognises four kinds, lists each for the planner with its path and the tool to run, and checks afterwards that the tool was run:
 
 | Evidence | How it is recognised | Tools planned |
 |----------|----------------------|---------------|
-| Cloud audit log exports | `.json`, `.jsonl` or `.ndjson` files that carry audit-log keys | `run_cloud_audit_logs` |
+| Cloud audit log exports | `.json`, `.jsonl` or `.ndjson` files that carry audit-log keys, and `.csv` files with an `AuditData` column | `run_cloud_audit_logs` |
+| Mailbox files | `.pst` and `.ost` files | `parse_pst` |
 | Repository checkout | a directory containing `.github/workflows` | `run_workflow_audit`, `run_secret_scan` |
 | CI run logs | a directory of GitHub Actions run logs as downloaded (`1_build.txt`, timestamped lines) | `run_secret_scan` |
 
@@ -666,7 +703,7 @@ Logs that mulder parses into events are therefore also loaded as rows into a **l
 | `log_histogram` | events per minute, hour or day, optionally split by one field |
 | `log_rows` | the matching events themselves, a page at a time, in time order |
 
-Today `run_cloud_audit_logs` fills `cloudlog.github`, `cloudlog.gcp` and `cloudlog.aws` (and so does `collect_cloud_audit_logs`, which indexes through it). For example, on a CloudTrail export:
+Today `run_cloud_audit_logs` fills `cloudlog.github`, `cloudlog.gcp`, `cloudlog.aws`, `cloudlog.m365`, `cloudlog.entra_signin` and `cloudlog.entra_audit` (and so does `collect_cloud_audit_logs`, which indexes through it). For example, on a CloudTrail export:
 
 ```
 log_top(table="cloudlog.aws", fields=["src_ip"],
@@ -683,7 +720,7 @@ What a count does and does not tell you:
 
 - It counts the records that were exported, parsed and loaded. A service that was not logging, a window the export did not cover, and records listed under `rows_not_parsed` are not in it. `rows_not_parsed` is a lower bound: a truncated or damaged file counts once however many events it lost.
 - Values are compared as written: `Alice@example.com` and `alice@example.com` are two actors unless you filter with `contains`.
-- Cloud audit logs are loaded once per evidence path. A path inside one that is already loaded (a subdirectory, or one file of it) adds no rows, a directory replaces the rows of paths inside it, and a forced re-run or another spelling of the same path replaces its rows. The one exception is a file that a directory run does not read (it has no `.json`, `.jsonl` or `.ndjson` suffix) and that was run by itself: it keeps its own rows. Copies of a file in two separate directories are still two sets of rows; `list_log_tables` shows each path and its rows under `loaded_from`.
+- Cloud audit logs are loaded once per evidence path. A path inside one that is already loaded (a subdirectory, or one file of it) adds no rows, a directory replaces the rows of paths inside it, and a forced re-run or another spelling of the same path replaces its rows. The one exception is a file that a directory run does not read (it has no `.json`, `.jsonl` or `.ndjson` suffix and is not a unified audit log `.csv`) and that was run by itself: it keeps its own rows. Copies of a file in two separate directories are still two sets of rows; `list_log_tables` shows each path and its rows under `loaded_from`.
 - A stored value is one line of at most 512 characters (a longer one ends in `…`), and times are kept to the second. A time before 1990 or after 2100 (a zeroed or forged timestamp) is kept as no time and counted under `rows_without_time`. The whole event is in the text index: `log_rows` gives its source and line.
 
 ## CLI Reference
