@@ -243,6 +243,36 @@ class TestQueryRegistryValueTool:
 
     @patch("mulder.server.tools.extract.registry_query._cleanup_tsk_extract_dir")
     @patch("mulder.server.tools.extract.registry_query.extract_and_index")
+    @patch("mulder.server.tools.extract.registry_query._extract_hive")
+    @patch("mulder.server.tools.extract.registry_query.get_ctx")
+    def test_unreadable_hive_returns_error(
+        self,
+        mock_ctx: MagicMock,
+        mock_extract: MagicMock,
+        mock_index: MagicMock,
+        mock_cleanup: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """A file that is not a registry hive is an error result, not a crash."""
+        fn = self._get_sync_fn()
+        mock_ctx.return_value = MagicMock(case_id="test-case")
+        junk = tmp_path / "SYSTEM"
+        junk.write_bytes(b"not a hive" * 512)
+        mock_extract.return_value = (junk, str(tmp_path))
+
+        result = fn(
+            case_id="test-case",
+            image_path="/images/disk.dd",
+            hive="system",
+            key_path="ControlSet001\\Control\\Windows",
+            value_name=None,
+            username=None,
+        )
+        assert result["status"] == "error"
+        assert result["error_type"] == "hive_unreadable"
+
+    @patch("mulder.server.tools.extract.registry_query._cleanup_tsk_extract_dir")
+    @patch("mulder.server.tools.extract.registry_query.extract_and_index")
     @patch("mulder.server.tools.extract.registry_query.Registry.Registry")
     @patch("mulder.server.tools.extract.registry_query._extract_hive")
     @patch("mulder.server.tools.extract.registry_query.get_ctx")

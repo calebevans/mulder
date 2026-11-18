@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +29,7 @@ __all__ = ["query_registry_value"]
 
 logger = logging.getLogger(__name__)
 
-_FILETIME_EPOCH = datetime(1601, 1, 1, tzinfo=timezone.utc)
+_FILETIME_EPOCH = datetime(1601, 1, 1, tzinfo=UTC)
 
 _HIVE_PATHS: dict[str, list[str]] = {
     "system": ["config/SYSTEM"],
@@ -76,11 +76,7 @@ def _try_decode_filetime(raw: bytes) -> str | None:
         return None
     try:
         dt = _FILETIME_EPOCH + timedelta(microseconds=ticks // 10)
-        if (
-            datetime(1980, 1, 1, tzinfo=timezone.utc)
-            < dt
-            < datetime(2100, 1, 1, tzinfo=timezone.utc)
-        ):
+        if datetime(1980, 1, 1, tzinfo=UTC) < dt < datetime(2100, 1, 1, tzinfo=UTC):
             return dt.isoformat()
     except (OverflowError, OSError):
         pass
@@ -260,7 +256,20 @@ def query_registry_value(
                 error_type="hive_not_found",
             )
 
-        reg = Registry.Registry(str(hive_path))
+        try:
+            reg = Registry.Registry(str(hive_path))
+        except Exception as exc:
+            # python-registry raises its own ParseException (and struct errors)
+            # on a truncated or non-hive file; report it instead of crashing.
+            return error_response(
+                tc_id,
+                "query_registry_value",
+                params,
+                f"The {hive} hive extracted from {image_path} is not a readable "
+                f"registry hive: {exc}",
+                error_type="hive_unreadable",
+                suggestion="Run run_registry_parser or run_regripper on the image instead.",
+            )
 
         try:
             key = reg.open(key_path)
