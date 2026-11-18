@@ -168,6 +168,7 @@ _LOG_TABLES_CREATE = (
     "  source_id INTEGER NOT NULL,"
     "  log_table TEXT NOT NULL,"
     "  complete INTEGER NOT NULL,"
+    "  nested INTEGER NOT NULL,"
     "  row_count INTEGER NOT NULL,"
     "  rows_no_time INTEGER NOT NULL,"
     "  rows_unparsed INTEGER NOT NULL,"

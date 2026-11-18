@@ -107,11 +107,11 @@ def test_every_export_framing_is_read(tmp_path: Path) -> None:
     for name, text in cases.items():
         file = tmp_path / f"{name}.json"
         file.write_text(text)
-        assert _read_events(file) == ([a, b], False), name
+        assert _read_events(file) == ([a, b], 0, 0), name
 
     utf16 = tmp_path / "powershell.json"
     utf16.write_bytes(json.dumps([a, b]).encode("utf-16"))
-    assert _read_events(utf16) == ([a, b], False)
+    assert _read_events(utf16) == ([a, b], 0, 0)
 
 
 def test_a_damaged_export_keeps_its_complete_events_and_says_so(tmp_path: Path) -> None:
@@ -128,7 +128,7 @@ def test_a_damaged_export_keeps_its_complete_events_and_says_so(tmp_path: Path) 
     for name, text in cases.items():
         file = tmp_path / f"{name}.json"
         file.write_text(text)
-        assert _read_events(file) == ([a, b], True), name
+        assert _read_events(file) == ([a, b], 1, 0), name
 
 
 @pytest.mark.parametrize("poison", ["[" * 200_000, '{"n": ' + "9" * 5000 + "}"])

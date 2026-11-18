@@ -148,7 +148,8 @@ def _answer(
     if result["rows_not_parsed"]:
         notes.append(
             f"at least {result['rows_not_parsed']} records of this log could not be parsed "
-            "(damaged or truncated input) and are in no count: the table is incomplete"
+            "(damaged, truncated or malformed input) and are in no count: the table is "
+            "incomplete"
         )
     if result.get("ingest_incomplete"):
         notes.append("loading this table was cut short: the counts cover only what was stored")

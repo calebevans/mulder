@@ -26,6 +26,11 @@ from sqlalchemy.engine import Connection
 
 from mulder.db import CaseDB
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows; mulder is Linux-first
+    fcntl = None  # type: ignore[assignment]
+
 __all__ = [
     "BUCKETS",
     "COLUMNS",
@@ -65,9 +70,11 @@ _MAX_IN_VALUES = 50
 _SPLIT_VALUES = 5
 _MIN_TIME = datetime(1990, 1, 1, tzinfo=UTC)
 _MAX_TIME = datetime(2100, 1, 1, tzinfo=UTC)
-# ponytail: one ingest at a time, so an ingest cannot replace one that is still loading
-# (two overlapping paths planned in one batch). The write queue serialises the inserts
-# anyway; a lock per table if ingests of different tables ever need to interleave.
+# ponytail: one ingest of a case at a time, so an ingest cannot replace one that is still
+# loading (two overlapping paths planned in one batch, or by two sessions). This lock
+# covers the batch's threads and, in :func:`ingest`, a ``flock`` beside the database
+# covers the other sessions' server processes, as for archive extraction. Writes are
+# serialised anyway; a lock per table if ingests of different tables must interleave.
 _INGEST_LOCK = threading.Lock()
 
 _INSERT = text(
@@ -84,7 +91,8 @@ _UPDATE = text(
 # The ingests of one table from a source of the same name as this one, itself included,
 # with their evidence paths: the ones this ingest may replace or be covered by.
 _EARLIER = text(
-    "SELECT t.source_id, t.complete, old.source_path AS path, new.source_path AS mine"
+    "SELECT t.source_id, t.complete, t.nested, old.source_path AS path,"
+    " new.source_path AS mine"
     " FROM log_tables t JOIN sources old ON old.source_id = t.source_id"
     " JOIN sources new ON new.source_id = :sid AND old.source_name = new.source_name"
     " WHERE t.log_table = :t"
@@ -229,13 +237,16 @@ def ingest(
     are reduced to one printable line of at most ``MAX_VALUE_CHARS`` characters. A time
     that :func:`normalise_time` refuses is stored as no time and counted. An earlier
     ingest of *table* from a source of the same name and evidence path (a forced
-    re-run) is replaced.
+    re-run, or the same path spelled differently) is replaced.
 
     Pass ``nested=True`` when the extractor reads a directory recursively, so that one
     evidence path can contain another and then holds the same events. An earlier ingest
-    from a path inside this source's (or the same path spelled differently) is replaced
-    as well; and when a completed earlier ingest's path contains this source's, nothing
-    is loaded, *rows* is not read and the result names that path as ``covered_by``.
+    from a path inside this source's is replaced as well; and when a completed earlier
+    ingest's path contains this source's, nothing is loaded, *rows* is not read and the
+    result names that path as ``covered_by``.
+    Both rules hold only between ingests that passed ``nested=True``: pass False for a
+    path that the recursive read of a directory above it would skip, so that it is
+    neither taken as loaded by that directory nor replaced by it.
 
     Returns:
         ``{"rows", "rows_no_time", "rows_unparsed"}``, and ``covered_by`` when nothing
@@ -252,9 +263,11 @@ def ingest(
     def _start(conn: Connection) -> str | None:
         replaced = []
         for old in conn.execute(_EARLIER, scope).fetchall():
-            if old.path == old.mine or (nested and _inside(old.path, old.mine)):
+            both = nested and old.nested
+            # The same path, however it is spelled; or, between recursive reads, one inside.
+            if _inside(old.path, old.mine) and (both or _inside(old.mine, old.path)):
                 replaced.append(old.source_id)
-            elif nested and old.complete and _inside(old.mine, old.path):
+            elif both and old.complete and _inside(old.mine, old.path):
                 return str(old.path)
         for old_id in replaced:
             gone = {"t": table, "old": old_id}
@@ -264,14 +277,18 @@ def ingest(
                 )
         conn.execute(
             text(
-                "INSERT INTO log_tables (source_id, log_table, complete, row_count,"
-                " rows_no_time, rows_unparsed, field_counts) VALUES (:sid, :t, 0, 0, 0, 0, '{}')"
+                "INSERT INTO log_tables (source_id, log_table, complete, nested, row_count,"
+                " rows_no_time, rows_unparsed, field_counts)"
+                " VALUES (:sid, :t, 0, :nested, 0, 0, 0, '{}')"
             ),
-            scope,
+            {**scope, "nested": int(nested)},
         )
         return None
 
-    with _INGEST_LOCK:
+    lock_path = db.db_path.with_name(f".mulder-logtable-{db.db_path.stem}.lock")
+    with _INGEST_LOCK, open(lock_path, "a") as lock:
+        if fcntl is not None:
+            fcntl.flock(lock, fcntl.LOCK_EX)  # released when the file is closed
         covered_by = db.write(_start)
         if covered_by is not None:
             return {"rows": 0, "rows_no_time": 0, "rows_unparsed": 0, "covered_by": covered_by}

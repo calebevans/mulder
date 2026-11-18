@@ -5,6 +5,8 @@ from __future__ import annotations
 import inspect
 import json
 import sqlite3
+import subprocess
+import sys
 import threading
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -256,6 +258,9 @@ def test_a_recursive_extractor_does_not_load_a_path_twice(case: CaseDB) -> None:
     # An extractor that does not recurse keeps both: the inner path holds other events.
     assert _load(case, path="/evidence/logs/2024")["rows"] == 5
     assert _call(log_top, _TABLE, "actor")["rows_in_table"] == 10
+    # And a recursive read of the directory above it does not replace what it did not read.
+    assert _load(case, path="/evidence/logs", nested=True)["rows"] == 5
+    assert _call(log_top, _TABLE, "actor")["rows_in_table"] == 10
 
 
 def test_overlapping_paths_loaded_at_the_same_time_are_still_counted_once(case: CaseDB) -> None:
@@ -280,6 +285,50 @@ def test_overlapping_paths_loaded_at_the_same_time_are_still_counted_once(case: 
     inner.join()
     outer.join()
 
+    result = _call(log_top, _TABLE, "actor")
+    assert (result["rows_matched"], result["rows_in_table"]) == (5, 5)
+    assert "ingest_incomplete" not in result
+
+
+# Another server process part-way through loading a directory into the case: it has
+# registered its ingest and waits for a line on stdin before it yields the rest.
+_OTHER_SERVER = """
+import sys
+from pathlib import Path
+from mulder import logtable
+from mulder.db import CaseDB
+
+def rows():
+    yield {"actor": "alice", "line": 1}
+    print("loading", flush=True)
+    sys.stdin.readline()
+    yield {"actor": "bob", "line": 2}
+
+db = CaseDB.open("test-case", Path(sys.argv[1]))
+source_id = db.register_source("weblog.access", "/evidence/logs/2024", "blake2b:test", "test", 2)
+logtable.ingest(db, "weblog.access", source_id, rows(), nested=True)
+db.close()
+"""
+
+
+def test_overlapping_paths_loaded_by_two_server_processes_are_still_counted_once(
+    case: CaseDB,
+) -> None:
+    """Each agent session has its own ``mulder serve``, and they share the case database."""
+    other = subprocess.Popen(
+        [sys.executable, "-c", _OTHER_SERVER, str(case.db_path.parent)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    assert other.stdout is not None and other.stdout.readline() == "loading\n"
+    outer = threading.Thread(target=_load, args=(case, _ROWS, _TABLE, "/evidence/logs", True))
+    outer.start()
+    outer.join(0.3)  # it must wait for the other process, as it would for another thread
+    other.communicate("\n", timeout=30)
+    outer.join(30)
+
+    assert other.returncode == 0
     result = _call(log_top, _TABLE, "actor")
     assert (result["rows_matched"], result["rows_in_table"]) == (5, 5)
     assert "ingest_incomplete" not in result
@@ -972,6 +1021,45 @@ def test_cloud_logs_reached_through_overlapping_paths_are_counted_once(
     assert _counts(result, "src_ip") == {"203.0.113.9": 2, "198.51.100.7": 1}
     (table,) = _call(list_log_tables)["tables"]
     assert len(table["loaded_from"]) == 1
+
+
+@pytest.mark.parametrize("file_first", [False, True])
+def test_a_file_the_directory_read_skips_is_neither_covered_nor_replaced_by_it(
+    case: CaseDB, tmp_path: Path, file_first: bool
+) -> None:
+    """A directory is searched for JSON suffixes; a file named itself is read whatever its own."""
+    records = _CLOUDTRAIL["Records"]
+    logs = tmp_path / "aws"
+    logs.mkdir()
+    (logs / "trail.json").write_text(json.dumps({"Records": records[:2]}))
+    (logs / "trail.log").write_text(json.dumps({"Records": records[2:]}))
+
+    for path in (logs / "trail.log", logs) if file_first else (logs, logs / "trail.log"):
+        assert "log_table_note" not in _run(path)["aws"]
+    _run(f"{logs}/../aws/trail.log")  # the same file again: its rows are replaced
+
+    result = _call(log_top, "cloudlog.aws", "src_ip")
+    assert (result["rows_in_table"], result["rows_matched"]) == (3, 3)
+
+
+def test_json_that_is_no_log_is_named_and_counts_against_no_table(
+    case: CaseDB, tmp_path: Path
+) -> None:
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "trail.json").write_text(json.dumps(_CLOUDTRAIL))
+    (logs / "tags.json").write_text(json.dumps(["prod", "eu", "tier-1"]))
+    (logs / "count.json").write_text("42")
+
+    with patch.object(cloudlogs, "_zircolite_script", return_value=None):
+        problems = _call(run_cloud_audit_logs, str(logs))["results"]["files_with_problems"]
+
+    assert problems == {
+        str(logs / "count.json"): "JSON values that are not objects: 1; events read: 0",
+        str(logs / "tags.json"): "JSON values that are not objects: 3; events read: 0",
+    }
+    result = _call(log_top, "cloudlog.aws", "actor")
+    assert (result["rows_in_table"], result["rows_not_parsed"], result["notes"]) == (3, 0, [])
 
 
 def test_damaged_cloud_log_files_and_records_that_are_no_event_count_as_not_parsed(

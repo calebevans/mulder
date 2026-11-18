@@ -643,16 +643,21 @@ target of the text line (for AWS the target is the region), plus:
 A forced re-run replaces the rows it loaded before. Because a directory is read
 recursively, evidence paths can overlap, and the table holds each path's events once:
 a path inside one already loaded adds no rows (`log_table_note` names the path that
-contains it), and a directory replaces the rows of paths inside it. The text index
-is not deduplicated: both runs are indexed as `cloudlog.<type>` sources.
+contains it), and a directory replaces the rows of paths inside it. A file without
+a `.json`, `.jsonl` or `.ndjson` suffix is read only when it is named itself, so it is
+neither covered nor replaced by a directory. The text index is not deduplicated: both
+runs are indexed as `cloudlog.<type>` sources.
 
 What could not be read is counted as the table's `rows_not_parsed`: each damaged
-stretch of a file, a file that could not be read, and each record that is not a
-JSON object. A file whose log type cannot be told (nothing in it was readable)
-counts against every table the run loaded. It is a lower bound on the events lost.
+stretch of a file, a file that could not be read, and each JSON value that is not
+an object in a file that holds events. A damaged or unreadable file whose log type
+cannot be told (nothing in it was readable) counts against every table the run
+loaded. It is a lower bound on the events lost. Valid JSON that holds no event at
+all (a list of strings, a number) counts against no table.
 
-A file that was damaged or truncated, or that held no events, is named in
-`files_with_problems`; complete events before the damage are kept. Events are
+A file that was damaged or truncated, that held no events, or that held JSON values
+that are not objects is named in `files_with_problems` with which of these it was;
+complete events before the damage are kept. Events are
 indexed in time order, and the index keeps one time per window of lines (a few
 events), so a time-range query finds a window by its earliest event. Sigma
 matches on full field paths (`userIdentity.type`), so a nested key cannot

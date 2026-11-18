@@ -218,7 +218,7 @@ def _events_in(value: object) -> list[dict[str, Any] | None]:
     return [None]
 
 
-def _read_events(path: Path) -> tuple[list[dict[str, Any]], int]:
+def _read_events(path: Path) -> tuple[list[dict[str, Any]], int, int]:
     """Read every event in an export, whatever its framing.
 
     Decodes one JSON value after another, which covers a single array, JSON
@@ -227,10 +227,10 @@ def _read_events(path: Path) -> tuple[list[dict[str, Any]], int]:
     read element by element, so a truncated export keeps every complete event.
 
     Returns:
-        (events, skipped). *skipped* counts what was not read: each stretch that
-        was not valid JSON, an array that truncation left open, and each record
-        that is not an object. It is zero for a whole file, and a lower bound on
-        the events lost otherwise.
+        (events, damaged, not_objects). *damaged* counts each stretch that was not
+        valid JSON and an array that truncation left open: zero for a whole file,
+        and a lower bound on the events lost otherwise. *not_objects* counts the
+        JSON values that are not an event because they are not an object.
     """
     raw = path.read_bytes()
     # PowerShell's ">" writes UTF-16; several exporters prepend a UTF-8 BOM.
@@ -238,7 +238,7 @@ def _read_events(path: Path) -> tuple[list[dict[str, Any]], int]:
     text = raw.decode("utf-16" if utf16 else "utf-8-sig", errors="replace")
     decoder = json.JSONDecoder()
     events: list[dict[str, Any]] = []
-    skipped = 0
+    damaged = not_objects = 0
     pos, end = 0, len(text)
 
     def resync(at: int) -> int:
@@ -252,7 +252,7 @@ def _read_events(path: Path) -> tuple[list[dict[str, Any]], int]:
         while pos < end and (text[pos].isspace() or (in_array and text[pos] == ",")):
             pos += 1
         if pos >= end:
-            return events, skipped + in_array
+            return events, damaged + in_array, not_objects
         if in_array and text[pos] == "]":
             in_array = False
             pos += 1
@@ -266,12 +266,12 @@ def _read_events(path: Path) -> tuple[list[dict[str, Any]], int]:
             # RecursionError: nesting deeper than the decoder allows.
             value, pos = decoder.raw_decode(text, pos)
         except (ValueError, RecursionError):
-            skipped, in_array = skipped + 1, False
+            damaged, in_array = damaged + 1, False
             pos = resync(pos)
             continue
         found = _events_in(value)
         events.extend(event for event in found if event is not None)
-        skipped += found.count(None)
+        not_objects += found.count(None)
 
 
 def _flatten(event: dict[str, Any]) -> dict[str, object]:
@@ -395,7 +395,8 @@ def run_cloud_audit_logs(
     in cloudlog.<type> (time, actor, action, source IP, target, raw event) and
     Sigma matches in cloudlog.<type>.detections; other JSON is indexed as
     cloudlog.generic and scanned only when ruleset_path is given. Files that
-    were damaged, truncated or held no events are named in files_with_problems.
+    were damaged, truncated, held no events or held JSON values that are not
+    objects are named in files_with_problems.
     GitHub, GCP and AWS events are also loaded as rows into a log table of the
     source's name, which log_top, log_histogram and log_rows count over. A path
     inside one that was already loaded adds no rows (log_table_note says so).
@@ -460,13 +461,17 @@ def run_cloud_audit_logs(
     lost: dict[str, int] = {}
     for file in files:
         try:
-            events, unread = _read_events(file)
+            events, damaged, not_objects = _read_events(file)
         except (OSError, MemoryError) as exc:
             problems[str(file)] = f"unreadable: {exc}"
-            events, unread = [], 1
+            events, damaged, not_objects = [], 1, 0
         else:
-            if unread:
+            if damaged:
                 problems[str(file)] = f"damaged or truncated JSON; {len(events)} events recovered"
+            elif not_objects:
+                problems[str(file)] = (
+                    f"JSON values that are not objects: {not_objects}; events read: {len(events)}"
+                )
             elif not events:
                 problems[str(file)] = "no events"
         kinds = set()
@@ -474,8 +479,10 @@ def run_cloud_audit_logs(
             kind = _log_type(event)
             kinds.add(kind)
             by_type.setdefault(kind, []).append(event)
+        # A value that is not an object is a lost record of the log around it. In a file
+        # with no events it is no sign of a log at all (a list of tags, a number).
         for kind in kinds or {""}:
-            lost[kind] = lost.get(kind, 0) + unread
+            lost[kind] = lost.get(kind, 0) + damaged + (not_objects if kinds else 0)
 
     if not by_type:
         return error_response(
@@ -514,7 +521,9 @@ def run_cloud_audit_logs(
                 ),
                 # The directory is read recursively, so a path can lie inside one that
                 # was already loaded; its events are then in the table once, not twice.
-                nested=True,
+                # Not so a file that reading a directory skips for its suffix: nothing
+                # above it holds its events, and nothing above it may replace them.
+                nested=root.is_dir() or root.resolve().suffix.lower() in JSON_LOG_EXTS,
             )
             entry["log_table"] = source
             if "covered_by" in loaded:
