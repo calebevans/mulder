@@ -20,6 +20,7 @@ from mulder.orchestrator.phases import PhaseConfig
 from mulder.orchestrator.session import SessionExecutor
 from mulder.orchestrator.types import (
     AnalystResult,
+    EffortLevel,
     ExecutionResults,
     PhaseResult,
     Plan,
@@ -144,6 +145,7 @@ class RoleRunner:
         env: dict[str, str],
         cwd: str,
         max_compactions: int,
+        executor_effort: EffortLevel | None = None,
     ) -> None:
         """Initialize the role runner.
 
@@ -156,6 +158,9 @@ class RoleRunner:
             cwd: Working directory for agent sessions.
             max_compactions: Continuation sessions allowed per role session
                 after context exhaustion.
+            executor_effort: Effort level for executor sessions, their
+                continuations and JSON repair; ``None`` uses *session*'s
+                level, as every other role does.
         """
         self._session = session
         self._dashboard = dashboard
@@ -164,6 +169,7 @@ class RoleRunner:
         self._env = env
         self._cwd = cwd
         self._max_compactions = max_compactions
+        self._executor_effort = executor_effort
 
     async def run_planner(
         self,
@@ -303,6 +309,7 @@ class RoleRunner:
             max_turns=phase.executor_max_turns,
             log_prefix=log_prefix,
             task_system=task_system,
+            effort=self._executor_effort,
         )
 
         extra_turns = await self.compaction_loop(
@@ -323,6 +330,7 @@ class RoleRunner:
             role_label="Executor",
             log_prefix=log_prefix,
             task_system=task_system,
+            effort=self._executor_effort,
         )
         total_turns = result.turns_used + extra_turns
 
@@ -567,6 +575,7 @@ class RoleRunner:
         role_label: str = "",
         log_prefix: str = "",
         task_system: str = "",
+        effort: EffortLevel | None = None,
     ) -> int:
         """Run compaction retries when a session exhausts its context window.
 
@@ -585,6 +594,8 @@ class RoleRunner:
             role_label: Role name for dashboard messages (e.g. "Executor").
             log_prefix: Prefix for SDK query log lines.
             task_system: Task panel system name for tool tracking.
+            effort: Effort level for continuation sessions; ``None`` uses
+                the session's own level.
 
         Returns:
             Additional turns consumed across all compaction attempts.
@@ -606,6 +617,7 @@ class RoleRunner:
                 max_turns=max_turns,
                 log_prefix=log_prefix,
                 task_system=task_system,
+                effort=effort,
             )
             additional_turns += continuation.turns_used
             result.messages.extend(continuation.messages)
@@ -714,6 +726,7 @@ class RoleRunner:
             allowed_tools=[],
             disallowed_tools=["Bash", "Shell"],
             max_turns=1,
+            effort=self._executor_effort,
         )
 
         repaired = extract_json_plan(repair_result.messages)

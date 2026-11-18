@@ -426,7 +426,8 @@ also get a 32768-token output cap instead of 8192, because reasoning tokens
 count against it; so do models LiteLLM's map does not know at all, since they
 may reason unasked (see [Models LiteLLM does not know](#models-litellm-does-not-know)). Phase queries run at `--effort` (`max` and `xhigh` reach
 Bedrock as `high`); utility queries run at `low`, which DeepSeek treats as
-non-reasoning.
+non-reasoning. Executor sessions run at `--executor-effort`, also `low` by
+default, so on such a model the executor does not reason unless you raise it.
 
 In a tool loop Claude Code sends each earlier turn's `thinking` block back in
 the assistant history. Bedrock's DeepSeek route returns those blocks without a
@@ -442,7 +443,7 @@ warning is logged at proxy start. A custom `--proxy-config` is used verbatim;
 add `allowed_openai_params: [reasoning_effort]` to its `litellm_params` yourself.
 
 To turn thinking off, add `--no-thinking`. This disables thinking for every
-phase and utility query, overrides `--effort`, and serves every proxy model
+phase and utility query, overrides `--effort` and `--executor-effort`, and serves every proxy model
 without the reasoning passthrough. The model/provider must support disabling
 thinking; this option does not establish that a model can complete an
 investigation reliably.
@@ -669,8 +670,9 @@ Runs a full multi-phase forensic investigation.
 | `--executor-model` | `claude-haiku-4-5` | Model for executor agents |
 | `--analyst-model` | `claude-opus-4-6` | Model for analyst agents |
 | `--config` | None | YAML config file for models and settings |
-| `--effort` | `max` | Effort level (`max`, `xhigh`, `high`) |
-| `--no-thinking` | off | Disable extended thinking for all queries; overrides `--effort` |
+| `--effort` | `max` | Effort level for planner, analyst, catalog and report sessions (`low`, `medium`, `high`, `xhigh`, `max`) |
+| `--executor-effort` | `low` | Effort level for executor sessions, their continuations and plan JSON repair (same choices). Also settable via `MULDER_EXECUTOR_EFFORT` (the flag wins) |
+| `--no-thinking` | off | Disable extended thinking for all queries; overrides `--effort` and `--executor-effort` |
 | `--workers` | `3` | Max concurrent extraction sessions |
 | `--max-compactions` | `3` | Continuation sessions allowed per role session after context exhaustion; `0` disables. Also settable via `MULDER_MAX_COMPACTIONS` (the flag wins) |
 | `--db-dir` | `~/.mulder/cases` | Case database directory |
@@ -682,6 +684,25 @@ For subprocess failures that say "Check stderr output for details", rerun with
 `--show-cli-stderr`. This displays diagnostics as they arrive for both investigation
 and utility sessions, labeled by worker, model, or utility operation. The same lines
 are saved in `<db-dir>/orchestrator.log`. Without the flag, CLI stderr remains suppressed.
+
+#### Effort per role
+
+The executor runs the tools a plan names, waits for batches and reports what
+happened, so it runs at `low` effort by default while the roles that decide and
+interpret keep `--effort`. This matters most when one model runs every role
+(`--model`). To run every role at one level, exactly as mulder did before the
+executor had its own setting, pass the same value to both:
+
+```bash
+mulder investigate /evidence my-case --model claude-opus-4-6 \
+  --effort max --executor-effort max
+```
+
+The `low` default follows from the role's job; no benchmark run has compared
+levels yet. If an executor at `low` skips planned tasks or misreports failures,
+raise `--executor-effort`. The start-up banner and each `Starting query` line in
+`orchestrator.log` show the level a session ran at (`effort=none` under
+`--no-thinking`).
 
 ### `mulder setup`
 

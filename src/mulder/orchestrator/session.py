@@ -391,7 +391,8 @@ class SessionExecutor:
             model_config: Model identifiers for utility model resolution.
             cwd: Working directory for agent sessions.
             env: Environment variables passed to agent subprocesses.
-            effort: Effort level for agent sessions (max, xhigh, high, low).
+            effort: Effort level for agent sessions unless ``execute`` is
+                given one (low, medium, high, xhigh, max).
             using_proxy: Whether a LiteLLM proxy is active (disables
                 per-message token tracking to avoid double counting).
             no_thinking: Disable extended thinking for phase and utility queries.
@@ -531,6 +532,7 @@ class SessionExecutor:
         max_turns: int,
         log_prefix: str = "",
         task_system: str = "",
+        effort: EffortLevel | None = None,
     ) -> PhaseResult:
         """Execute a single SDK query session.
 
@@ -549,6 +551,8 @@ class SessionExecutor:
             log_prefix: Optional prefix for dashboard log lines.
             task_system: When non-empty, tool use blocks update the
                 dashboard task panel for this system name.
+            effort: Effort level for this session; ``None`` uses the level
+                given to the constructor. Not sent under ``no_thinking``.
 
         Returns:
             PhaseResult with collected messages and usage information.
@@ -557,7 +561,7 @@ class SessionExecutor:
             system_prompt=system_prompt,
             model=model,
             max_turns=max_turns,
-            effort=None if self._no_thinking else self._effort,
+            effort=None if self._no_thinking else effort or self._effort,
             thinking={"type": "disabled"} if self._no_thinking else None,
             stderr=self._stderr_callback(log_prefix or task_system or model),
             max_buffer_size=_MAX_BUFFER_SIZE_BYTES,
@@ -572,9 +576,10 @@ class SessionExecutor:
         session_id = ""
 
         logger.info(
-            "Starting query (model=%s, max_turns=%d)",
+            "Starting query (model=%s, max_turns=%d, effort=%s)",
             model,
             max_turns,
+            options.effort or "none",
         )
 
         tool_count = 0

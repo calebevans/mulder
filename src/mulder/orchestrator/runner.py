@@ -83,6 +83,7 @@ class Orchestrator:
         no_thinking: bool = False,
         show_cli_stderr: bool = False,
         max_compactions: int = DEFAULT_MAX_COMPACTIONS,
+        executor_effort: EffortLevel = "low",
     ) -> None:
         """Initialize the orchestrator.
 
@@ -91,7 +92,8 @@ class Orchestrator:
             cwd: Working directory for agent sessions.
             model_config: Model identifiers for each agent role. Uses
                 built-in defaults when not provided.
-            effort: Effort level (max, xhigh, high).
+            effort: Effort level for planner, analyst, catalog and report
+                sessions (low, medium, high, xhigh, max).
             env: Additional environment variables for agent sessions.
             parallel_extractions: Maximum number of extraction sessions
                 to run concurrently.
@@ -107,6 +109,9 @@ class Orchestrator:
             show_cli_stderr: Stream agent CLI diagnostics to the dashboard and log.
             max_compactions: Continuation sessions allowed per role session
                 after context exhaustion; ``0`` disables continuations.
+            executor_effort: Effort level for executor sessions, their
+                continuations and plan JSON repair. Equal to *effort*, every
+                role session runs at one level.
         """
         self.evidence_path = evidence_path
         self.cwd = str(cwd)
@@ -152,6 +157,7 @@ class Orchestrator:
             env=self.env,
             cwd=self.cwd,
             max_compactions=max_compactions,
+            executor_effort=executor_effort,
         )
         self._evidence = EvidenceContext(
             evidence_path=evidence_path,
