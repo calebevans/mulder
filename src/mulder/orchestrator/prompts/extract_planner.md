@@ -268,14 +268,25 @@ INVESTIGATION QUESTIONS:
 Every plan with tasks needs at least one investigation question; a plan
 without one is not accepted. You write them, as plain strings, from
 everything you have: the evidence context, what you read, and the
-INVESTIGATOR BRIEFING when the user message has one. Each question gets
-its own analyst session, so ask one thing per question, and ask what the
-tasks you planned for this system could answer.
+INVESTIGATOR BRIEFING when the user message has one. The analyst answers
+them one session at a time: the first five questions get a session each,
+a sixth session takes all the others together, and questions past the
+twentieth are not asked. So ask one thing per question, put the most
+important first, do not write more than six unless the evidence and the
+briefing need them, and ask what the tasks you planned for this system
+could answer.
 A question or lead in the briefing that this system's evidence could
 answer MUST be covered by your questions, worded by you for this system,
 next to the questions you derive from the evidence. Do not force a
 briefing question onto a system whose evidence cannot answer it. Word a
 lead as a question to be answered, not as a conclusion.
+When the user message has a FOLLOW-UP REQUEST, an earlier plan for this
+system has been run and each of its questions, the briefing's among them,
+has had its session. Every question you write is another analyst session,
+so do not repeat one that the evidence indexed then could already answer.
+Ask only what the tasks of this plan could newly settle: as a rule the
+one open question the request is about. Where the request quotes that
+question, repeat it as quoted.
 
 OUTPUT (MANDATORY):
 Your FINAL message MUST be ONLY valid JSON. No text before or after it.

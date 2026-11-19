@@ -33,7 +33,7 @@ from mulder.orchestrator.types import (
     extract_follow_up_request,
     extract_json_plan,
 )
-from mulder.questions import ID_LABELS
+from mulder.questions import ID_LABELS, MAX_QUESTIONS_PER_PLAN
 
 if TYPE_CHECKING:
     from mulder.orchestrator.evidence import ServerBridge
@@ -66,17 +66,23 @@ _PLANNER_OUT_OF_TURNS: str = (
 
 _MAX_PLANNER_NOTES_CHARS: int = 20_000
 
+_QUESTION_PLACEHOLDER: str = "<question>"
+"""Stands for a question in ``_PLANNER_NO_QUESTIONS``; echoed back, it is not one."""
+
 _PLANNER_NO_QUESTIONS: str = (
     "PLAN NOT ACCEPTED: it has no usable investigation_questions (the key is "
     "missing, empty, or holds something other than plain strings). Every "
-    "plan needs at least one: each question gets its own analyst session, "
-    "and with none nothing analyses what the tasks extract. The tasks are "
-    "kept as they are. Tools are disabled now; do NOT call any. Write the "
-    "questions this system's evidence could answer, from the evidence "
-    "context and what you have read, and cover every question or lead in "
-    "the INVESTIGATOR BRIEFING (when the user message has one) that this "
-    "system's evidence could answer. Respond with ONLY this JSON: "
-    '{"investigation_questions": ["<question>", "<question>"]}'
+    "plan needs at least one: the analyst answers them one session at a "
+    "time, and with none nothing analyses what the tasks extract. The tasks "
+    "are kept as they are. Tools are disabled now; do NOT call any. Write "
+    "the questions the tasks of your plan could answer, from the evidence "
+    "context and what you have read. Unless the user message has a "
+    "FOLLOW-UP REQUEST, cover every question or lead in the INVESTIGATOR "
+    "BRIEFING (when the user message has one) that this system's evidence "
+    "could answer; for a follow-up plan ask only what its tasks could newly "
+    "settle. Respond with ONLY this JSON, each placeholder replaced by a "
+    "question of yours: "
+    f'{{"investigation_questions": ["{_QUESTION_PLACEHOLDER}", "{_QUESTION_PLACEHOLDER}"]}}'
 )
 
 _PLANNER_NO_QUESTIONS_NOTES: str = (
@@ -169,7 +175,8 @@ _MAX_QUESTION_SESSIONS: int = 6
 """Question sessions the extraction analyst step runs for one plan.
 
 A plan with more questions than this gives the last session all that are
-left, so the number of sessions does not grow with the plan.
+left, so the number of sessions does not grow with the plan. Questions past
+``MAX_QUESTIONS_PER_PLAN`` are not asked at all.
 """
 
 _QUESTION_MAX_TURNS: int = 25
@@ -467,9 +474,9 @@ class RoleRunner:
             planner found nothing more to run. A planner that ended at a
             turn or context limit and produced no plan is recorded as cut
             short (see ``_note_cut_short``). An extraction plan with
-            tasks has at least one usable investigation question (each
-            gets its own analyst session); one that still has none after
-            ``_request_questions`` is not accepted.
+            tasks has at least one usable investigation question (the
+            analyst answers them one session at a time); one that still has
+            none after ``_request_questions`` is not accepted.
         """
         model = self._model_config.resolve(phase.name, "planner")
         effective_vars = dict(prompt_vars or {})
@@ -768,7 +775,9 @@ class RoleRunner:
         Args:
             phase: Phase configuration with analyst fields.
             context: Template variables for the analyst prompt.
-            questions: The plan's questions, sanitised; at least one.
+            questions: The plan's questions, sanitised; at least one. Those
+                past ``MAX_QUESTIONS_PER_PLAN`` are left out, and the
+                dashboard and the log say how many.
             model: Model identifier.
             log_prefix: Prefix for dashboard log lines.
             task_system: Task panel system name, and the progress label.
@@ -776,13 +785,25 @@ class RoleRunner:
         Returns:
             One AnalystResult for all the sessions.
         """
+        pfx = f"[{log_prefix}] " if log_prefix else ""
+        # The last session and the consolidation list every question they
+        # are given, so the list is bounded: by the number recorded for a
+        # plan, past which a question has no id to be closed by.
+        dropped = len(questions) - MAX_QUESTIONS_PER_PLAN
+        if dropped > 0:
+            questions = questions[:MAX_QUESTIONS_PER_PLAN]
+            msg = (
+                f"Plan has more than {MAX_QUESTIONS_PER_PLAN} investigation "
+                f"questions; the last {dropped} are not asked"
+            )
+            logger.warning("[%s] %s", phase.name, msg)
+            self._dashboard.log_info(f"{pfx}{phase.name}: {msg}")
         # One session each, the last one taking whatever is over the cap.
         single = questions[: _MAX_QUESTION_SESSIONS - 1]
         rest = questions[_MAX_QUESTION_SESSIONS - 1 :]
         groups = [[q] for q in single] + ([rest] if rest else [])
         label = _label(task_system or phase.name)
         system = json.dumps(label)
-        pfx = f"[{log_prefix}] " if log_prefix else ""
         started = datetime.now(UTC)
         question_phase = replace(phase, analyst_max_turns=_QUESTION_MAX_TURNS)
         outs: list[AnalystResult] = []
@@ -1475,10 +1496,11 @@ class RoleRunner:
         The planner is told why the plan was not accepted and asked for
         the questions alone, the way ``_request_plan_from_notes`` asks for
         the plan: its session is resumed for one turn with its tools off,
-        and when that cannot be done or yields none (and under
-        ``--no-wrapup``) one tool-less, single-turn new session is given
-        the original prompt and the planner's own output. The messages
-        and turns of both are merged into *result*.
+        and when that cannot be done or yields none (and after a context
+        overflow, or under ``--no-wrapup``) one tool-less, single-turn new
+        session is given the original prompt and the planner's own output.
+        The messages and turns of both are merged into *result*. The
+        template's own placeholder, echoed back, is not a question.
 
         Args:
             phase: Phase configuration with planner fields.
@@ -1501,10 +1523,17 @@ class RoleRunner:
             for message in reversed(answer.messages):
                 found = _try_extract_json(message, {"investigation_questions"})
                 if found is not None:
-                    return _plan_questions(found["investigation_questions"])
+                    return [
+                        q
+                        for q in _plan_questions(found["investigation_questions"])
+                        if q != _QUESTION_PLACEHOLDER
+                    ]
             return []
 
-        if self._wrapup and result.session_id:
+        # A conversation the provider rejected as too long would be rejected
+        # again; one that stopped at its turn limit can still be resumed.
+        overflowed = result.context_exhausted and not result.turns_exhausted
+        if self._wrapup and result.session_id and not overflowed:
             questions = questions_in(
                 await self._resume(
                     result.session_id,

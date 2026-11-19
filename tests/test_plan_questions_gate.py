@@ -11,6 +11,7 @@ written from everything it has, the investigator's ``MULDER.md`` included.
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 from collections.abc import Iterator
@@ -22,17 +23,22 @@ import pytest
 
 import mulder.server.app as server_app
 from mulder.db import CaseDB
+from mulder.orchestrator.budget import TokenBudgetReached
 from mulder.orchestrator.fallback import incomplete_notice
 from mulder.orchestrator.gates import GateResult
 from mulder.orchestrator.phases import ALTERNATIVE_NARRATIVE, CROSS_SYSTEM, EXTRACTION
 from mulder.orchestrator.roles import (
     _MAX_QUESTION_CHARS,
+    _MAX_QUESTION_SESSIONS,
     _PLANNER_NO_QUESTIONS,
     _PLANNER_NO_QUESTIONS_NOTES,
+    _QUESTION_MAX_TURNS,
+    _QUESTION_PLACEHOLDER,
+    RoleRunner,
 )
 from mulder.orchestrator.runner import Orchestrator
 from mulder.orchestrator.types import ExecutionResults, InvestigationResult, PhaseResult, Plan
-from mulder.questions import ID_LABELS
+from mulder.questions import ID_LABELS, MAX_QUESTIONS_PER_PLAN
 
 CASE = "case-1"
 SYSTEM = "host-a"
@@ -79,7 +85,8 @@ class _Script:
     tool-less requests for the questions (``resume`` of the planner session,
     then ``ask``, a new one) the next of *answers* (then ``NONE``), and
     ``analyst`` sessions the next of *analysts* (then "done"). *resume*
-    answers the resume instead, to make it fail.
+    answers the resume instead, to make it fail. *planner_ended* is how the
+    planner session ended early: at its "turn limit", or a "context overflow".
     """
 
     def __init__(
@@ -90,8 +97,10 @@ class _Script:
         session_id: str = PLANNER_SESSION,
         phase: Any = EXTRACTION,
         resume: PhaseResult | Exception | None = None,
+        planner_ended: str = "",
     ) -> None:
         self.plans = plans
+        self.planner_ended = planner_ended
         self.answers = iter(answers or [])
         self.analysts = iter(analysts or [])
         self.session_id = session_id
@@ -115,7 +124,12 @@ class _Script:
             planned = self.kinds.count("planner")
             message = self.plans[min(planned, len(self.plans)) - 1]
             return PhaseResult(
-                "query", messages=[message], turns_used=3, session_id=self.session_id
+                "query",
+                messages=[message],
+                turns_used=3,
+                session_id=self.session_id,
+                context_exhausted=bool(self.planner_ended),
+                turns_exhausted=self.planner_ended == "turn limit",
             )
         if kind == "resume" and self.resume is not None:
             if isinstance(self.resume, Exception):
@@ -217,13 +231,21 @@ class TestQuestionsGate:
 
         assert reason.startswith("PLAN NOT ACCEPTED: it has no usable investigation_questions")
         assert "missing, empty, or holds something other than plain strings" in reason
-        assert "each question gets its own analyst session" in reason
+        assert "the analyst answers them one session at a time" in reason
         assert "with none nothing analyses what the tasks extract" in reason
         assert "The tasks are kept as they are" in reason
         assert "Tools are disabled now; do NOT call any" in reason
-        assert "cover every question or lead in the INVESTIGATOR BRIEFING" in reason
-        assert "that this system's evidence could answer" in reason
+        assert "Write the questions the tasks of your plan could answer" in reason
+        # The briefing's questions on a first plan, not all over again on a follow-up.
+        assert (
+            "Unless the user message has a FOLLOW-UP REQUEST, cover every question or lead "
+            "in the INVESTIGATOR BRIEFING (when the user message has one) that this "
+            "system's evidence could answer; for a follow-up plan ask only what its tasks "
+            "could newly settle."
+        ) in reason
+        assert "each placeholder replaced by a question of yours" in reason
         assert reason.endswith('{"investigation_questions": ["<question>", "<question>"]}')
+        assert _QUESTION_PLACEHOLDER == "<question>"
 
     @pytest.mark.asyncio()
     async def test_a_resume_that_gives_none_is_followed_by_one_new_session(
@@ -275,20 +297,56 @@ class TestQuestionsGate:
 
     @pytest.mark.asyncio()
     @pytest.mark.parametrize(
-        ("wrapup", "session_id"),
-        [(False, PLANNER_SESSION), (True, "")],
-        ids=["--no-wrapup", "no session id"],
+        ("wrapup", "session_id", "ended"),
+        [
+            (False, PLANNER_SESSION, ""),
+            (True, "", ""),
+            # Its conversation was rejected as too long; a resume would be too.
+            (True, PLANNER_SESSION, "context overflow"),
+        ],
+        ids=["--no-wrapup", "no session id", "context overflow"],
     )
     async def test_a_planner_that_cannot_be_resumed_is_asked_in_a_new_session(
-        self, db_dir: Path, wrapup: bool, session_id: str
+        self, db_dir: Path, wrapup: bool, session_id: str, ended: str
     ) -> None:
         orch = _orchestrator(db_dir, wrapup=wrapup)
-        script = _Script([NO_QUESTIONS], [_answer(QUESTIONS)], session_id=session_id)
+        script = _Script(
+            [NO_QUESTIONS], [_answer(QUESTIONS)], session_id=session_id, planner_ended=ended
+        )
         plan = await _planner(orch, script)
 
         assert script.kinds == ["planner", "ask"]
         assert plan is not None
         assert plan.investigation_questions == QUESTIONS
+
+    @pytest.mark.asyncio()
+    async def test_a_planner_that_stopped_at_its_turn_limit_is_still_resumed(
+        self, db_dir: Path
+    ) -> None:
+        orch = _orchestrator(db_dir)
+        script = _Script([NO_QUESTIONS], [_answer(QUESTIONS)], planner_ended="turn limit")
+        plan = await _planner(orch, script)
+
+        assert script.kinds == ["planner", "resume"]
+        assert plan is not None
+        assert plan.investigation_questions == QUESTIONS
+
+    @pytest.mark.asyncio()
+    async def test_the_template_echoed_back_is_not_an_answer(self, db_dir: Path) -> None:
+        """No question was written, so none is asked: the plan is still without one."""
+        echo = _PLANNER_NO_QUESTIONS[_PLANNER_NO_QUESTIONS.index("{") :]
+        assert json.loads(echo) == {"investigation_questions": [_QUESTION_PLACEHOLDER] * 2}
+        orch = _orchestrator(db_dir)
+        script = _Script([NO_QUESTIONS], [echo, _answer([_QUESTION_PLACEHOLDER, "What ran?"])])
+        plan = await _planner(orch, script)
+
+        assert script.kinds == ["planner", "resume", "ask"]
+        assert plan is not None
+        assert plan.investigation_questions == ["What ran?"]
+
+        script = _Script([NO_QUESTIONS], [echo, echo])
+        assert await _planner(orch, script) is None
+        assert script.kinds == ["planner", "resume", "ask"]
 
     @pytest.mark.asyncio()
     async def test_only_the_questions_are_taken_and_they_are_cleaned(self, db_dir: Path) -> None:
@@ -329,6 +387,27 @@ class TestQuestionsGate:
         assert f"plan for {name} not accepted: no usable investigation questions" in caplog.text
 
     @pytest.mark.asyncio()
+    async def test_a_request_refused_at_the_token_budget_stops_the_run_not_the_plan(
+        self, db_dir: Path
+    ) -> None:
+        """``TokenBudgetReached`` reaches the pipeline; the planner is not reported as silent."""
+        orch = _orchestrator(db_dir)
+        script = _Script([NO_QUESTIONS])
+
+        async def execute(**kwargs: Any) -> PhaseResult:
+            if not kwargs["allowed_tools"]:  # either request for the questions
+                raise TokenBudgetReached("9 of 10 tokens used")
+            return await script.execute(**kwargs)
+
+        with (
+            patch.object(orch._session, "execute", side_effect=execute),
+            pytest.raises(TokenBudgetReached),
+        ):
+            await orch._roles.run_planner(EXTRACTION, VARS)
+
+        assert not any(f.startswith("Questions gate failed") for f in _gate_failures(orch))
+
+    @pytest.mark.asyncio()
     async def test_a_follow_up_planner_with_nothing_more_to_run_is_not_asked(
         self, db_dir: Path
     ) -> None:
@@ -359,8 +438,17 @@ class TestQuestionsGate:
 # ------------------------------------------------------------------
 
 
-async def _phase(orch: Orchestrator, script: _Script) -> tuple[PhaseResult, AsyncMock]:
-    """Run the extraction phase for one system: real planner and analyst."""
+PASSED = GateResult(True, "extraction")
+FAILED = GateResult(False, "extraction", gaps=["No sources indexed"])
+
+
+async def _phase(
+    orch: Orchestrator, script: _Script, gates: list[GateResult] | None = None
+) -> tuple[PhaseResult, AsyncMock]:
+    """Run the extraction phase for one system: real planner and analyst.
+
+    The extraction gate passes, or gives *gates* in turn.
+    """
 
     async def executed(phase: Any, plan: Plan, *a: Any, **kw: Any) -> ExecutionResults:
         return ExecutionResults(plan.plan_id, [], 1, False, tool_calls=1)
@@ -369,7 +457,7 @@ async def _phase(orch: Orchestrator, script: _Script) -> tuple[PhaseResult, Asyn
     with (
         patch.object(orch._roles, "run_executor", executor),
         patch.object(orch._session, "execute", side_effect=script.execute),
-        patch.object(orch, "_validate_phase", return_value=GateResult(True, "extraction")),
+        patch.object(orch, "_validate_phase", side_effect=gates or [PASSED]),
     ):
         return await orch._run_split_phase(EXTRACTION, prompt_vars=VARS), executor
 
@@ -394,6 +482,13 @@ class TestThroughThePhase:
         ]
         assert "QUESTION SESSION 1 OF 2" in script.prompts("analyst")[0]
         assert "CONSOLIDATION: 2 sessions before you" in script.prompts("analyst")[2]
+        # They are recorded like any plan's, and each session is told its own by its id.
+        with CaseDB.open(CASE, db_dir) as db:
+            recorded = db.get_questions()
+        assert [q.question for q in recorded] == QUESTIONS
+        first = script.prompts("analyst")[0]
+        assert f'["[{recorded[0].question_id}] {QUESTIONS[0]}"]' in first
+        assert "naming it by the id in square brackets it begins with" in first
 
     @pytest.mark.asyncio()
     async def test_exhaustion_fails_the_system_and_no_analyst_session_runs(
@@ -473,6 +568,55 @@ class TestThroughThePhase:
         assert [_questions_in(p) for p in script.prompts("analyst")[2:]] == [["From where?"]] * 2
         assert result.success
 
+    @pytest.mark.asyncio()
+    async def test_the_re_plan_after_a_failed_remediation_is_gated_and_per_question(
+        self, db_dir: Path
+    ) -> None:
+        """A full cycle, a remediation session, then a full re-plan: the retry loop."""
+        orch = _orchestrator(db_dir)
+        script = _Script([_plan(["Who logged on?"]), NO_QUESTIONS], [_answer(["From where?"])])
+        result, executor = await _phase(orch, script, gates=[FAILED, FAILED, PASSED])
+
+        assert result.success
+        assert script.kinds == [
+            *["planner", "analyst", "analyst"],  # one question, then the consolidation
+            "analyst",  # the remediation
+            *["planner", "resume", "analyst", "analyst"],  # the re-plan, sent back once
+        ]
+        assert executor.await_count == 2
+        analysts = [kwargs for kind, kwargs in script.calls if kind == "analyst"]
+        # The remediation is one session with the gap list and no question.
+        assert "GATE FAILED for phase 'extraction':\n- No sources indexed" in analysts[2]["prompt"]
+        assert "QUESTION SESSION" not in analysts[2]["prompt"]
+        assert analysts[2]["max_turns"] == EXTRACTION.analyst_max_turns
+        # The re-plan is told the gaps, and is gated like any plan with tasks.
+        replan = script.prompts("planner")[1]
+        assert 'FOLLOW-UP REQUEST:\n{"gate_failure": ["No sources indexed"]}' in replan
+        assert script.prompts("resume") == [_PLANNER_NO_QUESTIONS]
+        assert [_questions_in(a["prompt"]) for a in analysts[3:]] == [["From where?"]] * 2
+        assert "QUESTION SESSION 1 OF 1" in analysts[3]["prompt"]
+        assert analysts[3]["max_turns"] == _QUESTION_MAX_TURNS
+
+    @pytest.mark.asyncio()
+    async def test_a_re_plan_that_never_has_questions_fails_the_system(self, db_dir: Path) -> None:
+        orch = _orchestrator(db_dir)
+        script = _Script([_plan(["Who logged on?"]), NO_QUESTIONS])
+        result, executor = await _phase(orch, script, gates=[FAILED, FAILED])
+
+        assert not result.success
+        assert script.kinds == [
+            *["planner", "analyst", "analyst"],
+            "analyst",
+            *["planner", "resume", "ask"],  # no analyst session on the plan that was not accepted
+        ]
+        executor.assert_awaited_once()
+        attempts = 1 + EXTRACTION.max_retries
+        assert _gate_failures(orch)[-2:] == [
+            f"Questions gate failed for {SYSTEM}: the planner wrote no investigation "
+            "questions; plan not accepted, no analysis runs on it",
+            f"extraction FAILED after {attempts} attempts",
+        ]
+
 
 # ------------------------------------------------------------------
 # The questions are the planner's, written from the briefing too
@@ -487,7 +631,15 @@ class TestBriefing:
         assert "a plan without one is not accepted" in prompt
         assert "You write them, as plain strings, from everything you have" in prompt
         assert "the INVESTIGATOR BRIEFING when the user message has one" in prompt
-        assert "Each question gets its own analyst session" in prompt
+        # What a question costs, in the numbers the analyst step uses.
+        assert (
+            "The analyst answers them one session at a time: the first five questions get "
+            "a session each, a sixth session takes all the others together, and questions "
+            "past the twentieth are not asked. So ask one thing per question, put the most "
+            "important first, do not write more than six unless the evidence and the "
+            "briefing need them"
+        ) in prompt
+        assert (_MAX_QUESTION_SESSIONS, MAX_QUESTIONS_PER_PLAN) == (6, 20)
         assert (
             "A question or lead in the briefing that this system's evidence could answer "
             "MUST be covered by your questions, worded by you for this system, next to the "
@@ -497,6 +649,21 @@ class TestBriefing:
             "Do not force a briefing question onto a system whose evidence cannot answer it."
         ) in prompt
         assert "not as a conclusion" in prompt
+
+    def test_a_follow_up_plan_does_not_ask_everything_again(self) -> None:
+        """Each question is a session: a follow-up for one tool is not a second full pass."""
+        prompt = " ".join(EXTRACTION.planner_system_prompt.split())
+
+        assert (
+            "When the user message has a FOLLOW-UP REQUEST, an earlier plan for this system "
+            "has been run and each of its questions, the briefing's among them, has had its "
+            "session. Every question you write is another analyst session, so do not repeat "
+            "one that the evidence indexed then could already answer. Ask only what the "
+            "tasks of this plan could newly settle: as a rule the one open question the "
+            "request is about. Where the request quotes that question, repeat it as quoted."
+        ) in prompt
+        # The rule names the heading run_planner puts the request under.
+        assert "FOLLOW-UP REQUEST:" in inspect.getsource(RoleRunner.run_planner)
 
     @pytest.mark.asyncio()
     async def test_the_briefing_reaches_the_planner_and_every_analyst_session(

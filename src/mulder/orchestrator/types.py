@@ -50,8 +50,8 @@ class Plan:
         plan_id: Unique identifier ``{phase}-plan-{case_id}-{short_uuid}``.
         tasks: List of task dicts with keys: tool, args, purpose.
         investigation_questions: Questions the planner wants the analyst to
-            answer. An extraction plan has at least one, and each gets its
-            own analyst session.
+            answer. An extraction plan has at least one, and the analyst
+            answers them one session at a time.
         expected_sources: Source names the planner expects after execution.
         raw_text: Full planner output for debugging/logging.
         turns_used: SDK turns consumed by the planner session.

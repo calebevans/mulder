@@ -66,6 +66,7 @@ from mulder.orchestrator.types import (
     PhaseResult,
     Plan,
 )
+from mulder.questions import MAX_QUESTIONS_PER_PLAN
 from mulder.report.case_report import write_case_report
 from mulder.server.app import _tool_dispatch_sync
 
@@ -796,6 +797,29 @@ class TestPerQuestion:
         first, continuation = sessions.prompts
         assert _questions_in(first) == _questions_in(continuation) == asked
         assert "These are yours. Close each one" in continuation
+
+    @pytest.mark.asyncio()
+    async def test_questions_past_the_number_recorded_for_a_plan_are_not_asked(
+        self, db_dir: Path
+    ) -> None:
+        """The last session and the consolidation list what they are given: bounded."""
+        many = [f"question {i}? " + "y" * 600 for i in range(400)]
+        sessions = _Sessions()
+        orch = _orchestrator(db_dir)
+        await _analyst(orch, sessions, Plan("p", TASK, many, [], "plan", 1))
+
+        asked = [_questions_in(p) for p in sessions.prompts]
+        kept = [q[:_MAX_QUESTION_CHARS] + "..." for q in many[:MAX_QUESTIONS_PER_PLAN]]
+        assert len(asked) == _MAX_QUESTION_SESSIONS + 1
+        assert asked[_MAX_QUESTION_SESSIONS - 1] == kept[_MAX_QUESTION_SESSIONS - 1 :]
+        assert asked[-1] == kept
+        assert max(len(p) for p in sessions.prompts) < 20_000
+        # Said, not silent.
+        logged = [call.args[0] for call in orch.dashboard.log_info.call_args_list]  # type: ignore[attr-defined]
+        assert (
+            f"extraction: Plan has more than {MAX_QUESTIONS_PER_PLAN} investigation "
+            f"questions; the last {400 - MAX_QUESTIONS_PER_PLAN} are not asked"
+        ) in logged
 
     @pytest.mark.asyncio()
     async def test_a_remediation_session_is_one_session_with_no_question(
