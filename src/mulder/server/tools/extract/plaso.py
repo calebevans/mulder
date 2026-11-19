@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import re
 import shutil
 import subprocess
 import tempfile
 import time
 from pathlib import Path
 
+from mulder.linuxvol import unencrypted_partitions
 from mulder.server.app import get_cfg, get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
@@ -48,6 +50,18 @@ _L2T_FLAGS = [
     "none",
 ]
 
+# Names mulder expands, so that a plan need not spell parser names. Checked
+# against ``log2timeline --parsers list`` of plaso 20261027. Not plaso's own
+# "linux" preset: that adds filestat (four events per file) and browser history.
+PARSER_PRESETS: dict[str, str] = {
+    "linux_logs": (
+        "systemd_journal,utmp,text/syslog,text/syslog_traditional,text/bash_history,"
+        "text/zsh_extended_history,text/selinux,text/apt_history,text/dpkg,"
+        "jsonl/docker_container_log"
+    ),
+}
+_UNKNOWN_PARSERS_RE = re.compile(r'Unknown parser or plugin names in element\(s\): "([^"]+)"')
+
 
 def _failure_detail(name: str, proc: subprocess.CompletedProcess[str]) -> str:
     """Summarise a failed plaso process: exit code plus the tail of its output.
@@ -74,6 +88,7 @@ def _find_plaso_cmd(tool: str) -> list[str] | None:
         "log2timeline": "plaso.cli.log2timeline",
         "psort": "plaso.cli.psort",
         "pinfo": "plaso.cli.pinfo",
+        "image_export": "plaso.cli.image_export",
     }
     base = tool.removesuffix(".py")
     for name in (f"{base}.py", base):
@@ -112,6 +127,13 @@ def run_plaso(
         evidence_path: Path to a disk image or directory.
         parsers: Comma-separated list of Plaso parsers to run (e.g.
             "winevtx,prefetch,pe").  Runs all parsers if omitted.
+            "linux_logs" runs the Linux login and system-log parsers: the
+            systemd journal, wtmp/btmp/utmp, syslog and auth.log, shell
+            history that carries timestamps, the audit log, apt and dpkg
+            logs and Docker container logs. Give it a Linux disk image
+            (plaso reads LVM and XFS, which Sleuth Kit does not) or a
+            directory that holds a Linux file tree; prefer the image,
+            where each log still has the times plaso dates its lines by.
         time_range: Date filter passed to psort (e.g. "2015-08-01").
     """
     tc_id = make_tool_call_id()
@@ -137,25 +159,46 @@ def run_plaso(
     with tempfile.TemporaryDirectory(prefix="mulder_plaso_") as tmpdir:
         plaso_file = Path(tmpdir) / "timeline.plaso"
 
-        l2t_cmd = [*l2t_cmd_prefix, "--storage_file", str(plaso_file), *_L2T_FLAGS]
-        if parsers:
-            l2t_cmd.extend(["--parsers", parsers])
-        l2t_cmd.append(cli_path(evidence_path))
-
         plaso_timeout = adaptive_timeout(evidence_path, base=_PLASO_TIMEOUT)
-        try:
-            proc = subprocess.run(
-                l2t_cmd,
-                capture_output=True,
-                text=True,
-                timeout=plaso_timeout,
-                check=False,
-                stdin=subprocess.DEVNULL,
-            )
-        except subprocess.TimeoutExpired:
-            return error_response(
-                tc_id, "run_plaso", params, f"log2timeline timed out after {plaso_timeout}s"
-            )
+        wanted = PARSER_PRESETS.get(parsers or "", parsers)
+        dropped: list[str] = []
+        only: list[str] = []
+        while True:
+            l2t_cmd = [*l2t_cmd_prefix, "--storage_file", str(plaso_file), *_L2T_FLAGS, *only]
+            if wanted:
+                l2t_cmd.extend(["--parsers", wanted])
+            l2t_cmd.append(cli_path(evidence_path))
+            try:
+                proc = subprocess.run(
+                    l2t_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=plaso_timeout,
+                    check=False,
+                    stdin=subprocess.DEVNULL,
+                )
+            except subprocess.TimeoutExpired:
+                return error_response(
+                    tc_id, "run_plaso", params, f"log2timeline timed out after {plaso_timeout}s"
+                )
+            # plaso stops at a LUKS partition it has no key for and reads nothing:
+            # name the other partitions, once, so that they are read.
+            locked = "Encrypted volume found" in f"{proc.stdout}{proc.stderr}" and not only
+            if locked and (others := unencrypted_partitions(evidence_path)):
+                only = ["--partitions", others]
+                plaso_file.unlink(missing_ok=True)
+                continue
+            # A preset names the parsers of the plaso it was written for. An older
+            # plaso rejects the whole run over one name it lacks: drop those, once.
+            unknown = _UNKNOWN_PARSERS_RE.search(f"{proc.stdout}{proc.stderr}")
+            if unknown:
+                plaso_file.unlink(missing_ok=True)  # the stub such a run leaves is no timeline
+            if unknown is None or not wanted or parsers not in PARSER_PRESETS or dropped:
+                break
+            dropped = unknown.group(1).split(",")
+            wanted = ",".join(name for name in wanted.split(",") if name not in dropped)
+            if not wanted:  # nothing left to run: report the rejection
+                break
 
         if proc.returncode != 0 and not plaso_file.exists():
             return error_response(
@@ -239,5 +282,14 @@ def run_plaso(
             )
         )
 
+    if dropped:
+        results.append({"parsers_not_in_this_plaso": dropped, "parsers_run": wanted})
+    if only:
+        results.append(
+            {
+                "partitions_read": only[1],
+                "not_read": "the encrypted (LUKS) partitions of this image: no key was given",
+            }
+        )
     elapsed = (time.monotonic() - t0) * 1000
     return tool_response(tc_id, "run_plaso", params, results, "plaso.timeline", elapsed)

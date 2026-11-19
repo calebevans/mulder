@@ -7,9 +7,14 @@ empty-result handling.
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+from mulder.dirroot import icat
 from mulder.server.tools.extract.app_files import (
     _DEFAULT_EXTENSIONS,
     _derive_source_name,
@@ -432,36 +437,80 @@ class TestDeletedFilesAreDiscovered:
 
 
 class TestSizeLimitAppliesToExtractedBytes:
-    """The threshold now runs where the size is actually known."""
+    """The threshold runs where the size is known, and no more than it is read."""
 
-    def _icat_returning(self, payload: bytes) -> Any:
-        proc = MagicMock()
-        proc.returncode = 0
-        proc.stdout = payload
-        return proc
+    @staticmethod
+    def _icat(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str) -> None:
+        """A program named icat, first on PATH, that does what *body* says."""
+        tool = tmp_path / "bin" / "icat"
+        tool.parent.mkdir()
+        tool.write_text(f"#!/bin/sh\n{body}\n")
+        tool.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{tool.parent}{os.pathsep}{os.environ['PATH']}")
 
-    def test_a_file_over_the_limit_is_skipped(self) -> None:
-        big = b"A" * 4096
-        with (
-            patch("mulder.server.tools.extract.app_files.shutil.which", return_value="/bin/icat"),
-            patch(
-                "mulder.server.tools.extract.app_files.subprocess.run",
-                return_value=self._icat_returning(big),
-            ),
-        ):
-            content = _extract_and_read_file("/img.dd", "16", 0, max_size_bytes=1024)
+    def test_a_file_over_the_limit_is_skipped_without_being_read_to_its_end(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Never ends: only a reader that stops at the limit returns at all.
+        self._icat(tmp_path, monkeypatch, "exec yes AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+        why: list[str] = []
 
-        assert content is None
+        content = _extract_and_read_file("/img.dd", "16", 0, max_size_bytes=1024, why=why)
 
-    def test_a_file_under_the_limit_is_read(self) -> None:
-        small = b"hello evidence"
-        with (
-            patch("mulder.server.tools.extract.app_files.shutil.which", return_value="/bin/icat"),
-            patch(
-                "mulder.server.tools.extract.app_files.subprocess.run",
-                return_value=self._icat_returning(small),
-            ),
-        ):
-            content = _extract_and_read_file("/img.dd", "16", 0, max_size_bytes=1024)
+        assert content is None and why == ["too_large"]
+        assert len(icat("/img.dd", 0, "16", limit=1024).stdout) == 1025
 
-        assert content == "hello evidence"
+    def test_a_file_under_the_limit_is_read(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._icat(tmp_path, monkeypatch, 'test "$1 $2 $3 $4" = "-o 63 /img.dd 16" && echo hello')
+
+        assert _extract_and_read_file("/img.dd", "16", 63, max_size_bytes=1024) == "hello\n"
+        # Without the offset the stand-in exits 1, as icat does on a failure.
+        failed = icat("/img.dd", 0, "16", limit=1024)
+        assert failed.returncode == 1 and failed.stdout == b""
+        assert _extract_and_read_file("/img.dd", "16", 0, max_size_bytes=1024) is None
+
+    def test_a_private_key_is_withheld_whatever_the_file_is_called(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._icat(tmp_path, monkeypatch, "echo '-----BEGIN RSA PRIVATE KEY-----'; echo MIIE")
+        why: list[str] = []
+
+        assert _extract_and_read_file("/img.dd", "16", 0, max_size_bytes=1024, why=why) is None
+        assert why == ["private_key"]
+
+
+class TestNamesWithoutATextExtension:
+    """On Linux the name says little: crontab, sshd_config, .bash_history, access.log.1."""
+
+    LINUX_FLS = (
+        "r/r 12:\tetc/crontab\n"
+        "r/r 13:\tetc/ssh/sshd_config\n"
+        "r/r 14:\tetc/apt/sources.list~\n"
+        "r/r 15:\tetc/default/grub.d/50-cloud.cfg\n"
+        "r/r 16:\tvar/log/auth.log.1\n"
+    )
+
+    def test_the_default_extensions_still_leave_them_out(self) -> None:
+        matches = _find_matching_files([self.LINUX_FLS], "etc", _DEFAULT_EXTENSIONS, offset=0)
+
+        assert [m[1] for m in matches] == ["etc/default/grub.d/50-cloud.cfg"]
+
+    def test_a_star_takes_every_name_under_the_pattern(self) -> None:
+        matches = _find_matching_files([self.LINUX_FLS], "etc", frozenset({"*"}), offset=0)
+
+        assert [m[1] for m in matches] == [
+            "etc/crontab",
+            "etc/ssh/sshd_config",
+            "etc/apt/sources.list~",
+            "etc/default/grub.d/50-cloud.cfg",
+        ]
+
+    def test_compressed_content_is_binary_even_without_a_null_byte(self) -> None:
+        """A short rotated log can be all non-zero bytes after its header."""
+        assert _is_binary_content(b"\x1f\x8b\x08\x08" + b"\x55" * 200)
+        assert _is_binary_content(b"BZh91AY&SY" + b"\x55" * 200)
+        assert _is_binary_content(b"\xfd7zXZ\x00" + b"\x55" * 200)
+        assert _is_binary_content(b"\x28\xb5\x2f\xfd" + b"\x55" * 200)
+        assert not _is_binary_content(b"Oct  5 11:00:01 web01 sshd[9]: Accepted password\n")

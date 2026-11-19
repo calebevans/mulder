@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from mulder.cut_short import CUT_SHORT_PREFIX
 from mulder.extractors.classifier import EvidenceClassifier
 
 logger = logging.getLogger(__name__)
@@ -264,6 +265,11 @@ def validate_extraction(summary: dict[str, Any] | None) -> GateResult:
 def validate_cross_system(summary: dict[str, Any] | None) -> GateResult:
     """Validate that cross-system analysis was performed.
 
+    Needs a finding and a MITRE-mapped finding, or, for a case where the
+    evidence shows no incident, every recorded investigation question
+    resolved and no finding of activity at medium severity or above. A
+    summary without recorded questions is judged on the first pair only.
+
     If the summary query fails on the first attempt, the gate passes with
     an advisory warning. On consecutive failures, the gate fails to prevent
     indefinite silent auto-passes.
@@ -315,25 +321,49 @@ def validate_cross_system(summary: dict[str, Any] | None) -> GateResult:
 
     _consecutive_cross_system_failures = 0
 
+    # The second way to pass both checks: a case where the evidence shows no
+    # incident has nothing to map to ATT&CK. It needs every recorded question
+    # resolved and no finding of activity at medium severity or above. The
+    # coverage audits the finalize gate also asks for are not required here:
+    # no cross-system role can run them, they belong to the next phase.
+    questions = summary.get("questions") or {}
+    recorded = questions.get("recorded", 0)
+    still_open = questions.get("open", 0)
+    quiet = recorded > 0 and summary.get("significant_findings", 1) == 0
+    by_questions = quiet and still_open == 0
+    via = (
+        f"; passed on resolved questions: all {recorded} recorded question(s) resolved "
+        "and no finding of medium severity or above"
+    )
+    hint = (
+        f" If the evidence examined shows no incident, resolve the {still_open} open "
+        "investigation question(s) with resolve_question instead of adding a finding or "
+        "a mapping the evidence does not support."
+        if quiet
+        else ""
+    )
+
     findings_submitted = summary.get("findings_submitted", 0)
     check_findings = GateCheck(
         name="cross_system_findings",
-        passed=findings_submitted > 0,
-        detail=f"{findings_submitted} total finding(s) after cross-system analysis",
+        passed=findings_submitted > 0 or by_questions,
+        detail=f"{findings_submitted} total finding(s) after cross-system analysis"
+        + (via if findings_submitted == 0 and by_questions else ""),
     )
     checks.append(check_findings)
     if not check_findings.passed:
-        gaps.append("No findings exist after cross-system analysis.")
+        gaps.append("No findings exist after cross-system analysis." + hint)
 
     mitre_count = summary.get("findings_with_mitre_ids", 0)
     check_mitre = GateCheck(
         name="mitre_mapping",
-        passed=mitre_count > 0,
-        detail=f"{mitre_count} finding(s) mapped to MITRE ATT&CK",
+        passed=mitre_count > 0 or by_questions,
+        detail=f"{mitre_count} finding(s) mapped to MITRE ATT&CK"
+        + (via if mitre_count == 0 and by_questions else ""),
     )
     checks.append(check_mitre)
     if not check_mitre.passed:
-        gaps.append("No findings have MITRE ATT&CK technique mappings.")
+        gaps.append("No findings have MITRE ATT&CK technique mappings." + hint)
 
     return GateResult(
         passed=all(c.passed for c in checks),
@@ -424,6 +454,11 @@ def validate_narrative(
             item_str = str(item)
             if "narrative" in item_str.lower():
                 continue
+            # A caveat for the report, not a gap: nothing a retry does
+            # can un-cut a session, and a remediation analyst is told to
+            # fix exactly the gaps it is given.
+            if item_str.startswith(CUT_SHORT_PREFIX):
+                continue
             gaps.append(item_str)
 
     return GateResult(
@@ -432,6 +467,23 @@ def validate_narrative(
         checks=checks,
         gaps=gaps,
     )
+
+
+def report_written(report_path: Path, since: float) -> bool:
+    """Return True when the Markdown report was written at or after *since*.
+
+    ``finalize_report`` writes it only after every readiness gate passes, so
+    a report this fresh is a finalized one.
+
+    Args:
+        report_path: ``<db_dir>/<case_id>.report.md``.
+        since: A ``time.time()`` value; an older report is a leftover.
+
+    Returns:
+        True if the file exists and is not older than *since*.
+    """
+    # 1s slack for filesystems with whole-second mtimes.
+    return report_path.is_file() and report_path.stat().st_mtime >= since - 1.0
 
 
 def validate_report(
@@ -459,8 +511,7 @@ def validate_report(
     Returns:
         GateResult indicating whether the report exists.
     """
-    # 1s slack for filesystems with whole-second mtimes.
-    written = report_path.is_file() and report_path.stat().st_mtime >= started_at - 1.0
+    written = report_written(report_path, started_at)
     invoked = "finalize_report" in tool_names
 
     if written:

@@ -15,7 +15,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from itertools import islice
-from typing import IO, TYPE_CHECKING, Any, Literal
+from typing import IO, TYPE_CHECKING, Literal
 
 import psutil
 
@@ -28,6 +28,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from mulder.orchestrator.budget import TokenBudget
 from mulder.patterns import format_token_count
 
 logger = logging.getLogger(__name__)
@@ -73,6 +74,9 @@ _CONTROL_CHARS_RE: re.Pattern[str] = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]"
 _SPINNER_FRAMES: str = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 _HEADER_SIZE: int = 8
+
+_MAX_CUT_SHORT_ROWS: int = 20
+"""Cut-short sessions the summary lists; the rest are counted."""
 
 
 @dataclass
@@ -136,8 +140,13 @@ class InvestigationDashboard:
     subprocess writing its own ANSI sequences.
     """
 
-    def __init__(self) -> None:
-        """Initialize the dashboard."""
+    def __init__(self, budget: TokenBudget | None = None) -> None:
+        """Initialize the dashboard.
+
+        Args:
+            budget: The run's token tally and limit, which the session
+                executor fills. Defaults to an empty tally with no limit.
+        """
         # Duplicate the real stderr fd so the Console can reach the
         # terminal even after we redirect fd 2 to /dev/null.
         self._terminal_fd: int = os.dup(2)
@@ -163,7 +172,9 @@ class InvestigationDashboard:
         self._severity_counts: dict[str, int] = {}
         self._input_tokens = 0
         self._output_tokens = 0
-        self._model_tokens: dict[str, dict[str, int]] = {}
+        self._budget = budget or TokenBudget()
+        # The run's one per-model tally, shown here and filled elsewhere.
+        self._model_tokens = self._budget.by_model
 
         self._log_lines: deque[Text] = deque(maxlen=500)
 
@@ -180,6 +191,10 @@ class InvestigationDashboard:
 
         self._system_color_map: dict[str, str] = {}
         self._next_color_idx: int = 0
+
+        # Role sessions left unfinished with no continuation left, for the
+        # summary (``log_cut_short``).
+        self.cut_short: list[str] = []
 
     def _get_system_color(self, system: str) -> str:
         """Return a consistent color for a system name.
@@ -394,6 +409,15 @@ class InvestigationDashboard:
         """
         self._log_and_display(f"  ✗ {message}", style="bold red")
 
+    def log_cut_short(self, label: str) -> None:
+        """Log a role session left unfinished, and keep it for the summary.
+
+        Args:
+            label: Phase, role, system and question of the session.
+        """
+        self.cut_short.append(label)
+        self._log_and_display(f"  ✗ Cut short, no continuation left: {label}", style="bold red")
+
     def log_info(self, text: str) -> None:
         """Log an informational message (retries, limits, etc.).
 
@@ -522,37 +546,6 @@ class InvestigationDashboard:
             self._output_tokens,
         )
 
-    def add_model_usage(self, model_usage: dict[str, Any]) -> None:
-        """Accumulate per-model token usage from ResultMessage.model_usage.
-
-        The model_usage dict maps model names to dicts with camelCase
-        keys: inputTokens, outputTokens, cacheCreationInputTokens,
-        cacheReadInputTokens.
-
-        Args:
-            model_usage: Per-model usage dict from the SDK.
-        """
-        for model_name, usage in model_usage.items():
-            if not isinstance(usage, dict):
-                logger.warning(
-                    "Unexpected model_usage value for '%s': %s",
-                    model_name,
-                    type(usage).__name__,
-                )
-                continue
-            if model_name not in self._model_tokens:
-                self._model_tokens[model_name] = {"input": 0, "output": 0}
-            tok_in = usage.get("inputTokens", 0) or 0
-            tok_out = usage.get("outputTokens", 0) or 0
-            self._model_tokens[model_name]["input"] += tok_in
-            self._model_tokens[model_name]["output"] += tok_out
-            logger.debug(
-                "Model usage '%s': +(%d in, %d out)",
-                model_name,
-                tok_in,
-                tok_out,
-            )
-
     @property
     def total_findings(self) -> int:
         """Current total finding count."""
@@ -572,11 +565,6 @@ class InvestigationDashboard:
     def start_time(self) -> float:
         """Monotonic start timestamp."""
         return self._start_time
-
-    @property
-    def model_tokens(self) -> dict[str, dict[str, int]]:
-        """Per-model token usage accumulated during the investigation."""
-        return self._model_tokens
 
     @staticmethod
     def suppress_stderr(_line: str) -> None:
@@ -862,7 +850,24 @@ class InvestigationDashboard:
             "",
         )
 
-        return Panel(table, title="Mulder", border_style="blue", height=_HEADER_SIZE)
+        # In the border, not the grid: a fourth-row cell this wide makes the
+        # grid wrap its other columns on an 80-column terminal.
+        return Panel(
+            table,
+            title="Mulder",
+            subtitle=self._budget_text(),
+            border_style="blue",
+            height=_HEADER_SIZE,
+        )
+
+    def _budget_text(self) -> str:
+        """Tokens of every kind used so far against ``--max-tokens``, if set."""
+        if self._budget.limit is None:
+            return ""
+        return (
+            f"Budget: {format_token_count(self._budget.used)}"
+            f" / {format_token_count(self._budget.limit)}"
+        )
 
     def _build_log_panel(self, body_height: int) -> Panel:
         """Build the scrolling log panel with a fixed viewport height.
@@ -958,12 +963,32 @@ class InvestigationDashboard:
             f"(in: {format_token_count(total_in)}, "
             f"out: {format_token_count(total_out)})",
         )
+        cache_write = self._budget.total("cache_creation")
+        cache_read = self._budget.total("cache_read")
+        if cache_write or cache_read:
+            # Beside the row above, not in it: "Tokens" keeps its meaning.
+            summary.add_row(
+                "Cached input",
+                f"{format_token_count(cache_write)} written, "
+                f"{format_token_count(cache_read)} read (not in Tokens)",
+            )
+        if self._budget.limit is not None:
+            spent = (
+                f"{format_token_count(self._budget.used)} of "
+                f"{format_token_count(self._budget.limit)} used, cached input included"
+            )
+            summary.add_row(
+                "Token budget",
+                Text(f"REACHED ({spent}); analysis stopped early", style="bold red")
+                if result.budget_stop is not None
+                else spent,
+            )
         summary.add_row("Throughput", f"{format_token_count(tpm)}/min")
         summary.add_row("Findings", self._format_findings_summary())
         summary.add_row("Elapsed", elapsed_str)
         if any(p.phase_name == "report" and not p.success for p in result.phases):
             summary.add_row(
-                "Report", Text("MISSING (report phase failed; nothing written)", style="bold red")
+                "Report", Text("MISSING (report phase failed; none finalized)", style="bold red")
             )
 
         # Per-model breakdown
@@ -979,6 +1004,9 @@ class InvestigationDashboard:
                 f"{format_token_count(m_out)} out = "
                 f"{format_token_count(m_total)}"
             )
+            cached = counts["cache_creation"] + counts["cache_read"]
+            if cached:
+                detail += f" (+ {format_token_count(cached)} cached)"
             summary.add_row(f"  {short_name}", detail)
 
         self._console.print()
@@ -996,5 +1024,26 @@ class InvestigationDashboard:
                 Text(status_text, style=status_style),
                 str(phase.turns_used),
             )
+        # A phase the token budget cut short has no row above; its sessions'
+        # turns are in the total, so show them and let the table add up.
+        cut = result.total_turns - sum(p.turns_used for p in result.phases)
+        if result.budget_stop is not None and cut > 0:
+            phases_table.add_row("(cut short)", "", str(cut))
 
         self._console.print(phases_table)
+
+        if self.cut_short:
+            cut_table = Table(
+                title="Sessions Cut Short",
+                caption="Ended at a turn or context limit with no continuation left; "
+                "conclusions about these may be incomplete.",
+                border_style="red",
+                show_header=False,
+            )
+            # Text, not str: a label holds evidence-derived names and model
+            # text, which must not be read as Rich markup.
+            for label in self.cut_short[:_MAX_CUT_SHORT_ROWS]:
+                cut_table.add_row(Text(_neutralize_controls(label)))
+            if len(self.cut_short) > _MAX_CUT_SHORT_ROWS:
+                cut_table.add_row(f"(+{len(self.cut_short) - _MAX_CUT_SHORT_ROWS} more)")
+            self._console.print(cut_table)

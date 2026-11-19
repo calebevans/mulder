@@ -8,11 +8,12 @@ import logging
 import queue
 import re
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, TypedDict, TypeVar, cast
+from uuid import uuid4
 
 from pydantic import ValidationError
 from sqlalchemy import (
@@ -36,8 +37,10 @@ from sqlalchemy import (
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import DatabaseError, OperationalError
 from sqlalchemy.pool import NullPool
+from sqlalchemy.schema import CreateTable
 
-from mulder.models import CaseMetadataRow, Finding, SourceRow, WindowRow
+from mulder.cut_short import dropped_count
+from mulder.models import CaseMetadataRow, Finding, Question, SourceRow, WindowRow
 
 _T = TypeVar("_T")
 
@@ -136,6 +139,21 @@ kv_store_t = Table(
     Column("updated_at", Text, nullable=False),
 )
 
+# Questions the planners asked and how each was resolved. ``resolution`` is
+# NULL while a question is open.
+questions_t = Table(
+    "investigation_questions",
+    metadata,
+    Column("question_id", Text, primary_key=True),
+    Column("phase", Text, nullable=False),
+    Column("system", Text, nullable=False),
+    Column("question", Text, nullable=False),
+    Column("resolution", Text),
+    Column("finding_ids", Text),
+    Column("reason", Text),
+    Column("recorded_at", Text, nullable=False),
+)
+
 _FTS_CREATE = (
     "CREATE VIRTUAL TABLE IF NOT EXISTS windows_fts USING fts5("
     "    raw_text, content=windows, content_rowid=window_id"
@@ -144,6 +162,39 @@ _FTS_CREATE = (
 
 _IX_WINDOWS_SOURCE_LINE = (
     "CREATE INDEX IF NOT EXISTS ix_windows_source_line ON windows (source_id, line_start)"
+)
+
+# Log tables (mulder.logtable): one normalised row per log event, so counting
+# questions are one grouped query instead of paging through search hits.
+# event_time is fixed-width UTC ("YYYY-MM-DDTHH:MM:SSZ"), so string order is
+# time order; source_id and line point back at the indexed text; extra is a
+# JSON object of strings. log_tables holds one row per ingest.
+_LOG_TABLES_CREATE = (
+    "CREATE TABLE IF NOT EXISTS log_events ("
+    "  event_id INTEGER PRIMARY KEY,"
+    "  log_table TEXT NOT NULL,"
+    "  source_id INTEGER NOT NULL,"
+    "  line INTEGER,"
+    "  event_time TEXT,"
+    "  actor TEXT, src_ip TEXT, action TEXT, target TEXT, status TEXT,"
+    "  user_agent TEXT, session_id TEXT,"
+    "  bytes INTEGER,"
+    "  extra TEXT"
+    ")",
+    "CREATE INDEX IF NOT EXISTS ix_log_events_table_time ON log_events (log_table, event_time)",
+    "CREATE TABLE IF NOT EXISTS log_tables ("
+    "  source_id INTEGER NOT NULL,"
+    "  log_table TEXT NOT NULL,"
+    "  complete INTEGER NOT NULL,"
+    "  nested INTEGER NOT NULL,"
+    "  row_count INTEGER NOT NULL,"
+    "  rows_no_time INTEGER NOT NULL,"
+    "  rows_unparsed INTEGER NOT NULL,"
+    "  first_time TEXT,"
+    "  last_time TEXT,"
+    "  field_counts TEXT NOT NULL,"
+    "  PRIMARY KEY (source_id, log_table)"
+    ")",
 )
 
 # windows_hash of a source whose windows are still being stored. It is replaced
@@ -369,6 +420,11 @@ _QueueItem = tuple[
     Callable[..., object], tuple[object, ...], dict[str, object], _QueueResult, threading.Event
 ]
 
+_CUT_SHORT_KEY = "cut_short_sessions"
+_CUT_SHORT_FIELDS = ("phase", "role", "system", "question", "recorded_at", "n")
+_MAX_CUT_SHORT = 100
+_REJECTED_PLANS_KEY = "questions_gate_rejected_plans"
+
 
 class _WriteQueue:
     """Single-writer thread that serialises all DB write operations.
@@ -444,6 +500,19 @@ def _finding_fields(row: Any) -> dict[str, Any]:
     }
 
 
+def _question(row: Any) -> Question:
+    """Map an ``investigation_questions`` row to a ``Question``."""
+    return Question(
+        question_id=row.question_id,
+        phase=row.phase,
+        system=row.system,
+        question=row.question,
+        resolution=row.resolution,
+        finding_ids=json.loads(row.finding_ids) if row.finding_ids else [],
+        reason=row.reason or "",
+    )
+
+
 class CaseDB:
     """Manages a per-case SQLite database file."""
 
@@ -473,6 +542,8 @@ class CaseDB:
         with db._engine.begin() as conn:
             conn.execute(text(_FTS_CREATE))
             conn.execute(text(_IX_WINDOWS_SOURCE_LINE))
+            for statement in _LOG_TABLES_CREATE:
+                conn.execute(text(statement))
             now = datetime.now(UTC).isoformat()
             conn.execute(
                 insert(case_metadata_t).values(
@@ -502,6 +573,11 @@ class CaseDB:
             _migrate_add_bookmarks(conn)
             _migrate_add_progress(conn)
             _migrate_add_kv_store(conn)
+            for statement in _LOG_TABLES_CREATE:
+                conn.execute(text(statement))
+            # IF NOT EXISTS, not a check-then-create: every session's server
+            # opens the case, several at once during extraction.
+            conn.execute(CreateTable(questions_t, if_not_exists=True))
         return db
 
     def close(self) -> None:
@@ -516,6 +592,15 @@ class CaseDB:
     def __exit__(self, *exc: object) -> None:
         """Close the database when exiting the context."""
         self.close()
+
+    def write(self, fn: Callable[[Connection], _T]) -> _T:
+        """Run *fn* in one transaction on the writer thread and return its result."""
+
+        def _do_write() -> _T:
+            with self._engine.begin() as conn:
+                return fn(conn)
+
+        return self._wq.submit(_do_write)
 
     def register_source(
         self,
@@ -1432,6 +1517,114 @@ class CaseDB:
             total_progress_records=len(records),
         )
 
+    def record_questions(
+        self, phase: str, system: str, questions: Sequence[str]
+    ) -> list[Question]:
+        """Store a plan's investigation questions and return their rows.
+
+        A question already recorded with the same text for the same phase and
+        system is returned as it stands rather than stored twice: retries and
+        follow-up cycles re-plan, and a planner repeats itself. The result has
+        one row per distinct question, in the order given.
+        """
+
+        def _do_record() -> list[Question]:
+            """Insert the questions not yet stored for this phase and system."""
+            now = datetime.now(UTC).isoformat()
+            rows: dict[str, Question] = {}
+            with self._engine.begin() as conn:
+                stored = conn.execute(
+                    select(questions_t).where(
+                        questions_t.c.phase == phase, questions_t.c.system == system
+                    )
+                ).fetchall()
+                known = {row.question: _question(row) for row in stored}
+                for question in questions:
+                    if question in rows:
+                        continue
+                    if question not in known:
+                        question_id = f"q_{uuid4().hex[:8]}"
+                        conn.execute(
+                            insert(questions_t).values(
+                                question_id=question_id,
+                                phase=phase,
+                                system=system,
+                                question=question,
+                                recorded_at=now,
+                            )
+                        )
+                        known[question] = Question(
+                            question_id=question_id, phase=phase, system=system, question=question
+                        )
+                    rows[question] = known[question]
+            return list(rows.values())
+
+        return self._wq.submit(_do_record)
+
+    def get_questions(self) -> list[Question]:
+        """Return every recorded investigation question, oldest first."""
+        stmt = select(questions_t).order_by(text("rowid"))
+        with self._engine.connect() as conn:
+            try:
+                rows = conn.execute(stmt).fetchall()
+            except OperationalError as exc:
+                # A case from before questions were recorded, opened without
+                # migrations (``mulder report``): it has none.
+                if "no such table" not in str(exc):
+                    raise
+                return []
+        return [_question(row) for row in rows]
+
+    def resolve_question(
+        self,
+        question_id: str,
+        resolution: Literal["answered", "ruled_out", "undetermined"],
+        finding_ids: Sequence[str],
+        reason: str,
+    ) -> bool:
+        """Set a question's resolution. Returns False if no such question."""
+
+        def _do_update() -> bool:
+            """Execute the UPDATE and return whether a row was matched."""
+            with self._engine.begin() as conn:
+                result = conn.execute(
+                    update(questions_t)
+                    .where(questions_t.c.question_id == question_id)
+                    .values(
+                        resolution=resolution,
+                        finding_ids=json.dumps(list(finding_ids)),
+                        reason=reason,
+                    )
+                )
+                return result.rowcount > 0
+
+        return bool(self._wq.submit(_do_update))
+
+    def repoint_question_findings(self, survivors: Mapping[str, str]) -> None:
+        """Point questions that name a merged-away finding at its survivor.
+
+        Args:
+            survivors: Absorbed finding_id -> the finding_id that absorbed it.
+        """
+
+        def _do_repoint() -> None:
+            """Rewrite ``finding_ids`` wherever an absorbed finding is named."""
+            with self._engine.begin() as conn:
+                rows = conn.execute(
+                    select(questions_t.c.question_id, questions_t.c.finding_ids)
+                ).fetchall()
+                for row in rows:
+                    old = json.loads(row.finding_ids) if row.finding_ids else []
+                    new = list(dict.fromkeys(survivors.get(fid, fid) for fid in old))
+                    if new != old:
+                        conn.execute(
+                            update(questions_t)
+                            .where(questions_t.c.question_id == row.question_id)
+                            .values(finding_ids=json.dumps(new))
+                        )
+
+        self._wq.submit(_do_repoint)
+
     def set_kv(self, key: str, value: str) -> None:
         """Store a key-value pair, replacing any existing value for the key.
 
@@ -1469,6 +1662,92 @@ class CaseDB:
                 {"key": key},
             ).fetchone()
         return row[0] if row else None
+
+    def record_cut_short(self, phase: str, role: str, system: str, question: str) -> None:
+        """Record a role session that was still unfinished after every continuation.
+
+        Args:
+            phase: Phase the session belonged to.
+            role: Its role in a split phase; empty for a single-mode phase.
+            system: The system it worked on; empty when the phase has none.
+            question: The investigation question it was given, when it had
+                one of its own.
+        """
+        # ponytail: read-modify-write of one kv value, kept to the last
+        # _MAX_CUT_SHORT rows. The orchestrator is the only writer; give it
+        # a table if a second one ever appears.
+        rows = self.get_cut_short()
+        rows.append(
+            {
+                "phase": phase,
+                "role": role,
+                "system": system,
+                "question": question,
+                "recorded_at": datetime.now(UTC).isoformat(timespec="seconds"),
+                # Its number in the case: readers work out from the first
+                # row kept how many earlier ones the cap dropped.
+                "n": str(dropped_count(rows) + len(rows) + 1),
+            }
+        )
+        self.set_kv(_CUT_SHORT_KEY, json.dumps(rows[-_MAX_CUT_SHORT:]))
+
+    def get_cut_short(self) -> list[dict[str, str]]:
+        """Return the role sessions recorded as cut short, oldest first.
+
+        Empty for a case with none, and for a database with no ``kv_store``:
+        one from before it existed, opened without migrations the way
+        ``mulder report`` opens it.
+        """
+        try:
+            rows = json.loads(self.get_kv(_CUT_SHORT_KEY) or "[]")
+        except (OperationalError, ValueError):
+            return []
+        if not isinstance(rows, list):
+            return []
+        return [
+            {field: str(row.get(field, "")) for field in _CUT_SHORT_FIELDS}
+            for row in rows
+            if isinstance(row, dict)
+        ]
+
+    def record_rejected_plan(self, system: str) -> None:
+        """Count a plan for *system* that was rejected at the questions gate.
+
+        The planner wrote no investigation questions, in the plan or when
+        asked again, so nothing of the plan was run and no analyst ran on it.
+        """
+        # ponytail: read-modify-write of one kv value, as record_cut_short;
+        # the orchestrator is the only writer.
+        rejected = self._rejected_plans()
+        rejected[system] = rejected.get(system, 0) + 1
+        self.set_kv(_REJECTED_PLANS_KEY, json.dumps(rejected))
+
+    def _rejected_plans(self) -> dict[str, int]:
+        """Plans rejected at the questions gate, counted by system.
+
+        Empty for a database with no ``kv_store`` (see ``get_cut_short``).
+        """
+        try:
+            rejected = json.loads(self.get_kv(_REJECTED_PLANS_KEY) or "{}")
+        except (OperationalError, ValueError):
+            return {}
+        if not isinstance(rejected, dict):
+            return {}
+        return {str(s): plans for s, plans in rejected.items() if isinstance(plans, int)}
+
+    def get_unanalysed(self) -> dict[str, int]:
+        """Return the systems never analysed for want of investigation questions.
+
+        Each system with a plan rejected at the questions gate and no
+        recorded question, and how many plans were rejected. An accepted
+        plan's questions are recorded before its analyst runs, so a system
+        analysed on a retry or in a later run is not listed.
+        """
+        rejected = self._rejected_plans()
+        if not rejected:
+            return {}
+        analysed = {q.system for q in self.get_questions()}
+        return {system: plans for system, plans in rejected.items() if system not in analysed}
 
     def _get_case_id(self) -> str:
         """Read case_id from the case_metadata table (cached after first call)."""

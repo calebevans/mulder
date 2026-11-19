@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -12,7 +14,16 @@ import time
 from collections.abc import Mapping
 from pathlib import Path
 
+from mulder.dirroot import (
+    LISTING_EXTRACTOR,
+    detect_collection,
+    dir_root,
+    icat,
+    read_regular,
+    real_dir,
+)
 from mulder.extractors.optical import probe_optical
+from mulder.linuxvol import probe
 from mulder.patterns import fls_file_entries, parse_mmls_rows
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
@@ -32,6 +43,7 @@ __all__ = [
     "_cleanup_tsk_extract_dir",
     "_collect_fls_chunks",
     "_detect_partition_offset",
+    "_index_dir_listing",
     "_partition_table_text",
     "_parse_all_partitions",
     "_parse_partition_offset",
@@ -219,13 +231,13 @@ def _run_fls_inline(image_path: str) -> str:
 def _collect_fls_chunks(image_path: str) -> list[tuple[list[str], int]]:
     """Collect fls text chunks paired with their partition offsets.
 
-    Gathers output from all indexed ``tsk.filelist*`` sources (primary
-    and secondary partitions).  Each returned element is a ``(chunks,
-    offset)`` pair representing one partition's file listing and the
-    sector offset required for ``icat`` extraction.
+    Gathers output from the ``tsk.filelist*`` sources indexed for this
+    image (primary and secondary partitions).  Each returned element is a
+    ``(chunks, offset)`` pair representing one partition's file listing and
+    the sector offset required for ``icat`` extraction.
 
     Falls back to ``_run_fls_inline`` on the primary partition when no
-    indexed sources exist.
+    source was indexed for this image.
 
     Args:
         image_path: Path to the disk image.
@@ -233,28 +245,51 @@ def _collect_fls_chunks(image_path: str) -> list[tuple[list[str], int]]:
     Returns:
         List of ``(text_chunks, sector_offset)`` pairs, one per partition.
     """
+    root = dir_root(image_path)
+    if root is not None:
+        return [([root.listing()], 0)]
+
     ctx = get_ctx()
     sources = ctx.db.get_sources()
+    # A directory's listing numbers its rows; those are not inodes of any image.
+    dir_ids = {s.source_id for s in sources if s.extractor == LISTING_EXTRACTOR}
     fls_sources = sorted(
-        [s for s in sources if s.source_name.startswith("tsk.filelist")],
+        [
+            s
+            for s in sources
+            if s.source_name.startswith("tsk.filelist") and s.source_id not in dir_ids
+        ],
         key=lambda s: s.source_name,
     )
+    # Every image of a case is listed under the same source names. Read this
+    # image's listings alone: another image's rows name files this one may not
+    # hold, with inode numbers that are other files here. An image no listing
+    # was indexed for is listed inline below, as it is in a case with one image.
+    real = os.path.realpath(image_path)
+    fls_sources = [
+        s
+        for s in fls_sources
+        if s.source_path == image_path or os.path.realpath(s.source_path) == real
+    ]
 
     if fls_sources:
         result: list[tuple[list[str], int]] = []
         for src in fls_sources:
             windows = ctx.db.get_windows_by_source(src.source_name)
-            chunks = [w.raw_text for w in windows]
+            chunks = [w.raw_text for w in windows if w.source_id == src.source_id]
             if not chunks:
                 continue
 
-            stored = ctx.db.get_kv(f"{_KV_SOURCE_OFFSET_PREFIX}{src.source_name}:{image_path}")
+            # Under the path the listing was indexed with, which the caller may spell otherwise.
+            stored = ctx.db.get_kv(
+                f"{_KV_SOURCE_OFFSET_PREFIX}{src.source_name}:{src.source_path}"
+            )
             if stored is not None:
                 with contextlib.suppress(ValueError):
                     offset = int(stored)
                     result.append((chunks, offset))
                     continue
-            result.append((chunks, _resolve_partition_offset(image_path)))
+            result.append((chunks, _resolve_partition_offset(src.source_path)))
         return result
 
     inline_output = _run_fls_inline(image_path)
@@ -434,17 +469,8 @@ def _tsk_extract_files(
 
                 safe_name = rel_path.replace("/", "_").replace("\\", "_")
                 out_path = extract_dir / safe_name
-                cmd = ["icat"]
-                if offset > 0:
-                    cmd.extend(["-o", str(offset)])
-                cmd.extend([image_path, inode_str])
                 try:
-                    proc = subprocess.run(
-                        cmd,
-                        capture_output=True,
-                        timeout=30,
-                        check=False,
-                    )
+                    proc = icat(image_path, offset, inode_str)
                     if proc.returncode == 0 and proc.stdout:
                         out_path.write_bytes(proc.stdout)
                         extracted.append((rel_path, out_path))
@@ -452,6 +478,135 @@ def _tsk_extract_files(
                     continue
 
     return extracted
+
+
+_DIR_LISTING_NOTE = (
+    "This is a directory, not a disk image: only the files that were collected are "
+    "listed. There are no deleted entries and no unallocated space, and the inode "
+    "column is the row number. A file that is not listed was not collected, which "
+    "does not show it was absent from the system."
+)
+
+# ponytail: one lock for every directory; a lock per path if the listings of
+# several large collections ever need to be indexed at the same time.
+_dir_listing_lock = threading.Lock()
+
+_MAX_BODY_BYTES = 256 * 1024 * 1024
+"""Most of a collection's body file handed to mactime."""
+
+_MACTIME_DATE = r"\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2})?"
+_MACTIME_RANGE_RE = re.compile(rf"{_MACTIME_DATE}(?:\.\.{_MACTIME_DATE})?")
+
+
+def _index_dir_listing(image_path: str, force: bool = False) -> dict[str, object] | None:
+    """Index a directory root's files as ``tsk.filelist``; None when *image_path* is not one.
+
+    run_fls and index_triage_collection both end up here, and one batch may
+    hold both for the same directory: the check and the write are one step.
+    """
+    root = dir_root(image_path)
+    if root is None:
+        return None
+    with _dir_listing_lock:
+        existing = sources_already_indexed(["tsk.filelist"], evidence_path=image_path)
+        if existing and not force:
+            return {
+                "status": "skipped",
+                "reason": "Sources already indexed from prior extraction",
+                "existing_sources": existing,
+            }
+        summary: dict[str, object] = {
+            "listing": "directory",
+            "note": _DIR_LISTING_NOTE,
+            "files_listed": len(root.files),
+            "truncated": root.truncated,
+        }
+        summary.update(
+            extract_and_index(root.listing(), "tsk.filelist", image_path, LISTING_EXTRACTOR)
+        )
+    return summary
+
+
+def _mactime_from_body_file(
+    tc_id: str, t0: float, params: Mapping[str, object], image_path: str, time_range: str | None
+) -> dict[str, object]:
+    """run_mactime for a directory: the body file a UAC collection carries, through mactime."""
+    collection = detect_collection(Path(image_path))
+    body_dir = (
+        real_dir(collection.root, "bodyfile")
+        if collection and collection.layout == "uac"
+        else None
+    )
+    body = read_regular(body_dir / "bodyfile.txt", _MAX_BODY_BYTES) if body_dir else None
+    if body is not None and not body[1]:  # cut: drop the partial last row
+        body = (body[0][: body[0].rfind(b"\n") + 1], False)
+    if body is None or not body[0].strip():
+        return error_response(
+            tc_id,
+            "run_mactime",
+            params,
+            "No body file in this directory. A UAC collection carries one "
+            "(bodyfile/bodyfile.txt); other triage collections do not, and the timestamps on "
+            "collected copies are those of the copy, not of the original file.",
+            error_type="not_applicable",
+            suggestion=(
+                "Use run_mft_parser when $MFT was collected, or search the triage.* sources "
+                "index_triage_collection writes (KAPE copy log, Velociraptor upload metadata)."
+            ),
+        )
+    if not require_binary("mactime"):
+        return error_response(tc_id, "run_mactime", params, "mactime not found on PATH")
+
+    if time_range and not _MACTIME_RANGE_RE.fullmatch(time_range):  # it becomes an argument
+        return error_response(
+            tc_id,
+            "run_mactime",
+            params,
+            f"time_range must be YYYY-MM-DD or YYYY-MM-DD..YYYY-MM-DD, not {time_range!r}",
+            error_type="invalid_input",
+        )
+    body_text = body[0].decode("utf-8", errors="replace")
+    try:
+        mac_proc = subprocess.run(
+            # The range is one argument: given two, mactime ignores the end date.
+            ["mactime", "-b", "-", "-d", *([time_range] if time_range else [])],
+            input=body_text,
+            capture_output=True,
+            text=True,
+            timeout=TOOL_TIMEOUT,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return error_response(tc_id, "run_mactime", params, "mactime timed out")
+
+    # mactime exits 0 and drops what it cannot read, so count what came back.
+    timeline = mac_proc.stdout.strip()
+    body_rows = body[0].count(b"\n") + (not body[0].endswith(b"\n"))
+    timeline_rows = timeline.count("\n")  # the lines after the header row
+    if not timeline_rows:
+        return error_response(
+            tc_id,
+            "run_mactime",
+            params,
+            f"mactime wrote no timeline rows (body file rows read: {body_rows})"
+            + (
+                f" for time_range {time_range}: nothing in the body file falls in that "
+                "range, or the range is not one of real dates."
+                if time_range
+                else ": the body file is not in Sleuth Kit body format."
+            ),
+            error_type="no_rows",
+        )
+
+    summary: dict[str, object] = {
+        "body_file": "bodyfile/bodyfile.txt, written by the collector on the live system",
+        "truncated": not body[1],
+        "body_rows": body_rows,
+        "timeline_rows": timeline_rows,
+    }
+    summary.update(extract_and_index(timeline, "tsk.timeline", image_path, "sleuthkit"))
+    elapsed = (time.monotonic() - t0) * 1000
+    return tool_response(tc_id, "run_mactime", params, summary, "tsk.timeline", elapsed)
 
 
 def _optical_redirect(
@@ -590,8 +745,12 @@ def run_fls(
     ``tsk.filelist.p2``, etc.  Entries marked with ``*`` are deleted
     files.  Searchable via ``search(query, source='tsk.filelist')``.
 
+    Given a triage collection directory instead (KAPE, Velociraptor, UAC
+    or a Windows volume directory), lists the collected files: there are
+    no deleted entries and the inode column is the row number.
+
     Args:
-        image_path: Path to the disk image.
+        image_path: Path to the disk image, or a triage collection directory.
         partition_offset: Sector offset of the partition.  Auto-detected
             via mmls if omitted.  When provided explicitly, only that
             single partition is analyzed.
@@ -617,6 +776,11 @@ def run_fls(
                 "tsk.filelist",
                 0.0,
             )
+
+    listed = _index_dir_listing(image_path, force)
+    if listed is not None:
+        elapsed = (time.monotonic() - t0) * 1000
+        return tool_response(tc_id, "run_fls", params, listed, "tsk.filelist", elapsed)
 
     if not require_binary("fls"):
         return error_response(
@@ -668,6 +832,24 @@ def run_fls(
             return redirect
 
     if proc.returncode != 0:
+        # LVM, XFS, LUKS, btrfs: no offset makes Sleuth Kit read these.
+        unread = probe(image_path)
+        if unread:
+            return error_response(
+                tc_id,
+                "run_fls",
+                params,
+                f"Sleuth Kit cannot read this image: it holds {'; '.join(map(str, unread))}",
+                error_type="unsupported_volume",
+                suggestion=(
+                    f"Call export_linux_files(image_path={image_path!r}): it lists every file "
+                    "through dfVFS and exports the ones the Linux tools read."
+                    if any(v.readable for v in unread)
+                    else "No tool here reads it (an encrypted volume needs its key, a volume "
+                    "group on several disks needs all of them, btrfs is not supported). Report "
+                    "it as not examined; run_bulk_extractor still reads the raw image."
+                ),
+            )
         stderr_hint = stderr_text[:_HINT_CHAR_LIMIT].strip()
         return error_response(
             tc_id,
@@ -709,14 +891,21 @@ def run_mactime(image_path: str, time_range: str | None = None) -> dict[str, obj
     Indexes as ``tsk.timeline``; timestamps are in mactime CSV format,
     queryable via search() and get_timeline().
 
+    Given a UAC collection directory, builds the timeline from the body
+    file the collector wrote. Other triage collections have none, and the
+    timestamps on their copies are not those of the original files.
+
     Args:
-        image_path: Path to the disk image.
+        image_path: Path to the disk image, or a UAC collection directory.
         time_range: Optional date range filter for mactime (e.g.
             "2015-08-01..2015-08-05").
     """
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
     params = {"image_path": image_path, "time_range": time_range}
+
+    if dir_root(image_path) is not None:
+        return _mactime_from_body_file(tc_id, t0, params, image_path, time_range)
 
     for binary in ("fls", "mactime"):
         if not require_binary(binary):

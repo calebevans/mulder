@@ -147,6 +147,51 @@ summary = extract_and_index(
 
 The `source_name` is how agents reference this data later (e.g. `search(query, source="mytool.output")`). Use a dotted prefix convention: `toolname.artifact_type`.
 
+### Log tables: `logtable.ingest()`
+
+If the tool parses a log into events, also load them as rows, so the analyst can count with `log_top`, `log_histogram` and `log_rows` instead of paging through `search`. Index the text first, then pass the same events to [`ingest()`](../src/mulder/logtable.py) with the `source_id` that `extract_and_index()` returned:
+
+```python
+from mulder import logtable
+from mulder.server.app import get_ctx
+
+lines = [format_line(event) for event in events]  # one event per line
+indexed = extract_and_index("\n".join(lines), "mylog.access", evidence_path, "mylog")
+
+
+def rows():
+    for number, event in enumerate(events, 1):
+        if event is None:  # a record the parser could not read
+            yield None
+            continue
+        yield {
+            "event_time": event.time,  # ISO 8601, epoch seconds or ms, or a datetime
+            "actor": event.user,
+            "src_ip": event.client,
+            "action": event.method,
+            "target": event.path,
+            "status": event.status,
+            "user_agent": event.agent,
+            "session_id": event.session,
+            "bytes": event.size,
+            "line": number,  # the event's line in the indexed text
+            "extra": {"host": event.vhost},  # other fields worth counting on
+        }
+
+
+logtable.ingest(get_ctx().db, "mylog.access", int(str(indexed["source_id"])), rows())
+```
+
+- Every key is optional. Leave out what the log does not have rather than inventing a value; a field no row fills is not offered to the model.
+- Name the table after the text source, so `list_sources` and `list_log_tables` agree.
+- `extra` keys are constants you choose (`[a-z][a-z0-9_]*`), never names read from the evidence: they become fields the model may filter and group on. Keep them to a handful that answer counting questions.
+- `rows` may be a generator; it is consumed in batches. Values are stored as one printable line of at most 512 characters, and a time `ingest()` cannot read is stored as no time and counted. A time without an offset is taken as UTC, so convert a local time or attach its offset first.
+- Call `ingest()` once per source and table, with every row in the one iterable. It returns `{"rows", "rows_no_time", "rows_unparsed"}`. Running it again for a source of the same name and evidence path replaces the earlier rows. One source may feed more than one table.
+- Yield `None` for whatever was not read: a record that did not parse, or a damaged or truncated stretch of the file. Every query result repeats the count, which is how the analyst learns that a count is over an incomplete log.
+- If the tool reads a directory recursively, pass `nested=True`: one evidence path can then contain another, with the same events. A path inside one already loaded is not loaded again (the result carries `covered_by`, and `rows` is not read), and a directory replaces the rows of paths inside it. Without it, two overlapping paths are counted twice. Both rules hold only between ingests that passed `nested=True`, so pass `False` for a path the recursive read would skip (`run_cloud_audit_logs` does for a file named by itself that has no JSON suffix): a directory above it neither stands in for it nor replaces it.
+- One ingest of a case runs at a time, in every server process that has the case open, so an ingest never replaces one that is still loading.
+- A time before 1990 or after 2100 is stored as no time, so a zeroed or forged timestamp cannot become a first or last seen.
+
 ### `tool_response()` vs `@audited_tool()`
 
 Use **one** of these two patterns for audit logging, not both:
@@ -204,6 +249,10 @@ return run_cli_tool(
     timeout=600,
 )
 ```
+
+### Reading a file out of the evidence
+
+A tool that needs a file from inside a disk image should take `image_path`, find the file with `_collect_fls_chunks(image_path)` (`tools/extract/tsk.py`) and read it with `icat(image_path, offset, inode)` from `mulder.dirroot`, rather than running `icat` itself. The same two calls then work on a triage collection directory (KAPE, Velociraptor, UAC), where the listing and the bytes come from the collected files. Write what you read to a temporary directory; never hand a parser a path inside the evidence.
 
 ## 4. Register the Module Import
 

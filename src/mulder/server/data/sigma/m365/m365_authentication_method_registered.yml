@@ -1,0 +1,24 @@
+title: Microsoft 365 Authentication Method Registered
+id: e7de51cf-76a2-4ef5-9ba7-7705d2cbc21b
+status: experimental
+description: Detects a sign-in method (authenticator app, phone number, security key) being registered for an account. An intruder who registers their own passes MFA from then on.
+references:
+    - https://learn.microsoft.com/en-us/security/operations/token-theft-playbook
+    - https://learn.microsoft.com/en-us/entra/identity/monitoring-health/reference-audit-activities
+author: mulder
+date: 2026-11-18
+tags:
+    - attack.persistence
+    - attack.t1098.005
+logsource:
+    product: m365
+    service: audit
+detection:
+    selection:
+        Operation|contains:
+            - 'registered security info'
+            - 'registered all required security info'
+    condition: selection
+falsepositives:
+    - New accounts, new phones and MFA enrolment campaigns
+level: low

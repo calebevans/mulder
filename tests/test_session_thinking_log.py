@@ -42,7 +42,11 @@ def _result(stop_reason: str | None = "end_turn") -> ResultMessage:
 
 async def _run(tmp_path: Path, stream: list[object], caplog: pytest.LogCaptureFixture) -> None:
     with patch("mulder.orchestrator.runner.InvestigationDashboard"):
-        orch = Orchestrator(evidence_path="/evidence", case_id="case", db_dir=str(tmp_path))
+        # wrapup=False: these tests are about what is logged; the nudge a
+        # silent ending now gets is covered in test_session_wrapup.py.
+        orch = Orchestrator(
+            evidence_path="/evidence", case_id="case", db_dir=str(tmp_path), wrapup=False
+        )
 
     async def fake_query(*, prompt: str, options: ClaudeAgentOptions) -> AsyncIterator[object]:
         for message in stream:

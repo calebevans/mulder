@@ -24,10 +24,12 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
+from mulder.dirroot import detect_collection
 from mulder.extractors.classifier import ClassifiedEvidence
 from mulder.extractors.optical import probe_optical
+from mulder.linuxvol import probe, route
 from mulder.path_policy import PathPolicyError, resolve_allowed_path
-from mulder.patterns import case_extract_dir
+from mulder.patterns import EXTRACTION_MARKER, case_extract_dir
 from mulder.server.app import (
     create_case,
     get_cfg,
@@ -99,7 +101,7 @@ _EXTRACTION_LOCK = threading.Lock()
 """Fallback for :func:`_extraction_slot` where ``fcntl`` is unavailable."""
 
 
-_COMPLETION_MARKER = ".mulder-extraction-complete.json"
+_COMPLETION_MARKER = EXTRACTION_MARKER
 """Written only after an extraction runs to completion.
 
 The presence of *files* in a destination proves only that an extraction
@@ -263,6 +265,21 @@ def _manifest_entry(item: ClassifiedEvidence) -> dict[str, object]:
         if media is not None:
             entry["media"] = f"optical ({media})"
             entry["note"] = "CD/DVD image: use run_optical_listing, not run_fls/run_mmls"
+        elif how := route(str(item.path)):
+            entry["media"] = "; ".join(map(str, probe(str(item.path))))
+            entry["note"] = {
+                "export": "Sleuth Kit cannot read this volume: export_linux_files, not run_fls",
+                "also": "Sleuth Kit cannot read this volume: export_linux_files for it, the "
+                "usual disk tools for the rest of the image",
+                "rest": "No tool here reads this volume; the usual disk tools read the rest "
+                "of the image",
+                "none": "No tool here reads this volume",
+            }[how]
+    if item.artifact_type == "triage_collection":
+        collection = detect_collection(item.path)
+        if collection is not None:
+            entry["collection"] = collection.description
+            entry["note"] = "Files copied from one live system, not a disk image"
     return entry
 
 
@@ -297,6 +314,8 @@ def _scan_evidence_inner(ev_path: Path, case_id: str, replace: bool) -> dict[str
         atype = mi["artifact_type"]
         if "media" in mi:
             atype = f"{atype}, {mi['media']}"
+        if "collection" in mi:
+            atype = f"{atype}, {mi['collection']}"
         tree_lines.append(f"{indent}{name}  [{atype}] {size_label}")
 
     result = create_case(case_id, str(ev_path), replace=replace)
@@ -319,6 +338,12 @@ def _scan_evidence_inner(ev_path: Path, case_id: str, replace: bool) -> dict[str
     )
     if failed_files:
         message += f" WARNING: {len(failed_files)} file(s) failed to hash."
+    if type_counts.get("triage_collection"):
+        message += (
+            f" NOTE: {type_counts['triage_collection']} triage collection(s) are directories "
+            "and were not hashed: of the files inside, only those listed above as items of "
+            "their own are in the evidence registry."
+        )
     if archive_count > 0:
         message += (
             f" NOTE: {archive_count} compressed archive(s) detected. "
@@ -1089,6 +1114,11 @@ def extract_archive(
             "or run extraction tools directly on the evidence files."
         ),
     }
+    # An archive that held a triage collection: the catalog needs its path and
+    # the host it states to name the system.
+    collections = [mi for mi in manifest if mi["artifact_type"] == "triage_collection"]
+    if collections:
+        result["triage_collections"] = collections
 
     elapsed = (time.monotonic() - t0) * 1000
     if has_ctx():
