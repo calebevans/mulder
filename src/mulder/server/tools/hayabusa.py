@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import csv
 import io
+import ipaddress
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -19,7 +21,7 @@ from collections import Counter
 from pathlib import Path
 
 from mulder.assets.paths import asset_path, asset_search_summary
-from mulder.patterns import DISK_IMAGE_EXTS
+from mulder.patterns import DISK_IMAGE_EXTS, is_external_ip
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import (
@@ -69,13 +71,16 @@ def _resolve_evtx_dir(evtx_dir: str | None, image_path: str | None = None) -> st
     1. Explicit *evtx_dir* if it exists and contains EVTX files.
     2. Prior extraction from ``run_evtx_parser`` keyed by *image_path*
        (in-memory cache).
-    3. Any prior extraction directory (newest first) that still has files
-       (in-memory cache).
-    4. DB ``kv_store`` fallback (``evtx_extract_dir:{image_path}`` then
-       ``evtx_extract_dir``), for cross-process persistence when the
-       server restarts between orchestrator phases.
+    3. Without *image_path* only: any prior extraction directory (newest
+       first) that still has files (in-memory cache).
+    4. DB ``kv_store`` fallback (``evtx_extract_dir:{image_path}``, or
+       ``evtx_extract_dir`` without *image_path*), for cross-process
+       persistence when the server restarts between orchestrator phases.
     5. Inline EVTX extraction from *image_path* using the same TSK +
        carved-EVTX strategy as ``run_evtx_parser``.
+
+    With *image_path* given, another image's directory is never returned:
+    its logs would be reported, and indexed, as this image's.
 
     Args:
         evtx_dir: Explicit directory containing ``.evtx`` files.
@@ -94,17 +99,14 @@ def _resolve_evtx_dir(evtx_dir: str | None, image_path: str | None = None) -> st
         if Path(d).is_dir() and _dir_has_evtx(d):
             return d
 
-    for d in reversed(list(_evtx_extract_dirs.values())):
-        if Path(d).is_dir() and _dir_has_evtx(d):
-            return d
+    if not image_path:
+        for d in reversed(list(_evtx_extract_dirs.values())):
+            if Path(d).is_dir() and _dir_has_evtx(d):
+                return d
 
     try:
-        ctx = get_ctx()
-        if image_path:
-            db_dir = ctx.db.get_kv(f"evtx_extract_dir:{image_path}")
-            if db_dir and Path(db_dir).is_dir() and _dir_has_evtx(db_dir):
-                return db_dir
-        db_dir = ctx.db.get_kv("evtx_extract_dir") or ""
+        key = f"evtx_extract_dir:{image_path}" if image_path else "evtx_extract_dir"
+        db_dir = get_ctx().db.get_kv(key) or ""
         if db_dir and Path(db_dir).is_dir() and _dir_has_evtx(db_dir):
             return db_dir
     except Exception:
@@ -393,3 +395,231 @@ def _parse_hayabusa_csv(csv_text: str) -> list[dict[str, str]]:
     for row in reader:
         alerts.append(dict(row))
     return alerts
+
+
+# ---------------------------------------------------------------------------
+# Logon summary
+# ---------------------------------------------------------------------------
+
+# Not under "hayabusa.": run_hayabusa and the batch submitter treat any source
+# with that prefix as the Sigma scan already done.
+_LOGON_SOURCE = "logon.summary"
+_LOGON_TOOL = "run_hayabusa_logon_summary"
+_LOGON_ROWS_SHOWN = 15
+_LOGON_COLUMNS = (
+    "Target Account",
+    "Target Domain",
+    "Target Computer",
+    "Logon Type",
+    "Source Computer",
+    "Source IP Address",
+)
+_LOGON_NOTE = (
+    "Each row counts one combination of account, logon type and source over the whole "
+    "log; Hayabusa 3.8.1 gives no first or last time per row (log_period is the span of "
+    "all event records read), so search the Security log (events 4624, 4625) for when. "
+    "A logon is not a compromise: type 5 and 0 are the "
+    "machine's own services, and type 3 or 10 from an address the organisation does not "
+    "use is a lead to check against the account's normal sources. external is null when "
+    "the source is not an address that could be classified. No rows means no logon "
+    "events in the logs that were read, not that nobody logged on: the Security log may "
+    "be cleared, rolled over or absent."
+)
+# Account and computer names come from the event log, and a failed logon's
+# account name is whatever the remote party typed.
+_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+# Hayabusa 3.8.1 prints these three lines on stdout, with colour resets
+# between the label and the colon even under --no-color.
+_PERIOD_RE = re.compile(
+    r"(First Timestamp|Last Timestamp|Total Event Records)[^:\n]*:\s*([0-9][0-9 :.+-]{0,40})"
+)
+
+
+def _is_external(address: str) -> bool | None:
+    """Whether a logon's source address is public; None when it cannot be classified."""
+    try:
+        ip = ipaddress.ip_address(address.strip())
+    except ValueError:
+        return None
+    if isinstance(ip, ipaddress.IPv6Address):
+        if ip.ipv4_mapped is None:
+            return ip.is_global
+        ip = ip.ipv4_mapped
+    return is_external_ip(str(ip))
+
+
+def _logon_table(csv_text: str) -> dict[str, object]:
+    """Summarise one of Hayabusa's logon CSVs: totals, by type, and rows naming a source."""
+    rows = [r for r in csv.reader(io.StringIO(csv_text)) if r]
+    table: dict[str, object] = {
+        "logons": 0,
+        "combinations": 0,
+        "by_logon_type": {},
+        "with_source_address": [],
+    }
+    if len(rows) < 2 or not all(c in rows[0] for c in _LOGON_COLUMNS):
+        return table
+    header = rows[0]
+    idx = {c: header.index(c) for c in _LOGON_COLUMNS}
+    by_type: Counter[str] = Counter()
+    combinations = 0
+    sourced: list[tuple[int, int, dict[str, object]]] = []
+    for row in rows[1:]:
+        if len(row) != len(header) or not row[0].isdigit():
+            continue
+        row = [_CONTROL_RE.sub("?", cell)[:_PREVIEW_CHAR_LIMIT] for cell in row]
+        count = int(row[0])
+        combinations += 1
+        by_type[row[idx["Logon Type"]]] += count
+        address = row[idx["Source IP Address"]]
+        if address not in ("", "-"):
+            external = _is_external(address)
+            fields: dict[str, object] = {"count": count, "external": external}
+            fields.update({c: row[i] for c, i in idx.items()})
+            # External first, then what could not be classified, then internal.
+            rank = {True: 0, None: 1, False: 2}[external]
+            sourced.append((rank, count, fields))
+    sourced.sort(key=lambda s: (s[0], -s[1]))
+    table.update(
+        logons=sum(by_type.values()),
+        combinations=combinations,
+        by_logon_type=dict(by_type.most_common()),
+        with_source_address=[fields for _e, _c, fields in sourced[:_LOGON_ROWS_SHOWN]],
+    )
+    if len(sourced) > _LOGON_ROWS_SHOWN:
+        table["with_source_address_not_listed"] = len(sourced) - _LOGON_ROWS_SHOWN
+    return table
+
+
+@mcp.tool()
+@tool_access(Role.EXTRACT_EXECUTOR)
+def run_hayabusa_logon_summary(
+    evtx_dir: str = "",
+    image_path: str = "",
+    force: bool = False,
+) -> dict[str, object]:
+    """Summarise successful and failed Windows logons from EVTX files using Hayabusa.
+
+    Call after run_evtx_parser on a Windows image, alongside run_hayabusa. It
+    answers who logged on, how (logon type) and from which computer and
+    address, with a count per combination, which Sigma alerts do not give.
+
+    Indexes the full tables as ``logon.summary`` and returns totals, counts
+    by logon type and the rows that name a source address, external addresses
+    first. Counts cover the whole log (``log_period``) and carry no times of
+    their own. A logon is not a compromise, and no rows is not no logons: the
+    Security log may have been cleared or rolled over.
+
+    Args:
+        evtx_dir: Directory containing ``.evtx`` files. If empty, falls back
+            to the directory created by ``run_evtx_parser``.
+        image_path: Path to the disk image whose extracted EVTX directory
+            should be used (as passed to ``run_evtx_parser``).
+        force: Re-run even if the summary is already indexed.
+    """
+    tc_id = make_tool_call_id()
+    t0 = time.monotonic()
+    params = {"evtx_dir": evtx_dir, "image_path": image_path, "force": force}
+
+    def _error(message: str, error_type: str = "unknown") -> dict[str, object]:
+        elapsed = (time.monotonic() - t0) * 1000
+        return error_response(tc_id, _LOGON_TOOL, params, message, elapsed, error_type=error_type)
+
+    target = image_path or evtx_dir
+    if not force:
+        existing = sources_already_indexed([_LOGON_SOURCE], evidence_path=target or None)
+        if existing:
+            return tool_response(
+                tc_id,
+                _LOGON_TOOL,
+                params,
+                {
+                    "status": "skipped",
+                    "reason": "Sources already indexed from prior extraction",
+                    "existing_sources": existing,
+                },
+                _LOGON_SOURCE,
+                0.0,
+            )
+
+    hayabusa_bin = _hayabusa_binary()
+    if hayabusa_bin is None:
+        return _error(
+            "Hayabusa binary not found on PATH or under "
+            f"{asset_search_summary(_HAYABUSA_DIRNAME, 'hayabusa')}. Run 'mulder setup'.",
+            "binary_missing",
+        )
+    resolved_dir = _resolve_evtx_dir(evtx_dir or None, image_path=image_path or None)
+    if not resolved_dir:
+        return _error(
+            "No EVTX directory found. Run run_evtx_parser on a disk image "
+            "first, or provide an explicit evtx_dir path."
+        )
+
+    with tempfile.TemporaryDirectory(prefix="mulder_hayabusa_logon_") as tmpdir:
+        prefix = str(Path(tmpdir) / "logon")
+        # Verified against Hayabusa 3.8.1: -o is a prefix and the command writes
+        # <prefix>-successful.csv and <prefix>-failed.csv. --quiet-errors keeps
+        # it from writing ./logs/errorlog-*.log into the working directory.
+        cmd = [hayabusa_bin, "logon-summary", "-d", resolved_dir, "-o", prefix]
+        cmd += ["--clobber", "--quiet", "--quiet-errors", "--no-color", "--UTC"]
+        # Without rules/config (eventkey_alias.txt) Hayabusa reads no logon
+        # fields and reports "No logon events were detected" on any log.
+        config = Path(hayabusa_bin).resolve().parent / "rules" / "config"
+        if config.is_dir():
+            cmd += ["--rules-config", str(config)]
+        timeout = adaptive_timeout(image_path or resolved_dir, base=_HAYABUSA_TIMEOUT)
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=timeout, check=False
+            )
+        except subprocess.TimeoutExpired:
+            return _error(f"Hayabusa timed out after {timeout}s", "timeout")
+        output = (proc.stdout or "") + (proc.stderr or "")
+        if "eventkey_alias.txt" in output:
+            return _error(
+                "Hayabusa could not open rules/config/eventkey_alias.txt, so it cannot read "
+                "logon events: the rules directory beside its binary is missing or empty. "
+                "Nothing was examined.",
+                "asset_missing",
+            )
+        tables: dict[str, str] = {}
+        for kind in ("successful", "failed"):
+            try:
+                tables[kind] = Path(f"{prefix}-{kind}.csv").read_text(errors="replace")
+            except OSError:
+                tables[kind] = ""
+    if proc.returncode != 0 and not any(t.strip() for t in tables.values()):
+        detail = output.strip()[:_PREVIEW_CHAR_LIMIT]
+        return _error(
+            f"Hayabusa exited {proc.returncode} and wrote no summary: {detail}", "tool_failed"
+        )
+
+    summaries = {kind: _logon_table(table) for kind, table in tables.items()}
+    result: dict[str, object] = {
+        "source": _LOGON_SOURCE,
+        **summaries,
+        "evtx_dir": resolved_dir,
+        "note": _LOGON_NOTE,
+    }
+    period = {label: value.strip() for label, value in _PERIOD_RE.findall(proc.stdout or "")}
+    if period:
+        result["log_period"] = {
+            "first_timestamp": period.get("First Timestamp"),
+            "last_timestamp": period.get("Last Timestamp"),
+            "event_records": period.get("Total Event Records"),
+        }
+    if any(summary["combinations"] for summary in summaries.values()):
+        text = "".join(
+            f"# {kind} logons: count per account, logon type and source (no times)\n{table}\n"
+            for kind, table in tables.items()
+            if table.strip()
+        )
+        result["index"] = extract_and_index(
+            text, _LOGON_SOURCE, target or resolved_dir, "hayabusa"
+        )
+    else:
+        # Nothing is registered, so a later call reads the logs again instead
+        # of being skipped as done on a log that could not be read this time.
+        result["index"] = {"status": "not_indexed", "reason": "no logon rows"}
+    return tool_response(tc_id, _LOGON_TOOL, params, result, None, (time.monotonic() - t0) * 1000)

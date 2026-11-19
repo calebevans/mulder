@@ -277,6 +277,29 @@ class TestProvisioning:
         assert (roots[1] / "capa").is_symlink()
         assert (roots[1] / "capa").resolve() == (roots[0] / "capa" / "capa").resolve()
 
+    def test_a_release_that_is_a_bare_binary_is_made_executable(
+        self, roots: tuple[Path, Path]
+    ) -> None:
+        """evtx_dump is published as the executable itself, not an archive."""
+        import dataclasses
+
+        from mulder.assets import manifest as manifest_mod
+
+        unpinned = dataclasses.replace(ASSETS_BY_KEY["evtx-dump"], pinnable=False, digests={})
+        patched = tuple(unpinned if a.key == "evtx-dump" else a for a in manifest_mod.ASSETS)
+        with (
+            patch.dict(manifest_mod.ASSETS_BY_KEY, {"evtx-dump": unpinned}),
+            patch.object(install_mod, "ASSETS", patched),
+            patch.object(manifest_mod, "ASSETS", patched),
+        ):
+            result = _run(roots, RecordingFetcher(roots[0]), {"evtx-dump"})
+
+        binary = roots[0] / "evtx-dump" / "evtx_dump"
+        assert _by_key(result)["evtx-dump"].status == "installed"
+        assert os.access(binary, os.X_OK)
+        # Not linked into the shim directory: python-evtx owns that name on PATH.
+        assert not (roots[1] / "evtx_dump").exists()
+
 
 class TestVerify:
     def test_verify_reports_missing_and_exits_4(self, roots: tuple[Path, Path]) -> None:

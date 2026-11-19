@@ -20,6 +20,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from mulder.orchestrator.budget import TokenBudgetReached
+
 logger = logging.getLogger(__name__)
 
 EffortLevel = Literal["low", "medium", "high", "xhigh", "max"]
@@ -130,6 +132,8 @@ class PhaseResult:
             a context overflow. Implies ``context_exhausted``.
         batch_ids: Batch IDs captured structurally from start_extraction_batch
             tool result blocks during the session.
+        nudges_used: Times the session was resumed after ending on a turn
+            with no text and no tool call.
     """
 
     phase_name: str
@@ -144,6 +148,7 @@ class PhaseResult:
     context_exhausted: bool = False
     turns_exhausted: bool = False
     batch_ids: set[str] = field(default_factory=set)
+    nudges_used: int = 0
 
 
 @dataclass
@@ -154,11 +159,14 @@ class InvestigationResult:
         phases: Results from each completed phase.
         total_turns: Sum of turns across all phases.
         success: Whether the full investigation succeeded.
+        budget_stop: The refusal that ended the run early because its token
+            budget was used up, or None. ``success`` is False when set.
     """
 
     phases: list[PhaseResult] = field(default_factory=list)
     total_turns: int = 0
     success: bool = False
+    budget_stop: TokenBudgetReached | None = None
 
 
 def extract_json_plan(messages: list[str], allow_empty: bool = False) -> dict[str, Any] | None:

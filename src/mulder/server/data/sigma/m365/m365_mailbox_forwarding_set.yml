@@ -1,0 +1,28 @@
+title: Microsoft 365 Mailbox Forwarding Set
+id: 1271caca-17f8-4b50-acf1-455cf8f4c074
+status: experimental
+description: Detects Set-Mailbox with a forwarding parameter, which sends a copy of all mail a mailbox receives to another address. Matches the parameter's name, so it also fires when forwarding is cleared.
+references:
+    - https://learn.microsoft.com/en-us/exchange/recipients-in-exchange-online/manage-user-mailboxes/configure-email-forwarding
+    - https://learn.microsoft.com/en-us/defender-office-365/responding-to-a-compromised-email-account
+author: mulder
+date: 2026-11-18
+tags:
+    - attack.collection
+    - attack.t1114.003
+logsource:
+    product: m365
+    service: audit
+detection:
+    selection:
+        Operation: 'Set-Mailbox'
+        Parameters|contains:
+            - 'ForwardingSmtpAddress'
+            - 'ForwardingAddress'
+    filter_system:
+        UserId|startswith: 'NT AUTHORITY\SYSTEM'
+    condition: selection and not filter_system
+falsepositives:
+    - Forwarding set up by the mailbox owner or an administrator, for leave or an account that is being retired
+    - Forwarding being removed
+level: medium

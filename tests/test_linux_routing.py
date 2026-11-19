@@ -478,6 +478,41 @@ def test_a_linux_collection_is_planned_with_the_linux_tools(tmp_path: Path) -> N
     assert linux_line not in _context(root, "ws01", tmp_path / "x", ["triage_collection"])
 
 
+def test_a_var_log_is_planned_for_one_reader_and_a_bundle_stays_a_bundle(tmp_path: Path) -> None:
+    """run_loose_logs takes a var/log that came by itself. One inside a Linux file tree,
+    a collection or mulder's own export is read with its tree, by run_plaso, and is not
+    planned a second time. An ESXi support bundle holds etc/passwd too and is no tree."""
+    root, extracted = tmp_path / "evidence", tmp_path / "extracted"
+    collection = uac(root)
+    _linux_tree(root / "db02-rootfs", "db02\n")
+    image = write(root, {"web01.E01": b"EVF", "fw01/var/log/messages": "x\n"}) / "web01.E01"
+    _linux_tree(export_dir(extracted, str(image)))
+    bundle = {"commands/ps.txt": "x\n", "etc/vmware/esx.conf": "x\n", "etc/passwd": "root:x:0:0\n"}
+    write(root / "esx01", {**bundle, "var/run/log/hostd.log": "x\n"})
+
+    found = EvidenceClassifier().classify(root)
+    assert {str(c.path.relative_to(root.resolve())): c.artifact_type for c in found} == {
+        collection.name: "triage_collection",
+        "db02-rootfs": "triage_collection",
+        "esx01": "esxi_bundle",
+        "fw01/var/log": "log_directory",
+        "web01.E01": "disk_image",
+    }
+    assert EvidenceClassifier().classify(extracted) == []
+
+    with _holding(LVM):
+        disk = _context(root, "web01", extracted, ["disk_image", "triage_collection"])
+    tree = _context(root, "db02", extracted, ["triage_collection"])
+    for text in (disk, tree):
+        assert 'parsers="linux_logs"' in text and "run_loose_logs" not in text
+    assert "Its files will be exported to" in disk and "(UAC collection, host web01)" in disk
+    alone = _context(root, "fw01", extracted, ["log_directory"])
+    assert f"  {root / 'fw01/var/log'}\n  Plan one run_loose_logs(" in alone
+    assert "linux_logs" not in alone
+    esx = _context(root, "esx01", extracted, ["esxi_bundle"])
+    assert f"  {root / 'esx01'}\n  Plan one run_loose_logs(" in esx and "Linux files" not in esx
+
+
 def test_the_catalog_sees_what_an_image_holds(tmp_path: Path) -> None:
     image = write(tmp_path, {"web01.E01": b"EVF"}) / "web01.E01"
     item = ClassifiedEvidence(path=image, artifact_type="disk_image")
