@@ -9,11 +9,12 @@ import signal
 import sys
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, get_args
 
 import click
 
 from mulder import __version__
+from mulder.orchestrator.types import EffortLevel
 from mulder.patterns import (
     DB_DIR_ENV_VAR,
     DEFAULT_DB_DIR,
@@ -46,6 +47,9 @@ HTTP_TOKEN_ENV_VAR = "MULDER_HTTP_TOKEN"
 _HTTP_PORT = 8000
 
 _UNAUTHORIZED_BODY = b'{"error": "unauthorized"}'
+
+#: Choices for ``--effort`` and ``--executor-effort``, lowest first.
+_EFFORT_LEVELS: tuple[str, ...] = get_args(EffortLevel)
 
 
 def _require_bearer(app: ASGIApp, token: str) -> ASGIApp:
@@ -326,14 +330,23 @@ def report(case_id: str, db_dir: str) -> None:
 @click.option(
     "--effort",
     default="max",
-    type=click.Choice(["max", "xhigh", "high"]),
+    type=click.Choice(_EFFORT_LEVELS),
     show_default=True,
-    help="Effort level.",
+    help="Effort level for planner, analyst, catalog and report sessions.",
+)
+@click.option(
+    "--executor-effort",
+    default="low",
+    envvar="MULDER_EXECUTOR_EFFORT",
+    type=click.Choice(_EFFORT_LEVELS),
+    show_default=True,
+    help="Effort level for executor sessions and plan JSON repair; set it to the "
+    "--effort value to run every role alike (env: MULDER_EXECUTOR_EFFORT).",
 )
 @click.option(
     "--no-thinking",
     is_flag=True,
-    help="Disable extended thinking for all queries; overrides --effort.",
+    help="Disable extended thinking for all queries; overrides --effort and --executor-effort.",
 )
 @click.option(
     "--db-dir",
@@ -407,6 +420,7 @@ def investigate(
     analyst_model: str | None,
     config_path: str | None,
     effort: str,
+    executor_effort: str,
     db_dir: str,
     cwd: str,
     workers: int,
@@ -440,7 +454,6 @@ def investigate(
 
     from mulder.orchestrator.models import ModelConfig
     from mulder.orchestrator.runner import Orchestrator
-    from mulder.orchestrator.types import EffortLevel
 
     cwd_path = Path(cwd).expanduser()
     try:
@@ -492,7 +505,7 @@ def investigate(
     if no_thinking:
         click.echo(f"Thinking: disabled (effort ignored), Workers: {workers}", err=True)
     else:
-        click.echo(f"Effort: {effort}, Workers: {workers}", err=True)
+        click.echo(f"Effort: {effort} (executor: {executor_effort}), Workers: {workers}", err=True)
     if max_tokens is not None:
         from mulder.orchestrator.budget import report_reserve
 
@@ -507,8 +520,9 @@ def investigate(
         evidence_path=evidence_path,
         cwd=cwd,
         model_config=model_config,
-        # click.Choice above is the validation boundary for this value.
+        # click.Choice above is the validation boundary for these values.
         effort=cast("EffortLevel", effort),
+        executor_effort=cast("EffortLevel", executor_effort),
         env={},
         parallel_extractions=workers,
         proxy_config=proxy_config,

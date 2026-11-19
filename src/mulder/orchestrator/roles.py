@@ -29,6 +29,7 @@ from mulder.orchestrator.session import _MAX_NUDGES, SessionExecutor
 from mulder.orchestrator.snapshot import planner_snapshot, prompt_modules
 from mulder.orchestrator.types import (
     AnalystResult,
+    EffortLevel,
     ExecutionResults,
     PhaseResult,
     Plan,
@@ -523,6 +524,7 @@ class RoleRunner:
         env: dict[str, str],
         cwd: str,
         max_compactions: int,
+        executor_effort: EffortLevel | None = None,
         wrapup: bool = True,
         server: ServerBridge | None = None,
         evidence: EvidenceContext | None = None,
@@ -538,6 +540,9 @@ class RoleRunner:
             cwd: Working directory for agent sessions.
             max_compactions: Continuations allowed per role session after
                 a turn limit or context exhaustion.
+            executor_effort: Effort level for executor sessions, their
+                continuations and JSON repair; ``None`` uses *session*'s
+                level, as every other role does.
             wrapup: At a turn limit, resume the session where it stopped
                 instead of replacing it, and seed a new session, when one
                 is needed, with the recorded notes and saved findings
@@ -561,6 +566,7 @@ class RoleRunner:
         self._env = env
         self._cwd = cwd
         self._max_compactions = max_compactions
+        self._executor_effort = executor_effort
         self._wrapup = wrapup
         self._server = server
 
@@ -831,6 +837,7 @@ class RoleRunner:
             max_turns=phase.executor_max_turns,
             log_prefix=log_prefix,
             task_system=task_system,
+            effort=self._executor_effort,
         )
 
         extra_turns = await self.compaction_loop(
@@ -851,6 +858,7 @@ class RoleRunner:
             role_label="Executor",
             log_prefix=log_prefix,
             task_system=task_system,
+            effort=self._executor_effort,
             task_prompt=prompt,
             handoff_system=task_system or phase.name,
             started=started,
@@ -1287,6 +1295,7 @@ class RoleRunner:
         role_label: str = "",
         log_prefix: str = "",
         task_system: str = "",
+        effort: EffortLevel | None = None,
         task_prompt: str = "",
         handoff_system: str = "",
         started: datetime | None = None,
@@ -1322,6 +1331,8 @@ class RoleRunner:
             role_label: Role name for dashboard messages (e.g. "Executor").
             log_prefix: Prefix for SDK query log lines.
             task_system: Task panel system name for tool tracking.
+            effort: Effort level for every continuation (a resume, a new
+                session, the wrap-up); ``None`` uses the session's own level.
             task_prompt: The prompt the role session was given, repeated
                 to a new session.
             handoff_system: Label progress notes are recorded and read under.
@@ -1360,6 +1371,7 @@ class RoleRunner:
                         role_label,
                         log_prefix,
                         system,
+                        effort,
                     )
                 break
             compaction_count += 1
@@ -1383,6 +1395,7 @@ class RoleRunner:
                     role_label,
                     log_prefix,
                     task_system=task_system,
+                    effort=effort,
                     nudges=nudges,
                 )
             if continuation is None:
@@ -1401,6 +1414,7 @@ class RoleRunner:
                     max_turns=max_turns,
                     log_prefix=log_prefix,
                     task_system=task_system,
+                    effort=effort,
                     nudges=nudges,
                 )
             nudges -= continuation.nudges_used
@@ -1509,6 +1523,7 @@ class RoleRunner:
         role_label: str,
         log_prefix: str,
         system: str,
+        effort: EffortLevel | None = None,
     ) -> int:
         """Resume a session one last time so it can save and hand off.
 
@@ -1528,6 +1543,8 @@ class RoleRunner:
             role_label: Role name for dashboard and log messages.
             log_prefix: Prefix for SDK query log lines.
             system: Sanitised label the handoff note is recorded under.
+            effort: Effort level of that session; ``None`` is the session
+                executor's own.
 
         Returns:
             Turns the wrap-up used; 0 when it did not run.
@@ -1549,6 +1566,7 @@ class RoleRunner:
             _WRAPUP_MAX_TURNS,
             role_label,
             log_prefix,
+            effort=effort,
             # It was told to stop; ending without a word is doing that.
             nudges=0,
         )
@@ -1864,6 +1882,7 @@ class RoleRunner:
             allowed_tools=[],
             disallowed_tools=["Bash", "Shell"],
             max_turns=1,
+            effort=self._executor_effort,
         )
 
         repaired = extract_json_plan(repair_result.messages)

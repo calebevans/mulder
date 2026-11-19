@@ -502,7 +502,8 @@ class SessionExecutor:
             model_config: Model identifiers for utility model resolution.
             cwd: Working directory for agent sessions.
             env: Environment variables passed to agent subprocesses.
-            effort: Effort level for agent sessions (max, xhigh, high, low).
+            effort: Effort level for agent sessions unless ``execute`` is
+                given one (low, medium, high, xhigh, max).
             using_proxy: Whether a LiteLLM proxy is active (disables
                 per-message token tracking to avoid double counting).
             no_thinking: Disable extended thinking for phase and utility queries.
@@ -659,6 +660,7 @@ class SessionExecutor:
         max_turns: int,
         log_prefix: str = "",
         task_system: str = "",
+        effort: EffortLevel | None = None,
         resume: str = "",
         nudges: int = _MAX_NUDGES,
     ) -> PhaseResult:
@@ -679,6 +681,8 @@ class SessionExecutor:
             log_prefix: Optional prefix for dashboard log lines.
             task_system: When non-empty, tool use blocks update the
                 dashboard task panel for this system name.
+            effort: Effort level for this session; ``None`` uses the level
+                given to the constructor. Not sent under ``no_thinking``.
             resume: Session id to resume, with its conversation intact,
                 instead of starting a new session. *prompt* is then the
                 next user message. A resume that fails (an exception, no
@@ -701,7 +705,7 @@ class SessionExecutor:
             model=model,
             max_turns=max_turns,
             resume=resume or None,
-            effort=None if self._no_thinking else self._effort,
+            effort=None if self._no_thinking else effort or self._effort,
             thinking={"type": "disabled"} if self._no_thinking else None,
             stderr=self._stderr_callback(log_prefix or task_system or model),
             max_buffer_size=_MAX_BUFFER_SIZE_BYTES,
@@ -716,9 +720,11 @@ class SessionExecutor:
         session_id = ""
 
         logger.info(
-            "Starting query (model=%s, max_turns=%d%s)",
+            "Starting query (model=%s, max_turns=%d, effort=%s%s)",
             model,
             max_turns,
+            # Unset means the CLI picks its own default for the model.
+            options.effort or "unset",
             f", resume={resume}" if resume else "",
         )
 
@@ -938,6 +944,7 @@ class SessionExecutor:
                 max_turns,
                 log_prefix,
                 task_system,
+                effort=effort,
                 resume=session_id,
                 nudges=nudges - 1,
             )

@@ -808,14 +808,16 @@ entrypoint; use `docker exec -u mulder` for investigations in an existing contai
 
 The orchestrator uses a planner/executor/analyst role system for model assignment. Each role maps to a CLI flag with built-in defaults:
 
-| CLI Flag | Role | Default Model | Responsibility |
-|----------|------|--------------|----------------|
-| `--planner-model` | Planner | `claude-opus-4-6` | Decides what tools to run, produces execution plans |
-| `--executor-model` | Executor | `claude-haiku-4-5` | Calls tools mechanically, manages waits and retries |
-| `--analyst-model` | Analyst | `claude-opus-4-6` | Queries indexed data, reasons about evidence, submits findings |
-| `--model` | Fallback | None | Sets all roles when per-role flags are not specified |
+| CLI Flag | Role | Default Model | Effort | Responsibility |
+|----------|------|--------------|--------|----------------|
+| `--planner-model` | Planner | `claude-opus-4-6` | `--effort` (`max`) | Decides what tools to run, produces execution plans |
+| `--executor-model` | Executor | `claude-haiku-4-5` | `--executor-effort` (`low`) | Calls tools mechanically, manages waits and retries |
+| `--analyst-model` | Analyst | `claude-opus-4-6` | `--effort` (`max`) | Queries indexed data, reasons about evidence, submits findings |
+| `--model` | Fallback | None | | Sets all roles when per-role flags are not specified |
 
 Single-mode phases map to roles: catalog uses the planner model, report uses the analyst model. Per-phase overrides can be specified in a YAML config file via `--config`.
+
+Effort follows the role, not the model. Planner and analyst sessions (including the planner's plan-from-notes follow-up and analyst remediation) and the single-mode catalog and report sessions run at `--effort`. Executor sessions in all three split phases, their continuations, and the plan JSON-repair session, which runs on the executor model, run at `--executor-effort` (`MULDER_EXECUTOR_EFFORT`). Utility queries always run at `low`. `RoleRunner` passes the executor level to `SessionExecutor.execute` per session, the same way it passes the model. With `--executor-effort` equal to `--effort`, every role session gets one level, which is what mulder did before the executor had its own. The `--config` file does not set effort. The default executor model, Claude Haiku 4.5, has no effort control and Claude Code sends no effort level for it, so `--executor-effort` only matters when `--model` or `--executor-model` puts a model with effort control in the executor role.
 
 All roles inherit from `--model` if not specified individually. Model IDs are passed through to the SDK exactly as specified, with no automatic translation between provider formats. Vertex users must include the `@version` suffix (e.g. `claude-opus-4-6@20250514`) and Bedrock users must include the `us.anthropic.` prefix (e.g. `us.anthropic.claude-opus-4-6`).
 
