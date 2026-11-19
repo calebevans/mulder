@@ -275,6 +275,15 @@ twentieth are not asked. So ask one thing per question, put the most
 important first, do not write more than six unless the evidence and the
 briefing need them, and ask what the tasks you planned for this system
 could answer.
+A session is given only the question it is to answer, never the rest of
+your list. So when these instructions or the evidence context tell you
+to name evidence in investigation_questions as not examined (a path
+listed under NOT READ), name it inside every question it bears on, in a
+few words ("... <path> was not read"), not only in an entry of its own:
+the session answering a question about those logs must know that part
+of them was not read. A question is cut after 500 characters, so where
+many paths were not read name their directory and how many, and give
+them one entry of their own together, not one each.
 A question or lead in the briefing that this system's evidence could
 answer MUST be covered by your questions, worded by you for this system,
 next to the questions you derive from the evidence. Do not force a

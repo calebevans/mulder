@@ -1430,7 +1430,9 @@ class RoleRunner:
         (and after a context overflow, or under ``--no-wrapup``) this runs
         one tool-less, single-turn new session with the original case
         prompt plus the planner's own text messages so far. The
-        follow-up's messages and turns are merged into *result*.
+        follow-up's messages and turns are merged into *result*. A plan
+        from the new session is not in the planner's conversation, so
+        *result* then names no session to resume about it.
 
         Args:
             phase: Phase configuration with planner fields.
@@ -1481,6 +1483,9 @@ class RoleRunner:
         result.messages.extend(follow_up.messages)
         result.tool_names.extend(follow_up.tool_names)
         result.turns_used += follow_up.turns_used
+        # The planner's conversation holds no plan (and a resume of it may
+        # just have failed): the questions gate asks in a new session too.
+        result.session_id = ""
         return extract_json_plan(follow_up.messages)
 
     async def _request_questions(
@@ -1497,8 +1502,10 @@ class RoleRunner:
         the questions alone, the way ``_request_plan_from_notes`` asks for
         the plan: its session is resumed for one turn with its tools off,
         and when that cannot be done or yields none (and after a context
-        overflow, or under ``--no-wrapup``) one tool-less, single-turn new
-        session is given the original prompt and the planner's own output.
+        overflow, under ``--no-wrapup``, or when the plan itself came from
+        the new session of ``_request_plan_from_notes``) one tool-less,
+        single-turn new session is given the original prompt and the
+        planner's own output.
         The messages and turns of both are merged into *result*. The
         template's own placeholder, echoed back, is not a question.
 

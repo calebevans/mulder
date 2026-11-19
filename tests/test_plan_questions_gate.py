@@ -23,6 +23,7 @@ import pytest
 
 import mulder.server.app as server_app
 from mulder.db import CaseDB
+from mulder.orchestrator import evidence
 from mulder.orchestrator.budget import TokenBudgetReached
 from mulder.orchestrator.fallback import incomplete_notice
 from mulder.orchestrator.gates import GateResult
@@ -332,6 +333,36 @@ class TestQuestionsGate:
         assert plan.investigation_questions == QUESTIONS
 
     @pytest.mark.asyncio()
+    @pytest.mark.parametrize(
+        ("resume", "answers"),
+        [
+            (None, [NONE, NO_QUESTIONS, _answer(QUESTIONS)]),
+            (RuntimeError("resume is not supported"), [NO_QUESTIONS, _answer(QUESTIONS)]),
+        ],
+        ids=["the resume gave no plan", "the resume failed"],
+    )
+    async def test_a_plan_the_new_session_wrote_is_not_taken_back_to_the_planner_session(
+        self, db_dir: Path, resume: Exception | None, answers: list[str]
+    ) -> None:
+        """That conversation holds no plan to keep the tasks of, and its resume just failed."""
+        orch = _orchestrator(db_dir)
+        script = _Script(
+            ["Still reading the file listing."],
+            answers,
+            resume=resume,
+            planner_ended="turn limit",
+        )
+        plan = await _planner(orch, script)
+
+        # The planner, its resume for the plan, the new session that wrote
+        # the plan, then the questions asked in a new session: no second resume.
+        assert script.kinds == ["planner", "resume", "ask", "ask"]
+        assert script.prompts("ask")[1].endswith(NO_QUESTIONS)  # it is shown the plan
+        assert plan is not None
+        assert plan.tasks == TASKS
+        assert plan.investigation_questions == QUESTIONS
+
+    @pytest.mark.asyncio()
     async def test_the_template_echoed_back_is_not_an_answer(self, db_dir: Path) -> None:
         """No question was written, so none is asked: the plan is still without one."""
         echo = _PLANNER_NO_QUESTIONS[_PLANNER_NO_QUESTIONS.index("{") :]
@@ -489,6 +520,27 @@ class TestThroughThePhase:
         first = script.prompts("analyst")[0]
         assert f'["[{recorded[0].question_id}] {QUESTIONS[0]}"]' in first
         assert "naming it by the id in square brackets it begins with" in first
+
+    @pytest.mark.asyncio()
+    async def test_a_question_that_names_unread_evidence_reaches_its_own_session_only(
+        self, db_dir: Path
+    ) -> None:
+        """Why the planner names it inside each question it bears on, not in one entry."""
+        unread = "/evidence/acme-aws/trail-2026.json"
+        questions = [
+            f"Which roles were assumed from an address not seen before? ({unread} was not read)",
+            "Was a new access key created?",
+            f"NOT EXAMINED: {unread} (513 MiB) is over the size limit",
+        ]
+        orch = _orchestrator(db_dir)
+        script = _Script([_plan(questions)])
+        await _phase(orch, script)
+
+        first, second, notice, consolidation = script.prompts("analyst")
+        assert _questions_in(first) == [questions[0]]  # whole, the notice with it
+        assert unread not in second  # a session is not shown the other entries
+        assert unread in notice
+        assert _questions_in(consolidation) == questions
 
     @pytest.mark.asyncio()
     async def test_exhaustion_fails_the_system_and_no_analyst_session_runs(
@@ -649,6 +701,28 @@ class TestBriefing:
             "Do not force a briefing question onto a system whose evidence cannot answer it."
         ) in prompt
         assert "not as a conclusion" in prompt
+
+    def test_evidence_that_was_not_read_is_named_in_the_questions_it_bears_on(self) -> None:
+        """A session sees one question: a notice in an entry of its own would miss the rest."""
+        prompt = " ".join(EXTRACTION.planner_system_prompt.split())
+
+        assert (
+            "A session is given only the question it is to answer, never the rest of your "
+            "list. So when these instructions or the evidence context tell you to name "
+            "evidence in investigation_questions as not examined (a path listed under NOT "
+            'READ), name it inside every question it bears on, in a few words ("... <path> '
+            'was not read"), not only in an entry of its own: the session answering a '
+            "question about those logs must know that part of them was not read. A question "
+            "is cut after 500 characters, so where many paths were not read name their "
+            "directory and how many, and give them one entry of their own together, not one "
+            "each."
+        ) in prompt
+        assert _MAX_QUESTION_CHARS == 500
+        # The instructions and the context it speaks of, and the analyst's rule it serves.
+        assert "Do not plan a path listed under NOT READ" in prompt
+        assert "NOT READ, do not plan these" in inspect.getsource(evidence)
+        analyst = " ".join(EXTRACTION.analyst_system_prompt.split())
+        assert "An export that the investigation questions name as not examined" in analyst
 
     def test_a_follow_up_plan_does_not_ask_everything_again(self) -> None:
         """Each question is a session: a follow-up for one tool is not a second full pass."""
