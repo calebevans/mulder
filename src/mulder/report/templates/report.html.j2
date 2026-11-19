@@ -637,6 +637,20 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
     <p>{{ executive_summary | safe }}</p>
   </div>
 
+  {% if unanalysed %}
+  <div class="card mb-1">
+    <div class="card-header">&#9888; Systems Not Analysed</div>
+    <div class="card-body" style="font-size:0.88rem;line-height:1.7;">
+      <p style="margin-bottom:0.75em;">These systems were not analysed. The planner wrote no investigation questions for them, in its plan or when asked again, so no plan was accepted and no analysis ran. Not analysed is not the same as clean: an absence of findings about these systems says nothing about them.</p>
+      <ul style="margin-left:1.25rem;">
+        {% for system, plans in unanalysed.items() %}
+        <li><span class="mono">{{ system }}</span> (plans rejected: {{ plans }})</li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+  {% endif %}
+
   {% if cut_short %}
   <div class="card mb-1">
     <div class="card-header">&#9888; Analysis Cut Short</div>

@@ -423,6 +423,7 @@ _QueueItem = tuple[
 _CUT_SHORT_KEY = "cut_short_sessions"
 _CUT_SHORT_FIELDS = ("phase", "role", "system", "question", "recorded_at", "n")
 _MAX_CUT_SHORT = 100
+_UNANALYSED_KEY = "unanalysed_systems"
 
 
 class _WriteQueue:
@@ -1708,6 +1709,40 @@ class CaseDB:
             for row in rows
             if isinstance(row, dict)
         ]
+
+    def record_unanalysed(self, system: str) -> None:
+        """Count a plan for *system* that was rejected at the questions gate.
+
+        The planner wrote no investigation questions, in the plan or when
+        asked again, so nothing of the plan was run and no analyst ran on it.
+        """
+        # ponytail: read-modify-write of one kv value, as record_cut_short;
+        # the orchestrator is the only writer.
+        rejected = self.get_unanalysed()
+        rejected[system] = rejected.get(system, 0) + 1
+        self.set_kv(_UNANALYSED_KEY, json.dumps(rejected))
+
+    def get_unanalysed(self) -> dict[str, int]:
+        """Return the systems never analysed for want of investigation questions.
+
+        Each system with a plan rejected at the questions gate and no
+        recorded question, and how many plans were rejected. An accepted
+        plan's questions are recorded before its analyst runs, so a system
+        analysed on a retry or in a later run is no longer listed. Empty
+        for a database with no ``kv_store`` (see ``get_cut_short``).
+        """
+        try:
+            rejected = json.loads(self.get_kv(_UNANALYSED_KEY) or "{}")
+        except (OperationalError, ValueError):
+            return {}
+        if not rejected or not isinstance(rejected, dict):
+            return {}
+        analysed = {q.system for q in self.get_questions()}
+        return {
+            str(system): plans
+            for system, plans in rejected.items()
+            if isinstance(plans, int) and system not in analysed
+        }
 
     def _get_case_id(self) -> str:
         """Read case_id from the case_metadata table (cached after first call)."""

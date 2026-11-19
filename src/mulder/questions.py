@@ -10,7 +10,7 @@ functions here, so they cannot disagree.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 
 from mulder.models import Finding, Question
 
@@ -151,6 +151,7 @@ def no_incident(
     questions: Sequence[Question],
     findings: Sequence[Finding],
     tool_call_counts: Mapping[str, int],
+    unanalysed: Collection[str] = (),
 ) -> bool:
     """True when the report may say no evidence of an incident was found.
 
@@ -161,10 +162,15 @@ def no_incident(
     severity, and a case with a high-severity finding has found something.
     It passes when every question is undetermined too, and a case where
     nothing could be examined has not found that nothing happened.
+
+    Never while a system is *unanalysed* (``CaseDB.get_unanalysed``): its
+    plans were rejected for having no questions, so it has none on record
+    to be left open, and what was not analysed has not been found clean.
     """
     positive = [f for f in findings if is_positive(f)]
     return (
-        len(positive) < MIN_NON_NEGATIVE_FINDINGS
+        not unanalysed
+        and len(positive) < MIN_NON_NEGATIVE_FINDINGS
         and not any(f.severity in SIGNIFICANT_SEVERITIES for f in positive)
         and resolved_path(questions, findings, tool_call_counts)
         and any(status != "undetermined" for status in statuses(questions, findings))

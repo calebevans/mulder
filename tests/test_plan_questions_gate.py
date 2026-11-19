@@ -14,6 +14,7 @@ from __future__ import annotations
 import inspect
 import json
 import logging
+import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -22,7 +23,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 import mulder.server.app as server_app
-from mulder.db import CaseDB
+from mulder.db import _UNANALYSED_KEY, CaseDB
 from mulder.orchestrator import evidence
 from mulder.orchestrator.budget import TokenBudgetReached
 from mulder.orchestrator.fallback import incomplete_notice
@@ -39,7 +40,7 @@ from mulder.orchestrator.roles import (
 )
 from mulder.orchestrator.runner import Orchestrator
 from mulder.orchestrator.types import ExecutionResults, InvestigationResult, PhaseResult, Plan
-from mulder.questions import ID_LABELS, MAX_QUESTIONS_PER_PLAN
+from mulder.questions import ID_LABELS, MAX_QUESTIONS_PER_PLAN, MAX_SYSTEM_CHARS, clean
 
 CASE = "case-1"
 SYSTEM = "host-a"
@@ -170,6 +171,12 @@ async def _planner(
 
 def _gate_failures(orch: Orchestrator) -> list[str]:
     return [call.args[0] for call in orch.dashboard.log_gate_fail.call_args_list]  # type: ignore[attr-defined]
+
+
+def _unanalysed(db_dir: Path) -> dict[str, int]:
+    """The systems the case database lists as never analysed, with their rejected plans."""
+    with CaseDB.open(CASE, db_dir) as db:
+        return db.get_unanalysed()
 
 
 def _questions_in(prompt: str) -> list[str]:
@@ -416,6 +423,22 @@ class TestQuestionsGate:
             "questions; plan not accepted, no analysis runs on it",
         ]
         assert f"plan for {name} not accepted: no usable investigation questions" in caplog.text
+        # And in the case database, under the name its questions would have had.
+        assert _unanalysed(db_dir) == {clean(hostile, MAX_SYSTEM_CHARS): 1}
+
+    def test_a_database_with_no_kv_store_or_a_bad_value_lists_no_system(
+        self, db_dir: Path
+    ) -> None:
+        path = db_dir / f"{CASE}.db"
+        # ``mulder report`` and the partial report open the file like this.
+        with CaseDB(path) as db:
+            for value in ("not json", "[1]", "7", '{"host-a": "three"}'):
+                db.set_kv(_UNANALYSED_KEY, value)
+                assert db.get_unanalysed() == {}
+        with sqlite3.connect(path) as conn:
+            conn.execute("DROP TABLE kv_store")
+        with CaseDB(path) as db:
+            assert db.get_unanalysed() == {}
 
     @pytest.mark.asyncio()
     async def test_a_request_refused_at_the_token_budget_stops_the_run_not_the_plan(
@@ -437,6 +460,7 @@ class TestQuestionsGate:
             await orch._roles.run_planner(EXTRACTION, VARS)
 
         assert not any(f.startswith("Questions gate failed") for f in _gate_failures(orch))
+        assert _unanalysed(db_dir) == {}  # the budget ended it, not a planner with no questions
 
     @pytest.mark.asyncio()
     async def test_a_follow_up_planner_with_nothing_more_to_run_is_not_asked(
@@ -569,6 +593,9 @@ class TestThroughThePhase:
         not_completed = incomplete_notice(orch, None)[2]
         assert not_completed.startswith("Not completed: ")
         assert f"extraction (1 of 1 systems: {SYSTEM})" in not_completed
+        # On record in the case database, where every report and the
+        # investigation summary read it: the system, and its rejected plans.
+        assert _unanalysed(db_dir) == {SYSTEM: attempts}
 
     @pytest.mark.asyncio()
     async def test_a_later_planner_session_that_writes_them_recovers(self, db_dir: Path) -> None:
@@ -579,6 +606,10 @@ class TestThroughThePhase:
         assert result.success
         assert script.kinds == ["planner", "resume", "ask", "planner", *["analyst"] * 3]
         executor.assert_awaited_once()
+        # One plan was rejected, but the system was then analysed: not listed.
+        with CaseDB.open(CASE, db_dir) as db:
+            assert json.loads(db.get_kv(_UNANALYSED_KEY) or "{}") == {SYSTEM: 1}
+            assert db.get_unanalysed() == {}
 
     @pytest.mark.asyncio()
     async def test_a_follow_up_plan_without_questions_ends_the_follow_up(
@@ -599,6 +630,7 @@ class TestThroughThePhase:
         assert result.success
         assert (result.follow_ups_used, result.plans_executed) == (1, 1)
         assert any(f.startswith("Questions gate failed") for f in _gate_failures(orch))
+        assert _unanalysed(db_dir) == {}  # the first cycle analysed the system
 
     @pytest.mark.asyncio()
     async def test_a_follow_up_plan_given_its_questions_is_analysed_per_question(

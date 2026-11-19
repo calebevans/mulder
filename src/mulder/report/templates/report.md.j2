@@ -26,6 +26,17 @@
 
 {{ executive_summary_md }}
 
+{% if unanalysed -%}
+### Systems Not Analysed
+
+These systems were not analysed. The planner wrote no investigation questions
+for them, in its plan or when asked again, so no plan was accepted and no
+analysis ran. Not analysed is not the same as clean: an absence of findings
+about these systems says nothing about them.
+{% for system, plans in unanalysed.items() %}{# a code span: a name taken from evidence stays text #}
+- `{{ system | replace("`", "'") }}` (plans rejected: {{ plans }})
+{% endfor %}
+{% endif -%}
 {% if critical_findings %}
 ### Critical Findings
 

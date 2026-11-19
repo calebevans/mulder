@@ -476,7 +476,9 @@ class RoleRunner:
             short (see ``_note_cut_short``). An extraction plan with
             tasks has at least one usable investigation question (the
             analyst answers them one session at a time); one that still has
-            none after ``_request_questions`` is not accepted.
+            none after ``_request_questions`` is not accepted, and is
+            counted for its system in the case database
+            (``ServerBridge.record_unanalysed``).
         """
         model = self._model_config.resolve(phase.name, "planner")
         effective_vars = dict(prompt_vars or {})
@@ -567,6 +569,10 @@ class RoleRunner:
                     phase.name,
                     system,
                 )
+                # On record, so that a system no plan is ever accepted for
+                # is named in the report and not passed over as clean.
+                if self._server is not None:
+                    self._server.record_unanalysed(effective_vars.get("system_name", ""))
                 return None
             plan_json["investigation_questions"] = questions
 

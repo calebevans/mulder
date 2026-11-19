@@ -1203,6 +1203,7 @@ class ReportRenderer:
         incomplete: Sequence[str] = (),
         questions: Sequence[Question] | None = None,
         cut_short: Sequence[Mapping[str, str]] = (),
+        unanalysed: Mapping[str, int] | None = None,
     ) -> dict[str, Any]:
         """Assemble template variables from case metadata, findings, audit trail, and sources.
 
@@ -1224,6 +1225,10 @@ class ReportRenderer:
                 report is what it was before questions were recorded.
             cut_short: Rows from ``CaseDB.get_cut_short``: role sessions that
                 ended unfinished. When non-empty both templates name them.
+            unanalysed: ``CaseDB.get_unanalysed``: systems that were never
+                analysed, with the number of plans rejected for having no
+                questions. Both templates name them under the executive
+                summary, which then never says that no incident was found.
 
         Returns:
             Dict of template variables ready for Jinja2 rendering.
@@ -1321,7 +1326,7 @@ class ReportRenderer:
         # The test the gates and the summary tool use, so the report cannot
         # state an outcome the case did not pass on.
         is_no_incident = no_incident(
-            questions or [], normalized_findings, audit_summary.tool_call_counts
+            questions or [], normalized_findings, audit_summary.tool_call_counts, unanalysed or ()
         )
         if is_no_incident:
             # Counted the way the evidence_citation_coverage gate counts:
@@ -1411,6 +1416,7 @@ class ReportRenderer:
                 for row in cut_short
             ],
             "cut_short_dropped": dropped_count(cut_short),
+            "unanalysed": dict(unanalysed or {}),
             "model_token_breakdown": self._load_model_usage(
                 Path(audit_log_path).parent, case_metadata.case_id
             ),
@@ -1610,6 +1616,7 @@ class ReportRenderer:
         incomplete: Sequence[str] = (),
         questions: Sequence[Question] | None = None,
         cut_short: Sequence[Mapping[str, str]] = (),
+        unanalysed: Mapping[str, int] | None = None,
     ) -> str:
         """Render the markdown report template (``report.md.j2``) to a string.
 
@@ -1628,6 +1635,7 @@ class ReportRenderer:
                 DB source for threat intel context.
             incomplete: Lines for the INCOMPLETE banner (see ``build_context``).
             cut_short: Role sessions that ended unfinished (see ``build_context``).
+            unanalysed: Systems that were never analysed (see ``build_context``).
 
         Returns:
             Rendered markdown report string.
@@ -1644,6 +1652,7 @@ class ReportRenderer:
             incomplete=incomplete,
             questions=questions,
             cut_short=cut_short,
+            unanalysed=unanalysed,
         )
         return self._render_markdown(ctx)
 
@@ -1661,6 +1670,7 @@ class ReportRenderer:
         incomplete: Sequence[str] = (),
         questions: Sequence[Question] | None = None,
         cut_short: Sequence[Mapping[str, str]] = (),
+        unanalysed: Mapping[str, int] | None = None,
     ) -> str:
         """Render the HTML report with markdown descriptions converted to HTML.
 
@@ -1680,6 +1690,7 @@ class ReportRenderer:
                 DB source for threat intel context.
             incomplete: Lines for the INCOMPLETE banner (see ``build_context``).
             cut_short: Role sessions that ended unfinished (see ``build_context``).
+            unanalysed: Systems that were never analysed (see ``build_context``).
 
         Returns:
             Rendered HTML report string.
@@ -1697,6 +1708,7 @@ class ReportRenderer:
             incomplete=incomplete,
             questions=questions,
             cut_short=cut_short,
+            unanalysed=unanalysed,
         )
         return self._render_html(ctx)
 
@@ -1714,6 +1726,7 @@ class ReportRenderer:
         enrichment_windows: list[dict[str, Any]] | None = None,
         questions: Sequence[Question] | None = None,
         cut_short: Sequence[Mapping[str, str]] = (),
+        unanalysed: Mapping[str, int] | None = None,
     ) -> tuple[str, str, bytes | None]:
         """Render markdown, HTML, and optionally PDF reports.
 
@@ -1735,6 +1748,7 @@ class ReportRenderer:
             enrichment_windows: Raw windows from the ``enrichment.iocs``
                 DB source for threat intel context.
             cut_short: Role sessions that ended unfinished (see ``build_context``).
+            unanalysed: Systems that were never analysed (see ``build_context``).
 
         Returns:
             Tuple of (markdown_text, html_text, pdf_bytes_or_none).
@@ -1751,6 +1765,7 @@ class ReportRenderer:
             enrichment_windows=enrichment_windows,
             questions=questions,
             cut_short=cut_short,
+            unanalysed=unanalysed,
         )
         md_text = self._render_markdown(ctx)
         html_text = self._render_html(dict(ctx))

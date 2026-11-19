@@ -2766,6 +2766,8 @@ Return a compact progress dashboard for the current investigation.
 
 When a role session was cut short (it ended at a turn or context limit with no continuation left), `remaining_work` has one item starting `Analysis cut short` that names up to ten such sessions by phase, role, system and question. It means those sessions did not finish, so conclusions about them may be incomplete; it does not mean nothing was found. What they had not reached may not have been examined, unless a later retry or follow-up covered it.
 
+When a system was never analysed (every plan for it was rejected at the questions gate, so it has no recorded question), the result has `systems_not_analysed{}`: `count`, `systems[]` (system, plans_rejected; at most ten) and a `note` saying that not analysed is not the same as clean. `no_incident` is not reported while a system is listed.
+
 **Roles:** `EXTRACT_ANALYST` `CROSS_PLANNER` `CROSS_ANALYST` `NARRATIVE_PLANNER` `NARRATIVE_ANALYST` `REPORT`
 
 ### check_finalize_readiness

@@ -784,6 +784,7 @@ def finalize_report() -> dict[str, object]:
 
     evidence_integrity = ctx.db.get_evidence_registry()
     cut_short = ctx.db.get_cut_short()
+    unanalysed = ctx.db.get_unanalysed()
 
     db_path = Path(ctx.db.db_path)
     report_dir = db_path.parent
@@ -826,6 +827,7 @@ def finalize_report() -> dict[str, object]:
             enrichment_windows=enrichment_windows,
             questions=questions,
             cut_short=cut_short,
+            unanalysed=unanalysed,
         )
     except Exception as exc:
         logger.warning(
@@ -841,6 +843,7 @@ def finalize_report() -> dict[str, object]:
             enrichment_windows=enrichment_windows,
             questions=questions,
             cut_short=cut_short,
+            unanalysed=unanalysed,
         )
         html_text = ""
         html_warning: str | None = f"HTML report generation failed: {exc}"

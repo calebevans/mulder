@@ -1046,3 +1046,23 @@ class ServerBridge:
             get_ctx().db.record_cut_short(phase, role, system, question)
         except Exception:
             logger.warning("record_cut_short failed", exc_info=True)
+
+    def record_unanalysed(self, system: str) -> None:
+        """Record that a plan for *system* was rejected at the questions gate.
+
+        A system left with no accepted plan is named as not analysed by the
+        investigation summary and the report, which then never says that no
+        incident was found. Stored under the name the system's questions
+        are recorded under, so that an accepted plan takes it off the list.
+        A failure to record is logged, not raised.
+
+        Args:
+            system: The system, or group of systems, the plan was for.
+        """
+        try:
+            self.ensure_context()
+            from mulder.server.app import get_ctx
+
+            get_ctx().db.record_unanalysed(clean(system, MAX_SYSTEM_CHARS))
+        except Exception:
+            logger.warning("record_unanalysed failed", exc_info=True)
