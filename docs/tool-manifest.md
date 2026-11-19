@@ -485,13 +485,13 @@ one disk, XFS v4/v5 and ext2/3/4. See the
 |-----------|------|----------|-------------|
 | image_path | str | yes | Path to the disk image |
 | paths | list[str] \| None | no | Files or directories to export as well, spelled as the path column of `linux.filelist` shows them. They go to a directory of their own, `requested.root` |
-| force | bool | no | List and export again even if this image was already exported |
+| force | bool | no | List and export again even if this image was already exported. The directories of earlier `paths` requests are removed with the export |
 
 **Returns:** `status` (`exported`, `incomplete`, or either after `already exported`), `export_root`, `volumes[]` (name, file system, files listed and exported, where in the export, mount point), `not_read[]`, `entries_listed`, `listing_truncated`, `listing_incomplete[]`, `files_exported`, `bytes_exported`, `selected{}` (files per kind), `not_exported{}` (reason to names), `problems[]`, `requested{}` (when `paths` was given: `root`, `exported[]`, `not_exported{}`, `not_in_listing[]`, `paths_ignored`), `note`
 
 | Source | Content |
 |--------|---------|
-| `linux.filelist` | every file, directory and link on every volume that could be read: volume, type, mode, uid, gid, size, modified, changed and created times, path. No deleted entries |
+| `linux.filelist` | every file, directory and link on every volume that could be read: volume, type, mode, uid, gid, size, modified, changed, created and accessed times, path. No deleted entries |
 | `tsk.filelist` | the exported files, as `fls` rows of the export directory (a [directory root](#index_triage_collection)); the inode column is the row number |
 
 `export_root` is `<cases>/extracted/<case>/.linux-exports/<image name>-<digest>/files`:
@@ -509,7 +509,8 @@ and nothing recognises one by a file inside it, which evidence could carry too.
 Files asked for with `paths` go to `requested.root`, a directory of their own
 per request laid out the same way, so the tree at `export_root` stays as its
 `tsk.filelist` was indexed and a row number goes on naming the same file. Pass
-`requested.root` as `image_path` to index or scan them.
+`requested.root` as `image_path` to index or scan them: `index_app_files` reads
+any directory under `.linux-exports` as a Linux tree and takes every name.
 
 Exported without being asked for, within 64 MiB per file, 50,000 files, and a
 limit per kind (the most recently modified files are taken first):
@@ -518,14 +519,16 @@ limit per kind (the most recently modified files are taken first):
 |------|-------|---------------------|
 | config | 1 GiB | `etc/`, `var/spool/{cron,at,anacron}/`, systemd unit, `modules-load.d`, `modprobe.d` and `udev/rules.d` directories under `lib/`, `usr/lib/` and `usr/local/lib/`, package state (`var/lib/dpkg/status*`, `var/lib/apt/extended_states`, `var/lib/rpm/`, `var/lib/dnf/history*`, `var/lib/yum/history/`) |
 | logs | 2 GiB | `var/log/`, `var/lib/docker/containers/*/*.{json,log}` |
-| homes | 512 MiB | `root/`; in each `home/<user>/`: dotfiles at its top, `.ssh/`, `.config/{systemd,autostart}/`, `.local/share/systemd/` |
+| homes | 512 MiB | `root/`; the dotfiles at the top of each `home/<user>/`; and from any directory, since an account's home may be anywhere (`/var/mail`, `/usr/php`, `/var/lib/postgresql`): `.ssh/`, `.config/{systemd,autostart}/`, `.local/share/systemd/`, `authorized_keys`, shell histories (`.*history`), `.viminfo` and shell profiles (`.bashrc`, `.profile`, `.zshrc` and the like) |
 | web | 512 MiB | `var/www/`, `srv/www/`, `usr/share/nginx/html/` |
 | tmp | 256 MiB | `tmp/`, `var/tmp/` |
 
 Not exported, by default or through `paths`, by their well-known names:
 `etc/shadow*`, `etc/gshadow*`, `etc/master.passwd`, `etc/security/opasswd*`,
-`var/backups/shadow*` and `gshadow*`, SSH host private keys, `.ssh/id_*` other
-than `.pub`, `etc/ssl/private/`, `etc/pki/tls/private/` and `privkey*.pem`.
+`backups/shadow*` and `backups/gshadow*` (Debian's copies under `var/backups`,
+which a volume mounted at `/var` lists without the `var/`), SSH host private
+keys, `.ssh/id_*` other than `.pub`, `etc/ssl/private/`, `etc/pki/tls/private/`
+and `privkey*.pem`.
 They are listed in `linux.filelist` and named in `not_exported`. A copy or a
 hard link of one under another name is exported; `index_app_files` and
 `run_linux_persistence` withhold a private key by its first line whatever the
@@ -533,8 +536,18 @@ file is called.
 
 A volume that holds `etc/passwd` is the root volume. For any other, the mount
 point is guessed from its top-level names (`/var`, `/var/log`, `/home`,
-`/boot`); the guess decides which of the paths above apply to it and where its
-files are put, and the result states the guess as one. image_export stores
+`/boot`; for `/var` and `/var/log` two of the usual names, since one alone is a
+database's `journal` directory or an application's `log`); the guess decides
+which of the paths above apply to it and where its files are put, and the
+result states the guess as one. A volume whose mount point is not recognised
+is read as a root volume: the paths above are applied to it as they stand, and
+what they select is exported under the directory named after the volume. When
+the root volume holds a file under a mount point at a path the mounted volume
+has too, the mounted volume's file is exported (it is what the running system
+showed) and the other is named in `not_exported` as under a mount point: it
+can be asked for alone with `paths`. A directory or a link is listed without
+its volume when its path is on several (`?`); two such directories keep a row
+each unless they also share an inode number, as `lost+found` does. image_export stores
 some characters of a name as `_` and stamps each copy with the time of the
 copy; the tool gives each exported file its name and its modification time
 back. Two names it would store as one are not exported together (whose content
@@ -560,9 +573,17 @@ volume, a volume group in which dfVFS found no file system, or NTFS beside the
 Linux volume (which `run_fls` reads). A LUKS partition beside readable ones is
 passed by: plaso is told to read the other partitions. When nothing could be
 read the call is an error that says why, and nothing is recorded as exported.
+The same holds when `log2timeline` or `psort` fails, whatever it had written
+by then (`unreadable`, with the tool's last lines): a listing cut short lacks
+its newest entries, and is not indexed. An export that cannot be written is
+the error `write_failed`.
 Bounds: 1,000,000 listed entries (`listing_truncated`), 200 `paths` per call
-(`paths_ignored` counts the rest). The listing takes about four minutes for
-85,000 entries; a later call with `paths` reuses it.
+(`paths_ignored` counts the rest). Listing and exporting took about a minute
+and a half for 85,000 entries; a later call with `paths` reuses the listing.
+The listing pass needs temporary space in `TMPDIR`, about 4 MiB per 1,000
+entries, and is not started with less than 1 GiB free (`no_space`): short of
+space `log2timeline` neither fails nor finishes before its timeout. The
+listing is held in memory while it is indexed, about 1.4 KiB per entry.
 
 **Roles:** `EXTRACT_EXECUTOR`
 
@@ -575,7 +596,7 @@ List what a Linux system starts on its own and who it lets in, one row per file.
 | image_path | str | yes | A directory holding a Linux file tree (the `export_root` of `export_linux_files`, a UAC or Velociraptor collection), or a Linux disk image `run_fls` has listed |
 | force | bool | no | Run again even if this path was already swept |
 
-**Returns:** `source` (linux.persistence), `rows`, `by_kind{}`, `most_recently_modified[]`, `files_not_readable`, `truncated`, `accounts_not_shown`, `export_incomplete{}` (on an export `export_linux_files` reported as incomplete), `note`
+**Returns:** `source` (linux.persistence), `rows`, `by_kind{}`, `most_recently_modified[]`, `files_not_readable`, `truncated`, `accounts_not_shown`, `passwd_files_not_read`, `export_incomplete{}` (on an export `export_linux_files` reported as incomplete), `note`
 
 Each row of `linux.persistence` is kind, path, `modified=`, `size=` and the
 file's first lines without comments (300 characters; long keys and blobs
@@ -594,7 +615,7 @@ shortened, a path never, a private key withheld):
 | pam | `etc/pam.d/` |
 | udev | `udev/rules.d/` |
 | login_hooks | `etc/update-motd.d/`, XDG autostart, `etc/network/if-*.d/`, NetworkManager dispatcher scripts |
-| account | accounts in `etc/passwd` with uid 0, a login shell, or absent from `etc/passwd-`; members of the root, sudo, wheel, admin, adm, docker and lxd groups |
+| account | accounts in `etc/passwd` with uid 0, a login shell, or absent from `etc/passwd-` or changed since it (uid, gid, home or shell); members of the root, sudo, wheel, admin, adm, docker and lxd groups |
 
 It is an inventory. A row shows that a file exists and what it holds: not that
 it is malicious, not that a unit is enabled, and not that anything ran; most
@@ -608,8 +629,20 @@ image. Bounds: 4 KiB read per file (on a disk image no more than that is read
 of a file, and `size=over 4096` stands for a longer one), 5,000 rows, 200
 accounts. When there are more accounts than that, `accounts_not_shown` counts
 them and `truncated` is set; the uid 0 accounts and the privileged groups are
-kept, then the accounts absent from `etc/passwd-`, and the accounts that only
-have a login shell are cut first.
+kept, then the accounts absent from `etc/passwd-` or changed since it, and the
+accounts that only have a login shell are cut first.
+
+Every `etc/passwd` in the listing is read, each with the `passwd-` and `group`
+beside it, the one at the top of the tree first and then the shallowest (20 at
+most; `passwd_files_not_read` counts the rest). An account row names the file
+it is from, so a copy under `backup/`, a container layer or a second root
+volume of an export (`p2/etc/passwd`) is neither taken for the system's
+accounts nor left out. A record ends at a newline and nowhere else, as glibc
+reads the file, and a uid written `00` or `+0` is uid 0. A file that cannot be
+read from a disk image (`icat` fails or times out) is counted in
+`files_not_readable`; when none of the files found could be read the call is
+the error `unreadable`, not "none found". An image listed twice (`run_fls`
+with `force`) is swept once.
 
 On a directory that `export_linux_files` reported as `incomplete`, the result
 repeats under `export_incomplete` the directories that could not be listed and
@@ -1790,13 +1823,13 @@ Index text and config files from application directories on a disk image.
 | case_id | str | yes | Active case identifier |
 | image_path | str | yes | Path to the disk image |
 | directory_pattern | str | yes | Path pattern to match directories (supports wildcards) |
-| extensions | list[str] \| None | no | File extensions to include (defaults to .ini, .cfg, .conf, .txt, .log, .xml, .json, .yaml, .yml, .properties, .csv, .bat, .cmd, .ps1, .reg, .inf, .manifest). On a Linux file tree (the listing of this image or directory holds `etc/passwd`) the default is every file whatever its name; `["*"]` asks for that anywhere. A file that is binary, compressed or over the size limit is skipped either way |
+| extensions | list[str] \| None | no | File extensions to include (defaults to .ini, .cfg, .conf, .txt, .log, .xml, .json, .yaml, .yml, .properties, .csv, .bat, .cmd, .ps1, .reg, .inf, .manifest). On a Linux file tree (the listing of this image or directory holds `etc/passwd`, or the directory is one `export_linux_files` wrote, such as `requested.root`) the default is every file whatever its name; `["*"]` asks for that anywhere. A file that is binary, compressed or over the size limit is skipped either way |
 | max_file_size_kb | int | no | Skip files larger than this (default 512 KB). No more than this is read of any file |
 | max_files | int | no | Maximum files to extract per call (default 200) |
 
-**Returns:** `files_discovered`, `files_extracted`, `files_indexed`, `files_skipped_binary`, `files_skipped_too_large`, `files_withheld`, `source_prefix`, `sample_files[]`
+**Returns:** `files_discovered`, `files_extracted`, `files_indexed`, `files_skipped_binary`, `files_skipped_too_large`, `too_large[]` (the first ten of them by name: raise `max_file_size_kb` to index one), `files_withheld`, `withheld[]` (the first ten by name), `source_prefix`, `sample_files[]`
 
-When every name is taken, password hash files and private keys are withheld and counted in `files_withheld`: their content is a credential. The well-known names (`etc/shadow`, `var/backups/shadow.bak`, SSH host and user private keys, TLS private keys) are withheld by name, and a private key under any other name by its first line (`-----BEGIN ... PRIVATE KEY-----`), with any extension list. A copy of a password hash file under another name is not recognised.
+When every name is taken, password hash files and private keys are withheld and counted in `files_withheld`: their content is a credential. The well-known names (`etc/shadow`, `backups/shadow.bak` as Debian keeps it under `/var`, SSH host and user private keys, TLS private keys) are withheld by name, and a private key under any other name by its first line (`-----BEGIN ... PRIVATE KEY-----`), with any extension list. A copy of a password hash file under another name is not recognised.
 
 **Roles:** `EXTRACT_EXECUTOR`
 

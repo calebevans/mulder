@@ -691,7 +691,7 @@ When mulder scans the evidence it looks at the first sectors of each partition. 
 
 | Tool | On | What it gives |
 |------|----|---------------|
-| `export_linux_files` | the image | `linux.filelist`, a listing of every file on every volume that could be read, and an export directory under the case directory holding `/etc`, cron and systemd units, `/var/log`, `/root`, each user's dotfiles and `.ssh`, package manager state, web roots and `/tmp`, each within a size limit |
+| `export_linux_files` | the image | `linux.filelist`, a listing of every file on every volume that could be read, and an export directory under the case directory holding `/etc`, cron and systemd units, `/var/log`, `/root`, each user's dotfiles and `.ssh` (shell histories, shell profiles and `.ssh` from any directory, since a service account's home is rarely under `/home`), package manager state, web roots and `/tmp`, each within a size limit |
 | `run_plaso` with `parsers="linux_logs"` | the image | who logged in, from where and how: wtmp, btmp, auth.log or secure, the systemd journal, the audit log, apt and dpkg logs |
 | `run_linux_persistence` | the export directory | one row per file in the places Linux starts programs from or grants access through, and the accounts with uid 0 or a login shell |
 | `index_app_files` | the export directory | the text of a directory (`etc/ssh`, `root`, `home`, `var/www`), whatever the files are called |
@@ -700,12 +700,12 @@ When mulder scans the evidence it looks at the first sectors of each partition. 
 
 What to keep in mind when reading the report:
 
-- **The listing is not the export.** `linux.filelist` shows that a file exists, with its owner, size and three timestamps, whether or not it was exported. To read a listed file that was not exported, the analyst asks for it and `export_linux_files` is run again with `paths`.
+- **The listing is not the export.** `linux.filelist` shows that a file exists, with its owner, size and four timestamps (modified, changed, created, accessed), whether or not it was exported. To read a listed file that was not exported, the analyst asks for it and `export_linux_files` is run again with `paths`.
 - **Password hashes and private keys are not exported, by their well-known names**: `/etc/shadow`, `/etc/gshadow`, Debian's copies under `/var/backups`, SSH host and user private keys, TLS private keys. They are listed, and the report should say "not exported" rather than "absent". A copy under another name is exported like any file; a private key is still kept out of the index by its first line.
 - **No deleted files.** dfVFS lists allocated files only, and nothing here reads unallocated space except `run_bulk_extractor`.
-- **The export is one tree.** The volume that holds `etc/passwd` is the root. `/home`, `/var`, `/var/log` and `/boot` on a volume of their own are recognised from their top-level names and their files are put at that place in the tree, so `home/alice/.bash_history` is where the tools look for it; the result says that this is a guess. Any other separately mounted volume is listed, sits under a directory named after the volume, and has its files exported only when asked for by path.
+- **The export is one tree.** The volume that holds `etc/passwd` is the root. `/home`, `/var`, `/var/log` and `/boot` on a volume of their own are recognised from their top-level names and their files are put at that place in the tree, so `home/alice/.bash_history` is where the tools look for it; the result says that this is a guess, and it takes two such names to make one. Any other separately mounted volume is listed and read as if it were a root volume: the same paths are exported from it, under a directory named after the volume (`p5/lib/systemd/system/` for a `/usr` volume). A file the root volume holds under a mount point, at a path the mounted volume has too, was not what the running system showed: the mounted volume's file is exported and the other is named in `not_exported`, to be asked for by path.
 - **An export can be incomplete, and says so.** One file name that is not valid UTF-8 stops dfVFS from reading the rest of its directory. The result then has `status: incomplete`, names the directory under `listing_incomplete` and the files that could not be copied under `not_exported`, and `run_linux_persistence` repeats both. The rest of the volume is listed and exported; only that directory is not examined, and the report should say so.
-- **The persistence sweep is an inventory.** Nearly every row is the distribution's own file. It marks nothing as malicious and does not show that anything ran.
+- **The persistence sweep is an inventory.** Nearly every row is the distribution's own file. It marks nothing as malicious and does not show that anything ran. Every `etc/passwd` in the tree is read, the system's own first; an account row names the file it is from, so a backup copy or a container layer is not taken for the system's accounts.
 - **Syslog lines have no year.** plaso takes it from the file's own times; the systemd journal, wtmp and dpkg.log carry full dates.
 
 What cannot be read is said, not skipped: an encrypted (LUKS) volume, btrfs, and a volume group spread over several disks of which the image is one. What is planned then depends on what else the disk holds:
@@ -730,7 +730,7 @@ evidence/
   uac-app03-linux-20261112093000.tar.gz
 ```
 
-The listing takes about four minutes for a disk of 85,000 files, and `run_plaso` about as long again.
+Listing and exporting a disk of 85,000 files took about a minute and a half, and `run_plaso` with `linux_logs` about four minutes (a 1.2 GB E01, arm64 container). The listing needs temporary space, about 4 MiB per 1,000 files (345 MiB for that disk), in the directory `TMPDIR` names: `export_linux_files` does not start it with less than 1 GiB free, and says so.
 
 ## CLI Reference
 
