@@ -1,3 +1,3 @@
 """Mulder: custom MCP server for SANS SIFT Workstation forensic investigations."""
 
-__version__ = "1.6.1"
+__version__ = "1.6.2"
