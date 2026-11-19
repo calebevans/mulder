@@ -360,6 +360,54 @@ pytest
 
 Pre-commit runs ruff (linting + formatting), mypy (strict type checking), and other checks. All code must pass before merging.
 
+## 7. Prompt Guidance: Modules and the Signature Line
+
+A session's system prompt is its role's core plus the modules for the kinds of evidence its system holds ([Prompt Assembly](architecture.md#prompt-assembly)). A new tool or a new kind of evidence touches three things. None of them is needed for the tool to work: whatever is missing fails open, to the whole prompt.
+
+### Register the source prefix or evidence type in `MODULES`
+
+`MODULES` in [`src/mulder/orchestrator/prompts/__init__.py`](../src/mulder/orchestrator/prompts/__init__.py) maps an evidence type or a source prefix to the modules a session then needs:
+
+```python
+MODULES: dict[str, tuple[str, ...]] = {
+    ...
+    "netflow_capture": ("netflow",),  # an evidence type, as the classifier labels it
+    "mytool.": ("disk",),  # a source prefix: the name up to its first dot
+    "enrichment.": (),  # known, and needs no module
+    ...
+}
+```
+
+- Add the prefix of every source your tool indexes. A prefix that is not in the table means "unknown": from the moment such a source is indexed, the sessions it counts for get every module. That is safe and costs the saving. `tests/test_prompt_modules.py` fails for a prefix that is not in `MODULES` and is in `TOOL_SOURCE_PREFIXES` or `source_names.py`, or is written out where a tool names its source (`source_name = f"mytool.{...}"`, or the second argument of `extract_and_index`). A name built some other way is not seen by the test, so add its prefix by hand.
+- Use `()` for output that says nothing about the kind of evidence (a result about one file, a lookup, something computed from other sources).
+- The table also decides whose a source is when its path names no system: it belongs to the systems whose evidence types select a module its prefix maps to (`EvidenceContext.sources_for`).
+- A new evidence type in the classifier needs its key too (the same test fails without it).
+
+### Put the guidance in a module
+
+Guidance that applies to one kind of evidence goes between marker lines in the role's prompt file, so sessions on other evidence do not carry it:
+
+```
+<!-- module: netflow -->
+NETFLOW EVIDENCE:
+netflow.* sources hold one row per line; ...
+
+<!-- /module -->
+```
+
+- Use an existing module when the tool reads a kind of evidence that already has one (`disk`, `memory`, `pcap`, `netflow`, `cloud`, `logs`, `triage`, `mobile`). Append a block or extend one; keep the blank line that ends a section inside the block.
+- Name several modules when a block serves several (`<!-- module: disk memory -->`). It is kept when any of them is selected.
+- A new kind of evidence gets a new module name: use it in the markers and as a value in `MODULES`. A marker that names a module no key selects is an error at import.
+- Leave in the core (outside any marker) whatever every session of the role needs: output formats, the plan schema, citation rules, anything a gate checks.
+- Text outside markers is in every session. Text inside a block is absent for a system that does not hold that evidence, so a block must not be the only place a rule that applies elsewhere is stated. In particular, what to do when that kind of evidence is *not* listed ("if the briefing shows such evidence that the context did not list, plan the same tools on it") cannot be in its block: put it in the core, or in a block that also names the modules of the sessions it is for (`<!-- module: triage disk -->`). A marker is a whole line, so a sentence can only be given a block of its own where it starts and ends on a line break.
+
+### The planner's signature line
+
+A planner is given `name(parameters): purpose` for the executor tools that its system prompt or its message names; every other tool is still listed by name. The line is read from the function: the parameter names and defaults from its signature, the purpose from the first line of its docstring. So:
+
+- Name the tool in the planner guidance for its evidence (its module in `extract_planner.md`, or the line the evidence context tells the planner to plan, as `_ci_cloud_lines` in `orchestrator/evidence.py` does). The signature then appears for exactly the sessions that are told about the tool.
+- Keep the first docstring line a one-sentence statement of what the tool does, and name the parameter that carries the evidence location `evidence_path` (or `image_path` for a disk image).
+
 ## Complete Example
 
 Here is a minimal extraction tool that runs a hypothetical `custom-parser` binary on a disk image and indexes the output:
@@ -469,4 +517,5 @@ After writing this module, you would:
 1. Save it as `src/mulder/server/tools/extract/custom_parser.py`
 2. Add `custom_parser,` to the imports in `src/mulder/server/tools/extract/__init__.py`
 3. Add `"run_custom_parser": ["custom_parser."]` to `TOOL_SOURCE_PREFIXES` in `src/mulder/server/helpers.py`
-4. Run `pre-commit run --all-files` and `pytest`
+4. Add `"custom_parser.": (...)` to `MODULES` in `src/mulder/orchestrator/prompts/__init__.py`, and put the planner and analyst guidance for it in the module for its kind of evidence
+5. Run `pre-commit run --all-files` and `pytest`

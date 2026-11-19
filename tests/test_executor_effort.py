@@ -125,13 +125,15 @@ class _FakeSdk:
         )
 
     def _role(self, system_prompt: object) -> str:
-        return {
+        roles = {
             self.phase.planner_system_prompt: "planner",
             self.phase.executor_system_prompt: "executor",
             self.phase.analyst_system_prompt: "analyst",
             self.phase.single_system_prompt: "single",
             REPAIR_SYSTEM_PROMPT: "repair",
-        }[str(system_prompt)]
+        }
+        # A session's task is pinned after its role's prompt (tests/test_task_pin.py).
+        return next(r for p, r in roles.items() if p and str(system_prompt).startswith(p))
 
     async def query(self, *, prompt: str, options: ClaudeAgentOptions) -> AsyncIterator[object]:
         role = self._role(options.system_prompt)

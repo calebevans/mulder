@@ -111,7 +111,8 @@ class _Script:
         self.calls: list[tuple[str, dict[str, Any]]] = []
 
     def _kind(self, kwargs: dict[str, Any]) -> str:
-        if kwargs["system_prompt"] == self.phase.analyst_system_prompt:
+        # A question session's task is pinned after the analyst prompt.
+        if kwargs["system_prompt"].startswith(self.phase.analyst_system_prompt):
             return "analyst"
         if kwargs["allowed_tools"]:
             return "planner"

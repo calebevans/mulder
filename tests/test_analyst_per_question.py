@@ -678,13 +678,14 @@ class TestPerQuestion:
         assert "CONSOLIDATION: 3 sessions before you" in last["prompt"]
         assert "QUESTION SESSION" not in last["prompt"]
         assert last["max_turns"] == _CONSOLIDATION_MAX_TURNS
-        # The same analyst, with a smaller allowance: nothing else differs.
+        # The same analyst, with a smaller allowance and its task pinned after
+        # the analyst prompt (tests/test_task_pin.py): nothing else differs.
         assert EXTRACTION.analyst_max_turns > _QUESTION_MAX_TURNS
         assert _CONSOLIDATION_MAX_TURNS < _QUESTION_MAX_TURNS
         for call in sessions.calls:
             assert call["allowed_tools"] == EXTRACTION.analyst_allowed_tools
             assert call["disallowed_tools"] == EXTRACTION.disallowed_tools
-            assert call["system_prompt"] == EXTRACTION.analyst_system_prompt
+            assert call["system_prompt"].startswith(EXTRACTION.analyst_system_prompt)
             assert call["task_system"] == SYSTEM
 
     @pytest.mark.asyncio()

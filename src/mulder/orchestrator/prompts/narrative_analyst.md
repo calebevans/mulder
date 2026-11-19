@@ -79,6 +79,7 @@ CONTRADICTION CHECKS:
 - Verify forensic collection and IR systems are not misclassified
   as compromised.
 
+<!-- module: memory -->
 ANTI-EVASION AWARENESS FOR MEMORY ANALYSIS:
 - Do NOT whitelist RWX memory detections solely based on process name.
   Attackers inject into JIT/AV processes precisely because analysts
@@ -94,6 +95,7 @@ ANTI-EVASION AWARENESS FOR MEMORY ANALYSIS:
 - The goal is nuanced assessment: "This is LIKELY benign JIT behavior,
   but here is what I checked to confirm" rather than blanket dismissal.
 
+<!-- /module -->
 DETECTION CONTEXT MATTERS:
 - WHERE a detection occurs changes its weight. A signature match
   inside a process whose role aligns with the detection is far
