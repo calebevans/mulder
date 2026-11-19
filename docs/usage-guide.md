@@ -23,6 +23,7 @@ Try-it-out instructions for running Mulder, the forensic investigation platform.
     - [Using Amazon Bedrock](#using-amazon-bedrock)
   - [Starting an Investigation](#starting-an-investigation)
     - [When a Run Ends Early](#when-a-run-ends-early)
+    - [When a Session Runs Out of Turns](#when-a-session-runs-out-of-turns)
     - [Limiting Token Use](#limiting-token-use)
   - [Using Non-Anthropic Models via LiteLLM](#using-non-anthropic-models-via-litellm)
     - [Provider Prefixes](#provider-prefixes)
@@ -394,6 +395,18 @@ Read a partial report for what it is. Its findings were saved before the run sto
 A partial report never replaces a finished one. A report that was finalized during the same run is left alone and no partial report is written. A report left by an earlier run of the same case is kept as well: the partial report is then written beside it as `{case_id}.partial.report.md` and `{case_id}.partial.report.html`, and its banner says so. Only an earlier partial report is replaced.
 
 The case database and audit log are kept either way.
+
+### When a Session Runs Out of Turns
+
+Each role session has a turn limit. Reaching it is a pause, not a restart. Mulder resumes the same session, with its whole conversation and a fresh turn allowance, and it carries on from where it stopped. Before it continues, the session is asked to save the findings it has already established and to record a progress note, so its progress is in the case database as well as in the conversation. The dashboard shows `Analyst ran out of turns; resuming where it stopped (#1/3)`. This applies to analyst, executor, catalog and report sessions; a planner that runs out of turns is resumed for one turn with its tools off to write its plan.
+
+`--max-compactions` (default 3) is how many times one role session may be continued this way. If the last continuation also runs out of turns, the session gets a final 8 turns with only its saving tools, to save and record a handoff note (`Analyst ran out of turns; saving and handing off`); that wrap-up is not counted, and with `--max-compactions 0` it happens at once.
+
+A new session is started only when the old one cannot go on: the provider rejected its conversation as too long, or it could not be resumed (the reason is in `orchestrator.log`). The new session is given the notes the earlier one recorded, the findings saved since it started and the original task, and is told not to re-run tools that already succeeded or re-submit saved findings. It counts against `--max-compactions` like a resume.
+
+A note is a model's own account of what it did. A new session is told to treat it as a record, not as verified fact: "ruled out" means ruled out in what that session examined, and anything the note does not mention is to be treated as not examined.
+
+A resumed session sends its whole conversation again on every turn, as any session does, so several continuations of one long session cost more input tokens per turn than new sessions would, most of all with a provider that has no prompt caching. To compare the two behaviours, run with `--no-wrapup` (or `MULDER_WRAPUP=0`): no session is resumed, every continuation is a new session with the generic prompt, and analysts and executors are not told their turn budget.
 
 ### Limiting Token Use
 
@@ -874,7 +887,8 @@ Runs a full multi-phase forensic investigation.
 | `--effort` | `max` | Effort level (`max`, `xhigh`, `high`) |
 | `--no-thinking` | off | Disable extended thinking for all queries; overrides `--effort` |
 | `--workers` | `3` | Max concurrent extraction sessions |
-| `--max-compactions` | `3` | Continuation sessions allowed per role session after context exhaustion; `0` disables. Also settable via `MULDER_MAX_COMPACTIONS` (the flag wins) |
+| `--max-compactions` | `3` | Continuations allowed per role session after a turn limit (the session is resumed) or context exhaustion (a new session); `0` disables. Also settable via `MULDER_MAX_COMPACTIONS` (the flag wins) |
+| `--wrapup` / `--no-wrapup` | on | At a turn limit, resume the session where it stopped, with its conversation intact, instead of replacing it. `--no-wrapup` restarts cold. Also settable via `MULDER_WRAPUP=0` (the flag wins). See [When a Session Runs Out of Turns](#when-a-session-runs-out-of-turns) |
 | `--max-tokens` | None | Token budget for the whole run: input, output, cache-write and cache-read tokens of every session and model. Unset means no limit. Also settable via `MULDER_MAX_TOKENS` (the flag wins). See [Limiting Token Use](#limiting-token-use) |
 | `--db-dir` | `~/.mulder/cases` | Case database directory |
 | `--cwd` | `~/.mulder/workspace` | Working directory for agent sessions. Also settable via `MULDER_CWD`; the container sets it to `/mulder-investigation`. Created on first use, along with a default `.mcp.json` |

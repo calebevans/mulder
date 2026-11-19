@@ -10,6 +10,7 @@ its own table and is wrong for models behind the LiteLLM proxy.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +91,9 @@ class TokenBudget:
         """Tokens of one *kind* (a ``by_model`` key), summed over every model."""
         return sum(counts[kind] for counts in self.by_model.values())
 
-    def record(self, result: object, model: str) -> None:
+    def record(
+        self, result: object, model: str, model_usage: dict[str, Any] | None = None
+    ) -> None:
         """Add the usage a finished session reported.
 
         Args:
@@ -98,8 +101,11 @@ class TokenBudget:
                 used when present; otherwise its ``usage``, which covers the
                 session's own model only.
             model: The session's model, for a result without ``model_usage``.
+            model_usage: Per-model usage to count in place of the result's
+                own. A resumed session reports its running total there, so
+                the session layer passes only what the query added.
         """
-        per_model = getattr(result, "model_usage", None)
+        per_model = getattr(result, "model_usage", None) if model_usage is None else model_usage
         key = 0
         if not (isinstance(per_model, dict) and per_model):
             per_model, key = {model: getattr(result, "usage", None)}, 1

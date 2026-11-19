@@ -14,6 +14,7 @@ import contextlib
 import json
 import logging
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -104,6 +105,7 @@ class Orchestrator:
         no_thinking: bool = False,
         show_cli_stderr: bool = False,
         max_compactions: int = DEFAULT_MAX_COMPACTIONS,
+        wrapup: bool = True,
         max_tokens: int | None = None,
     ) -> None:
         """Initialize the orchestrator.
@@ -129,6 +131,11 @@ class Orchestrator:
             show_cli_stderr: Stream agent CLI diagnostics to the dashboard and log.
             max_compactions: Continuation sessions allowed per role session
                 after context exhaustion; ``0`` disables continuations.
+            wrapup: Resume a session at its turn limit where it stopped,
+                seed a new session (when one is needed) with the recorded
+                notes and saved findings, tell analysts and executors
+                their turn budget, and nudge a session that ended on a
+                silent turn. False restores the cold restart.
             max_tokens: Token budget for the whole run (input, output,
                 cache-write and cache-read tokens of every session), or
                 None for no limit. See ``orchestrator/budget.py``.
@@ -147,7 +154,6 @@ class Orchestrator:
             self.env["MULDER_CASE_ID"] = self._case_id
         self._last_session_id: str = ""
         self._parallel_extractions = max(1, parallel_extractions)
-        self._max_compactions = max_compactions
         self._phase_counter = 0
         self._total_phases = 0
         self._phase_started_at = 0.0
@@ -177,8 +183,10 @@ class Orchestrator:
             using_proxy=self._using_proxy,
             no_thinking=no_thinking,
             show_cli_stderr=show_cli_stderr,
+            wrapup=wrapup,
             budget=self.budget,
         )
+        self._server = ServerBridge(case_id=self._case_id, db_dir=self._db_dir)
         self._roles = RoleRunner(
             session=self._session,
             dashboard=self.dashboard,
@@ -187,12 +195,13 @@ class Orchestrator:
             env=self.env,
             cwd=self.cwd,
             max_compactions=max_compactions,
+            wrapup=wrapup,
+            server=self._server,
         )
         self._evidence = EvidenceContext(
             evidence_path=evidence_path,
             extracted_dir=case_extract_dir(self._db_dir, self._case_id),
         )
-        self._server = ServerBridge(case_id=self._case_id, db_dir=self._db_dir)
         self._log_tailer = LogTailer(
             dashboard=self.dashboard,
             log_path=self._db_dir / "mulder.log",
@@ -664,6 +673,7 @@ class Orchestrator:
                 )
                 self.dashboard.log_info(f"Retry {attempt}/{phase.max_retries}")
 
+            started = datetime.now(UTC)
             try:
                 phase_result = await self._session.execute(
                     system_prompt=phase.single_system_prompt,
@@ -681,30 +691,22 @@ class Orchestrator:
             phase_result.phase_name = phase.name
             accumulated_turns += phase_result.turns_used
 
-            # Continuation for context overflow or turn-limit exhaustion
-            compaction_count = 0
-            while phase_result.context_exhausted and compaction_count < self._max_compactions:
-                compaction_count += 1
-                why = "Ran out of turns" if phase_result.turns_exhausted else "Auto-compacting"
-                self.dashboard.log_info(
-                    f"{why}: restarting with DB state "
-                    f"(continuation #{compaction_count}/{self._max_compactions})"
-                )
-                compact_prompt = self._build_compaction_prompt(phase, effective_vars)
-                continuation = await self._session.execute(
-                    system_prompt=phase.single_system_prompt,
-                    prompt=compact_prompt,
-                    model=model,
-                    allowed_tools=phase.single_allowed_tools,
-                    disallowed_tools=phase.disallowed_tools,
-                    max_turns=phase.single_max_turns,
-                )
-                accumulated_turns += continuation.turns_used
-                phase_result.messages.extend(continuation.messages)
-                phase_result.tool_names.extend(continuation.tool_names)
-                phase_result.context_exhausted = continuation.context_exhausted
-                phase_result.turns_exhausted = continuation.turns_exhausted
-                phase_result.turns_used = accumulated_turns
+            # Continuation for context overflow or turn-limit exhaustion:
+            # the loop the split-mode roles use, so a single-mode session
+            # wraps up and hands off the same way.
+            accumulated_turns += await self._roles.compaction_loop(
+                result=phase_result,
+                system_prompt=phase.single_system_prompt,
+                model=model,
+                allowed_tools=phase.single_allowed_tools,
+                disallowed_tools=phase.disallowed_tools,
+                max_turns=phase.single_max_turns,
+                continuation_prompt=self._build_compaction_prompt(phase, effective_vars),
+                role_label=phase.name,
+                task_prompt=prompt,
+                handoff_system=phase.name,
+                started=started,
+            )
 
             gate = await self._validate_phase(phase, phase_result)
             phase_result.gate_result = gate

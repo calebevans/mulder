@@ -237,6 +237,21 @@ def _is_turns_exhausted(message: object) -> bool:
     return getattr(message, "subtype", None) == _MAX_TURNS_SUBTYPE
 
 
+#: Times a role session is resumed after a session of it ended on a turn
+#: with no text and no tool call (the answer stayed in the reasoning, #199).
+#: Once: Claude Code 2.1.327 already re-asks once inside the session before
+#: it ends. Callers that continue a role session pass on what is left
+#: (``PhaseResult.nudges_used``).
+_MAX_NUDGES: int = 1
+
+_NUDGE_PROMPT: str = (
+    "Your last turn had no text and no tool call, so it produced nothing. "
+    "Your earlier tool calls were recorded; do not repeat them, or your "
+    "reasoning. Either call the next tool you need, or write your final "
+    "answer now in the format the task asked for."
+)
+
+
 def _is_payment_required(message: object) -> bool:
     """Return True when a ResultMessage or SDK error reports HTTP 402.
 
@@ -477,6 +492,7 @@ class SessionExecutor:
         using_proxy: bool = False,
         no_thinking: bool = False,
         show_cli_stderr: bool = False,
+        wrapup: bool = True,
         budget: TokenBudget | None = None,
     ) -> None:
         """Initialize the session executor.
@@ -491,6 +507,8 @@ class SessionExecutor:
                 per-message token tracking to avoid double counting).
             no_thinking: Disable extended thinking for phase and utility queries.
             show_cli_stderr: Stream agent CLI diagnostics to the dashboard and log.
+            wrapup: Resume a session that ended on a turn with no text and
+                no tool call (``--no-wrapup`` turns it off).
             budget: The run's token tally and limit. Every session's usage
                 is added to it, and no session starts once it is used up.
                 Defaults to a tally with no limit.
@@ -507,10 +525,14 @@ class SessionExecutor:
         self._proxy_settings: dict[str, ModelSettings] = {}
         self._no_thinking = no_thinking
         self._show_cli_stderr = show_cli_stderr
+        self._wrapup = wrapup
         #: The "Query error" text of the most recent session, empty when it
         #: had none. A partial report quotes it next to a failed gate, which
         #: otherwise names only the symptom (``orchestrator/fallback.py``).
         self.last_query_error = ""
+        #: ``model_usage`` last reported for each session id: a resumed query
+        #: reports the session's running total (``_new_model_usage``).
+        self._model_usage_seen: dict[str, dict[str, Any]] = {}
         #: Turns of every role session so far. A phase the token budget cuts
         #: short returns no result to add up, so the run's total is read here.
         self.turns_run = 0
@@ -637,6 +659,8 @@ class SessionExecutor:
         max_turns: int,
         log_prefix: str = "",
         task_system: str = "",
+        resume: str = "",
+        nudges: int = _MAX_NUDGES,
     ) -> PhaseResult:
         """Execute a single SDK query session.
 
@@ -655,6 +679,14 @@ class SessionExecutor:
             log_prefix: Optional prefix for dashboard log lines.
             task_system: When non-empty, tool use blocks update the
                 dashboard task panel for this system name.
+            resume: Session id to resume, with its conversation intact,
+                instead of starting a new session. *prompt* is then the
+                next user message. A resume that fails (an exception, no
+                result, or an error before the resumed session called any
+                tool) returns a result with no ``session_id``.
+            nudges: Times this session may still be resumed after ending
+                on a turn with no text and no tool call. How many it used
+                is in the result's ``nudges_used``.
 
         Returns:
             PhaseResult with collected messages and usage information.
@@ -668,6 +700,7 @@ class SessionExecutor:
             system_prompt=system_prompt,
             model=model,
             max_turns=max_turns,
+            resume=resume or None,
             effort=None if self._no_thinking else self._effort,
             thinking={"type": "disabled"} if self._no_thinking else None,
             stderr=self._stderr_callback(log_prefix or task_system or model),
@@ -683,9 +716,10 @@ class SessionExecutor:
         session_id = ""
 
         logger.info(
-            "Starting query (model=%s, max_turns=%d)",
+            "Starting query (model=%s, max_turns=%d%s)",
             model,
             max_turns,
+            f", resume={resume}" if resume else "",
         )
 
         tool_count = 0
@@ -701,10 +735,13 @@ class SessionExecutor:
         turn_id: str | None = None
         turn_has_output = False
         last_silent = False
+        silent_end = False
+        resume_failed = False
         got_result = False
         hit_context_limit = False
         hit_turn_limit = False
-        self.last_query_error = ""
+        if not resume:
+            self.last_query_error = ""
 
         for connect_attempt in range(1, _MCP_CONNECT_ATTEMPTS + 1):
             mcp_problem = ""
@@ -754,6 +791,17 @@ class SessionExecutor:
                         if _is_turns_exhausted(message):
                             hit_turn_limit = True
                         last_silent = turn_id is not None and not turn_has_output
+                        silent_end = last_silent and not message.is_error
+                        # A resumed session that ends on an error before its
+                        # first tool call never got going (the provider
+                        # rejected the request, or the conversation no longer
+                        # fits).
+                        resume_failed = (
+                            bool(resume)
+                            and not tool_count
+                            and not hit_turn_limit
+                            and (message.is_error or hit_context_limit)
+                        )
                         if last_silent:
                             self._log_silent_turn(log_prefix)
                         (
@@ -771,6 +819,7 @@ class SessionExecutor:
                             phase_out_tokens,
                             thinking=(thinking_blocks, thinking_chars),
                             last_silent=last_silent,
+                            resume=resume,
                         )
                         if _is_payment_required(message):
                             raise OutOfCreditError(message.result or "HTTP 402 Payment Required")
@@ -786,6 +835,7 @@ class SessionExecutor:
             except Exception as exc:
                 exc_msg = str(exc)
                 exc_lower = exc_msg.lower()
+                silent_end = False
 
                 category, _ = _classify_fatal_error(exc_msg)
                 if category == "auth":
@@ -809,6 +859,9 @@ class SessionExecutor:
                     # The CLI already yielded the error_max_turns result; the
                     # trailing exception is its deliberate non-zero exit.
                     hit_turn_limit = True
+                    # The id is what a wrap-up resumes; the SDK's error carries
+                    # it when no result message came first.
+                    session_id = session_id or getattr(exc, "session_id", None) or ""
                     self._dashboard.log_info(f"Turn limit reached ({max_turns}); will continue")
                     logger.warning("Turn limit reached (max_turns=%d): %s", max_turns, exc_msg)
                 elif _is_context_exhausted(exc_msg):
@@ -817,6 +870,13 @@ class SessionExecutor:
                     hit_context_limit = True
                 elif "error result: success" in exc_lower:
                     self._dashboard.log_info("Query completed (SDK reported success as error)")
+                elif resume and not tool_count:
+                    # The resume did not take; its caller falls back to a new
+                    # session, or to leaving things as they ended. Not the
+                    # reason a run stopped, so ``last_query_error`` is left
+                    # alone.
+                    self._dashboard.log_info(f"Resumed session failed: {exc_msg}")
+                    logger.warning("Resumed session %s failed: %s", resume, exc_msg)
                 else:
                     self._dashboard.log_gate_fail(f"Query error: {exc_msg}")
                     logger.error("Query error: %s", exc_msg)
@@ -846,7 +906,11 @@ class SessionExecutor:
             )
 
         self.turns_run += turns_used
-        return PhaseResult(
+        if resume_failed:
+            logger.warning("Resumed session %s ended on an error before it did anything", resume)
+            session_id = ""
+
+        result = PhaseResult(
             phase_name="query",
             success=False,
             messages=messages,
@@ -857,6 +921,39 @@ class SessionExecutor:
             turns_exhausted=hit_turn_limit,
             batch_ids=collected_batch_ids,
         )
+        if self._wrapup and silent_end and session_id and nudges > 0 and not hit_context_limit:
+            # The answer stayed in the reasoning (#199). Resume with the same
+            # tools and turn limit, which is right whether the CLI counts
+            # turns per invocation or over the whole session.
+            pfx = f"[{log_prefix}] " if log_prefix else ""
+            self._dashboard.log_info(
+                f"{pfx}Last turn had no text and no tool call; asking the session to act or answer"
+            )
+            follow = await self.execute(
+                system_prompt,
+                _NUDGE_PROMPT,
+                model,
+                allowed_tools,
+                disallowed_tools,
+                max_turns,
+                log_prefix,
+                task_system,
+                resume=session_id,
+                nudges=nudges - 1,
+            )
+            result.nudges_used = 1 + follow.nudges_used
+            if follow.session_id:
+                result.messages.extend(follow.messages)
+                result.tool_names.extend(follow.tool_names)
+                result.turns_used += follow.turns_used
+                result.session_id = follow.session_id
+                result.context_exhausted = follow.context_exhausted
+                result.turns_exhausted = follow.turns_exhausted
+                result.batch_ids.update(follow.batch_ids)
+            else:
+                # Left as it ended, which is what happened before the nudge.
+                logger.warning("%scould not resume session %s to nudge it", pfx, session_id)
+        return result
 
     def _process_assistant_message(
         self,
@@ -1021,7 +1118,9 @@ class SessionExecutor:
         )
 
     @staticmethod
-    def _extract_tokens(message: Any) -> tuple[int, int]:
+    def _extract_tokens(
+        message: Any, model_usage: dict[str, Any] | None = None
+    ) -> tuple[int, int]:
         """Extract (input_tokens, output_tokens) from a ResultMessage.
 
         Checks ``message.usage`` first, then falls back to ``model_usage``
@@ -1029,6 +1128,8 @@ class SessionExecutor:
 
         Args:
             message: A ResultMessage (or any object with usage/model_usage).
+            model_usage: Per-model usage to fall back on in place of the
+                message's own (see ``_new_model_usage``).
 
         Returns:
             Tuple of (input_tokens, output_tokens).
@@ -1037,7 +1138,7 @@ class SessionExecutor:
         tok_in: int = usage.get("input_tokens", 0) or 0
         tok_out: int = usage.get("output_tokens", 0) or 0
         if not tok_in and not tok_out:
-            mu = getattr(message, "model_usage", None)
+            mu = getattr(message, "model_usage", None) if model_usage is None else model_usage
             if mu and isinstance(mu, dict):
                 for _mname, mvals in mu.items():
                     if isinstance(mvals, dict):
@@ -1076,6 +1177,44 @@ class SessionExecutor:
             except (json.JSONDecodeError, TypeError):
                 pass
 
+    def _new_model_usage(self, message: ResultMessage, resume: str) -> dict[str, Any]:
+        """Return the per-model usage *message* adds to what was already counted.
+
+        ``ResultMessage.usage`` is the query's own, but on a resumed query
+        ``model_usage`` is the session's running total (Claude Code
+        2.1.327), so what the session's earlier queries reported is taken
+        off. A resume that never reached the model then adds nothing.
+
+        Args:
+            message: The result message from the SDK.
+            resume: Session id the query resumed; empty for a new session.
+
+        Returns:
+            ``model_usage`` with its token counts reduced to this query's.
+        """
+        reported = getattr(message, "model_usage", None)
+        if not reported or not isinstance(reported, dict):
+            return {}
+        seen = self._model_usage_seen.get(resume, {}) if resume else {}
+        if session_id := getattr(message, "session_id", "") or resume:
+            self._model_usage_seen[session_id] = reported
+        new: dict[str, Any] = {}
+        for name, counts in reported.items():
+            before = seen.get(name)
+            if not isinstance(counts, dict) or not isinstance(before, dict):
+                new[name] = counts
+                continue
+            new[name] = {
+                key: max(0, (counts.get(key) or 0) - (before.get(key) or 0))
+                for key in (
+                    "inputTokens",
+                    "outputTokens",
+                    "cacheCreationInputTokens",
+                    "cacheReadInputTokens",
+                )
+            }
+        return new
+
     def _process_result_message(
         self,
         message: ResultMessage,
@@ -1086,6 +1225,7 @@ class SessionExecutor:
         phase_out_tokens: int,
         thinking: tuple[int, int] = (0, 0),
         last_silent: bool = False,
+        resume: str = "",
     ) -> tuple[int, str, bool, int, int]:
         """Process a ResultMessage and reconcile token counts.
 
@@ -1098,6 +1238,7 @@ class SessionExecutor:
             phase_out_tokens: Running output token count.
             thinking: (block count, total chars) of thinking seen this query.
             last_silent: The final assistant turn had no text and no tool use.
+            resume: Session id the query resumed; empty for a new session.
 
         Returns:
             Tuple of (turns_used, session_id, got_result,
@@ -1106,7 +1247,8 @@ class SessionExecutor:
         turns_used = getattr(message, "num_turns", 0) or 0
         session_id: str = getattr(message, "session_id", "") or ""
 
-        result_in, result_out = self._extract_tokens(message)
+        model_usage = self._new_model_usage(message, resume)
+        result_in, result_out = self._extract_tokens(message, model_usage)
 
         correction_in = result_in - phase_in_tokens
         correction_out = result_out - phase_out_tokens
@@ -1121,7 +1263,7 @@ class SessionExecutor:
             phase_in_tokens = result_in
             phase_out_tokens = result_out
 
-        self._budget.record(message, model_label)
+        self._budget.record(message, model_label, model_usage)
 
         total_phase_tokens = phase_in_tokens + phase_out_tokens
         self._dashboard.log_phase_done(tool_count, turns_used, total_phase_tokens)

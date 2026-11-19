@@ -365,6 +365,15 @@ def report(case_id: str, db_dir: str) -> None:
     "(env: MULDER_MAX_COMPACTIONS).",
 )
 @click.option(
+    "--wrapup/--no-wrapup",
+    default=True,
+    envvar="MULDER_WRAPUP",
+    show_default=True,
+    help="At a turn limit, resume the session where it stopped, with its "
+    "conversation intact, instead of replacing it; --no-wrapup restarts "
+    "cold (env: MULDER_WRAPUP=0).",
+)
+@click.option(
     "--max-tokens",
     default=None,
     envvar="MULDER_MAX_TOKENS",
@@ -402,6 +411,7 @@ def investigate(
     cwd: str,
     workers: int,
     max_compactions: int,
+    wrapup: bool,
     max_tokens: int | None,
     proxy_config: str | None,
     no_thinking: bool,
@@ -507,6 +517,7 @@ def investigate(
         no_thinking=no_thinking,
         show_cli_stderr=show_cli_stderr,
         max_compactions=max_compactions,
+        wrapup=wrapup,
         max_tokens=max_tokens,
     )
 
