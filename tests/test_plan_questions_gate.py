@@ -32,6 +32,7 @@ from mulder.orchestrator.roles import (
 )
 from mulder.orchestrator.runner import Orchestrator
 from mulder.orchestrator.types import ExecutionResults, InvestigationResult, PhaseResult, Plan
+from mulder.questions import ID_LABELS
 
 CASE = "case-1"
 SYSTEM = "host-a"
@@ -157,9 +158,9 @@ def _gate_failures(orch: Orchestrator) -> list[str]:
 
 
 def _questions_in(prompt: str) -> list[str]:
+    """The questions an analyst prompt lists, without the ids they were recorded under."""
     line = prompt.split("Investigation questions:\n", 1)[1].split("\n", 1)[0]
-    questions: list[str] = json.loads(line)
-    return questions
+    return [ID_LABELS.sub("", q) for q in json.loads(line)]
 
 
 # ------------------------------------------------------------------

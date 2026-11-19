@@ -23,6 +23,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from mulder.dirroot import LISTING_EXTRACTOR, dir_root, icat
 from mulder.path_policy import PathPolicyError, resolve_allowed_path
 from mulder.patterns import fls_file_entries, parse_mmls_rows
 from mulder.server.app import get_cfg, get_ctx, mcp
@@ -70,12 +71,8 @@ _TOOL_TIMEOUT = 120
 
 def _icat_extract(image_path: str, offset: int, inode: str, dest: Path) -> bool:
     """Extract a file from disk image to dest using icat."""
-    cmd = ["icat"]
-    if offset > 0:
-        cmd.extend(["-o", str(offset)])
-    cmd.extend([image_path, inode])
     try:
-        proc = subprocess.run(cmd, capture_output=True, timeout=30, check=False)
+        proc = icat(image_path, offset, inode)
         if proc.returncode == 0 and proc.stdout:
             dest.write_bytes(proc.stdout)
             return True
@@ -135,15 +132,29 @@ def _find_inodes_by_path(path_pattern: str) -> list[tuple[str, str, int]]:
     Returns:
         List of ``(inode_str, relative_path, partition_offset)`` tuples.
     """
+    image_path, primary_offset = _resolve_image_and_offset()
+    pat = re.compile(path_pattern, re.IGNORECASE)
+    root = dir_root(image_path)
+    if root is not None:
+        return [
+            (entry.base_inode, entry.path, 0)
+            for entry in fls_file_entries(root.listing())
+            if pat.search(entry.path)
+        ]
+
     ctx = get_ctx()
     sources = ctx.db.get_sources()
+    # A directory's listing numbers its rows; those are not inodes of any image.
+    dir_ids = {s.source_id for s in sources if s.extractor == LISTING_EXTRACTOR}
     fls_sources = sorted(
-        [s for s in sources if s.source_name.startswith("tsk.filelist")],
+        [
+            s
+            for s in sources
+            if s.source_name.startswith("tsk.filelist") and s.source_id not in dir_ids
+        ],
         key=lambda s: s.source_name,
     )
 
-    _, primary_offset = _resolve_image_and_offset()
-    pat = re.compile(path_pattern, re.IGNORECASE)
     results: list[tuple[str, str, int]] = []
 
     for src in fls_sources:
@@ -152,6 +163,8 @@ def _find_inodes_by_path(path_pattern: str) -> list[tuple[str, str, int]]:
 
         windows = ctx.db.get_windows_by_source(src.source_name)
         for w in windows:
+            if w.source_id in dir_ids:
+                continue
             for entry in fls_file_entries(w.raw_text):
                 if pat.search(entry.path):
                     results.append((entry.base_inode, entry.path, offset))
@@ -337,7 +350,9 @@ def parse_plist(plist_filter: str | None = None) -> dict[str, object]:
 
 @mcp.tool()
 @tool_access(Role.EXTRACT_EXECUTOR | Role.EXTRACT_ANALYST)
-def query_sqlite_from_image(inode: int, query: str, description: str = "") -> dict[str, object]:
+def query_sqlite_from_image(
+    inode: int, query: str, description: str = "", image_path: str | None = None
+) -> dict[str, object]:
     """Extract a SQLite database from a disk image and run a SQL query.
 
     Uses icat to extract the file at *inode* to a temp directory, opens
@@ -348,16 +363,36 @@ def query_sqlite_from_image(inode: int, query: str, description: str = "") -> di
         inode: The inode number of the SQLite database (from fls listing).
         query: The SQL SELECT query to execute.
         description: Optional label for the indexed source name.
+        image_path: The disk image or triage collection directory whose
+            listing the inode came from. Needed only when the case holds a
+            collection beside another file listing.
     """
+    from mulder.server.tools.tsk import _listing_root
+    from mulder.server.tools.tsk import _resolve_image_and_offset as _resolve_named
+
     ctx = get_ctx()
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
     params = {"inode": inode, "query": query, "description": description}
+    if image_path is not None:
+        params["image_path"] = image_path
 
     if not shutil.which("icat"):
         return {"tool_call_id": tc_id, "status": "error", "error_message": "icat not found"}
 
-    image_path, offset = _resolve_image_and_offset()
+    # A collection's inode column is a row number: never read it from an image.
+    directory, problem = _listing_root(image_path)
+    if problem:
+        return {"tool_call_id": tc_id, "status": "error", "error_message": problem}
+    try:
+        if directory:
+            image_path, offset = directory, 0
+        elif image_path:
+            image_path, offset, _ = _resolve_named(image_path)
+        else:
+            image_path, offset = _resolve_image_and_offset()
+    except ValueError as exc:  # image_path is not an image this case has listed
+        return {"tool_call_id": tc_id, "status": "error", "error_message": str(exc)}
     if not image_path:
         return {"tool_call_id": tc_id, "status": "error", "error_message": "No disk image indexed"}
 

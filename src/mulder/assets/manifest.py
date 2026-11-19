@@ -98,6 +98,10 @@ class Asset:
             return None
         return self.urls.get(arch) or self.urls.get(ANY_ARCH)
 
+    def digest_for(self, arch: str) -> str | None:
+        """The locked SHA-256 for *arch*, falling back to an arch-independent one."""
+        return self.digests.get(arch) or self.digests.get(ANY_ARCH)
+
 
 _MB = 1024 * 1024
 
@@ -112,7 +116,11 @@ FLOSS_VERSION = "3.1.0"
 GITLEAKS_VERSION = "8.30.1"
 ZIRCOLITE_VERSION = "2.20.0"
 ZIZMOR_VERSION = "1.32.0"
+EVTX_DUMP_VERSION = "0.15.1"
 SIGMA_VERSION = "r2024-09-02"
+#: Neither repository tags releases, so the pin is a commit.
+LOLRMM_VERSION = "0c2d56639673a232ff9d2548e16c6d045d3a1217"
+RANSOMWARE_NOTES_VERSION = "8765d0b53dc09571b217a3fa3365730c46be9dee"
 
 _ASSETS: tuple[Asset, ...] = (
     Asset(
@@ -344,6 +352,77 @@ _ASSETS: tuple[Asset, ...] = (
         chmod_x=("gitleaks",),
         shims=("gitleaks",),
         note="secret detection in CI logs, artifacts and source trees",
+    ),
+    Asset(
+        key="evtx-dump",
+        version=EVTX_DUMP_VERSION,
+        # Upstream releases the bare executable, not an archive.
+        kind="file",
+        urls={
+            # Static, so it runs on any glibc. Upstream builds no musl arm64;
+            # its aarch64-gnu binary needs GLIBC 2.18.
+            "amd64": (
+                f"{_GH}/omerbenamram/evtx/releases/download/v{EVTX_DUMP_VERSION}"
+                f"/evtx_dump-v{EVTX_DUMP_VERSION}-x86_64-unknown-linux-musl"
+            ),
+            "arm64": (
+                f"{_GH}/omerbenamram/evtx/releases/download/v{EVTX_DUMP_VERSION}"
+                f"/evtx_dump-v{EVTX_DUMP_VERSION}-aarch64-unknown-linux-gnu"
+            ),
+        },
+        filename="evtx_dump",
+        dest=("evtx-dump",),
+        sentinel=("evtx_dump",),
+        pinnable=True,
+        size_estimate=4 * _MB,
+        chmod_x=("evtx_dump",),
+        # No shim: python-evtx, a mulder dependency, puts its own "evtx_dump"
+        # console script on PATH. run_evtx_recovery reads this one from here.
+        validate="none",
+        note="event log record recovery after a log was cleared",
+    ),
+    Asset(
+        key="lolrmm",
+        version=LOLRMM_VERSION,
+        kind="file",
+        urls={
+            ANY_ARCH: (
+                "https://raw.githubusercontent.com/magicsword-io/LOLRMM/"
+                f"{LOLRMM_VERSION}/website/public/api/rmm_tools.json"
+            )
+        },
+        filename="rmm_tools.json",
+        # Apache-2.0 asks for a copy of the licence beside what is redistributed.
+        siblings=(
+            (
+                "LICENSE",
+                f"https://raw.githubusercontent.com/magicsword-io/LOLRMM/{LOLRMM_VERSION}/LICENSE",
+            ),
+        ),
+        dest=("lolrmm",),
+        sentinel=("rmm_tools.json",),
+        pinnable=True,
+        size_estimate=3 * _MB,
+        validate="none",
+        note="LOLRMM remote access tool catalog (Apache-2.0) for find_remote_access_tools",
+    ),
+    Asset(
+        key="ransomware-notes",
+        version=RANSOMWARE_NOTES_VERSION,
+        kind="archive",
+        urls={
+            ANY_ARCH: (
+                f"{_GH}/ThreatLabz/ransomware_notes/archive/{RANSOMWARE_NOTES_VERSION}.tar.gz"
+            )
+        },
+        dest=("ransomware-notes",),
+        sentinel=("LICENSE",),
+        # A commit tarball is regenerated like a tag tarball (see sigma-rules):
+        # the commit fixes the content, not the gzip bytes.
+        pinnable=False,
+        size_estimate=2 * _MB,
+        strip_components=1,
+        note="ThreatLabz ransom note corpus (MIT) for ransomware family hints",
     ),
     Asset(
         key="aleapp",

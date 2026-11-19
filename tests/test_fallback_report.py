@@ -24,6 +24,7 @@ from click.testing import CliRunner
 from mulder.cli import cli
 from mulder.db import CaseDB
 from mulder.models import Finding, WindowRow
+from mulder.orchestrator.budget import TokenBudgetReached
 from mulder.orchestrator.errors import (
     AuthenticationError,
     ModelNotAvailableError,
@@ -79,8 +80,12 @@ def _orchestrator(db_dir: Path) -> Orchestrator:
     """An orchestrator that ran catalog, then stopped while extracting host-b."""
     with patch("mulder.orchestrator.runner.InvestigationDashboard"):
         orch = Orchestrator(evidence_path="/evidence", case_id=CASE, db_dir=db_dir)
-    dashboard: Any = orch.dashboard  # a MagicMock; the real property is read-only
-    dashboard.model_tokens = {"claude-test": {"input": 1200, "output": 340}}
+    orch.budget.by_model["claude-test"] = {
+        "input": 1200,
+        "output": 340,
+        "cache_creation": 50,
+        "cache_read": 9000,
+    }
     orch.result.phases.append(PhaseResult(phase_name="catalog", success=True))
     orch.current_phase = "extraction"
     orch.systems_done = {"host-a": True, "host-b": False}
@@ -236,6 +241,10 @@ class TestNotice:
                 "Reason: the configured model is not available: model not found",
             ),
             (RuntimeError("boom"), "Reason: unexpected RuntimeError: boom"),
+            (
+                TokenBudgetReached("9,100 of 9,000 tokens used"),
+                "Reason: token budget reached: 9,100 of 9,000 tokens used",
+            ),
         ],
     )
     def test_reason_per_kind_of_ending(
@@ -280,7 +289,16 @@ class TestWriteFallback:
         write_fallback_report(_orchestrator(tmp_path), CASE, tmp_path, time.time(), None)
 
         usage = json.loads((tmp_path / f"{CASE}.model_usage.json").read_text())
-        assert usage == [{"model": "claude-test", "input_tokens": 1200, "output_tokens": 340}]
+        # Cached input is recorded beside the two existing fields, not in them.
+        assert usage == [
+            {
+                "model": "claude-test",
+                "input_tokens": 1200,
+                "output_tokens": 340,
+                "cache_creation_input_tokens": 50,
+                "cache_read_input_tokens": 9000,
+            }
+        ]
         assert "claude-test" in _reports(tmp_path)[1].read_text()
 
     def test_never_overwrites_a_report_finalized_during_this_run(self, tmp_path: Path) -> None:
@@ -399,6 +417,8 @@ def _invoke(db_dir: Path, outcome: object) -> Any:
 
 
 _FAILED = InvestigationResult(phases=[PhaseResult(phase_name="report", success=False)])
+# The pipeline returns this, rather than raising, when the token budget ends a run.
+_OVER_BUDGET = InvestigationResult(budget_stop=TokenBudgetReached("9,100 of 9,000 tokens used"))
 
 
 class TestInvestigateCli:
@@ -411,8 +431,9 @@ class TestInvestigateCli:
             (KeyboardInterrupt(), 1, "interrupted (Ctrl-C or SIGTERM)"),
             (RuntimeError("boom"), 1, "unexpected RuntimeError: boom"),
             (_FAILED, 1, "ended without finalizing a report"),
+            (_OVER_BUDGET, 1, "token budget reached: 9,100 of 9,000 tokens used"),
         ],
-        ids=["out-of-credit", "auth", "model", "ctrl-c", "crash", "gate-failure"],
+        ids=["out-of-credit", "auth", "model", "ctrl-c", "crash", "gate-failure", "token-budget"],
     )
     def test_every_way_out_leaves_a_report_and_a_nonzero_exit(
         self, tmp_path: Path, outcome: object, exit_code: int, reason: str

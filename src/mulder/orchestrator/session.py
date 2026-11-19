@@ -28,6 +28,7 @@ from claude_agent_sdk.types import (
 )
 from rich.text import Text
 
+from mulder.orchestrator.budget import TokenBudget
 from mulder.orchestrator.display import InvestigationDashboard
 from mulder.orchestrator.errors import (
     FATAL_ERRORS,
@@ -458,6 +459,7 @@ _TASK_PANEL_SKIP: frozenset[str] = frozenset(
         "submit_finding",
         "update_finding",
         "bookmark_window",
+        "resolve_question",
     }
 )
 
@@ -491,6 +493,7 @@ class SessionExecutor:
         no_thinking: bool = False,
         show_cli_stderr: bool = False,
         wrapup: bool = True,
+        budget: TokenBudget | None = None,
     ) -> None:
         """Initialize the session executor.
 
@@ -506,8 +509,12 @@ class SessionExecutor:
             show_cli_stderr: Stream agent CLI diagnostics to the dashboard and log.
             wrapup: Resume a session that ended on a turn with no text and
                 no tool call (``--no-wrapup`` turns it off).
+            budget: The run's token tally and limit. Every session's usage
+                is added to it, and no session starts once it is used up.
+                Defaults to a tally with no limit.
         """
         self._dashboard = dashboard
+        self._budget = budget or TokenBudget()
         self._model_config = model_config
         self._cwd = cwd
         self._env = env
@@ -526,6 +533,9 @@ class SessionExecutor:
         #: ``model_usage`` last reported for each session id: a resumed query
         #: reports the session's running total (``_new_model_usage``).
         self._model_usage_seen: dict[str, dict[str, Any]] = {}
+        #: Turns of every role session so far. A phase the token budget cuts
+        #: short returns no result to add up, so the run's total is read here.
+        self.turns_run = 0
 
     def _stderr_callback(self, label: str) -> Callable[[str], None]:
         """Keep diagnostics scoped to their query and inside the live dashboard."""
@@ -680,7 +690,12 @@ class SessionExecutor:
 
         Returns:
             PhaseResult with collected messages and usage information.
+
+        Raises:
+            TokenBudgetReached: The run's token budget is used up, so the
+                session was not started.
         """
+        self._budget.check()
         options = ClaudeAgentOptions(
             system_prompt=system_prompt,
             model=model,
@@ -890,6 +905,7 @@ class SessionExecutor:
                 phase_out_tokens,
             )
 
+        self.turns_run += turns_used
         if resume_failed:
             logger.warning("Resumed session %s ended on an error before it did anything", resume)
             session_id = ""
@@ -1190,7 +1206,12 @@ class SessionExecutor:
                 continue
             new[name] = {
                 key: max(0, (counts.get(key) or 0) - (before.get(key) or 0))
-                for key in ("inputTokens", "outputTokens")
+                for key in (
+                    "inputTokens",
+                    "outputTokens",
+                    "cacheCreationInputTokens",
+                    "cacheReadInputTokens",
+                )
             }
         return new
 
@@ -1242,8 +1263,7 @@ class SessionExecutor:
             phase_in_tokens = result_in
             phase_out_tokens = result_out
 
-        if model_usage:
-            self._dashboard.add_model_usage(model_usage)
+        self._budget.record(message, model_label, model_usage)
 
         total_phase_tokens = phase_in_tokens + phase_out_tokens
         self._dashboard.log_phase_done(tool_count, turns_used, total_phase_tokens)
@@ -1281,7 +1301,12 @@ class SessionExecutor:
 
         Returns:
             Parsed JSON dictionary, or None if the query failed.
+
+        Raises:
+            TokenBudgetReached: The run's token budget is used up, so the
+                query was not started.
         """
+        self._budget.check()
         utility_model = self._model_config.resolve("utility", "planner")
 
         options = ClaudeAgentOptions(
@@ -1359,6 +1384,4 @@ class SessionExecutor:
         if tok_in or tok_out:
             self._dashboard.add_tokens(tok_in, tok_out)
 
-        model_usage = getattr(result, "model_usage", None)
-        if model_usage and isinstance(model_usage, dict):
-            self._dashboard.add_model_usage(model_usage)
+        self._budget.record(result, self._model_config.resolve("utility", "planner"))

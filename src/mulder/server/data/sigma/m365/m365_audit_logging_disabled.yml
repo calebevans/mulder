@@ -1,0 +1,38 @@
+title: Microsoft 365 Audit Logging Bypassed Or Disabled
+id: b49183cb-14c1-4697-95c6-f0a3cb2c2570
+status: experimental
+description: Detects audit logging being turned off for one account's mailbox access, for a mailbox or for the whole organisation. What happens afterwards is not recorded. Matches the parameter's name and the value anywhere in the parameters.
+references:
+    - https://learn.microsoft.com/en-us/purview/audit-log-enable-disable
+    - https://learn.microsoft.com/en-us/purview/audit-mailboxes
+author: mulder
+date: 2026-11-18
+tags:
+    - attack.defense-evasion
+    - attack.t1562.008
+logsource:
+    product: m365
+    service: audit
+detection:
+    selection_bypass:
+        Operation: 'Set-MailboxAuditBypassAssociation'
+        Parameters|contains|all:
+            - 'AuditBypassEnabled'
+            - 'True'
+    selection_mailbox:
+        Operation: 'Set-Mailbox'
+        Parameters|contains|all:
+            - 'AuditEnabled'
+            - 'False'
+    selection_organisation:
+        Operation: 'Set-AdminAuditLogConfig'
+        Parameters|contains|all:
+            - 'UnifiedAuditLogIngestionEnabled'
+            - 'False'
+    filter_system:
+        UserId|startswith: 'NT AUTHORITY\SYSTEM'
+    condition: 1 of selection_* and not filter_system
+falsepositives:
+    - Service accounts exempted from mailbox auditing on purpose
+    - A command that sets one of these parameters to its safe value and another parameter to the matched one
+level: high

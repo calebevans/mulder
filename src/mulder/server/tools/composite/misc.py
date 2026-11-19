@@ -647,7 +647,7 @@ def find_defense_evasion() -> dict[str, object]:
             ("volatility.pslist", "run_volatility('pslist', '<memory_path>')"),
             ("volatility.modules", "run_volatility('modules', '<memory_path>')"),
             ("evtx.security", "run_evtx_parser('<evtx_path>')"),
-            ("ez.usnjrnl", "run_mft_parser('<image_path>')"),
+            ("ez.usnjrnl", "run_usn_parser('<image_path>')"),
         ]
     )
 
@@ -784,7 +784,7 @@ def assess_recovery() -> dict[str, object]:
         [
             ("tsk.filelist", "run_fls('<image_path>')"),
             ("ez.prefetch", "run_prefetch_parser('<image_path>')"),
-            ("ez.usnjrnl", "parse_usn_journal('<image_path>')"),
+            ("ez.usnjrnl", "run_usn_parser('<image_path>')"),
         ]
     )
 
