@@ -105,6 +105,7 @@ class Orchestrator:
         no_thinking: bool = False,
         show_cli_stderr: bool = False,
         max_compactions: int = DEFAULT_MAX_COMPACTIONS,
+        executor_effort: EffortLevel = "low",
         wrapup: bool = True,
         max_tokens: int | None = None,
     ) -> None:
@@ -115,7 +116,8 @@ class Orchestrator:
             cwd: Working directory for agent sessions.
             model_config: Model identifiers for each agent role. Uses
                 built-in defaults when not provided.
-            effort: Effort level (max, xhigh, high).
+            effort: Effort level for planner, analyst, catalog and report
+                sessions (low, medium, high, xhigh, max).
             env: Additional environment variables for agent sessions.
             parallel_extractions: Maximum number of extraction sessions
                 to run concurrently.
@@ -131,6 +133,9 @@ class Orchestrator:
             show_cli_stderr: Stream agent CLI diagnostics to the dashboard and log.
             max_compactions: Continuation sessions allowed per role session
                 after context exhaustion; ``0`` disables continuations.
+            executor_effort: Effort level for executor sessions, their
+                continuations and plan JSON repair. Equal to *effort*, every
+                role session runs at one level.
             wrapup: Resume a session at its turn limit where it stopped,
                 seed a new session (when one is needed) with the recorded
                 notes and saved findings, tell analysts and executors
@@ -195,6 +200,7 @@ class Orchestrator:
             env=self.env,
             cwd=self.cwd,
             max_compactions=max_compactions,
+            executor_effort=executor_effort,
             wrapup=wrapup,
             server=self._server,
         )
