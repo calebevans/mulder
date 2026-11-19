@@ -75,6 +75,20 @@ _MAX_REQUESTED = 200
 _MAX_RUNS = 40
 """image_export runs spent on one volume; a run that fails is repeated in halves."""
 _LISTING_FILE = "filelist.tsv"
+_MIN_TMP_FREE = 1024 * _MIB
+"""Free temporary space below which no listing is started.
+
+log2timeline and psort took 345 MiB for 85,000 entries. Short of space psort
+fails, but log2timeline neither fails nor finishes before its timeout.
+"""
+# ponytail: a fixed floor, where the need grows with the number of entries
+# (about 4 KiB each); estimate it from the image if large disks run short.
+
+# A shell's start-up files, in any home directory.
+_PROFILES = (
+    r"bashrc|bash_profile|bash_login|bash_logout|profile|zshrc|zprofile|zshenv|zlogin"
+    r"|cshrc|tcshrc|kshrc|xprofile"
+)
 
 # What is exported without being asked for, and how many bytes of each kind. A
 # path is the file's path on its volume, without the leading slash.
@@ -94,8 +108,12 @@ _TARGETS: tuple[tuple[str, int, re.Pattern[str]], ...] = tuple(
         (
             "homes",
             512 * _MIB,
-            r"root/|home/[^/]+/(?:\.[^/]+$|\.ssh/|\.config/(?:systemd|autostart)/"
-            r"|\.local/share/systemd/)",
+            # An account's home may be anywhere (/var/mail, /usr/php,
+            # /var/lib/postgresql): what an intruder leaves in one is taken by
+            # name from any directory, and every dotfile from the usual homes.
+            r"root/|home/[^/]+/\.[^/]+$"
+            r"|(?:.+/)?(?:\.ssh/|\.config/(?:systemd|autostart)/|\.local/share/systemd/"
+            rf"|authorized_keys2?$|\.(?:[^/]*history|viminfo|{_PROFILES})$)",
         ),
         ("web", 512 * _MIB, r"(?:var/www|srv/www|usr/share/nginx/html)/"),
         ("tmp", 256 * _MIB, r"(?:tmp|var/tmp)/"),
@@ -112,17 +130,27 @@ _TIME_SLOTS = {
     "Content Modification Time": 0,
     "Metadata Modification Time": 1,
     "Creation Time": 2,
+    "Last Access Time": 3,
 }
 _SELECTOR = re.compile(r"([a-z]{1,8})(\d{1,3})")
 _HOME_SIGNS = re.compile(r"[^/]+/\.(?:bashrc|bash_logout|bash_profile|profile|ssh/)")
-_VAR_LOG_SIGNS = frozenset({"journal", "syslog", "auth.log", "messages", "secure", "wtmp"})
+# Two of these make a guess: one alone is a database's journal directory, an
+# application's log beside its lib, or a user called secure.
+_VAR_SIGNS = frozenset({"log", "spool", "cache", "backups", "mail"})
+_VAR_LOG_SIGNS = frozenset(
+    {"journal", "syslog", "auth.log", "messages", "secure", "wtmp", "btmp", "lastlog", "kern.log"}
+)
 _ENCRYPTED = "Encrypted volume found"
 _WARNINGS_RE = re.compile(r"Number of warnings generated while extracting events: (\d+)")
 _WARNED_VOLUME_RE = re.compile(r"location: /([a-z]{1,8}\d{1,3})(?:,|$)")
 
 _SHARED = (
-    "its place in the export is another file's too (two names image_export stores as one, "
-    "or one path on two volumes): ask for one of them alone with paths"
+    "its place in the export is another file's too (two names image_export stores as one): "
+    "ask for one of them alone with paths"
+)
+_UNDER_MOUNT = (
+    "under a mount point, where the running system showed the mounted volume's file of the "
+    "same path, which is the one exported: ask for this one alone with paths"
 )
 _NOT_COPIED = "image_export did not copy it"
 
@@ -138,7 +166,8 @@ _EXPORT_NOTE = (
     "keys); a copy of one under another name is. The times on the exported copies are the "
     "modification times from the listing. When status is incomplete, listing_incomplete "
     "names the directories whose entries could not all be read and not_exported the files "
-    "that could not be copied: what those hold was not examined."
+    "that could not be copied: what those hold was not examined. Whatever the status, "
+    "not_exported names by reason the files of the targeted set that were left out."
 )
 
 # ponytail: one lock for every image; a lock per image if two Linux images of
@@ -159,7 +188,7 @@ class _Entry:
     gid: int | None
     size: int
     times: list[int]
-    """Modified, changed, created: microseconds since 1970, 0 when not recorded."""
+    """Modified, changed, created, accessed: microseconds since 1970, 0 when not recorded."""
 
 
 class _Listing(NamedTuple):
@@ -201,7 +230,7 @@ def _read_listing(jsonl: Path) -> tuple[list[_Entry], bool, dict[str, str]]:
     Returns them ordered by volume and path, whether the listing was cut, and
     the file system dfVFS named for each volume.
     """
-    entries: dict[tuple[str | None, str], _Entry] = {}
+    entries: dict[tuple[str | None, str, object], _Entry] = {}
     file_systems: dict[str, str] = {}
     cut = False
     with jsonl.open(encoding="utf-8", errors="replace") as fh:
@@ -224,7 +253,10 @@ def _read_listing(jsonl: Path) -> tuple[list[_Entry], bool, dict[str, str]]:
             path = spec.get("location") if isinstance(spec, dict) else event.get("filename")
             if not isinstance(path, str) or not path.startswith("/"):
                 continue
-            key = (_volume(spec), path)
+            # Without a path specification, the inode is all that tells the /lib
+            # of one volume from the /lib of another.
+            inode = None if isinstance(spec, dict) else str(event.get("inode"))
+            key = (_volume(spec), path, inode)
             entry = entries.get(key)
             if entry is None:
                 if len(entries) >= _MAX_ENTRIES:
@@ -239,7 +271,7 @@ def _read_listing(jsonl: Path) -> tuple[list[_Entry], bool, dict[str, str]]:
                     _int(event.get("owner_identifier")),
                     _int(event.get("group_identifier")),
                     _int(event.get("file_size")) or 0,
-                    [0, 0, 0],
+                    [0, 0, 0, 0],
                 )
                 fs = str(event.get("file_system_type") or "")
                 if key[0] is not None and re.fullmatch(r"[A-Za-z0-9_]{1,16}", fs):
@@ -252,7 +284,7 @@ def _read_listing(jsonl: Path) -> tuple[list[_Entry], bool, dict[str, str]]:
     # A directory or a link carries no path specification. It is on the volume
     # of the nearest directory, at or above it, whose files are on one volume.
     owners: dict[str, set[str]] = {}
-    for volume, path in entries:
+    for volume, path, _ in entries:
         while volume is not None and path:
             path = path.rpartition("/")[0]
             seen = owners.setdefault(path, set())
@@ -278,7 +310,7 @@ def _iso(micros: float) -> str:
 
 def _render(entries: Iterable[_Entry]) -> str:
     """The listing as it is indexed and kept: one tab-separated row per entry."""
-    rows = ["volume\ttype\tmode\tuid\tgid\tsize\tmodified\tchanged\tcreated\tpath"]
+    rows = ["volume\ttype\tmode\tuid\tgid\tsize\tmodified\tchanged\tcreated\taccessed\tpath"]
     for e in entries:
         fields = [
             e.volume or "-",
@@ -300,15 +332,15 @@ def _parse(listing: str) -> list[_Entry]:
     # Split where _render joined, and nowhere else: a name may hold what
     # str.splitlines takes for a line break.
     for row in listing.split("\n")[1:]:
-        f = row.split("\t", 9)
-        if len(f) != 10:
+        f = row.split("\t", 10)
+        if len(f) != 11:
             continue
-        times = [0, 0, 0]
+        times = [0, 0, 0, 0]
         with contextlib.suppress(ValueError):
             times[0] = int(datetime.fromisoformat(f[6]).timestamp() * 1_000_000)
         size = int(f[5]) if f[5].isdigit() else 0
         volume = "" if f[0] == "-" else f[0]
-        entries.append(_Entry(volume, f[9], f[1], None, None, None, size, times))
+        entries.append(_Entry(volume, f[10], f[1], None, None, None, size, times))
     return entries
 
 
@@ -323,9 +355,9 @@ def _mount(paths: set[str]) -> tuple[str | None, str]:
     if "etc/passwd" in paths:
         return "", "the root volume: it holds etc/passwd"
     tops = {p.split("/", 1)[0] for p in paths}
-    if {"log", "lib"} <= tops:
+    if "lib" in tops and len(tops & _VAR_SIGNS) > 1:
         return "var/", "read as /var, guessed from its top-level names"
-    if tops & _VAR_LOG_SIGNS:
+    if len(tops & _VAR_LOG_SIGNS) > 1:
         return "var/log/", "read as /var/log, guessed from its top-level names"
     if any(_HOME_SIGNS.match(p) for p in paths):
         return "home/", "read as /home, guessed from the dotfiles in its directories"
@@ -484,6 +516,13 @@ def _export(
             plan.setdefault(raw, []).append((entry, raw, final))
     by_volume: dict[str, list[tuple[_Entry, Path, Path]]] = {}
     for group in plan.values():
+        if len(group) > 1 and len({final for _, _, final in group}) == 1:
+            # One path on two volumes: the root volume holds a file in a directory
+            # another volume is mounted on. The volume placed deepest is the one
+            # the running system showed there.
+            group.sort(key=lambda item: -len(places[item[0].volume or ""]))
+            left.setdefault(_UNDER_MOUNT, []).extend(_shown(entry) for entry, _, _ in group[1:])
+            del group[1:]
         if len(group) > 1:  # whose content the one stored file would hold cannot be told
             left.setdefault(_SHARED, []).extend(_shown(entry) for entry, _, _ in group)
         else:
@@ -631,7 +670,7 @@ def _list_image(tools: dict[str, list[str] | None], image_path: str, tmp: Path) 
     exact and says which volume a file is on.
 
     Raises:
-        RuntimeError: With what plaso reported, when it produced no listing.
+        RuntimeError: With what plaso reported, when either tool failed.
     """
     storage = tmp / "filestat.plaso"
     jsonl = tmp / "filestat.jsonl"
@@ -657,6 +696,8 @@ def _list_image(tools: dict[str, list[str] | None], image_path: str, tmp: Path) 
             )
         except subprocess.TimeoutExpired:
             raise RuntimeError(f"{tool} timed out after {timeout}s") from None
+        except OSError as exc:
+            raise RuntimeError(f"{tool} could not be run: {exc}") from None
 
     proc = run("log2timeline", [*list_files, image])
     if _ENCRYPTED in f"{proc.stdout}{proc.stderr}":
@@ -665,7 +706,10 @@ def _list_image(tools: dict[str, list[str] | None], image_path: str, tmp: Path) 
         storage.unlink(missing_ok=True)
         if others:
             proc = run("log2timeline", [*list_files, "--partitions", others, image])
-    if not storage.exists() or _ENCRYPTED in f"{proc.stdout}{proc.stderr}":
+    # Both tools exit 0 on an image they read, unreadable directories and all. One
+    # that failed (psort out of temporary space) leaves part of a listing behind,
+    # in time order: the newest entries are the ones it lacks.
+    if proc.returncode or not storage.exists() or _ENCRYPTED in f"{proc.stdout}{proc.stderr}":
         raise RuntimeError(_failure_detail("log2timeline", proc))
     # A directory log2timeline could not read to the end is a warning, not an
     # error: it lists what it reached of it and goes on.
@@ -674,7 +718,7 @@ def _list_image(tools: dict[str, list[str] | None], image_path: str, tmp: Path) 
     if warned and not incomplete:
         incomplete = [f"{warned.group(1)} directories, which pinfo did not name"]
     proc = run("psort", to_json)
-    if not jsonl.exists():
+    if proc.returncode or not jsonl.exists():
         raise RuntimeError(_failure_detail("psort", proc))
     return _Listing(*_read_listing(jsonl), incomplete)
 
@@ -725,15 +769,17 @@ def export_linux_files(
 
     Returns status, the volumes found, what could not be read and why, and
     export_root. linux.filelist lists every file on every readable volume
-    (volume, type, mode, owner, size, modified, changed and created times,
-    path). A targeted set is copied to export_root as one Linux file tree,
-    each volume at its mount point: /etc, cron and systemd unit directories,
-    /var/log, /root, the dotfiles and .ssh of each home directory, package
-    manager state, web roots and /tmp, each within a size limit. Password
-    hash files and private keys are left out by their well-known names. Pass
-    export_root as image_path to run_linux_persistence and index_app_files.
-    status "incomplete" means a directory could not be listed to the end or
-    a file could not be copied: listing_incomplete and not_exported say which.
+    (volume, type, mode, owner, size, modified, changed, created and
+    accessed times, path). A targeted set is copied to export_root as one
+    Linux file tree, each volume at its mount point: /etc, cron and systemd
+    unit directories, /var/log, /root, the dotfiles and .ssh of each home
+    directory (shell histories, shell profiles and .ssh from any directory,
+    since an account's home may be anywhere), package manager state, web
+    roots and /tmp, each within a size limit. Password hash files and
+    private keys are left out by their well-known names. Pass export_root as
+    image_path to run_linux_persistence and index_app_files. status
+    "incomplete" means a directory could not be listed to the end or a file
+    could not be copied: listing_incomplete and not_exported say which.
 
     Args:
         image_path: Path to the disk image.
@@ -741,7 +787,9 @@ def export_linux_files(
             column of linux.filelist shows them (for example
             ["/opt/app/config.php", "/usr/local/bin"]). They go to a
             directory of their own, named in the result as requested.root.
-        force: List and export again even if this image was already exported.
+        force: List and export again even if this image was already
+            exported. The directories of earlier paths requests are removed
+            with the export: ask for those files again.
     """
     tc_id = make_tool_call_id()
     t0 = time.monotonic()
@@ -768,39 +816,58 @@ def export_linux_files(
 
     root = export_dir(_extract_root(), image_path)
     home = root.parent
-    with _export_lock, tempfile.TemporaryDirectory(prefix="mulder_linux_") as tmpdir:
-        tmp = Path(tmpdir)
-        record = None if force else _record(home)
-        first = record is None
-        if record is None:
-            try:
-                listing = _list_image(tools, image_path, tmp)
-                detail = "dfVFS found no Linux volume or file system it can read in it"
-            except RuntimeError as exc:
-                listing, detail = _Listing([], False, {}, []), str(exc)
-            if not listing.entries:
-                held = "; ".join(map(str, probe(image_path)))
-                return fail(
-                    f"This image could not be listed: {detail}"
-                    + (f". It holds: {held}" if held else ""),
-                    "unreadable",
-                    "An encrypted volume needs its key, a volume group on several disks needs "
-                    "all of them, and btrfs is not supported: report the volume as not "
-                    "examined. run_bulk_extractor still reads the raw image.",
+    try:
+        with _export_lock, tempfile.TemporaryDirectory(prefix="mulder_linux_") as tmpdir:
+            tmp = Path(tmpdir)
+            record = None if force else _record(home)
+            first = record is None
+            if record is None:
+                free = shutil.disk_usage(tmp).free
+                if free < _MIN_TMP_FREE:
+                    return fail(
+                        f"Not enough temporary space to list this image: {free // _MIB} MiB "
+                        f"free in {tmp.parent}, and the listing is not started below "
+                        f"{_MIN_TMP_FREE // _MIB} MiB (it takes about 4 MiB per 1,000 files).",
+                        "no_space",
+                        "Nothing was listed or exported, for that reason alone: report the "
+                        "image as not examined. TMPDIR names the directory that is used.",
+                    )
+                try:
+                    listing = _list_image(tools, image_path, tmp)
+                    detail = "dfVFS found no Linux volume or file system it can read in it"
+                except RuntimeError as exc:
+                    listing, detail = _Listing([], False, {}, []), str(exc)
+                if not listing.entries:
+                    held = "; ".join(map(str, probe(image_path)))
+                    return fail(
+                        f"This image could not be listed: {detail}"
+                        + (f". It holds: {held}" if held else ""),
+                        "unreadable",
+                        "An encrypted volume needs its key, a volume group on several disks "
+                        "needs all of them, and btrfs is not supported: report the volume as "
+                        "not examined. When the message names a cause outside the image (a "
+                        "tool that timed out or ran out of space), nothing was listed for "
+                        "that reason alone. run_bulk_extractor still reads the raw image.",
+                    )
+                record = _export_first(exporter, image_path, root, listing, tmp)
+                (home / EXPORT_MARKER).write_text(
+                    json.dumps({"summary": record[0], "places": record[1]}), encoding="utf-8"
                 )
-            record = _export_first(exporter, image_path, root, listing, tmp)
-            (home / EXPORT_MARKER).write_text(
-                json.dumps({"summary": record[0], "places": record[1]}), encoding="utf-8"
-            )
-            refresh()  # the directory has files it did not have when it was last listed
-            _index_dir_listing(str(root), force=True)
-        summary, places = dict(record[0]), record[1]
-        if not first:  # and never as if it were whole when it is not
-            whole = summary.get("status") == "exported"
-            summary["status"] = "already exported" + ("" if whole else ", incomplete")
-        if paths:
-            summary["requested"] = _export_more(exporter, image_path, home, paths, places, tmp)
-            refresh()
+                refresh()  # the directory has files it did not have when it was last listed
+                _index_dir_listing(str(root), force=True)
+            summary, places = dict(record[0]), record[1]
+            if not first:  # and never as if it were whole when it is not
+                whole = summary.get("status") == "exported"
+                summary["status"] = "already exported" + ("" if whole else ", incomplete")
+            if paths:
+                summary["requested"] = _export_more(exporter, image_path, home, paths, places, tmp)
+                refresh()
+    except OSError as exc:  # no room in the case directory or the temporary one, a tool gone
+        return fail(
+            f"The export could not be completed: {exc}",
+            "write_failed",
+            "Whatever this call was to list or export was not examined, for that reason alone.",
+        )
     elapsed = (time.monotonic() - t0) * 1000
     # Returned in full rather than as a preview: it is bounded, and it is where
     # the caller learns the directory to read and what was left out.
@@ -912,7 +979,8 @@ def _export_more(
         if hit is None or entry.kind != "file":
             continue
         matched.add(hit)
-        reason = _refusal(entry, entry.path[1:])
+        # As _select names it: with the place of its volume, not as the volume alone has it.
+        reason = _refusal(entry, places.get(entry.volume or "", "") + entry.path[1:])
         if reason is None and (entry.volume or "") not in places:
             reason = "dfVFS did not say which volume it is on"
         if reason is None and (len(picks) >= _MAX_FILES or entry.size > budget):
@@ -961,7 +1029,9 @@ _MAX_ACCOUNTS = 200
 _LONG_TOKEN = re.compile(r"(?<![A-Za-z0-9+/])(?!/)[A-Za-z0-9+/]{48,}={0,2}")
 _NO_LOGIN = ("nologin", "false", "sync", "halt", "shutdown")
 _ADMIN_GROUPS = frozenset({"root", "sudo", "wheel", "admin", "adm", "docker", "lxd"})
-_ACCOUNTS = re.compile(r"(?:^|/)etc/(passwd-?|group)$")
+_MAX_TREES = 20
+"""Trees whose etc/passwd is read: the system's own, then copies and container layers."""
+_ACCOUNTS = re.compile(r"((?:.*/)?)etc/(passwd-?|group)$")
 
 # (kind, where). A path is matched from its start or from any directory, so
 # that a volume's own directory, or a volume mounted below the root, hides nothing.
@@ -994,8 +1064,7 @@ _PERSISTENCE: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
         (
             "shell_profile",
             r"etc/(?:profile|bash\.bashrc|bashrc|environment|zsh/[^/]+)|etc/profile\.d/[^/]+"
-            r"|\.(?:bashrc|bash_profile|bash_login|bash_logout|profile|zshrc|zprofile|zshenv"
-            r"|zlogin|cshrc|tcshrc|kshrc|xprofile)",
+            rf"|\.(?:{_PROFILES})",
         ),
         ("sudoers", r"etc/sudoers|etc/sudoers\.d/[^/]+"),
         (
@@ -1014,7 +1083,9 @@ _PERSISTENCE: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
 
 _PERSISTENCE_NOTE = (
     "Each row is kind, path, modified, size, then the file's first lines without comments "
-    "(long keys and blobs shortened, a private key withheld). These are the places a Linux "
+    "(long keys and blobs shortened, a private key withheld). An account row names the "
+    "etc/passwd it is from: one that is not at the top of the tree is a copy, a container's "
+    "or a second system's, not the accounts of this one. These are the places a Linux "
     "system starts programs from or grants access through, and most rows are the "
     "distribution's own files. A row shows that the file exists and what it holds: not that "
     "it is malicious, and not that what it names ever ran. A place with no row was not "
@@ -1049,33 +1120,48 @@ def _excerpt(data: bytes, complete: bool) -> str:
 def _accounts(passwd: bytes, previous: bytes | None, group: bytes | None) -> tuple[list[str], int]:
     """Accounts worth a row, and how many more there were than are shown.
 
-    Worth a row: uid 0, able to log in, or new since ``etc/passwd-`` was
-    written. When there are more than are shown, the cut takes the accounts
-    that merely have a login shell first, then the new ones, and the uid 0
-    accounts and the members of the privileged groups last.
+    Worth a row: uid 0, able to log in, or new or changed since
+    ``etc/passwd-`` was written. When there are more than are shown, the cut
+    takes the accounts that merely have a login shell first, then the new and
+    the changed ones, and the uid 0 accounts and the members of the
+    privileged groups last.
     """
-    before = {
-        line.split(":", 1)[0] for line in (previous or b"").decode("utf-8", "replace").splitlines()
-    }
+
+    def records(data: bytes | None) -> list[list[str]]:
+        # A record ends at "\n" and nowhere else, as glibc reads the file: a form
+        # feed or U+2028 in a GECOS field is part of the record, not the end of it.
+        text = (data or b"").decode("utf-8", "replace")
+        return [line.rstrip("\r").split(":") for line in text.split("\n")]
+
+    before = {f[0]: f for f in records(previous)}
     ranked: list[tuple[int, str]] = []
-    for line in passwd.decode("utf-8", "replace").splitlines():
-        f = line.split(":")
-        if len(f) < 7 or line.startswith("#"):
+    for f in records(passwd):
+        if len(f) < 7 or f[0].startswith("#"):
             continue
+        old = before.get(f[0])
+        try:
+            root = int(f[2]) == 0  # "00" and "+0" are uid 0 to glibc as well
+        except ValueError:
+            root = False
         marks = [
-            *(["uid 0"] if f[2] == "0" else []),
+            *(["uid 0"] if root else []),
             *([] if f[6].rsplit("/", 1)[-1] in _NO_LOGIN else ["has a login shell"]),
-            *(["not in etc/passwd-"] if previous is not None and f[0] not in before else []),
+            *(["not in etc/passwd-"] if previous is not None and old is None else []),
+            # The uid, gid, home or shell: a service account given a shell.
+            *(
+                ["changed since etc/passwd-"]
+                if old and old[2:4] + old[5:7] != f[2:4] + f[5:7]
+                else []
+            ),
         ]
         if marks:
-            rank = 0 if "uid 0" in marks else 2 if "not in etc/passwd-" in marks else 3
+            rank = 0 if root else 2 if marks[-1].endswith("etc/passwd-") else 3
             row = (
                 f"name={_clean(f[0])} uid={_clean(f[2], 12)} gid={_clean(f[3], 12)} "
                 f"home={_clean(f[5])} shell={_clean(f[6])} ({', '.join(marks)})"
             )
             ranked.append((rank, row))
-    for line in (group or b"").decode("utf-8", "replace").splitlines():
-        f = line.split(":")
+    for f in records(group):
         if len(f) >= 4 and f[0] in _ADMIN_GROUPS and f[3].strip():
             ranked.append((1, f"group={f[0]} members={_clean(f[3], 200)}"))
     rows = [row for _, row in sorted(ranked, key=lambda item: item[0])]  # stable within a rank
@@ -1119,8 +1205,10 @@ def run_linux_persistence(image_path: str, force: bool = False) -> dict[str, obj
     drop-ins, init scripts and rc.local, ld.so.preload, every
     authorized_keys and the sshd configuration, shell profile files, sudoers,
     kernel module and udev configuration, PAM, login hooks, and the accounts
-    in etc/passwd that have uid 0, a login shell, or are missing from
-    etc/passwd-.
+    in etc/passwd that have uid 0, a login shell, or are new or changed
+    since etc/passwd- (each etc/passwd found is read with the passwd- and
+    group beside it, the one at the top of the tree first, and each account
+    row names the file it is from).
 
     Returns the number of rows per kind and the most recently modified
     files; every row is indexed as linux.persistence with the file's path,
@@ -1155,7 +1243,10 @@ def run_linux_persistence(image_path: str, force: bool = False) -> dict[str, obj
         """A file's first bytes, its size, its modification time if known, and if that is all."""
         if root is None:
             # No more than the limit is read of a file, however large it is.
-            proc = icat(image_path, offset, inode, limit=limit)
+            try:
+                proc = icat(image_path, offset, inode, limit=limit)
+            except (subprocess.TimeoutExpired, OSError):
+                return None
             if proc.returncode:
                 return None
             whole = len(proc.stdout) <= limit
@@ -1172,31 +1263,38 @@ def run_linux_persistence(image_path: str, force: bool = False) -> dict[str, obj
         return got[0], str(info.st_size), info.st_mtime, got[1]
 
     rows: list[tuple[int, float, str]] = []
-    accounts: dict[str, tuple[bytes, float | None, str]] = {}
+    # Where the account files of each tree are, by the directory that holds its
+    # etc/: a copy under backup/ or in a container layer is not the system's own.
+    trees: dict[str, dict[str, tuple[int, str, str]]] = {}
+    seen: set[tuple[int, str, str]] = set()
     unread = 0
     for chunks, offset in groups:
         for chunk in chunks:
             for entry in fls_file_entries(chunk):
-                account = _ACCOUNTS.search(entry.path)
+                account = _ACCOUNTS.match(entry.path)
                 order = next(
                     (i for i, (_, where) in enumerate(_PERSISTENCE) if where.search(entry.path)),
                     None,
                 )
-                if entry.deleted or entry.meta_type == "l" or len(rows) >= _MAX_ROWS:
+                if entry.deleted or entry.meta_type == "l":
                     continue  # a deleted inode may hold another file; a link is no file
-                if account is None and order is None:
+                if account is None and (order is None or len(rows) >= _MAX_ROWS):
                     continue
-                # New accounts are appended, so the account files are read to the end.
-                limit = _HEAD_BYTES if account is None else _ACCOUNT_BYTES
-                got = head(offset, entry.base_inode, limit)
-                if got is None:
-                    unread += 1
+                # An image listed a second time (run_fls with force) has each row twice.
+                listed = (offset, entry.base_inode, entry.path)
+                if listed in seen:
                     continue
-                data, size, mtime, whole = got
+                seen.add(listed)
                 shown = listed_name(entry.path)
                 if account is not None:
-                    accounts.setdefault(account.group(1), (data, mtime, shown))
+                    tree = trees.setdefault(account.group(1), {})
+                    tree.setdefault(account.group(2), (offset, entry.base_inode, shown))
+                    continue
+                got = head(offset, entry.base_inode, _HEAD_BYTES)
+                if got is None:
+                    unread += 1
                 elif order is not None:
+                    data, size, mtime, whole = got
                     when = _iso(mtime * 1_000_000) if mtime is not None else "unknown"
                     rows.append(
                         (
@@ -1211,17 +1309,34 @@ def run_linux_persistence(image_path: str, force: bool = False) -> dict[str, obj
     counts: dict[str, int] = {}
     for order, _, _ in rows:
         counts[_PERSISTENCE[order][0]] = counts.get(_PERSISTENCE[order][0], 0) + 1
+    # Each etc/passwd with the passwd- and group beside it, the tree at the top
+    # first and then the shallowest: the system's own before any copy of one.
+    with_passwd = sorted(
+        (t for t in trees if "passwd" in trees[t]), key=lambda t: (t.count("/"), t)
+    )
     hidden = 0
-    if "passwd" in accounts:
-        data, mtime, shown = accounts["passwd"]
+    for top in with_passwd[:_MAX_TREES]:
+        held: dict[str, tuple[bytes, float | None, str]] = {}
+        for which, (offset, inode, shown) in trees[top].items():
+            # New accounts are appended, so the account files are read to the end.
+            got = head(offset, inode, _ACCOUNT_BYTES)
+            if got is None:
+                unread += 1
+            else:
+                held[which] = (got[0], got[2], shown)
+        if "passwd" not in held:
+            continue
+        data, mtime, shown = held["passwd"]
         when = _iso(mtime * 1_000_000) if mtime is not None else "unknown"
-        found, hidden = _accounts(
+        found, more = _accounts(
             data,
-            accounts["passwd-"][0] if "passwd-" in accounts else None,
-            accounts["group"][0] if "group" in accounts else None,
+            held["passwd-"][0] if "passwd-" in held else None,
+            held["group"][0] if "group" in held else None,
         )
+        hidden += more
         lines += [f"account\t{shown}\tmodified={when}\tsize=-\t{row}" for row in found]
-        counts["account"] = len(found)
+        counts["account"] = counts.get("account", 0) + len(found)
+    passed_by = len(with_passwd) - len(with_passwd[:_MAX_TREES])
     gaps = _export_gaps(image_path) if root is not None else {}
     if not lines:
         hint = _export_hint(image_path) if root is None else ""
@@ -1234,6 +1349,16 @@ def run_linux_persistence(image_path: str, force: bool = False) -> dict[str, obj
                 "not listed it.",
                 error_type="no_filelist",
                 suggestion=hint or "Run run_fls on the image first.",
+            )
+        if unread:  # found, and not one of them read: that is not "none"
+            return error_response(
+                tc_id,
+                name,
+                params,
+                f"{unread} files at Linux persistence locations are listed for {image_path} "
+                "and none of them could be read.",
+                error_type="unreadable",
+                suggestion="They were not examined, for that reason alone.",
             )
         return error_response(
             tc_id,
@@ -1254,8 +1379,9 @@ def run_linux_persistence(image_path: str, force: bool = False) -> dict[str, obj
         "by_kind": counts,
         "most_recently_modified": [" ".join(line.split("\t")[:3]) for _, _, line in recent],
         "files_not_readable": unread,
-        "truncated": len(rows) >= _MAX_ROWS or hidden > 0,
+        "truncated": len(rows) >= _MAX_ROWS or hidden > 0 or passed_by > 0,
         "accounts_not_shown": hidden,
+        "passwd_files_not_read": passed_by,
         "note": _PERSISTENCE_NOTE,
     }
     header = f"Linux persistence locations in {listed_name(image_path)}. {_PERSISTENCE_NOTE}"
@@ -1264,6 +1390,8 @@ def run_linux_persistence(image_path: str, force: bool = False) -> dict[str, obj
         header += f" INCOMPLETE EXPORT: {gaps['note']} {json.dumps(gaps)[:1500]}"
     if hidden:
         header += f" {hidden} accounts that only have a login shell are not shown."
+    if passed_by:
+        header += f" {passed_by} more files named etc/passwd, deeper in the tree, were not read."
     extract_and_index(
         "\n".join([_clean(header, 4000), *lines]), "linux.persistence", image_path, "linux"
     )

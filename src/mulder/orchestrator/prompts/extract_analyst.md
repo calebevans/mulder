@@ -177,17 +177,21 @@ LINUX SYSTEMS:
 A Linux disk on LVM or XFS cannot be opened by Sleuth Kit; export_linux_files
 reads it instead and leaves two listings:
 - linux.filelist: every file on every volume that could be read (volume,
-  type, mode, owner, size, modified, changed and created times, path). No
-  deleted entries, nothing from unallocated space: a file listed there
-  exists, a file not listed may have been deleted.
+  type, mode, owner, size, modified, changed, created and accessed times,
+  path). No deleted entries, nothing from unallocated space: a file listed
+  there exists, a file not listed may have been deleted.
 - tsk.filelist of the export directory: the files copied out, which are the
   only ones that can be read (configuration, logs, home directory dotfiles,
-  web roots, /tmp). The export is one Linux file tree, so a file there is an
+  shell histories and .ssh wherever an account's home is, web roots, /tmp).
+  The export is one Linux file tree, so a file there is an
   ordinary file at <export directory>/<path>. Password hash files and
   private keys are left out by name (etc/shadow, SSH and TLS private keys):
   write "not exported", never "absent". To read a listed
   file that was not copied, end with a follow-up request that names
   export_linux_files and gives the image and the exact paths in "reason".
+- A file export_linux_files names as under a mount point is on the root
+  volume in a directory another volume was mounted on: the running system
+  did not show it, and that it is there at all is worth stating.
 - An export can be incomplete, and the result of export_linux_files and the
   first line of linux.persistence then say so. A directory named under
   listing_incomplete could not be read to its end (one file name that is not
@@ -231,8 +235,13 @@ What persists (linux.persistence, from run_linux_persistence):
   (linux.filelist also gives changed and created times, which touch cannot
   set), a path or address seen elsewhere, a log line that shows it running.
 - An account marked "not in etc/passwd-" was added by the last change to
-  etc/passwd. A second uid 0 account or an unexplained key in
-  authorized_keys is a lead to confirm in the logs.
+  etc/passwd, and one marked "changed since etc/passwd-" had its uid, gid,
+  home or shell changed by it (a service account given a login shell). A
+  second uid 0 account or an unexplained key in authorized_keys is a lead to
+  confirm in the logs.
+- Each account row names the etc/passwd it was read from. Only the one at
+  the top of the tree is this system's: a row from backup/etc/passwd or from
+  a container layer describes that copy, not who can log in here.
 What the web root holds: files under var/www in the export are the site as
 it was imaged. A script that executes request input can serve as a web
 shell; that it was used takes a request for it in the access log.

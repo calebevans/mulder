@@ -17,7 +17,7 @@ import time
 from typing import Any
 
 from mulder.dirroot import icat
-from mulder.linuxvol import PRIVATE_KEY, SECRET_FILES
+from mulder.linuxvol import PRIVATE_KEY, SECRET_FILES, in_exports
 from mulder.patterns import fls_file_entries
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
@@ -242,14 +242,17 @@ def index_app_files(
             and config extensions: .ini, .cfg, .conf, .txt, .log, .xml,
             .json, .yaml, .yml, .properties, .csv, .bat, .cmd, .ps1,
             .reg, .inf, .manifest. On a Linux file tree (the listing holds
-            etc/passwd) the default is every file whatever its name, since
-            crontab, sshd_config, .bash_history and access.log.1 have no
-            such extension; ["*"] asks for that anywhere. Either way a file
+            etc/passwd, or the directory is one export_linux_files wrote)
+            the default is every file whatever its name, since crontab,
+            sshd_config, .bash_history and access.log.1 have no such
+            extension; ["*"] asks for that anywhere. Either way a file
             that is binary or compressed is skipped (files_skipped_binary),
             one over the size limit is skipped without being read past it
-            (files_skipped_too_large), and password hash files and private
-            keys are withheld (files_withheld): etc/shadow and the like by
-            name, a private key under any name by its first line.
+            (files_skipped_too_large, the first ten named in too_large:
+            raise max_file_size_kb for those), and password hash files and
+            private keys are withheld (files_withheld, named in withheld):
+            etc/shadow and the like by name, a private key under any name
+            by its first line.
         max_file_size_kb: Skip files larger than this threshold to avoid
             extracting multi-megabyte logs. Defaults to 512 KB.
         max_files: Maximum number of files to extract per invocation to
@@ -291,8 +294,11 @@ def index_app_files(
             error_type="no_filelist",
         )
 
-    if extensions is None and any(
-        _LINUX_TREE_RE.search(chunk) for chunks, _ in chunk_groups for chunk in chunks
+    # A directory of files asked for by path (requested.root) holds no
+    # etc/passwd, and is as much a part of a Linux tree as the export beside it.
+    if extensions is None and (
+        in_exports(image_path)
+        or any(_LINUX_TREE_RE.search(chunk) for chunks, _ in chunk_groups for chunk in chunks)
     ):
         ext_set = frozenset({"*"})
 
@@ -333,7 +339,7 @@ def index_app_files(
     total_windows = 0
     sample_files: list[str] = []
     skipped_binary = 0
-    too_large = 0
+    too_large: list[str] = []
 
     for inode_str, rel_path, offset in capped:
         why: list[str] = []
@@ -342,7 +348,7 @@ def index_app_files(
         )
         if content is None:
             if why == ["too_large"]:
-                too_large += 1
+                too_large.append(rel_path)
             elif why == ["private_key"]:
                 withheld.append(rel_path)
             else:
@@ -373,8 +379,10 @@ def index_app_files(
         "files_extracted": files_extracted,
         "files_indexed": files_indexed,
         "files_skipped_binary": skipped_binary,
-        "files_skipped_too_large": too_large,
+        "files_skipped_too_large": len(too_large),
+        "too_large": too_large[:10],
         "files_withheld": len(withheld),
+        "withheld": withheld[:10],
         "windows_indexed": total_windows,
         "source_prefix": source_name,
         "sample_files": sample_files,

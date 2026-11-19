@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import os
 import re
 import struct
 import subprocess
@@ -32,7 +33,7 @@ EXPORT_MARKER = ".mulder-linux-export.json"
 
 SECRET_FILES = re.compile(
     r"(?:^|/)(?:etc/(?:g?shadow|master\.passwd|security/opasswd)[^/]*"
-    r"|var/backups/g?shadow[^/]*"
+    r"|backups/g?shadow[^/]*"
     r"|etc/ssh/ssh_host_[^/]*_key|\.ssh/id_[^/]*(?<!\.pub)"
     r"|etc/(?:ssl|pki/tls)/private/.*|privkey[^/]*\.pem)$",
     re.IGNORECASE,
@@ -42,6 +43,8 @@ SECRET_FILES = re.compile(
 Not copied into the case directory and not indexed, asked for or not. That
 they exist, their size and their times are in the listing; their content is
 a credential. Without case, as image_export matches the names it is given.
+Debian's daily copies are matched without ``var/``: on a volume mounted at
+``/var`` a file's path is ``backups/shadow.bak``.
 A secret under another name (a copy, a hard link, a key called deploy.pem)
 is not caught here; :data:`PRIVATE_KEY` catches a key by its content.
 """
@@ -118,7 +121,18 @@ def export_dir(extract_root: Path, image_path: str) -> Path:
     """
     resolved = Path(image_path).resolve()
     digest = hashlib.blake2b(str(resolved).encode("utf-8", "surrogateescape"), digest_size=6)
-    return extract_root / EXPORTS_DIR / f"{resolved.name}-{digest.hexdigest()}" / "files"
+    # No more of the name than fits a directory name with the digest, in any encoding.
+    return extract_root / EXPORTS_DIR / f"{resolved.name[:60]}-{digest.hexdigest()}" / "files"
+
+
+def in_exports(path: str) -> bool:
+    """Whether *path* is inside a directory named :data:`EXPORTS_DIR`.
+
+    Files export_linux_files took from a Linux volume, whether or not the
+    directory given holds an ``etc/passwd``. Only for choosing a default: a
+    directory of that name in the evidence would be read the same way.
+    """
+    return EXPORTS_DIR in Path(os.path.abspath(path)).parts
 
 
 def _sectors(image_path: str, start: int, count: int) -> bytes:

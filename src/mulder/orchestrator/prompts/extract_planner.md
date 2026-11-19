@@ -116,7 +116,8 @@ When the evidence context says under a disk image that Sleuth Kit cannot read
 it (an LVM physical volume or an XFS file system), plan what the context names:
 - export_linux_files and run_plaso with parsers "linux_logs" on the image,
   group "foundation". export_linux_files lists every file (linux.filelist)
-  and copies configuration, logs, home directory dotfiles, web roots and /tmp
+  and copies configuration, logs, home directory dotfiles (shell histories
+  and .ssh from any directory), web roots and /tmp
   to the export directory the context gives. run_plaso with "linux_logs"
   builds the login and system-log timeline: wtmp, btmp, auth.log or secure,
   the systemd journal, the audit log, package installs.

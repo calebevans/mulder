@@ -197,6 +197,117 @@ def test_an_account_appended_to_a_long_passwd_is_still_seen(case: CaseDB, tmp_pa
     ]
 
 
+def test_a_record_of_etc_passwd_ends_at_a_newline_and_nowhere_else(
+    case: CaseDB, tmp_path: Path
+) -> None:
+    """As glibc reads it. Cut at a form feed or U+2028 in the GECOS field, a uid 0 account
+    is two short lines, and no row."""
+    doors = {"ff": "\x0c", "vt": "\x0b", "fs": "\x1c", "cr": "a\rb", "nel": "\x85", "ls": "\u2028"}
+    passwd = "root:x:0:0:root:/root:/bin/bash\n" + "".join(
+        f"{name}:x:0:0:{gecos}:/root:/bin/bash\n" for name, gecos in doors.items()
+    )
+    passwd += "zeros:x:00:0::/root:/bin/sh\nplus:x:+0:0::/root:/bin/sh\n"  # uid 0 to glibc too
+    crlf = (
+        "root:x:0:0::/root:/bin/sh\r\nbin:x:2:2::/bin:/usr/sbin/nologin\r\n"  # edited on Windows
+    )
+    root = _tree(tmp_path / "root", {"etc/passwd": passwd, "srv/etc/passwd": crlf})
+
+    result = _sweep(root)["results"]
+
+    rows = [row for row in _rows(case) if row[0] == "account"]
+    assert all(len(row) == 5 for row in rows)
+    named = {row[4].split(" ")[0]: row[4] for row in rows if row[1] == "etc/passwd"}
+    assert set(named) == {f"name={name}" for name in ("root", *doors, "zeros", "plus")}
+    assert all("(uid 0, has a login shell)" in said for said in named.values())
+    other = [row[4] for row in rows if row[1] == "srv/etc/passwd"]
+    assert other == ["name=root uid=0 gid=0 home=/root shell=/bin/sh (uid 0, has a login shell)"]
+    assert result["by_kind"] == {"account": 10} and result["accounts_not_shown"] == 0
+
+
+def test_every_etc_passwd_is_read_with_its_own_backup_the_systems_first(
+    case: CaseDB, tmp_path: Path
+) -> None:
+    """backup/ lists before etc/: its copy is not the system's, and does not stand for it."""
+    layer = "var/lib/docker/overlay2/abc/diff/"
+    root = _tree(
+        tmp_path / "root",
+        {
+            "backup/etc/passwd": "root:x:0:0::/root:/bin/sh\ndecoy:x:1000:1000::/home/d:/bin/sh\n",
+            "etc/passwd": "root:x:0:0::/root:/bin/sh\nrealdoor:x:0:0::/root:/bin/sh\n",
+            "etc/passwd-": "root:x:0:0::/root:/bin/sh\n",
+            "etc/group": "sudo:x:27:realdoor\n",
+            layer + "etc/passwd": "root:x:0:0::/root:/bin/ash\nlayered:x:0:0::/:/bin/ash\n",
+            layer + "etc/passwd-": "root:x:0:0::/root:/bin/ash\nlayered:x:0:0::/:/bin/ash\n",
+            "old/etc/group": "sudo:x:27:nobody\n",  # no passwd beside it: nothing to expand
+        },
+    )
+
+    result = _sweep(root)["results"]
+
+    rows = [(row[1], row[4]) for row in _rows(case) if row[0] == "account"]
+    assert [(path, said.split(" ")[0]) for path, said in rows] == [
+        ("etc/passwd", "name=root"),
+        ("etc/passwd", "name=realdoor"),
+        ("etc/passwd", "group=sudo"),
+        ("backup/etc/passwd", "name=root"),
+        ("backup/etc/passwd", "name=decoy"),
+        (layer + "etc/passwd", "name=root"),
+        (layer + "etc/passwd", "name=layered"),
+    ]
+    marks = {(path, said.split(" ")[0]): said for path, said in rows}
+    assert "not in etc/passwd-" in marks[("etc/passwd", "name=realdoor")]
+    # Compared with the passwd- beside it, or with none: never with another tree's.
+    assert "passwd-" not in marks[("backup/etc/passwd", "name=decoy")]
+    assert "passwd-" not in marks[(layer + "etc/passwd", "name=layered")]
+    assert result["by_kind"] == {"account": 7} and result["passwd_files_not_read"] == 0
+    assert "names the etc/passwd it is from" in result["note"]
+
+
+def test_more_files_named_etc_passwd_than_are_read_is_said(
+    case: CaseDB, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(linux, "_MAX_TREES", 2)
+    files: dict[str, bytes | str] = {
+        f"layers/{n}/etc/passwd": f"u{n}:x:0:0::/:/bin/sh\n" for n in range(4)
+    }
+    root = _tree(tmp_path / "root", {**files, "etc/passwd": "root:x:0:0::/root:/bin/sh\n"})
+
+    result = _sweep(root)["results"]
+
+    assert [row[1] for row in _rows(case)] == ["etc/passwd", "layers/0/etc/passwd"]
+    assert result["passwd_files_not_read"] == 3 and result["truncated"] is True
+    header = "".join(w.raw_text for w in case.get_windows_by_source("linux.persistence"))
+    assert "3 more files named etc/passwd" in header.split("\n")[0]
+
+
+def test_an_account_changed_since_the_backup_is_marked(case: CaseDB, tmp_path: Path) -> None:
+    """A service account given a shell is in both files: its name alone says nothing."""
+    root = _tree(
+        tmp_path / "root",
+        {
+            "etc/passwd": (
+                "mail:x:8:8:mail:/var/mail:/bin/bash\n"
+                "games:x:5:60:Games:/usr/games:/usr/sbin/nologin\n"
+                "www-data:x:0:33::/var/www:/usr/sbin/nologin\n"
+            ),
+            "etc/passwd-": (
+                "mail:x:8:8:mail:/var/mail:/usr/sbin/nologin\n"
+                "games:x:5:60:games:/usr/games:/usr/sbin/nologin\n"  # only the GECOS differs
+                "www-data:x:33:33::/var/www:/usr/sbin/nologin\n"
+            ),
+        },
+    )
+
+    _sweep(root)
+
+    assert [row[4] for row in _rows(case)] == [
+        "name=www-data uid=0 gid=33 home=/var/www shell=/usr/sbin/nologin "
+        "(uid 0, changed since etc/passwd-)",
+        "name=mail uid=8 gid=8 home=/var/mail shell=/bin/bash "
+        "(has a login shell, changed since etc/passwd-)",
+    ]
+
+
 def test_it_reports_what_exists_and_passes_no_verdict(case: CaseDB, tmp_path: Path) -> None:
     result = _sweep(_tree(tmp_path / "root"))["results"]
 
@@ -388,6 +499,62 @@ def test_a_disk_image_sleuth_kit_reads_is_swept_through_its_listing(
     assert row[3] == "size=over 4096" and row[4].endswith("[cut]")
 
 
+def test_a_file_that_cannot_be_read_from_an_image_is_counted_not_raised(
+    case: CaseDB, tmp_path: Path
+) -> None:
+    """icat that times out, or is gone: the sweep goes on and says how many it could not read."""
+    image = str(tmp_path / "ext4.dd")
+    Path(image).write_bytes(b"\x00" * 2048)
+    listing = "r/r 12:\tetc/crontab\nr/r 13:\tetc/rc.local\nr/r 14:\tetc/passwd\n"
+
+    def fake_icat(image: str, offset: int, inode: str, **_: object) -> Any:
+        if inode == "12":
+            raise subprocess.TimeoutExpired(["icat"], 30)
+        if inode == "14":
+            raise FileNotFoundError("icat")
+        return subprocess.CompletedProcess(["icat"], 0, b"exit 0\n", b"")
+
+    with (
+        patch.object(linux, "_collect_fls_chunks", return_value=[([listing], 0)]),
+        patch.object(linux, "icat", side_effect=fake_icat),
+    ):
+        result = _sweep(image)["results"]
+
+    assert [row[1] for row in _rows(case)] == ["etc/rc.local"]
+    assert result["files_not_readable"] == 2
+
+    # Found and none of them read is not "none of the locations is among the files".
+    with (
+        patch.object(linux, "_collect_fls_chunks", return_value=[([listing], 0)]),
+        patch.object(linux, "icat", side_effect=FileNotFoundError("icat")),
+    ):
+        none = _sweep(image, force=True)
+    assert none["error_type"] == "unreadable" and "3 files" in none["error_message"]
+
+
+def test_an_image_listed_twice_is_swept_once(case: CaseDB, tmp_path: Path) -> None:
+    """run_fls with force indexes a second tsk.filelist for the image: the same rows again."""
+    image = str(tmp_path / "db02.raw")
+    listing = "r/r 12:\tetc/rc.local\nr/r 20:\tetc/cron.d/dbjob\nr/r 20:\tetc/cron.d/hardlink\n"
+    extract_and_index(listing, "tsk.filelist", image, "sleuthkit")
+    extract_and_index(listing, "tsk.filelist", image, "sleuthkit")
+    content = subprocess.CompletedProcess(["icat"], 0, b"@daily /db\n", b"")
+
+    with (
+        patch.object(linux, "icat", return_value=content),
+        patch("mulder.server.tools.extract.tsk._resolve_partition_offset", return_value=0),
+    ):
+        result = _sweep(image)["results"]
+
+    # A second name of the same inode is another place something starts from.
+    assert sorted(row[1] for row in _rows(case)) == [
+        "etc/cron.d/dbjob",
+        "etc/cron.d/hardlink",
+        "etc/rc.local",
+    ]
+    assert result["rows"] == 3
+
+
 def test_two_images_in_one_case_are_each_swept_through_their_own_listing(
     case: CaseDB, tmp_path: Path
 ) -> None:
@@ -512,6 +679,7 @@ def test_on_a_linux_tree_the_content_decides_not_the_name(case: CaseDB, tmp_path
     assert sorted(result["sample_files"]) == ["root/.bash_history", "root/.viminfo", "root/notes"]
     assert result["files_discovered"] == 6 and result["files_skipped_binary"] == 2
     assert result["files_skipped_too_large"] == 1  # said apart: it is not binary
+    assert result["too_large"] == ["root/big.txt"]  # and by name: the file to ask for again
     text = "".join(w.raw_text for w in case.get_windows_by_source("appfiles.root..bash_history"))
     assert text.startswith("=== root/.bash_history ===") and "203.0.113.9/x.sh" in text
 
@@ -560,11 +728,38 @@ def test_a_private_key_under_any_name_is_withheld_by_its_first_line(
 
     assert result["sample_files"] == ["home/alice/.ssh/deploy.pub"]
     assert result["files_withheld"] == 2 and result["files_skipped_binary"] == 0
+    assert result["withheld"] == ["home/alice/.ssh/aws-prod.pem", "home/alice/.ssh/deploy"]
     assert _index(root, "var/backups")["files_withheld"] == 1  # Debian's copy of etc/shadow
     indexed = "".join(
         w.raw_text for s in case.get_sources() for w in case.get_windows_by_source(s.source_name)
     )
     assert "PRIVATE KEY" not in indexed and "$6$salt$hash" not in indexed
+
+
+def test_password_hashes_on_a_var_partition_are_withheld_from_the_index(
+    case: CaseDB, tmp_path: Path
+) -> None:
+    """/var on a partition of its own: fls lists Debian's copy as backups/shadow.bak."""
+    image = str(tmp_path / "var.raw")
+    listing = "r/r 12:\tbackups/shadow.bak\nr/r 13:\tbackups/passwd.bak\n"
+    extract_and_index(listing, "tsk.filelist", image, "sleuthkit")
+    held = {"12": b"root:$6$salt$hash:19000::\n", "13": b"root:x:0:0::/root:/bin/sh\n"}
+
+    def fake_icat(image: str, offset: int, inode: str, *_: object, **__: object) -> Any:
+        return subprocess.CompletedProcess(["icat"], 0, held[inode], b"")
+
+    with (
+        patch("mulder.server.tools.extract.app_files.icat", side_effect=fake_icat),
+        patch("mulder.server.tools.extract.tsk._resolve_partition_offset", return_value=0),
+    ):
+        result = _index(Path(image), "backups", extensions=["*"])
+
+    assert result["sample_files"] == ["backups/passwd.bak"]
+    assert result["files_withheld"] == 1 and result["withheld"] == ["backups/shadow.bak"]
+    indexed = "".join(
+        w.raw_text for s in case.get_sources() for w in case.get_windows_by_source(s.source_name)
+    )
+    assert "$6$salt$hash" not in indexed
 
 
 def test_one_linux_image_does_not_make_every_image_of_the_case_a_linux_tree(
