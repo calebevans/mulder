@@ -83,6 +83,7 @@ MODULES: dict[str, tuple[str, ...]] = {
     "appfiles.": ("disk",),
     "plist.": ("disk",),
     "linux.": ("disk",),
+    "regripper.": ("disk",),
     "plaso.": ("disk",),
     "bulk.": ("disk",),
     "forensic.": ("disk",),
@@ -130,6 +131,7 @@ MODULES: dict[str, tuple[str, ...]] = {
     "dislocker.": (),
     "bde.": (),
     "fvde.": (),
+    "sqlite.": (),
 }
 """Evidence type or source prefix -> the prompt modules a session then needs.
 
@@ -177,6 +179,11 @@ def _load(name: str) -> str:
     return prompt
 
 
+def type_key(evidence_type: object) -> str:
+    """An evidence type as ``MODULES`` spells it ("Disk image" is ``disk_image``)."""
+    return "_".join(str(evidence_type).lower().replace("-", " ").split())
+
+
 def modules_for(
     types: Iterable[object] | None, sources: Iterable[str] | None
 ) -> frozenset[str] | None:
@@ -196,7 +203,7 @@ def modules_for(
     """
     if not types or sources is None:
         return None
-    keys = ["_".join(str(t).lower().replace("-", " ").split()) for t in types]
+    keys = [type_key(t) for t in types]
     keys += [source.split(".", 1)[0] + "." for source in sources]
     unknown = sorted({key for key in keys if key not in MODULES})
     if unknown:

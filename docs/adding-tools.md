@@ -378,8 +378,9 @@ MODULES: dict[str, tuple[str, ...]] = {
 }
 ```
 
-- Add the prefix of every source your tool indexes. A prefix that is not in the table means "unknown": from the moment such a source is indexed, the sessions it counts for get every module. That is safe and costs the saving. `tests/test_prompt_modules.py` fails for a prefix that is in `TOOL_SOURCE_PREFIXES` or `source_names.py` and not in `MODULES`.
+- Add the prefix of every source your tool indexes. A prefix that is not in the table means "unknown": from the moment such a source is indexed, the sessions it counts for get every module. That is safe and costs the saving. `tests/test_prompt_modules.py` fails for a prefix that is not in `MODULES` and is in `TOOL_SOURCE_PREFIXES` or `source_names.py`, or is written out where a tool names its source (`source_name = f"mytool.{...}"`, or the second argument of `extract_and_index`). A name built some other way is not seen by the test, so add its prefix by hand.
 - Use `()` for output that says nothing about the kind of evidence (a result about one file, a lookup, something computed from other sources).
+- The table also decides whose a source is when its path names no system: it belongs to the systems whose evidence types select a module its prefix maps to (`EvidenceContext.sources_for`).
 - A new evidence type in the classifier needs its key too (the same test fails without it).
 
 ### Put the guidance in a module
@@ -398,7 +399,7 @@ netflow.* sources hold one row per line; ...
 - Name several modules when a block serves several (`<!-- module: disk memory -->`). It is kept when any of them is selected.
 - A new kind of evidence gets a new module name: use it in the markers and as a value in `MODULES`. A marker that names a module no key selects is an error at import.
 - Leave in the core (outside any marker) whatever every session of the role needs: output formats, the plan schema, citation rules, anything a gate checks.
-- Text outside markers is in every session. Text inside a block is absent for a system that does not hold that evidence, so a block must not be the only place a rule that applies elsewhere is stated.
+- Text outside markers is in every session. Text inside a block is absent for a system that does not hold that evidence, so a block must not be the only place a rule that applies elsewhere is stated. In particular, what to do when that kind of evidence is *not* listed ("if the briefing shows such evidence that the context did not list, plan the same tools on it") cannot be in its block: put it in the core, or in a block that also names the modules of the sessions it is for (`<!-- module: triage disk -->`). A marker is a whole line, so a sentence can only be given a block of its own where it starts and ends on a line break.
 
 ### The planner's signature line
 

@@ -17,9 +17,10 @@ that was cut says so and names the call that shows the rest.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from typing import Any
 
-from mulder.orchestrator.evidence import EvidenceContext, ServerBridge
+from mulder.orchestrator.evidence import CUT_MARK, EvidenceContext, ServerBridge, capped
 from mulder.orchestrator.prompts import modules_for
 from mulder.questions import MAX_QUESTION_CHARS, MAX_SYSTEM_CHARS, clean
 
@@ -37,22 +38,32 @@ _HEADER: str = (
 
 
 def _sources_of(
-    evidence: EvidenceContext, server: ServerBridge, system: str, with_stats: bool = False
-) -> list[dict[str, Any]] | None:
-    """The sources indexed for *system* (empty: the case), or None when unreadable."""
+    evidence: EvidenceContext,
+    server: ServerBridge,
+    system: str,
+    ran_on: Collection[str],
+    with_stats: bool = False,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]] | None:
+    """The sources indexed for *system* (empty: the case), or None when unreadable.
+
+    As ``(own, shared)``: see ``EvidenceContext.sources_for``. Every source
+    of the case is the case's own.
+    """
     rows = server.get_sources(with_stats)
-    if rows is None or not system:
-        return rows
-    return [row for row in rows if evidence.owns(system, str(row["source_path"]))]
+    if rows is None:
+        return None
+    return evidence.sources_for(system, rows, ran_on) if system else (rows, [])
 
 
 def prompt_modules(
-    evidence: EvidenceContext, server: ServerBridge, system: str
+    evidence: EvidenceContext, server: ServerBridge, system: str, ran_on: Collection[str] = ()
 ) -> frozenset[str] | None:
     """Choose the prompt modules for a session on *system* (empty: the whole case).
 
     From the evidence types the catalog and the evidence context give for it
-    and the sources indexed for it so far.
+    and the sources indexed so far that count for it: its own, and those that
+    cannot be shown to be another system's. *ran_on* is what the system's
+    plans have run tools on so far (``EvidenceContext.sources_for``).
 
     Returns:
         Module names for ``prompts.assemble``, or None for every module when
@@ -63,8 +74,9 @@ def prompt_modules(
     types = evidence.evidence_types(system)
     if types is None:
         return None
-    rows = _sources_of(evidence, server, system)
-    return modules_for(types, None if rows is None else [str(row["source_name"]) for row in rows])
+    found = _sources_of(evidence, server, system, ran_on)
+    names = None if found is None else [str(row["source_name"]) for rows in found for row in rows]
+    return modules_for(types, names)
 
 
 def _shows(planner_tools: list[str], tool: str) -> str:
@@ -72,31 +84,51 @@ def _shows(planner_tools: list[str], tool: str) -> str:
     return f" ({tool} lists them)" if f"mcp__mulder__{tool}" in planner_tools else ""
 
 
-def _source_lines(rows: list[dict[str, Any]], planner_tools: list[str]) -> list[str]:
-    """One line per family of sources (the part of the name before its first dot)."""
+def _source_lines(heading: str, rows: list[dict[str, Any]], planner_tools: list[str]) -> list[str]:
+    """*heading*, then one line per family of sources (the name up to its first dot).
+
+    Nothing is cut silently: a name that was cut ends in ``CUT_MARK``, and a
+    last line says what was cut and names the call that gives it in full.
+    """
+    how = _shows(planner_tools, "list_sources")
+    lines = [
+        f"{heading} ({len(rows)}; grouped by the first part of the name, with total "
+        "lines, time range where known, and evidence path):"
+    ]
+    cut = False
     families: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         families.setdefault(str(row["source_name"]).split(".", 1)[0], []).append(row)
-    lines: list[str] = []
-    for _, members in sorted(families.items())[:_MAX_FAMILIES]:
+    size = {
+        family: sum(int(m["line_count"] or 0) for m in members)
+        for family, members in families.items()
+    }
+    # When not all fit, the families with the most lines are the ones listed.
+    kept = sorted(sorted(families, key=lambda family: (-size[family], family))[:_MAX_FAMILIES])
+    for family in kept:
+        members = families[family]
         names = sorted({str(m["source_name"]) for m in members})
-        shown = ", ".join(clean(name, 80) for name in names[:_MAX_NAMES])
+        shown = ", ".join(capped(name, 80) for name in names[:_MAX_NAMES])
         if len(names) > _MAX_NAMES:
             shown += f", +{len(names) - _MAX_NAMES} more"
-        size = sum(int(m["line_count"] or 0) for m in members)
         times = [str(t) for m in members for t in (m["earliest"], m["latest"]) if t]
-        span = f", {clean(min(times), 30)} .. {clean(max(times), 30)}" if times else ""
+        span = f", {capped(min(times), 40)} .. {capped(max(times), 40)}" if times else ""
         paths = sorted({str(m["source_path"]) for m in members})
         # A path is passed to tools as it is spelled, so one that cannot be
         # shown whole and on one line is not shown at all.
         whole = len(paths) == 1 and paths[0].isprintable() and len(paths[0]) <= _MAX_PATH_CHARS
         where = paths[0] if whole else f"{len(paths)} evidence path(s), not shown"
-        lines.append(f"  {shown} ({size} lines{span}; {where})")
+        lines.append(f"  {shown} ({size[family]} lines{span}; {where})")
+        cut = cut or not whole or len(names) > _MAX_NAMES or CUT_MARK in shown
+    if cut:
+        lines.append(
+            f'  Names ending "{CUT_MARK}", names counted as "+N more" and paths '
+            f'"not shown" were cut from the lines above{how}'
+        )
     if len(families) > _MAX_FAMILIES:
-        cut = len(families) - _MAX_FAMILIES
-        how = _shows(planner_tools, "list_sources")
-        lines.append(f"  {cut} more groups of sources are not listed here{how}")
-    return lines
+        more = len(families) - _MAX_FAMILIES
+        lines.append(f"  {more} more groups of sources, the smallest, are not listed here{how}")
+    return lines if rows else [*lines, "  (none yet)"]
 
 
 def planner_snapshot(
@@ -105,6 +137,7 @@ def planner_snapshot(
     system: str,
     planner_tools: list[str],
     with_state: bool,
+    ran_on: Collection[str] = (),
 ) -> str:
     """Build the CASE SNAPSHOT section of a planner's user message.
 
@@ -118,6 +151,8 @@ def planner_snapshot(
             when the planner can make it.
         with_state: Include the number of findings and the open questions (a
             follow-up round, or a phase that runs after the analysis).
+        ran_on: What the system's plans have run tools on so far
+            (``EvidenceContext.sources_for``).
 
     Returns:
         The section, or "" when there is no catalog yet or nothing to show.
@@ -134,13 +169,19 @@ def planner_snapshot(
             *systems,
         ]
 
-    rows = _sources_of(evidence, server, system, with_stats=True)
-    if rows is not None:
-        lines.append(
-            f"Indexed sources {whose} ({len(rows)}; grouped by the first part of the name, "
-            "with total lines, time range where known, and evidence path):"
-        )
-        lines += _source_lines(rows, planner_tools) or ["  (none yet)"]
+    found = _sources_of(evidence, server, system, ran_on, with_stats=True)
+    if found is not None:
+        own, shared = found
+        lines += _source_lines(f"Indexed sources {whose}", own, planner_tools)
+        if shared:
+            # Not "for this system": a path that names no system, of a kind
+            # of evidence that several systems hold, or none.
+            lines += _source_lines(
+                "Indexed sources that nothing ties to one system (they may be "
+                "this system's or another's)",
+                shared,
+                planner_tools,
+            )
 
     state = server.get_open_questions() if with_state else None
     if state is not None:
@@ -153,7 +194,7 @@ def planner_snapshot(
         lines.append(f"Open questions recorded {whose}: {len(questions)}")
         for q in questions[:_MAX_QUESTIONS]:
             # A planner for the whole case is told which system asked.
-            asked = "" if system or not q.system else f"({clean(q.system, 80)}) "
+            asked = "" if system or not q.system else f"({capped(q.system, 80)}) "
             lines.append(f"  [{q.question_id}] {asked}{clean(q.question, MAX_QUESTION_CHARS)}")
         if len(questions) > _MAX_QUESTIONS:
             cut = len(questions) - _MAX_QUESTIONS

@@ -22,8 +22,8 @@ import pytest
 import mulder.server.app as server_app
 from mulder.db import CaseDB
 from mulder.extractors import classifier
-from mulder.orchestrator import prompts
-from mulder.orchestrator.evidence import EvidenceContext
+from mulder.orchestrator import prompts, snapshot
+from mulder.orchestrator.evidence import EvidenceContext, ServerBridge
 from mulder.orchestrator.phases import ALTERNATIVE_NARRATIVE, CROSS_SYSTEM, EXTRACTION, PhaseConfig
 from mulder.orchestrator.prompts import MODULES, assemble, modules_for
 from mulder.orchestrator.runner import Orchestrator
@@ -134,8 +134,6 @@ def test_the_headings_of_other_kinds_are_absent_for_a_disk_only_system() -> None
         "When the evidence includes a MEMORY DUMP",
         "When the evidence includes NETWORK CAPTURES",
         "When the evidence includes NETFLOW",
-        "CLOUD AUDIT LOGS, REPOSITORY CHECKOUTS",
-        "LOG DIRECTORIES, LOOSE LOG FILES",
         "TRIAGE COLLECTIONS (type",
         "When the evidence includes MOBILE DATA",
     ):
@@ -170,6 +168,34 @@ def test_a_microsoft_365_export_gets_its_guidance_and_none_for_a_disk() -> None:
     assert "DISK IMAGE" not in planner and "ARTIFACT AWARENESS" not in planner
     assert "EVENT LOGS:" not in analyst and "RANSOMWARE:" not in analyst
     assert "LINUX SYSTEMS:" not in planner + analyst
+
+
+def test_a_rule_for_evidence_that_is_not_listed_is_not_left_out_with_a_block() -> None:
+    """A block is absent where its evidence is, so it cannot hold what to do
+    when that evidence is missing, or a rule for another kind."""
+    planner = prompts.EXTRACT_PLANNER_PROMPT
+    disk = assemble(planner, modules_for(["disk_image"], DISK_SOURCES))
+    memory = assemble(planner, modules_for(["memory_dump"], []))
+
+    # A container KAPE wrote is typed disk_image: no triage source is ever indexed for it.
+    kape = "A .vhd or .vhdx that KAPE wrote is planned as a disk image, with two\ndifferences"
+    assert kape in disk and "TRIAGE COLLECTIONS (type" not in disk
+    assert kape in assemble(planner, modules_for(["triage_collection"], []))
+    assert kape not in memory
+    # What to plan, and what to ask, when cloud evidence or logs are NOT listed.
+    for sent in (disk, memory, assemble(planner, frozenset())):
+        assert (
+            "If the briefing or a directory listing shows such evidence that the context\n"
+            "did not list, plan the same tools on it."
+        ) in sent
+        assert "run_cloud_audit_logs indexes exported audit log events" in sent
+        assert (
+            "If the briefing describes an intrusion\nthrough a VPN, a web application or a "
+            "hypervisor and no such logs are\nlisted, ask in investigation_questions"
+        ) in sent
+    # The analyst's rule for a trace of evidence that is not in the case is core too.
+    analyst = assemble(prompts.EXTRACT_ANALYST_PROMPT, modules_for(["disk_image"], DISK_SOURCES))
+    assert "EVIDENCE OUTSIDE THE CASE:" in analyst and 'a title starting "[COLLECT] "' in analyst
 
 
 #: What mulder relies on in every session of a role, whatever the evidence.
@@ -259,13 +285,28 @@ def test_every_kind_of_evidence_the_classifier_knows_is_in_the_table() -> None:
     assert set(review._EVIDENCE_TOOL_MAP) <= set(MODULES)
 
 
+#: A source name written out where a tool indexes it: ``source_name = f"sqlite.{...}"``,
+#: or the second argument of ``extract_and_index``.
+_SOURCE_LITERAL = re.compile(
+    r'(?:source_name\w*\s*[=:]\s*\(?\s*|extract_and_index\(\s*[^,]+,\s*)f?"([a-z0-9_]+\.)'
+)
+
+
 def test_every_registered_source_prefix_is_in_the_table() -> None:
     """A prefix that is missing would give every session every module the
     moment a source of that name is indexed."""
     registered = {prefix for prefixes in TOOL_SOURCE_PREFIXES.values() for prefix in prefixes}
     registered |= {value for name, value in vars(source_names).items() if name.startswith("SRC_")}
+    # Not every tool is in that registry (it also decides what a batch skips
+    # as already indexed), so the names the tools write out are read too.
+    written = {
+        prefix
+        for path in Path(inspect.getfile(source_names)).parents[1].rglob("*.py")
+        for prefix in _SOURCE_LITERAL.findall(path.read_text(encoding="utf-8"))
+    }
 
-    assert len(registered) > 40
+    assert len(registered) > 40 and {"sqlite.", "regripper.", "volatility."} <= written
+    registered |= written
     for source in sorted(registered):
         assert source.split(".", 1)[0] + "." in MODULES, source
 
@@ -347,6 +388,16 @@ def test_a_prompt_file_with_broken_markers_does_not_load(
 # ---------------------------------------------------------------------------
 
 
+class _Sources(ServerBridge):
+    """A ``ServerBridge`` whose case database holds the given sources."""
+
+    def __init__(self, rows: list[dict[str, Any]]) -> None:
+        self.rows = rows
+
+    def get_sources(self, with_stats: bool = False) -> list[dict[str, Any]]:
+        return self.rows
+
+
 def _catalog(evidence: EvidenceContext, **systems: Any) -> None:
     evidence._catalog_systems = {
         name.lower(): {"name": name, "type": "Windows", "evidence": types}
@@ -426,23 +477,143 @@ def test_before_the_catalog_nothing_is_known(tmp_path: Path) -> None:
     assert evidence.evidence_types("host-a") is None
 
 
-def test_a_source_counts_for_the_system_its_path_names_or_for_every_system(
-    tmp_path: Path,
-) -> None:
-    evidence = EvidenceContext("/evidence", tmp_path / "extracted")
+def test_the_classifier_supplies_a_type_the_catalog_left_out(tmp_path: Path) -> None:
+    """Whatever kind it is, not only the kinds the context has a heading for."""
+    root = tmp_path / "evidence"
+    (root / "host-a").mkdir(parents=True)
+    (root / "host-a" / "disk.E01").write_bytes(b"EVF\x09\x0d\x0a\xff\x00" + b"\0" * 64)
+    (root / "host-a" / "capture.pcap").write_bytes(b"\xd4\xc3\xb2\xa1" + b"\0" * 20)
+    (root / "host-a" / "Security.evtx").write_bytes(b"ElfFile\x00" + b"\0" * 64)
+    (root / "host-b").mkdir()
+    (root / "host-b" / "sms.db").write_bytes(b"SQLite format 3\x00")
+    evidence = EvidenceContext(str(root), tmp_path / "extracted")
     _catalog(evidence, **{"host-a": ["disk_image"], "host-b": ["disk_image"]})
 
-    assert evidence.owns("host-a", "/evidence/host-a/disk.E01")
-    assert not evidence.owns("host-b", "/evidence/host-a/disk.E01")
-    assert evidence.owns("host-a, host-b", "/evidence/HOST-B/disk.E01")
-    assert evidence.owns("host-b", str(tmp_path / "extracted" / "host-b-1a2b" / "mem.raw"))
-    # Nobody's name is in the path: it cannot be shown to be another system's.
-    assert evidence.owns("host-a", "/evidence/flows/nfcapd.2026")
-    assert evidence.owns("host-b", "/evidence/flows/nfcapd.2026")
+    evidence.build_evidence_context("host-a")
+
+    # Another system's database is not this one's.
+    assert evidence.evidence_types("host-a") == {"disk_image", "network_capture", "evtx"}
+    modules = modules_for(evidence.evidence_types("host-a"), [])
+    assert modules == frozenset({"disk", "pcap"})
+    assert "When the evidence includes NETWORK CAPTURES" in assemble(
+        prompts.EXTRACT_PLANNER_PROMPT, modules
+    )
+
+
+def test_what_an_unpacked_archive_held_counts_whatever_kind_it_is(tmp_path: Path) -> None:
+    root, extracted = tmp_path / "evidence", tmp_path / "extracted"
+    (root / "host-a").mkdir(parents=True)
+    archive = root / "host-a" / "host-a-memory.zip"
+    archive.write_bytes(b"PK")
+    slot = extracted / case_tools._archive_slot(archive.resolve())
+    slot.mkdir(parents=True)
+    (slot / "memory.vmem").write_bytes(b"\0" * 64)
+    (slot / "capture.pcap").write_bytes(b"\xd4\xc3\xb2\xa1" + b"\0" * 20)
+    case_tools._mark_extraction_complete(slot, archive.resolve(), 2)
+    evidence = EvidenceContext(str(root), extracted)
+    _catalog(evidence, **{"host-a": ["compressed_archive"]})
+
+    evidence.build_evidence_context("host-a")
+
+    assert evidence.evidence_types("host-a") == {
+        "compressed_archive",
+        "memory_dump",
+        "network_capture",
+    }
+    assert modules_for(evidence.evidence_types("host-a"), []) == frozenset({"memory", "pcap"})
+
+
+def _rows(*sources: tuple[str, str]) -> list[dict[str, Any]]:
+    return [{"source_name": name, "source_path": path} for name, path in sources]
+
+
+def _names(rows: list[dict[str, Any]]) -> list[str]:
+    return [row["source_name"] for row in rows]
+
+
+def test_a_source_is_the_system_its_path_names(tmp_path: Path) -> None:
+    evidence = EvidenceContext("/evidence", tmp_path / "extracted")
+    _catalog(evidence, **{"host-a": ["disk_image"], "host-b": ["disk_image"]})
+    rows = _rows(
+        ("tsk.filelist", "/evidence/host-a/disk.E01"),
+        ("ez.mft", "/evidence/HOST-B/disk.E01"),
+        ("volatility.pslist", str(tmp_path / "extracted" / "host-b-1a2b" / "mem.raw")),
+    )
+
+    assert evidence.sources_for("host-a", rows) == (rows[:1], [])
+    assert evidence.sources_for("host-b", rows) == (rows[1:], [])
+    assert evidence.sources_for("host-a, host-b", rows) == (rows, [])
     # A name in the path to the evidence itself claims nothing.
     named_root = EvidenceContext("/cases/host-a/evidence", tmp_path / "extracted")
     _catalog(named_root, **{"host-a": ["disk_image"], "host-b": ["disk_image"]})
-    assert not named_root.owns("host-a", "/cases/host-a/evidence/host-b/disk.E01")
+    theirs = _rows(("tsk.filelist", "/cases/host-a/evidence/host-b/disk.E01"))
+    assert named_root.sources_for("host-a", theirs) == ([], [])
+
+
+def test_a_source_whose_path_names_no_system_goes_by_its_kind_of_evidence(
+    tmp_path: Path,
+) -> None:
+    """A cloud export and a NetFlow directory are rarely named after their
+    system: they are the systems' whose evidence types select their module,
+    which is how the evidence context finds them."""
+    evidence = EvidenceContext("/evidence", tmp_path / "extracted")
+    _catalog(
+        evidence,
+        **{
+            "WS01": ["disk_image"],
+            "WS02": ["Disk image"],
+            "contoso-tenant": ["cloud_audit_log"],
+            "edge-router": ["netflow_capture"],
+        },
+    )
+    rows = _rows(
+        ("tsk.filelist", "/evidence/WS01/disk.raw"),
+        ("cloudlog.m365", "/evidence/audit"),
+        ("logtable.cloudlog.m365", "/evidence/audit"),
+        ("netflow.inventory.abc", "/evidence/flows"),
+        ("ez.mft", "/evidence/images/disk2.raw"),
+        ("logs.firewall", "/evidence/perimeter"),
+    )
+
+    own, shared = evidence.sources_for("WS01", rows)
+    assert _names(own) == ["tsk.filelist"]
+    # A disk that is one of two disk systems', and logs no system holds:
+    # counted for this system, and not shown to be its own.
+    assert _names(shared) == ["ez.mft", "logs.firewall"]
+    own, shared = evidence.sources_for("contoso-tenant", rows)
+    # A log table says nothing about the kind: it goes with the log it was built from.
+    assert _names(own) == ["cloudlog.m365", "logtable.cloudlog.m365"]
+    assert _names(shared) == ["logs.firewall"]
+    own, shared = evidence.sources_for("edge-router", rows)
+    assert _names(own) == ["netflow.inventory.abc"]
+    # Both disk systems together are the only ones the unnamed disk can be.
+    assert "ez.mft" in _names(evidence.sources_for("WS01, WS02", rows)[0])
+    # A path the system's own plan ran a tool on is its own, whatever its kind.
+    own, _ = evidence.sources_for("WS01", rows, ran_on=["/evidence/audit/", "foundation"])
+    assert _names(own) == ["tsk.filelist", "cloudlog.m365", "logtable.cloudlog.m365"]
+
+    known = _Sources(rows[:5])
+    assert snapshot.prompt_modules(evidence, known, "WS01") == frozenset({"disk"})
+    assert snapshot.prompt_modules(evidence, known, "contoso-tenant") == frozenset({"cloud"})
+    assert snapshot.prompt_modules(evidence, known, "edge-router") == frozenset({"netflow"})
+    # Guidance for evidence that may be this system's is never left out.
+    assert snapshot.prompt_modules(evidence, _Sources(rows), "WS01") == frozenset({"disk", "logs"})
+
+
+def test_the_evidence_directory_is_compared_as_typed_and_resolved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The command line passes the path as typed; a tool may record the
+    resolved one, and a system's name in the path to the case claims nothing."""
+    case = tmp_path / "dc01-breach"
+    (case / "evidence" / "flows").mkdir(parents=True)
+    monkeypatch.chdir(case)
+    evidence = EvidenceContext("./evidence", tmp_path / "extracted")
+    _catalog(evidence, **{"dc01": ["disk_image"], "ws02": ["disk_image"]})
+    rows = _rows(("netflow.inventory.abc", str((case / "evidence" / "flows").resolve())))
+
+    assert evidence.sources_for("dc01", rows) == ([], rows)
+    assert evidence.sources_for("ws02", rows) == ([], rows)
 
 
 # ---------------------------------------------------------------------------
@@ -539,6 +710,73 @@ async def test_each_extraction_role_is_sent_the_modules_for_its_system(db_dir: P
     # Executor prompts have no modules: an executor gets all of its prompt.
     (executor,) = sessions.sent(EXTRACTION, "executor")
     assert executor.startswith(EXTRACTION.executor_system_prompt)
+
+
+@pytest.mark.asyncio()
+async def test_other_systems_sources_under_unnamed_paths_bring_no_module(db_dir: Path) -> None:
+    """A mixed case: the tenant's export and the router's flows are indexed
+    under paths that name no system, and stay out of the workstation's prompt."""
+    systems = {
+        SYSTEM: ["disk_image"],
+        "contoso-tenant": ["cloud_audit_log"],
+        "edge-router": ["netflow_capture"],
+    }
+    orch = _orchestrator(db_dir, **systems)
+    for name in DISK_SOURCES:
+        _index(db_dir, name)
+    _index(db_dir, "cloudlog.m365", "/evidence/audit")
+    _index(db_dir, "netflow.inventory.abc", "/evidence/flows")
+
+    workstation = await _run_roles(orch, EXTRACTION)
+    tenant = await _run_roles(orch, EXTRACTION, "contoso-tenant")
+
+    assert workstation.sent(EXTRACTION, "planner") == [
+        assemble(EXTRACTION.planner_system_prompt, {"disk"})
+    ]
+    for sent in workstation.sent(EXTRACTION, "analyst"):
+        assert sent.startswith(assemble(EXTRACTION.analyst_system_prompt, {"disk"}))
+        assert "NETFLOW EVIDENCE:" not in sent and "MICROSOFT 365" not in sent
+    for sent in tenant.sent(EXTRACTION, "analyst"):
+        assert sent.startswith(assemble(EXTRACTION.analyst_system_prompt, {"cloud"}))
+
+
+@pytest.mark.asyncio()
+async def test_what_a_systems_own_plan_ran_on_brings_its_module(db_dir: Path) -> None:
+    """The planner is told to plan the cloud tools on an export the briefing
+    names even when its context did not list it. The analyst that reads the
+    result then gets the guidance for it, on this round and the next."""
+    orch = _orchestrator(db_dir, **{SYSTEM: ["disk_image"], "contoso-tenant": ["cloud_audit_log"]})
+    _index(db_dir, "tsk.filelist")
+    _index(db_dir, "cloudlog.m365", "/evidence/audit")
+    task = {"tool": "run_cloud_audit_logs", "args": {"evidence_path": "/evidence/audit"}}
+    plan = Plan("p", [task], ["Who signed in?"], [], "", 1)
+    sessions = _Sessions('{"tasks": [], "investigation_questions": ["Who signed in?"]}')
+    variables = {
+        "case_id": CASE,
+        "system_name": SYSTEM,
+        "evidence_path": "/evidence",
+        "evidence_context": "",
+    }
+
+    with patch.object(orch._session, "execute", side_effect=sessions.execute):
+        await orch._roles.run_executor(EXTRACTION, plan, task_system=SYSTEM)
+        await orch._roles.run_analyst(
+            EXTRACTION, plan, ExecutionResults("p", [], 0, False), variables, task_system=SYSTEM
+        )
+        await orch._roles.run_planner(EXTRACTION, variables, follow_up_context="more")
+
+    both = {"disk", "cloud"}
+    analysts = sessions.sent(EXTRACTION, "analyst")
+    assert len(analysts) == 2
+    for sent in analysts:
+        assert sent.startswith(assemble(EXTRACTION.analyst_system_prompt, both))
+        assert "MICROSOFT 365 AND ENTRA ID" in sent
+    planner = sessions.calls[-1]
+    assert planner["system_prompt"] == assemble(EXTRACTION.planner_system_prompt, both)
+    assert "Indexed sources for this system (2;" in planner["prompt"]
+    # It is still the tenant's, and nobody else's.
+    tenant = snapshot.prompt_modules(orch._evidence, orch._server, "contoso-tenant")
+    assert tenant == frozenset({"cloud"})
 
 
 @pytest.mark.asyncio()

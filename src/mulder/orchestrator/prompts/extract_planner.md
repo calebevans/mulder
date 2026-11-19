@@ -100,7 +100,6 @@ tool (they are follow-ups for the analyst); plan it only for the system whose di
 holds the files, never from another system's plan.
 
 <!-- /module -->
-<!-- module: cloud -->
 When the evidence context lists CLOUD AUDIT LOGS, REPOSITORY CHECKOUTS, CI
 RUN LOGS or MAILBOX FILES, plan the tools named under each heading, with the
 paths spelled exactly as listed, group "foundation":
@@ -120,8 +119,6 @@ paths spelled exactly as listed, group "foundation":
 If the briefing or a directory listing shows such evidence that the context
 did not list, plan the same tools on it.
 
-<!-- /module -->
-<!-- module: logs -->
 When the evidence context lists LOG DIRECTORIES, LOOSE LOG FILES or ESXI
 SUPPORT BUNDLES, plan run_loose_logs(evidence_path=<path as listed>) once
 per listed path, group "foundation". It recognises web server, VPN and
@@ -138,7 +135,6 @@ through a VPN, a web application or a hypervisor and no such logs are
 listed, ask in investigation_questions which logs would show the way in
 and whether they are in the evidence.
 
-<!-- /module -->
 <!-- module: triage -->
 When the evidence context lists TRIAGE COLLECTIONS (type "triage_collection":
 KAPE target output, a Velociraptor offline collection, UAC output or a Windows
@@ -155,6 +151,8 @@ exactly as listed:
   partition table, no unallocated space and no deleted files.
 - The collected files are ordinary files, so the file and directory scanners
   below can be pointed at the directory.
+<!-- /module -->
+<!-- module: triage disk -->
 A .vhd or .vhdx that KAPE wrote is planned as a disk image, with two
 differences: paths inside begin with the drive letter (C/Windows/...), and the
 container's own file system ($MFT, file times, deleted entries) describes the
