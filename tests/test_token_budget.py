@@ -424,9 +424,13 @@ for _phase in (EXTRACTION, CROSS_SYSTEM, ALTERNATIVE_NARRATIVE):
     _ROLES[_phase.executor_system_prompt] = f"{_phase.name}.executor"
     _ROLES[_phase.analyst_system_prompt] = f"{_phase.name}.analyst"
 
+# The extraction analyst step is one session per question, then a consolidation
+# session; every plan here asks one question.
+_CONSOLIDATION = "extraction.consolidation"
+
 _FULL_RUN = [
     "catalog",
-    *["extraction.planner", "extraction.executor", "extraction.analyst"] * 2,
+    *["extraction.planner", "extraction.executor", "extraction.analyst", _CONSOLIDATION] * 2,
     "cross_system.planner",
     "cross_system.executor",
     "cross_system.analyst",
@@ -476,6 +480,8 @@ class _Run:
 
     async def query(self, *, prompt: str, options: Any) -> AsyncIterator[object]:
         role = _ROLES[options.system_prompt]
+        if role == "extraction.analyst" and "\n\nCONSOLIDATION:" in prompt:
+            role = _CONSOLIDATION
         self.sessions.append(role)
         self.prompts[role] = prompt
         phase, _, kind = role.partition(".")
@@ -488,7 +494,7 @@ class _Run:
             text = "done"
         elif kind == "planner":
             task = {"tool": _PLAN_TOOL[phase], "args": {}, "purpose": "test"}
-            text = json.dumps({"tasks": [task]})
+            text = json.dumps({"tasks": [task], "investigation_questions": ["What ran?"]})
         elif kind == "executor":
             yield AssistantMessage(
                 content=[
@@ -547,7 +553,8 @@ def _case(db_dir: Path, findings: int) -> None:
 
 
 def _costs(**override: int) -> dict[str, int]:
-    return {**dict.fromkeys(_ROLES.values(), 500), "catalog": 1_000, "report": 1_000, **override}
+    roles = [*_ROLES.values(), _CONSOLIDATION]
+    return {**dict.fromkeys(roles, 500), "catalog": 1_000, "report": 1_000, **override}
 
 
 class TestPipeline:
@@ -571,14 +578,14 @@ class TestPipeline:
         assert run.sessions == _FULL_RUN
         assert (result.success, result.budget_stop) == (True, None)
         assert "TOKEN BUDGET" not in run.prompts["report"]
-        assert run.orch.budget.used == 2_000 + 12 * 500
+        assert run.orch.budget.used == 2_000 + 14 * 500
 
     @pytest.mark.asyncio()
     async def test_reserve_reached_mid_extraction_skips_to_the_report(
         self, tmp_path: Path
     ) -> None:
-        """host-a's analyst takes the run into the reserve; host-b is never planned."""
-        run = _Run(tmp_path, 10_000, _costs(**{"extraction.analyst": 3_500}))
+        """host-a's consolidation takes the run into the reserve; host-b is never planned."""
+        run = _Run(tmp_path, 10_000, _costs(**{_CONSOLIDATION: 3_000}))
         result = await run.run()
         orch = run.orch
 
@@ -587,6 +594,7 @@ class TestPipeline:
             "extraction.planner",
             "extraction.executor",
             "extraction.analyst",
+            _CONSOLIDATION,
             "report",
         ]
         assert orch.systems_done == {"host-a": True, "host-b": False}
@@ -620,7 +628,7 @@ class TestPipeline:
     async def test_usage_sidecar_lists_cached_input_beside_the_old_fields(
         self, tmp_path: Path
     ) -> None:
-        run = _Run(tmp_path, 10_000, _costs(**{"extraction.analyst": 3_500}))
+        run = _Run(tmp_path, 10_000, _costs(**{_CONSOLIDATION: 3_000}))
         await run.run()
 
         models = ModelConfig()
@@ -634,11 +642,11 @@ class TestPipeline:
                 "cache_read_input_tokens": 490,
             },
             {
-                "model": models.planner,  # catalog, planner, analyst and report
-                "input_tokens": 40,
+                "model": models.planner,  # catalog, planner, both analyst sessions and report
+                "input_tokens": 50,
                 "output_tokens": 0,
                 "cache_creation_input_tokens": 0,
-                "cache_read_input_tokens": 5_960,
+                "cache_read_input_tokens": 5_950,
             },
         ]
 
@@ -656,7 +664,7 @@ class TestPipeline:
         assert not result.success
         assert incomplete_notice(run.orch, result.budget_stop) == [
             "Stopped in phase: report",
-            "Reason: token budget reached: 11,300 of 10,000 tokens used",
+            "Reason: token budget reached: 11,900 of 10,000 tokens used",
             "Not completed: report (failed)",
         ]
 
@@ -664,7 +672,7 @@ class TestPipeline:
     async def test_fully_spent_before_the_report_leaves_it_to_the_partial_report(
         self, tmp_path: Path
     ) -> None:
-        run = _Run(tmp_path, 10_000, _costs(**{"extraction.analyst": 9_500}))
+        run = _Run(tmp_path, 10_000, _costs(**{_CONSOLIDATION: 9_000}))
         result = await run.run()
 
         assert run.sessions == [
@@ -672,6 +680,7 @@ class TestPipeline:
             "extraction.planner",
             "extraction.executor",
             "extraction.analyst",
+            _CONSOLIDATION,
         ]
         assert [(p.phase_name, p.success) for p in result.phases] == [
             ("catalog", True),
@@ -691,11 +700,11 @@ class TestPipeline:
     async def test_a_stop_after_extraction_skips_the_later_analysis_phases(
         self, tmp_path: Path
     ) -> None:
-        run = _Run(tmp_path, 10_000, _costs(**{"extraction.analyst": 1_500}))
+        run = _Run(tmp_path, 10_000, _costs(**{_CONSOLIDATION: 750}))
         result = await run.run()
 
-        # 1,000 + 2 x 2,500 = 6,000 used: both hosts done, then the reserve.
-        assert run.sessions == [*_FULL_RUN[:7], "report"]
+        # 1,000 + 2 x 2,250 = 5,500 used: both hosts done, then the reserve.
+        assert run.sessions == [*_FULL_RUN[:9], "report"]
         assert run.orch.systems_done == {"host-a": True, "host-b": True}
         assert not result.success
         assert "Not completed (names come from the evidence" in run.prompts["report"]
@@ -763,7 +772,7 @@ class TestPipeline:
     ) -> None:
         """The report session wrote the report, ran out of turns and spent the budget."""
         started = time.time()
-        costs = _costs(**{"extraction.analyst": 3_500}, report=6_000)
+        costs = _costs(**{_CONSOLIDATION: 3_000}, report=6_000)
         run = _Run(tmp_path, 10_000, costs, {"report": "error_max_turns"})
         result = await run.run()
 
@@ -771,7 +780,7 @@ class TestPipeline:
         assert run.orch.budget.used == 11_500
         assert [(p.phase_name, p.success, p.turns_used) for p in result.phases] == [
             ("catalog", True, 1),
-            ("extraction", True, 3),
+            ("extraction", True, 4),
             ("report", True, 1),
         ]
         # Still the stop that cut the analysis short, so still not a success.
@@ -794,7 +803,7 @@ class TestPipeline:
         result = await run.run()
 
         assert run.sessions == _FULL_RUN
-        assert run.orch.budget.used == 10_600
+        assert run.orch.budget.used == 11_200
         assert (result.success, result.budget_stop) == (True, None)
 
     @pytest.mark.asyncio()

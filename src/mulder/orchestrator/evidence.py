@@ -1094,3 +1094,47 @@ class ServerBridge:
             except (TypeError, ValueError):  # not a timestamp, or not timezone-aware
                 continue
         return saved
+
+    def record_cut_short(self, phase: str, role: str, system: str, question: str) -> None:
+        """Record a role session that was still unfinished after every continuation.
+
+        The report and the investigation summary read these rows to say
+        which analysis was cut short. A failure to record is logged, not
+        raised: it must not end a run that is otherwise going on.
+
+        Args:
+            phase: Phase the session belonged to.
+            role: Its role in a split phase; empty for a single-mode phase.
+            system: The system it worked on; empty when the phase has none.
+            question: The investigation question it was given, when it had
+                one of its own. Sanitised by the caller, like *system*.
+        """
+        try:
+            self.ensure_context()
+            from mulder.server.app import get_ctx
+
+            get_ctx().db.record_cut_short(phase, role, system, question)
+        except Exception:
+            logger.warning("record_cut_short failed", exc_info=True)
+
+    def record_rejected_plan(self, system: str) -> None:
+        """Record that a plan for *system* was rejected at the questions gate.
+
+        A system with a rejected plan and no plan that reached an analyst is
+        named as not analysed by the investigation summary and the report,
+        which then never says that no incident was found
+        (``CaseDB.get_unanalysed``). Counted under the
+        name the system's questions are recorded under, so that an accepted
+        plan takes it off that list. A failure to record is logged, not
+        raised.
+
+        Args:
+            system: The system, or group of systems, the plan was for.
+        """
+        try:
+            self.ensure_context()
+            from mulder.server.app import get_ctx
+
+            get_ctx().db.record_rejected_plan(clean(system, MAX_SYSTEM_CHARS))
+        except Exception:
+            logger.warning("record_rejected_plan failed", exc_info=True)

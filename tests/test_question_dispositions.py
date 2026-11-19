@@ -28,11 +28,12 @@ from mulder.orchestrator import prompts
 from mulder.orchestrator.evidence import ServerBridge
 from mulder.orchestrator.gates import GateResult, validate_cross_system
 from mulder.orchestrator.models import ModelConfig
-from mulder.orchestrator.phases import EXTRACTION
+from mulder.orchestrator.phases import CROSS_SYSTEM, EXTRACTION
 from mulder.orchestrator.roles import RoleRunner
 from mulder.orchestrator.runner import Orchestrator
 from mulder.orchestrator.types import ExecutionResults, PhaseResult, Plan
 from mulder.questions import MAX_QUESTION_CHARS, clean, no_incident, resolved_path, statuses
+from mulder.report.case_report import write_case_report
 from mulder.server.app import _tool_dispatch_sync
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.tool_access import ALL_ROLES, ANALYSTS, Role, get_tools_for_role
@@ -254,6 +255,9 @@ def test_no_incident_is_the_second_path_with_nothing_of_medium_severity_or_above
     unanswerable = [_question("q_1", "undetermined"), _question("q_2", "undetermined")]
     assert resolved_path(unanswerable, [], AUDITS)
     assert not no_incident(unanswerable, [], AUDITS)
+    # A system was never analysed (its plans had no questions, so it has
+    # none on record to be open): the same case is not a clean one.
+    assert not no_incident(resolved, [NEGATIVE, COLLECT, LOW], AUDITS, {"WS02": 3})
 
 
 # ---------------------------------------------------------------------------
@@ -771,6 +775,98 @@ def test_mulder_report_renders_the_same_outcome_from_the_database(case: _Case) -
 
 
 # ---------------------------------------------------------------------------
+# A system that was never analysed: its plans had no questions
+# ---------------------------------------------------------------------------
+
+NOT_ANALYSED = "Systems Not Analysed"
+
+
+def test_a_case_with_a_system_never_analysed_is_not_reported_as_no_incident(case: _Case) -> None:
+    """WS01 analysed with nothing found; WS02's plans rejected at the questions gate."""
+    case.clean_case()
+    assert _tool("get_investigation_summary")["no_incident"] is True
+    for _ in range(3):
+        case.bridge.record_rejected_plan("WS02")
+
+    summary = _tool("get_investigation_summary")
+
+    assert "no_incident" not in summary
+    listed = summary["systems_not_analysed"]
+    assert (listed["count"], listed["systems"]) == (1, [{"system": "WS02", "plans_rejected": 3}])
+    assert "not analysed" in listed["note"] and "no investigation questions" in listed["note"]
+    assert "no_incident is not reported" in listed["note"]
+    # Not a remaining_work item: the narrative gate would hand it to an
+    # analyst as a gap to fix, and no analyst can fix it.
+    assert not any("WS02" in item for item in summary["remaining_work"])
+    # WS02 has no question on record, so none is open and the case still
+    # passes on WS01's resolved ones. It finalizes, but not as "no incident".
+    assert summary["questions"]["open"] == 0
+    assert case.minimum_findings()["detail"].startswith("Passed on resolved questions")
+
+    result = _tool("finalize_report")
+
+    markdown = Path(result["report_path"]).read_text()
+    html = Path(result["html_report_path"]).read_text()
+    for report in (markdown, html):
+        assert STATEMENT not in report
+        assert report.count(NOT_ANALYSED) == 1  # one place
+        # What is on record, and no more: plans rejected, and none analysed.
+        assert "with no investigation questions and wrote none when asked again" in " ".join(
+            report.split()
+        )
+        assert "no plan for the system reached an analyst" in " ".join(report.split())
+        assert "Not analysed is not the same as clean" in report
+    summary_md = markdown.split("## Executive Summary", 1)[1].split("\n---", 1)[0]
+    assert "**Results:** 0 findings" in summary_md  # the ordinary summary
+    assert f"### {NOT_ANALYSED}" in summary_md
+    assert "- `WS02` (plans rejected: 3)" in summary_md
+    assert '<span class="mono">WS02</span> (plans rejected: 3)' in html
+
+
+def test_mulder_report_and_the_partial_report_name_a_system_never_analysed(case: _Case) -> None:
+    case.clean_case()
+    hostile = "WS`02` <img src=x onerror=alert(1)>"  # a name comes from evidence file names
+    case.bridge.record_rejected_plan(hostile)
+    case.bridge.cleanup()
+
+    result = CliRunner().invoke(cli, ["report", "clean", "--db-dir", str(case.db_dir)])
+    partial = write_case_report(
+        "clean", case.db_dir, ["Stopped in phase: report"], "clean.partial"
+    )
+
+    assert result.exit_code == 0, result.output
+    for stem in ("clean", "clean.partial"):
+        markdown = (case.db_dir / f"{stem}.report.md").read_text()
+        html = (case.db_dir / f"{stem}.report.html").read_text()
+        assert STATEMENT not in markdown and STATEMENT not in html
+        assert "- `WS'02' <img src=x onerror=alert(1)>` (plans rejected: 1)" in markdown
+        assert "WS`02` &lt;img src=x onerror=alert(1)&gt;</span> (plans rejected: 1)" in html
+        assert "<img src=x" not in html
+    assert partial.html is not None
+    assert "INCOMPLETE INVESTIGATION" in partial.markdown.read_text()
+
+
+def test_a_system_analysed_later_is_no_longer_listed(case: _Case) -> None:
+    """An accepted plan's questions are recorded before its analyst runs."""
+    case.clean_case()
+    case.bridge.record_rejected_plan("WS02")
+    assert "systems_not_analysed" in _tool("get_investigation_summary")
+
+    (question_id,) = [
+        re.match(r"\[(q_[0-9a-f]{8})\] ", q).group(1)  # type: ignore[union-attr]
+        for q in case.bridge.record_questions("extraction", "WS02", ["Who logged on to WS02?"])
+    ]
+
+    # WS02 is now a system with an open question, which holds the outcome back itself.
+    summary = _tool("get_investigation_summary")
+    assert "systems_not_analysed" not in summary and "no_incident" not in summary
+    assert [q["question_id"] for q in summary["open_questions"]] == [question_id]
+    _tool("resolve_question", question_id=question_id, resolution="undetermined", reason="None.")
+    assert _tool("get_investigation_summary")["no_incident"] is True
+    assert NOT_ANALYSED not in Path(_tool("finalize_report")["report_path"]).read_text()
+
+
+# ---------------------------------------------------------------------------
 # The orchestrator hands the analyst its questions with their ids
 # ---------------------------------------------------------------------------
 
@@ -808,8 +904,11 @@ async def test_the_analyst_is_given_recorded_questions_with_their_ids(case: _Cas
     assert result.success
     (question,) = server_app.get_ctx().db.get_questions()
     assert (question.phase, question.system) == ("extraction", "WS01")
-    (analyst_prompt,) = prompts_seen
-    assert f"[{question.question_id}] Was any persistence mechanism installed?" in analyst_prompt
+    # Its own session, then the consolidation, which lists it for reference.
+    question_session, consolidation = prompts_seen
+    labelled = f"[{question.question_id}] Was any persistence mechanism installed?"
+    assert labelled in question_session and labelled in consolidation
+    assert "QUESTION SESSION 1 OF 1" in question_session
 
 
 @pytest.mark.asyncio()
@@ -828,9 +927,11 @@ async def test_a_continued_analyst_is_given_its_questions_again() -> None:
     roles = RoleRunner(session, MagicMock(), ModelConfig(), "clean", {}, "/tmp", 1)
     labelled = "[q_1a2b3c4d] Was any persistence mechanism installed?"
 
+    # A phase whose analyst is one session for the plan's questions, and which
+    # runs without any when its planner produced no plan.
     for questions in ([labelled], []):
         plan = Plan("p", [], questions, [], "plan", 1)
-        await roles.run_analyst(EXTRACTION, plan, ExecutionResults("p", [], 1, False))
+        await roles.run_analyst(CROSS_SYSTEM, plan, ExecutionResults("p", [], 1, False))
 
     with_questions, without = continuations
     assert labelled in with_questions and "resolve_question" in with_questions

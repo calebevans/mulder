@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from mulder.cut_short import CUT_SHORT_PREFIX
 from mulder.extractors.classifier import EvidenceClassifier
 
 logger = logging.getLogger(__name__)
@@ -452,6 +453,11 @@ def validate_narrative(
         for item in remaining:
             item_str = str(item)
             if "narrative" in item_str.lower():
+                continue
+            # A caveat for the report, not a gap: nothing a retry does
+            # can un-cut a session, and a remediation analyst is told to
+            # fix exactly the gaps it is given.
+            if item_str.startswith(CUT_SHORT_PREFIX):
                 continue
             gaps.append(item_str)
 

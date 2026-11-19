@@ -39,6 +39,7 @@ from sqlalchemy.exc import DatabaseError, OperationalError
 from sqlalchemy.pool import NullPool
 from sqlalchemy.schema import CreateTable
 
+from mulder.cut_short import dropped_count
 from mulder.models import CaseMetadataRow, Finding, Question, SourceRow, WindowRow
 
 _T = TypeVar("_T")
@@ -418,6 +419,11 @@ class ProgressSummary(TypedDict):
 _QueueItem = tuple[
     Callable[..., object], tuple[object, ...], dict[str, object], _QueueResult, threading.Event
 ]
+
+_CUT_SHORT_KEY = "cut_short_sessions"
+_CUT_SHORT_FIELDS = ("phase", "role", "system", "question", "recorded_at", "n")
+_MAX_CUT_SHORT = 100
+_REJECTED_PLANS_KEY = "questions_gate_rejected_plans"
 
 
 class _WriteQueue:
@@ -1656,6 +1662,92 @@ class CaseDB:
                 {"key": key},
             ).fetchone()
         return row[0] if row else None
+
+    def record_cut_short(self, phase: str, role: str, system: str, question: str) -> None:
+        """Record a role session that was still unfinished after every continuation.
+
+        Args:
+            phase: Phase the session belonged to.
+            role: Its role in a split phase; empty for a single-mode phase.
+            system: The system it worked on; empty when the phase has none.
+            question: The investigation question it was given, when it had
+                one of its own.
+        """
+        # ponytail: read-modify-write of one kv value, kept to the last
+        # _MAX_CUT_SHORT rows. The orchestrator is the only writer; give it
+        # a table if a second one ever appears.
+        rows = self.get_cut_short()
+        rows.append(
+            {
+                "phase": phase,
+                "role": role,
+                "system": system,
+                "question": question,
+                "recorded_at": datetime.now(UTC).isoformat(timespec="seconds"),
+                # Its number in the case: readers work out from the first
+                # row kept how many earlier ones the cap dropped.
+                "n": str(dropped_count(rows) + len(rows) + 1),
+            }
+        )
+        self.set_kv(_CUT_SHORT_KEY, json.dumps(rows[-_MAX_CUT_SHORT:]))
+
+    def get_cut_short(self) -> list[dict[str, str]]:
+        """Return the role sessions recorded as cut short, oldest first.
+
+        Empty for a case with none, and for a database with no ``kv_store``:
+        one from before it existed, opened without migrations the way
+        ``mulder report`` opens it.
+        """
+        try:
+            rows = json.loads(self.get_kv(_CUT_SHORT_KEY) or "[]")
+        except (OperationalError, ValueError):
+            return []
+        if not isinstance(rows, list):
+            return []
+        return [
+            {field: str(row.get(field, "")) for field in _CUT_SHORT_FIELDS}
+            for row in rows
+            if isinstance(row, dict)
+        ]
+
+    def record_rejected_plan(self, system: str) -> None:
+        """Count a plan for *system* that was rejected at the questions gate.
+
+        The planner wrote no investigation questions, in the plan or when
+        asked again, so nothing of the plan was run and no analyst ran on it.
+        """
+        # ponytail: read-modify-write of one kv value, as record_cut_short;
+        # the orchestrator is the only writer.
+        rejected = self._rejected_plans()
+        rejected[system] = rejected.get(system, 0) + 1
+        self.set_kv(_REJECTED_PLANS_KEY, json.dumps(rejected))
+
+    def _rejected_plans(self) -> dict[str, int]:
+        """Plans rejected at the questions gate, counted by system.
+
+        Empty for a database with no ``kv_store`` (see ``get_cut_short``).
+        """
+        try:
+            rejected = json.loads(self.get_kv(_REJECTED_PLANS_KEY) or "{}")
+        except (OperationalError, ValueError):
+            return {}
+        if not isinstance(rejected, dict):
+            return {}
+        return {str(s): plans for s, plans in rejected.items() if isinstance(plans, int)}
+
+    def get_unanalysed(self) -> dict[str, int]:
+        """Return the systems never analysed for want of investigation questions.
+
+        Each system with a plan rejected at the questions gate and no
+        recorded question, and how many plans were rejected. An accepted
+        plan's questions are recorded before its analyst runs, so a system
+        analysed on a retry or in a later run is not listed.
+        """
+        rejected = self._rejected_plans()
+        if not rejected:
+            return {}
+        analysed = {q.system for q in self.get_questions()}
+        return {system: plans for system, plans in rejected.items() if system not in analysed}
 
     def _get_case_id(self) -> str:
         """Read case_id from the case_metadata table (cached after first call)."""

@@ -56,6 +56,8 @@ def write_case_report(
         sources_list = case_db.get_sources()
         evidence_integrity = case_db.get_evidence_registry()
         questions = case_db.get_questions()
+        cut_short = case_db.get_cut_short()
+        unanalysed = case_db.get_unanalysed()
         audit_summary = AuditLog(audit_path).summary()
 
         renderer = ReportRenderer()
@@ -70,6 +72,8 @@ def write_case_report(
             evidence_integrity=evidence_integrity,
             incomplete=incomplete,
             questions=questions,
+            cut_short=cut_short,
+            unanalysed=unanalysed,
         )
         md_path.write_text(md_text, encoding="utf-8")
 
@@ -102,6 +106,8 @@ def write_case_report(
                 source_windows=source_windows,
                 incomplete=incomplete,
                 questions=questions,
+                cut_short=cut_short,
+                unanalysed=unanalysed,
             )
             html_path.write_text(html_text, encoding="utf-8")
         except Exception as exc:

@@ -24,6 +24,8 @@ Try-it-out instructions for running Mulder, the forensic investigation platform.
   - [Starting an Investigation](#starting-an-investigation)
     - [When a Run Ends Early](#when-a-run-ends-early)
     - [When a Session Runs Out of Turns](#when-a-session-runs-out-of-turns)
+    - [When Analysis Is Cut Short](#when-analysis-is-cut-short)
+    - [One Analyst Session per Question](#one-analyst-session-per-question)
     - [Limiting Token Use](#limiting-token-use)
   - [Using Non-Anthropic Models via LiteLLM](#using-non-anthropic-models-via-litellm)
     - [Provider Prefixes](#provider-prefixes)
@@ -409,6 +411,34 @@ A note is a model's own account of what it did. A new session is told to treat i
 
 A resumed session sends its whole conversation again on every turn, as any session does, so several continuations of one long session cost more input tokens per turn than new sessions would, most of all with a provider that has no prompt caching. To compare the two behaviours, run with `--no-wrapup` (or `MULDER_WRAPUP=0`): no session is resumed, every continuation is a new session with the generic prompt, and analysts and executors are not told their turn budget.
 
+### When Analysis Is Cut Short
+
+A role session that is still unfinished after every continuation `--max-compactions` allows, and after its wrap-up, is cut short: the phase goes on without the rest of that session's work. Mulder records each one in the case database with its phase, role, system and, when the session had one of its own, its investigation question. A planner that runs out of turns and still has no plan after it was asked to write one is recorded the same way. The dashboard shows `Cut short, no continuation left: extraction analyst, system "DC01"`.
+
+You will see the record in four places:
+
+- the run summary on the terminal, in a **Sessions Cut Short** table;
+- both reports, in an **Analysis Cut Short** section (the partial report and `mulder report` included);
+- `get_investigation_summary`, as one `remaining_work` item, so the later phases know which earlier analysis was not finished;
+- the case database itself (`kv_store`, key `cut_short_sessions`).
+
+Read it for what it says. What the session saved or indexed is in the case. What it had not reached may not have been examined, and not examined is not the same as absent, so conclusions about that system or question may be incomplete. The record does not say the session found nothing, and it is not removed when a later retry, follow-up or second run covers the same ground: each entry carries the time it was recorded, so compare it with what ran afterwards. The list keeps the 100 most recent entries and says how many earlier ones were dropped.
+
+To give sessions more room, raise `--max-compactions`.
+
+### One Analyst Session per Question
+
+The extraction planner writes the investigation questions for each system, from the evidence and from your [case briefing](#case-briefing) when there is one. After the executor has finished for a system, the analyst answers them one session at a time:
+
+1. Each investigation question gets its own analyst session, one after another, with 25 turns. Its instruction is that one question: answer it, save the findings, close the question with `resolve_question` (see [When No Incident Is Found](#when-no-incident-is-found)), record a progress note, stop. At most 6 such sessions run for a plan; when the plan has more questions, the sixth takes all that are left, up to 20 questions in all. Questions past the twentieth are not asked, and the dashboard says how many were left out. The planner is told these numbers and to put the most important questions first. A session sees only its own question, so the planner is also told that evidence it has to report as not examined (a cloud audit export too large to read) is named inside every question it bears on, not only in an entry of its own.
+2. One consolidation session of 15 turns then looks across what those sessions saved, for duplicate and contradicting findings and for questions left open, and may ask for a follow-up plan. It does not close questions itself: one that is still open after its session is closed by a later analyst that is asked it again, or by the report phase. A follow-up plan has questions of its own and is analysed the same way; its planner is told to ask only what the follow-up's tools could newly settle, not the earlier questions again.
+
+This is how every run works; there is no option for it. Systems still run in parallel under `--workers`. A plan with one question gets one question session and the consolidation session. The cross-system and alternative-narrative analysts, and the session that fixes a failed gate's gaps, are one session each, as before.
+
+**There are always questions.** An extraction plan without a usable investigation question (at least one plain string) is not accepted. The planner is told why and asked for the questions alone, with its tools off: first in its own session, then once in a new one (only the new one when its conversation had been rejected as too long, or when the plan itself had to be written in a new session). An answer that repeats the request's own `<question>` placeholder is not a question. If it still writes none, the dashboard shows `Questions gate failed for <system>` and the plan is dropped with nothing run from it. For a system's first plan, planning starts again, up to three planner sessions in all; after that the extraction for that system has failed: no analysis ran on it, the run goes on with the other systems and the later phases, the summary table shows `extraction FAIL`, and `mulder investigate` exits with status 1. The system is then on record in the case database as not analysed. Every report names it under **Systems Not Analysed**, directly below the executive summary: the finalized report, `mulder report` and the partial report (which also lists it under "Not completed"). While a system is listed there no report says that no incident was found, however the other systems' questions were resolved: a system that was not analysed has not been found clean. A system that is analysed after all, on a later attempt or in a later run of the case, is no longer listed. For a follow-up plan, the follow-up ends and what the earlier sessions saved stands.
+
+A system's analysis takes up to 6 x 25 + 15 = 165 turns before any continuation, in up to seven sessions that each re-read the case context and run one after another. With every continuation `--max-compactions 3` allows, each session's wrap-up and its one nudge, the ceiling is 881 turns for one plan; `--max-tokens` is the way to bound a run. This has not been benchmarked against the single session of 60 turns it replaced.
+
 ### Limiting Token Use
 
 `--max-tokens N` (or `MULDER_MAX_TOKENS=N`) caps what one run may use. Without it there is no limit and nothing in this section applies.
@@ -607,6 +637,8 @@ The contents of `MULDER.md` are prepended as an "INVESTIGATOR BRIEFING" to the p
 - The analysts in each phase use it to answer your questions and take its facts (time zone, known accounts, scope) as given
 - The cross-system correlator uses it to understand relationships
 - The report writer uses it to frame conclusions around your questions
+
+Questions and leads you write here shape the investigation questions the extraction planner asks. For each system it words the ones that system's evidence could answer, next to the questions it derives from the evidence, and the analyst answers those questions [one session at a time](#one-analyst-session-per-question): the first five get a session each and any others share a sixth. `MULDER.md` is the only place to put questions of your own; there is no flag or setting for them.
 
 ### Example
 
@@ -939,7 +971,7 @@ Runs a full multi-phase forensic investigation.
 | `--effort` | `max` | Effort level (`max`, `xhigh`, `high`) |
 | `--no-thinking` | off | Disable extended thinking for all queries; overrides `--effort` |
 | `--workers` | `3` | Max concurrent extraction sessions |
-| `--max-compactions` | `3` | Continuations allowed per role session after a turn limit (the session is resumed) or context exhaustion (a new session); `0` disables. Also settable via `MULDER_MAX_COMPACTIONS` (the flag wins) |
+| `--max-compactions` | `3` | Continuations allowed per role session after a turn limit (the session is resumed) or context exhaustion (a new session); `0` disables. The extraction analyst runs one session per investigation question and then a consolidation session, and each of those is a role session of its own (see [One Analyst Session per Question](#one-analyst-session-per-question)). Also settable via `MULDER_MAX_COMPACTIONS` (the flag wins) |
 | `--wrapup` / `--no-wrapup` | on | At a turn limit, resume the session where it stopped, with its conversation intact, instead of replacing it. `--no-wrapup` restarts cold. Also settable via `MULDER_WRAPUP=0` (the flag wins). See [When a Session Runs Out of Turns](#when-a-session-runs-out-of-turns) |
 | `--max-tokens` | None | Token budget for the whole run: input, output, cache-write and cache-read tokens of every session and model. Unset means no limit. Also settable via `MULDER_MAX_TOKENS` (the flag wins). See [Limiting Token Use](#limiting-token-use) |
 | `--db-dir` | `~/.mulder/cases` | Case database directory |
@@ -1066,7 +1098,7 @@ An investigation can end with the conclusion that the evidence shows no incident
 | Ruled out | The sources examined do not show it | A `[NEGATIVE]` finding that cites at least one such call |
 | Undetermined | The evidence needed is not in the case or could not be read | A stated reason |
 
-A case normally needs three findings before a report is written. A case with fewer passes instead when every recorded question is resolved and both coverage audits have run. If that case also has no finding of medium severity or above, and at least one question was answered or ruled out, the executive summary opens with "No evidence of an incident was found in the evidence examined", then lists what was examined (how many evidence sources there are, how many of them the findings cite, and how many of the tool calls went to tools that extract, search or read evidence, failed calls included) and what was not available: the undetermined questions with their reasons, and any `[COLLECT]` leads.
+A case normally needs three findings before a report is written. A case with fewer passes instead when every recorded question is resolved and both coverage audits have run. If that case also has no finding of medium severity or above, and at least one question was answered or ruled out, the executive summary opens with "No evidence of an incident was found in the evidence examined", then lists what was examined (how many evidence sources there are, how many of them the findings cite, and how many of the tool calls went to tools that extract, search or read evidence, failed calls included) and what was not available: the undetermined questions with their reasons, and any `[COLLECT]` leads. That sentence is never written while a system is listed under **Systems Not Analysed** (its plans had no investigation questions, so it has none on record to be left open).
 
 Read that sentence as written. It is a statement about the sources that were indexed and searched, not proof that nothing happened. A ruled-out question whose finding is later deleted or re-titled is open again, so the conclusion cannot outlive its evidence. The report lists the recorded questions under **Investigation Questions** whichever way the case passed; a case investigated before questions were recorded has none and is reported as before.
 
