@@ -210,14 +210,14 @@ def test_a_record_of_etc_passwd_ends_at_a_newline_and_nowhere_else(
     """As glibc reads it. Cut at a form feed or U+2028 in the GECOS field, a uid 0 account
     is two short lines, and no row."""
     doors = {"ff": "\x0c", "vt": "\x0b", "fs": "\x1c", "cr": "a\rb", "nel": "\x85", "ls": "\u2028"}
-    passwd = "root:x:0:0:root:/root:/bin/bash\n" + "".join(
+    accounts = "root:x:0:0:root:/root:/bin/bash\n" + "".join(
         f"{name}:x:0:0:{gecos}:/root:/bin/bash\n" for name, gecos in doors.items()
     )
-    passwd += "zeros:x:00:0::/root:/bin/sh\nplus:x:+0:0::/root:/bin/sh\n"  # uid 0 to glibc too
+    accounts += "zeros:x:00:0::/root:/bin/sh\nplus:x:+0:0::/root:/bin/sh\n"  # uid 0 to glibc too
     crlf = (
         "root:x:0:0::/root:/bin/sh\r\nbin:x:2:2::/bin:/usr/sbin/nologin\r\n"  # edited on Windows
     )
-    root = _tree(tmp_path / "root", {"etc/passwd": passwd, "srv/etc/passwd": crlf})
+    root = _tree(tmp_path / "root", {"etc/passwd": accounts, "srv/etc/passwd": crlf})
 
     result = _sweep(root)["results"]
 
@@ -240,11 +240,11 @@ def test_an_account_file_longer_than_is_read_is_cut_at_a_record_and_said(
     first = "root:x:0:0::/root:/bin/bash\n"
     split = "cut:x:3000:3000::/nonexistent:/u"  # what is read ends here: /u is no login shell
     pad = "#" * (4096 - len(first) - len(split) - 1) + "\n"
-    passwd = first + pad + split + "sr/sbin/nologin\nlate:x:0:0::/tmp:/bin/bash\n"
+    accounts = first + pad + split + "sr/sbin/nologin\nlate:x:0:0::/tmp:/bin/bash\n"
     root = _tree(
         tmp_path / "root",
         {
-            "etc/passwd": passwd,
+            "etc/passwd": accounts,
             "srv/etc/passwd": first + "www:x:33:33::/var/www:/usr/sbin/nologin\n",
             "srv/etc/passwd-": "#" * 5000 + "\n" + first + "www:x:33:33::/var/www:/bin/false\n",
         },
