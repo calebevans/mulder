@@ -388,16 +388,6 @@ def report(case_id: str, db_dir: str) -> None:
     "end above the budget. Unset: no limit (env: MULDER_MAX_TOKENS).",
 )
 @click.option(
-    "--analyst-scope",
-    default="system",
-    envvar="MULDER_ANALYST_SCOPE",
-    type=click.Choice(["system", "question"]),
-    show_default=True,
-    help="What one extraction analyst session covers: every investigation "
-    "question for a system, or one question each, followed by a short "
-    "consolidation session (env: MULDER_ANALYST_SCOPE).",
-)
-@click.option(
     "--proxy-config",
     default=None,
     type=click.Path(exists=True),
@@ -423,7 +413,6 @@ def investigate(
     max_compactions: int,
     wrapup: bool,
     max_tokens: int | None,
-    analyst_scope: str,
     proxy_config: str | None,
     no_thinking: bool,
     show_cli_stderr: bool,
@@ -512,8 +501,6 @@ def investigate(
             f"({report_reserve(max_tokens):,} held back for the report)",
             err=True,
         )
-    if analyst_scope != "system":
-        click.echo(f"Analyst scope: {analyst_scope}", err=True)
     click.echo(f"Logging to {log_file}", err=True)
 
     orchestrator = Orchestrator(
@@ -532,7 +519,6 @@ def investigate(
         max_compactions=max_compactions,
         wrapup=wrapup,
         max_tokens=max_tokens,
-        question_sessions=analyst_scope == "question",
     )
 
     from mulder.orchestrator.errors import (

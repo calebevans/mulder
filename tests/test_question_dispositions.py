@@ -28,7 +28,7 @@ from mulder.orchestrator import prompts
 from mulder.orchestrator.evidence import ServerBridge
 from mulder.orchestrator.gates import GateResult, validate_cross_system
 from mulder.orchestrator.models import ModelConfig
-from mulder.orchestrator.phases import EXTRACTION
+from mulder.orchestrator.phases import CROSS_SYSTEM, EXTRACTION
 from mulder.orchestrator.roles import RoleRunner
 from mulder.orchestrator.runner import Orchestrator
 from mulder.orchestrator.types import ExecutionResults, PhaseResult, Plan
@@ -808,8 +808,11 @@ async def test_the_analyst_is_given_recorded_questions_with_their_ids(case: _Cas
     assert result.success
     (question,) = server_app.get_ctx().db.get_questions()
     assert (question.phase, question.system) == ("extraction", "WS01")
-    (analyst_prompt,) = prompts_seen
-    assert f"[{question.question_id}] Was any persistence mechanism installed?" in analyst_prompt
+    # Its own session, then the consolidation, which lists it for reference.
+    question_session, consolidation = prompts_seen
+    labelled = f"[{question.question_id}] Was any persistence mechanism installed?"
+    assert labelled in question_session and labelled in consolidation
+    assert "QUESTION SESSION 1 OF 1" in question_session
 
 
 @pytest.mark.asyncio()
@@ -828,9 +831,11 @@ async def test_a_continued_analyst_is_given_its_questions_again() -> None:
     roles = RoleRunner(session, MagicMock(), ModelConfig(), "clean", {}, "/tmp", 1)
     labelled = "[q_1a2b3c4d] Was any persistence mechanism installed?"
 
+    # A phase whose analyst is one session for the plan's questions, and which
+    # runs without any when its planner produced no plan.
     for questions in ([labelled], []):
         plan = Plan("p", [], questions, [], "plan", 1)
-        await roles.run_analyst(EXTRACTION, plan, ExecutionResults("p", [], 1, False))
+        await roles.run_analyst(CROSS_SYSTEM, plan, ExecutionResults("p", [], 1, False))
 
     with_questions, without = continuations
     assert labelled in with_questions and "resolve_question" in with_questions

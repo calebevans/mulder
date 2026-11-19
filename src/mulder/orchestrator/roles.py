@@ -28,11 +28,12 @@ from mulder.orchestrator.types import (
     ExecutionResults,
     PhaseResult,
     Plan,
+    _try_extract_json,
     extract_executor_results,
     extract_follow_up_request,
     extract_json_plan,
 )
-from mulder.questions import ID_LABELS
+from mulder.questions import ID_LABELS, MAX_QUESTIONS_PER_PLAN
 
 if TYPE_CHECKING:
     from mulder.orchestrator.evidence import ServerBridge
@@ -64,6 +65,32 @@ _PLANNER_OUT_OF_TURNS: str = (
 )
 
 _MAX_PLANNER_NOTES_CHARS: int = 20_000
+
+_QUESTION_PLACEHOLDER: str = "<question>"
+"""Stands for a question in ``_PLANNER_NO_QUESTIONS``; echoed back, it is not one."""
+
+_PLANNER_NO_QUESTIONS: str = (
+    "PLAN NOT ACCEPTED: it has no usable investigation_questions (the key is "
+    "missing, empty, or holds something other than plain strings). Every "
+    "plan needs at least one: the analyst answers them one session at a "
+    "time, and with none nothing analyses what the tasks extract. The tasks "
+    "are kept as they are. Tools are disabled now; do NOT call any. Write "
+    "the questions the tasks of your plan could answer, from the evidence "
+    "context and what you have read. Unless the user message has a "
+    "FOLLOW-UP REQUEST, cover every question or lead in the INVESTIGATOR "
+    "BRIEFING (when the user message has one) that this system's evidence "
+    "could answer; for a follow-up plan ask only what its tasks could newly "
+    "settle. Respond with ONLY this JSON, each placeholder replaced by a "
+    "question of yours: "
+    f'{{"investigation_questions": ["{_QUESTION_PLACEHOLDER}", "{_QUESTION_PLACEHOLDER}"]}}'
+)
+
+_PLANNER_NO_QUESTIONS_NOTES: str = (
+    "\n\nThis is a new session without the planning session's conversation "
+    "(ignore the instruction to call open_case). Use the case context above "
+    "and that session's output below.\n\n"
+    "OUTPUT OF THE PLANNING SESSION:\n"
+)
 
 _ANALYST_TURN_BUDGET: str = (
     "\n\nTURN BUDGET: This session allows {max_turns} turns and every tool call "
@@ -145,10 +172,11 @@ _MAX_HANDOFF_NOTE_CHARS: int = 4_000
 _MAX_HANDOFF_FINDINGS: int = 30
 
 _MAX_QUESTION_SESSIONS: int = 6
-"""Question sessions per system under ``--analyst-scope question``.
+"""Question sessions the extraction analyst step runs for one plan.
 
 A plan with more questions than this gives the last session all that are
-left, so the number of sessions does not grow with the plan.
+left, so the number of sessions does not grow with the plan. Questions past
+``MAX_QUESTIONS_PER_PLAN`` are not asked at all.
 """
 
 _QUESTION_MAX_TURNS: int = 25
@@ -348,13 +376,13 @@ def _label(name: str) -> str:
     return _one_line(name, len(name))
 
 
-def _plan_questions(plan: Plan) -> list[str]:
+def _plan_questions(raw: object) -> list[str]:
     """Return a plan's investigation questions as distinct, bounded lines.
 
-    The plan is model output parsed from JSON, so the field can hold
-    anything: only strings are kept, each flattened to one printable line.
+    *raw* is model output parsed from JSON, so it can hold anything: only
+    strings are kept, each flattened to one printable line. An empty
+    result means the plan has no usable question.
     """
-    raw: object = plan.investigation_questions
     if not isinstance(raw, list):
         return []
     cleaned = (_one_line(q, _MAX_QUESTION_CHARS) for q in raw if isinstance(q, str))
@@ -395,7 +423,6 @@ class RoleRunner:
         max_compactions: int,
         wrapup: bool = True,
         server: ServerBridge | None = None,
-        question_sessions: bool = False,
     ) -> None:
         """Initialize the role runner.
 
@@ -414,10 +441,6 @@ class RoleRunner:
                 (``--no-wrapup`` turns it off).
             server: Direct database access, for reading handoff notes and
                 saved findings.
-            question_sessions: Run the extraction analyst as one session
-                per investigation question plus a consolidation session
-                (``--analyst-scope question``) instead of one session for
-                all of them.
         """
         self._session = session
         self._dashboard = dashboard
@@ -428,7 +451,6 @@ class RoleRunner:
         self._max_compactions = max_compactions
         self._wrapup = wrapup
         self._server = server
-        self._question_sessions = question_sessions
 
     async def run_planner(
         self,
@@ -451,7 +473,10 @@ class RoleRunner:
             *follow_up_context* the Plan may have no tasks, meaning the
             planner found nothing more to run. A planner that ended at a
             turn or context limit and produced no plan is recorded as cut
-            short (see ``_note_cut_short``).
+            short (see ``_note_cut_short``). An extraction plan with
+            tasks has at least one usable investigation question (the
+            analyst answers them one session at a time); one that still has
+            none after ``_request_questions`` is not accepted.
         """
         model = self._model_config.resolve(phase.name, "planner")
         effective_vars = dict(prompt_vars or {})
@@ -518,6 +543,32 @@ class RoleRunner:
             self._dashboard.log_gate_fail("Planner failed to produce valid plan")
             logger.warning("Phase '%s' planner did not produce a valid plan", phase.name)
             return None
+
+        # The questions gate. Every extraction analyst session answers one
+        # of the plan's questions, so a plan with none cannot be analysed.
+        if (
+            phase.name == EXTRACTION.name
+            and plan_json["tasks"]
+            and not _plan_questions(plan_json.get("investigation_questions"))
+        ):
+            system = _one_line(effective_vars.get("system_name", "")) or phase.name
+            self._dashboard.log_gate_fail(
+                f"Questions gate: the plan for {system} has no investigation "
+                "questions; asking the planner for them"
+            )
+            questions = await self._request_questions(phase, prompt, model, result, log_prefix)
+            if not questions:
+                self._dashboard.log_gate_fail(
+                    f"Questions gate failed for {system}: the planner wrote no "
+                    "investigation questions; plan not accepted, no analysis runs on it"
+                )
+                logger.warning(
+                    "Phase '%s' plan for %s not accepted: no usable investigation questions",
+                    phase.name,
+                    system,
+                )
+                return None
+            plan_json["investigation_questions"] = questions
 
         return Plan(
             plan_id=f"{phase.name}-plan-{self._case_id}-{uuid4().hex[:8]}",
@@ -645,11 +696,15 @@ class RoleRunner:
         """Run the analyst with execution results.
 
         The analyst interprets results, submits findings, and may request
-        follow-up iterations by emitting a structured JSON follow-up.
+        follow-up iterations by emitting a structured JSON follow-up. In
+        the extraction phase that is one session per investigation
+        question and then a consolidation session (see
+        ``_run_per_question``); every other phase runs one session.
 
         Args:
             phase: Phase configuration with analyst fields.
-            plan: The plan that was executed.
+            plan: The plan that was executed. An extraction plan has at
+                least one usable question; ``run_planner`` accepts no other.
             exec_results: Results from the executor.
             prompt_vars: Additional template variables (e.g. system_name).
             log_prefix: Prefix for dashboard log lines.
@@ -657,6 +712,10 @@ class RoleRunner:
 
         Returns:
             AnalystResult with findings count and optional follow-up request.
+
+        Raises:
+            ValueError: An extraction plan with no usable question. No
+                session runs without one.
         """
         model = self._model_config.resolve(phase.name, "analyst")
 
@@ -679,21 +738,23 @@ class RoleRunner:
         if prompt_vars:
             context.update(prompt_vars)
 
-        questions = _plan_questions(plan)
-        if self._question_sessions and phase.name == EXTRACTION.name and len(questions) > 1:
-            return await self._run_question_sessions(
-                phase, context, questions, model, log_prefix, task_system
+        if phase.name != EXTRACTION.name:
+            return await self._analyst_session(
+                phase,
+                _analyst_prompt(phase, context),
+                model,
+                log_prefix,
+                task_system,
+                plan.investigation_questions,
             )
-        return await self._analyst_session(
-            phase,
-            _analyst_prompt(phase, context),
-            model,
-            log_prefix,
-            task_system,
-            plan.investigation_questions,
+        questions = _plan_questions(plan.investigation_questions)
+        if not questions:
+            raise ValueError("an extraction plan needs at least one investigation question")
+        return await self._run_per_question(
+            phase, context, questions, model, log_prefix, task_system
         )
 
-    async def _run_question_sessions(
+    async def _run_per_question(
         self,
         phase: PhaseConfig,
         context: dict[str, str],
@@ -714,7 +775,9 @@ class RoleRunner:
         Args:
             phase: Phase configuration with analyst fields.
             context: Template variables for the analyst prompt.
-            questions: The plan's questions, sanitised; at least two.
+            questions: The plan's questions, sanitised; at least one. Those
+                past ``MAX_QUESTIONS_PER_PLAN`` are left out, and the
+                dashboard and the log say how many.
             model: Model identifier.
             log_prefix: Prefix for dashboard log lines.
             task_system: Task panel system name, and the progress label.
@@ -722,13 +785,25 @@ class RoleRunner:
         Returns:
             One AnalystResult for all the sessions.
         """
+        pfx = f"[{log_prefix}] " if log_prefix else ""
+        # The last session and the consolidation list every question they
+        # are given, so the list is bounded: by the number recorded for a
+        # plan, past which a question has no id to be closed by.
+        dropped = len(questions) - MAX_QUESTIONS_PER_PLAN
+        if dropped > 0:
+            questions = questions[:MAX_QUESTIONS_PER_PLAN]
+            msg = (
+                f"Plan has more than {MAX_QUESTIONS_PER_PLAN} investigation "
+                f"questions; the last {dropped} are not asked"
+            )
+            logger.warning("[%s] %s", phase.name, msg)
+            self._dashboard.log_info(f"{pfx}{phase.name}: {msg}")
         # One session each, the last one taking whatever is over the cap.
         single = questions[: _MAX_QUESTION_SESSIONS - 1]
         rest = questions[_MAX_QUESTION_SESSIONS - 1 :]
         groups = [[q] for q in single] + ([rest] if rest else [])
         label = _label(task_system or phase.name)
         system = json.dumps(label)
-        pfx = f"[{log_prefix}] " if log_prefix else ""
         started = datetime.now(UTC)
         question_phase = replace(phase, analyst_max_turns=_QUESTION_MAX_TURNS)
         outs: list[AnalystResult] = []
@@ -855,8 +930,8 @@ class RoleRunner:
         own to resolve.
 
         *question* is the session's own investigation question when it has
-        one (``--analyst-scope question``); it is recorded with the session
-        if the session is cut short.
+        one (a question session); it is recorded with the session if the
+        session is cut short.
         """
         continuation_prompt = (
             "CONTINUATION: The previous analyst session ended before it "
@@ -1355,7 +1430,9 @@ class RoleRunner:
         (and after a context overflow, or under ``--no-wrapup``) this runs
         one tool-less, single-turn new session with the original case
         prompt plus the planner's own text messages so far. The
-        follow-up's messages and turns are merged into *result*.
+        follow-up's messages and turns are merged into *result*. A plan
+        from the new session is not in the planner's conversation, so
+        *result* then names no session to resume about it.
 
         Args:
             phase: Phase configuration with planner fields.
@@ -1406,7 +1483,93 @@ class RoleRunner:
         result.messages.extend(follow_up.messages)
         result.tool_names.extend(follow_up.tool_names)
         result.turns_used += follow_up.turns_used
+        # The planner's conversation holds no plan (and a resume of it may
+        # just have failed): the questions gate asks in a new session too.
+        result.session_id = ""
         return extract_json_plan(follow_up.messages)
+
+    async def _request_questions(
+        self,
+        phase: PhaseConfig,
+        prompt: str,
+        model: str,
+        result: PhaseResult,
+        log_prefix: str = "",
+    ) -> list[str]:
+        """Send a plan with no usable questions back to its planner.
+
+        The planner is told why the plan was not accepted and asked for
+        the questions alone, the way ``_request_plan_from_notes`` asks for
+        the plan: its session is resumed for one turn with its tools off,
+        and when that cannot be done or yields none (and after a context
+        overflow, under ``--no-wrapup``, or when the plan itself came from
+        the new session of ``_request_plan_from_notes``) one tool-less,
+        single-turn new session is given the original prompt and the
+        planner's own output.
+        The messages and turns of both are merged into *result*. The
+        template's own placeholder, echoed back, is not a question.
+
+        Args:
+            phase: Phase configuration with planner fields.
+            prompt: The user prompt the planner session was given.
+            model: Model identifier.
+            result: Planner session result (mutated).
+            log_prefix: Prefix for dashboard log lines.
+
+        Returns:
+            The questions, sanitised; empty when the planner gave none.
+        """
+        tools_off = [*phase.disallowed_tools, *phase.planner_allowed_tools]
+
+        def questions_in(answer: PhaseResult | None) -> list[str]:
+            if answer is None:
+                return []
+            result.messages.extend(answer.messages)
+            result.turns_used += answer.turns_used
+            result.nudges_used += answer.nudges_used
+            for message in reversed(answer.messages):
+                found = _try_extract_json(message, {"investigation_questions"})
+                if found is not None:
+                    return [
+                        q
+                        for q in _plan_questions(found["investigation_questions"])
+                        if q != _QUESTION_PLACEHOLDER
+                    ]
+            return []
+
+        # A conversation the provider rejected as too long would be rejected
+        # again; one that stopped at its turn limit can still be resumed.
+        overflowed = result.context_exhausted and not result.turns_exhausted
+        if self._wrapup and result.session_id and not overflowed:
+            questions = questions_in(
+                await self._resume(
+                    result.session_id,
+                    _PLANNER_NO_QUESTIONS,
+                    phase.planner_system_prompt,
+                    model,
+                    [],
+                    tools_off,
+                    1,
+                    "Planner",
+                    log_prefix,
+                    nudges=_MAX_NUDGES - result.nudges_used,
+                )
+            )
+            if questions:
+                return questions
+        notes = "\n".join(result.messages)[-_MAX_PLANNER_NOTES_CHARS:]
+        return questions_in(
+            await self._session.execute(
+                system_prompt=phase.planner_system_prompt,
+                prompt=f"{prompt}\n\n{_PLANNER_NO_QUESTIONS}{_PLANNER_NO_QUESTIONS_NOTES}{notes}",
+                model=model,
+                allowed_tools=[],
+                disallowed_tools=tools_off,
+                max_turns=1,
+                log_prefix=log_prefix,
+                nudges=_MAX_NUDGES - result.nudges_used,
+            )
+        )
 
     async def _repair_json(
         self,

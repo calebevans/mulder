@@ -423,20 +423,20 @@ You will see the record in four places:
 
 Read it for what it says. What the session saved or indexed is in the case. What it had not reached may not have been examined, and not examined is not the same as absent, so conclusions about that system or question may be incomplete. The record does not say the session found nothing, and it is not removed when a later retry, follow-up or second run covers the same ground: each entry carries the time it was recorded, so compare it with what ran afterwards. The list keeps the 100 most recent entries and says how many earlier ones were dropped.
 
-To give sessions more room, raise `--max-compactions`, or split the extraction analyst's work with `--analyst-scope question` (below).
+To give sessions more room, raise `--max-compactions`.
 
 ### One Analyst Session per Question
 
-By default one extraction analyst session answers every investigation question the planner wrote for a system. That is `--analyst-scope system`, and nothing about it has changed.
+The extraction planner writes the investigation questions for each system, from the evidence and from your [case briefing](#case-briefing) when there is one. After the executor has finished for a system, the analyst answers them one session at a time:
 
-`--analyst-scope question` (or `MULDER_ANALYST_SCOPE=question`) splits that step. After the executor has finished for a system:
+1. Each investigation question gets its own analyst session, one after another, with 25 turns. Its instruction is that one question: answer it, save the findings, close the question with `resolve_question` (see [When No Incident Is Found](#when-no-incident-is-found)), record a progress note, stop. At most 6 such sessions run for a plan; when the plan has more questions, the sixth takes all that are left, up to 20 questions in all. Questions past the twentieth are not asked, and the dashboard says how many were left out. The planner is told these numbers and to put the most important questions first. A session sees only its own question, so the planner is also told that evidence it has to report as not examined (a cloud audit export too large to read) is named inside every question it bears on, not only in an entry of its own.
+2. One consolidation session of 15 turns then looks across what those sessions saved, for duplicate and contradicting findings and for questions left open, and may ask for a follow-up plan. It does not close questions itself: one that is still open after its session is closed by a later analyst that is asked it again, or by the report phase. A follow-up plan has questions of its own and is analysed the same way; its planner is told to ask only what the follow-up's tools could newly settle, not the earlier questions again.
 
-1. Each investigation question gets its own analyst session, one after another, with 25 turns instead of 60. Its instruction is that one question: answer it, save the findings, close the question with `resolve_question` (see [When No Incident Is Found](#when-no-incident-is-found)), record a progress note, stop. At most 6 such sessions run per system; when the plan has more questions, the sixth takes all that are left.
-2. One consolidation session of 15 turns then looks across what those sessions saved, for duplicate and contradicting findings and for questions left open, and may ask for a follow-up plan. It does not close questions itself: one that is still open after its session is closed by a later analyst that is asked it again, or by the report phase. Follow-up cycles, gates and retries work as before.
+This is how every run works; there is no option for it. Systems still run in parallel under `--workers`. A plan with one question gets one question session and the consolidation session. The cross-system and alternative-narrative analysts, and the session that fixes a failed gate's gaps, are one session each, as before.
 
-Systems still run in parallel under `--workers`. A plan with fewer than two usable questions runs the ordinary single session. The other phases are not affected.
+**There are always questions.** An extraction plan without a usable investigation question (at least one plain string) is not accepted. The planner is told why and asked for the questions alone, with its tools off: first in its own session, then once in a new one (only the new one when its conversation had been rejected as too long, or when the plan itself had to be written in a new session). An answer that repeats the request's own `<question>` placeholder is not a question. If it still writes none, the dashboard shows `Questions gate failed for <system>` and the plan is dropped with nothing run from it. For a system's first plan, planning starts again, up to three planner sessions in all; after that the extraction for that system has failed: no analysis ran on it, the run goes on with the other systems and the later phases, the summary table shows `extraction FAIL`, and `mulder investigate` exits with status 1. If the run finalizes no report, the partial report lists the system under "Not completed"; a report the later phases did finalize does not name it, so check the exit status and the summary table. For a follow-up plan, the follow-up ends and what the earlier sessions saved stands.
 
-This mode is opt-in and has not been benchmarked. It makes more sessions: up to 6 x 25 + 15 turns for a system before any continuation, against 60, and each session re-reads the case context. Whether shorter, single-purpose sessions give better answers or fewer turn-limit stops for a given model is what a benchmark run with and without the flag has to show.
+A system's analysis takes up to 6 x 25 + 15 = 165 turns before any continuation, in up to seven sessions that each re-read the case context and run one after another. With every continuation `--max-compactions 3` allows, each session's wrap-up and its one nudge, the ceiling is 881 turns for one plan; `--max-tokens` is the way to bound a run. This has not been benchmarked against the single session of 60 turns it replaced.
 
 ### Limiting Token Use
 
@@ -636,6 +636,8 @@ The contents of `MULDER.md` are prepended as an "INVESTIGATOR BRIEFING" to the p
 - The analysts in each phase use it to answer your questions and take its facts (time zone, known accounts, scope) as given
 - The cross-system correlator uses it to understand relationships
 - The report writer uses it to frame conclusions around your questions
+
+Questions and leads you write here shape the investigation questions the extraction planner asks. For each system it words the ones that system's evidence could answer, next to the questions it derives from the evidence, and the analyst answers those questions [one session at a time](#one-analyst-session-per-question): the first five get a session each and any others share a sixth. `MULDER.md` is the only place to put questions of your own; there is no flag or setting for them.
 
 ### Example
 
@@ -917,10 +919,9 @@ Runs a full multi-phase forensic investigation.
 | `--effort` | `max` | Effort level (`max`, `xhigh`, `high`) |
 | `--no-thinking` | off | Disable extended thinking for all queries; overrides `--effort` |
 | `--workers` | `3` | Max concurrent extraction sessions |
-| `--max-compactions` | `3` | Continuations allowed per role session after a turn limit (the session is resumed) or context exhaustion (a new session); `0` disables. Also settable via `MULDER_MAX_COMPACTIONS` (the flag wins) |
+| `--max-compactions` | `3` | Continuations allowed per role session after a turn limit (the session is resumed) or context exhaustion (a new session); `0` disables. The extraction analyst runs one session per investigation question and then a consolidation session, and each of those is a role session of its own (see [One Analyst Session per Question](#one-analyst-session-per-question)). Also settable via `MULDER_MAX_COMPACTIONS` (the flag wins) |
 | `--wrapup` / `--no-wrapup` | on | At a turn limit, resume the session where it stopped, with its conversation intact, instead of replacing it. `--no-wrapup` restarts cold. Also settable via `MULDER_WRAPUP=0` (the flag wins). See [When a Session Runs Out of Turns](#when-a-session-runs-out-of-turns) |
 | `--max-tokens` | None | Token budget for the whole run: input, output, cache-write and cache-read tokens of every session and model. Unset means no limit. Also settable via `MULDER_MAX_TOKENS` (the flag wins). See [Limiting Token Use](#limiting-token-use) |
-| `--analyst-scope` | `system` | What one extraction analyst session covers: `system` is every investigation question for a system; `question` is one question each, then a consolidation session. Also settable via `MULDER_ANALYST_SCOPE` (the flag wins). See [One Analyst Session per Question](#one-analyst-session-per-question) |
 | `--db-dir` | `~/.mulder/cases` | Case database directory |
 | `--cwd` | `~/.mulder/workspace` | Working directory for agent sessions. Also settable via `MULDER_CWD`; the container sets it to `/mulder-investigation`. Created on first use, along with a default `.mcp.json` |
 | `--proxy-config` | None | LiteLLM config YAML for custom model routing |

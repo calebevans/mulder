@@ -107,7 +107,6 @@ class Orchestrator:
         max_compactions: int = DEFAULT_MAX_COMPACTIONS,
         wrapup: bool = True,
         max_tokens: int | None = None,
-        question_sessions: bool = False,
     ) -> None:
         """Initialize the orchestrator.
 
@@ -140,10 +139,6 @@ class Orchestrator:
             max_tokens: Token budget for the whole run (input, output,
                 cache-write and cache-read tokens of every session), or
                 None for no limit. See ``orchestrator/budget.py``.
-            question_sessions: Run the extraction analyst as one session
-                per investigation question plus a consolidation session
-                (``--analyst-scope question``). False is one session per
-                system.
         """
         self.evidence_path = evidence_path
         self.cwd = str(cwd)
@@ -202,7 +197,6 @@ class Orchestrator:
             max_compactions=max_compactions,
             wrapup=wrapup,
             server=self._server,
-            question_sessions=question_sessions,
         )
         self._evidence = EvidenceContext(
             evidence_path=evidence_path,
