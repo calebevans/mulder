@@ -545,8 +545,10 @@ what they select is exported under the directory named after the volume. When
 the root volume holds a file under a mount point at a path the mounted volume
 has too, the mounted volume's file is exported (it is what the running system
 showed) and the other is named in `not_exported` as under a mount point: it
-can be asked for alone with `paths`. A directory or a link is listed without
-its volume when its path is on several (`?`); two such directories keep a row
+can be asked for alone with `paths`. That holds when the mounted volume's file
+is itself left out (over 64 MiB, over a limit): the root volume's file is not
+exported in its place, where it would be read as the system's own. A
+directory or a link is listed without its volume when its path is on several (`?`); two such directories keep a row
 each unless they also share an inode number, as `lost+found` does. image_export stores
 some characters of a name as `_` and stamps each copy with the time of the
 copy; the tool gives each exported file its name and its modification time
@@ -596,7 +598,7 @@ List what a Linux system starts on its own and who it lets in, one row per file.
 | image_path | str | yes | A directory holding a Linux file tree (the `export_root` of `export_linux_files`, a UAC or Velociraptor collection), or a Linux disk image `run_fls` has listed |
 | force | bool | no | Run again even if this path was already swept |
 
-**Returns:** `source` (linux.persistence), `rows`, `by_kind{}`, `most_recently_modified[]`, `files_not_readable`, `truncated`, `accounts_not_shown`, `passwd_files_not_read`, `export_incomplete{}` (on an export `export_linux_files` reported as incomplete), `note`
+**Returns:** `source` (linux.persistence), `rows`, `by_kind{}`, `most_recently_modified[]`, `files_not_readable`, `truncated`, `listing_truncated`, `accounts_not_shown`, `passwd_files_not_read`, `account_files_cut[]`, `export_incomplete{}` (on an export `export_linux_files` reported as incomplete), `note`
 
 Each row of `linux.persistence` is kind, path, `modified=`, `size=` and the
 file's first lines without comments (300 characters; long keys and blobs
@@ -631,6 +633,19 @@ accounts. When there are more accounts than that, `accounts_not_shown` counts
 them and `truncated` is set; the uid 0 accounts and the privileged groups are
 kept, then the accounts absent from `etc/passwd-` or changed since it, and the
 accounts that only have a login shell are cut first.
+
+What the sweep could not see is said in `note`, in the first line of
+`linux.persistence` and, when there is no row at all, in the error. An
+`etc/passwd`, `passwd-` or `group` is read to 1 MiB: a longer one is named in
+`account_files_cut` and `truncated` is set, an account past that point has no
+row, the record the cut fell in is dropped, and no account is compared with a
+`passwd-` that was not read whole. A directory whose listing was cut (200,000
+entries, the shallowest kept) sets `listing_truncated` and `truncated`: the
+deeper locations (user crontabs, unit files under `usr/lib/systemd/system`,
+per-user units, container layers) were not examined. On a disk image with
+more than one partition listed, every path starts with
+`partition@<start sector>:` and each partition's `etc/passwd` is read with the
+`passwd-` and `group` of that partition.
 
 Every `etc/passwd` in the listing is read, each with the `passwd-` and `group`
 beside it, the one at the top of the tree first and then the shallowest (20 at
@@ -1827,9 +1842,9 @@ Index text and config files from application directories on a disk image.
 | max_file_size_kb | int | no | Skip files larger than this (default 512 KB). No more than this is read of any file |
 | max_files | int | no | Maximum files to extract per call (default 200) |
 
-**Returns:** `files_discovered`, `files_extracted`, `files_indexed`, `files_skipped_binary`, `files_skipped_too_large`, `too_large[]` (the first ten of them by name: raise `max_file_size_kb` to index one), `files_withheld`, `withheld[]` (the first ten by name), `source_prefix`, `sample_files[]`
+**Returns:** `files_discovered`, `files_extracted`, `files_indexed`, `files_skipped_binary`, `files_skipped_too_large`, `too_large[]` (the first ten of them by name: raise `max_file_size_kb` to index one), `files_indexed_in_part`, `indexed_in_part[]` (no more than the first 512 KB of a file is indexed, whatever `max_file_size_kb` is: the first ten files longer than that, by name), `files_withheld`, `withheld[]` (the first ten by name), `source_prefix`, `sample_files[]`, and on a directory whose listing was cut `listing_truncated` with a `note` (deeper files are not listed, so a pattern that finds nothing there shows nothing)
 
-When every name is taken, password hash files and private keys are withheld and counted in `files_withheld`: their content is a credential. The well-known names (`etc/shadow`, `backups/shadow.bak` as Debian keeps it under `/var`, SSH host and user private keys, TLS private keys) are withheld by name, and a private key under any other name by its first line (`-----BEGIN ... PRIVATE KEY-----`), with any extension list. A copy of a password hash file under another name is not recognised.
+Password hash files and private keys are withheld and counted in `files_withheld`, whatever `extensions` asks for: their content is a credential. The well-known names (`etc/shadow`, `backups/shadow.bak` as Debian keeps it under `/var`, SSH host and user private keys, TLS private keys) are withheld by name, and a private key under any other name by its first line (`-----BEGIN ... PRIVATE KEY-----`), with any extension list. A copy of a password hash file under another name is not recognised.
 
 **Roles:** `EXTRACT_EXECUTOR`
 

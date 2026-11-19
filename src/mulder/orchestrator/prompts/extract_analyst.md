@@ -242,6 +242,11 @@ What persists (linux.persistence, from run_linux_persistence):
 - Each account row names the etc/passwd it was read from. Only the one at
   the top of the tree is this system's: a row from backup/etc/passwd or from
   a container layer describes that copy, not who can log in here.
+- The first line of linux.persistence says what the sweep could not see: a
+  directory whose listing was cut (deeper files have no row) or an
+  etc/passwd longer than was read (later accounts have no row). Write "not
+  examined" for those, never "none". A path that starts with
+  partition@<sector>: is on that partition of an image with several.
 What the web root holds: files under var/www in the export are the site as
 it was imaged. A script that executes request input can serve as a web
 shell; that it was used takes a request for it in the access log.
