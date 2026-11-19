@@ -225,6 +225,8 @@ REPORT: PhaseConfig = PhaseConfig(
     single_prompt_template=(
         "Case ID: {case_id}\n\n"
         "{case_briefing}Write the investigation narrative and finalize the report."
+        # Empty unless the run stopped analysing at its token budget.
+        "{budget_note}"
     ),
     single_allowed_tools=get_tools_for_role(Role.REPORT),
     single_max_turns=25,

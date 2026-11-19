@@ -32,6 +32,7 @@ from mulder.orchestrator.types import (
     extract_follow_up_request,
     extract_json_plan,
 )
+from mulder.questions import ID_LABELS
 
 if TYPE_CHECKING:
     from mulder.orchestrator.evidence import ServerBridge
@@ -164,12 +165,17 @@ _QUESTION_MANDATE: str = (
     "is established. Submit a finding only for what the evidence shows: the "
     "'at least one finding' rule is for the system as a whole, not for this "
     "session.\n"
-    "3. Call track_progress once, with system_name set to exactly {system} "
+    "3. Close it with resolve_question, as your instructions describe, "
+    "naming it by the id in square brackets it begins with. The one "
+    "exception is a question that a tool which was not run would settle: "
+    "leave that one open.\n"
+    "4. Call track_progress once, with system_name set to exactly {system} "
     "and questions_addressed set to the question. In notes give your answer, "
     "what you examined, what you could not determine, and any tool that was "
     "not run and would settle it.\n"
-    "4. Stop.\n"
-    "A question that the evidence you examined does not answer is open. That "
+    "5. Stop.\n"
+    "A question that the evidence you examined does not answer is "
+    "undetermined, or open when a tool that was not run would settle it. That "
     "is not the same as ruled out, so say which it is. Do not output a "
     "follow-up request. Where your instructions tell you to end with one, "
     "put what you would have asked for (the tool, and what to run it on) in "
@@ -180,8 +186,10 @@ _QUESTION_MANDATE: str = (
 _CONSOLIDATION_MANDATE: str = (
     "\n\nCONSOLIDATION: {total} sessions before you each took one part of the "
     "investigation questions above for this system and saved their findings. "
-    "Do not repeat their analysis. Your single mandate is to look across "
-    "what they saved:\n"
+    "Do not repeat their analysis. The questions are not yours to close: "
+    "where your instructions tell you to close the questions in this message "
+    "with resolve_question, leave each to the session that took it. Your "
+    "single mandate is to look across what they saved:\n"
     "1. Duplicates. Call get_findings. Where two findings describe the same "
     "event, do not submit a third: make one of them complete with "
     "update_finding (evidence_refs, sources, times). You cannot delete a "
@@ -677,7 +685,12 @@ class RoleRunner:
                 phase, context, questions, model, log_prefix, task_system
             )
         return await self._analyst_session(
-            phase, _analyst_prompt(phase, context), model, log_prefix, task_system
+            phase,
+            _analyst_prompt(phase, context),
+            model,
+            log_prefix,
+            task_system,
+            plan.investigation_questions,
         )
 
     async def _run_question_sessions(
@@ -733,7 +746,10 @@ class RoleRunner:
                     model,
                     log_prefix,
                     task_system,
-                    question="; ".join(group),
+                    # Its own question, id label and all, for a continuation;
+                    # the cut-short record names the question without the id.
+                    group,
+                    question="; ".join(ID_LABELS.sub("", q) for q in group),
                 )
             )
             # This session's own last note: one that was resumed or wrapped
@@ -827,14 +843,34 @@ class RoleRunner:
         model: str,
         log_prefix: str,
         task_system: str,
+        questions: list[str] | None = None,
         question: str = "",
     ) -> AnalystResult:
         """Run one analyst session plus its continuation loop.
+
+        A continuation session starts from a fixed prompt, so *questions*
+        (the session's own, as the first prompt gave them: the plan's, or
+        the one a question session was given) are repeated in it: the
+        analyst is told that only the questions in its user message are its
+        own to resolve.
 
         *question* is the session's own investigation question when it has
         one (``--analyst-scope question``); it is recorded with the session
         if the session is cut short.
         """
+        continuation_prompt = (
+            "CONTINUATION: The previous analyst session ended before it "
+            "finished (context window or turn limit). All submitted "
+            "findings are saved. Review the investigation summary and "
+            "continue analysis. Submit any remaining findings. Do NOT "
+            "re-submit existing findings."
+        )
+        if questions:
+            continuation_prompt += (
+                f"\n\nInvestigation questions:\n{json.dumps(questions)}\n"
+                "These are yours. Close each one that get_investigation_summary "
+                "still lists as open with resolve_question."
+            )
         if self._wrapup:
             prompt += _ANALYST_TURN_BUDGET.format(
                 max_turns=phase.analyst_max_turns,
@@ -859,13 +895,7 @@ class RoleRunner:
             allowed_tools=phase.analyst_allowed_tools,
             disallowed_tools=phase.disallowed_tools,
             max_turns=phase.analyst_max_turns,
-            continuation_prompt=(
-                "CONTINUATION: The previous analyst session ended before it "
-                "finished (context window or turn limit). All submitted "
-                "findings are saved. Review the investigation summary and "
-                "continue analysis. Submit any remaining findings. Do NOT "
-                "re-submit existing findings."
-            ),
+            continuation_prompt=continuation_prompt,
             role_label="Analyst",
             log_prefix=log_prefix,
             task_prompt=prompt,

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from mulder.db import CaseDB
+from mulder.orchestrator.budget import TokenBudgetReached
 from mulder.orchestrator.errors import (
     AuthenticationError,
     ModelNotAvailableError,
@@ -50,6 +51,7 @@ _REASONS: dict[type[BaseException], str] = {
     OutOfCreditError: "the API account is out of credit or over its quota",
     AuthenticationError: "authentication failed",
     ModelNotAvailableError: "the configured model is not available",
+    TokenBudgetReached: "token budget reached",
 }
 
 
@@ -72,6 +74,40 @@ def _is_partial(report: Path) -> bool:
     """
     with report.open(encoding="utf-8", errors="replace") as handle:
         return handle.read(len(_PARTIAL_HEAD)) == _PARTIAL_HEAD
+
+
+def not_completed(orchestrator: Orchestrator) -> list[str]:
+    """Name the phases that have not passed, and the systems extraction left.
+
+    Args:
+        orchestrator: The orchestrator, during or after its run.
+
+    Returns:
+        One bounded, printable entry per phase, in pipeline order.
+    """
+    phases = orchestrator.result.phases
+    pending = [name for name, done in orchestrator.systems_done.items() if not done]
+    left: list[str] = []
+    for name in _PHASE_ORDER:
+        results = [p for p in phases if p.phase_name == name]
+        if name == EXTRACTION.name and pending:
+            # Bounded on its own, so a many-host case cannot push the phases
+            # after it out of the line.
+            shown = ", ".join(_one_line(system, 40) for system in pending[:_MAX_SYSTEMS])
+            more = len(pending) - _MAX_SYSTEMS
+            left.append(
+                f"{name} ({len(pending)} of {len(orchestrator.systems_done)} systems: {shown}"
+                + (f", +{more} more)" if more > 0 else ")")
+            )
+        elif name == CROSS_SYSTEM.name and len(orchestrator.systems_done) == 1:
+            # One system: the pipeline skips cross-system correlation, so it
+            # is not something the run left undone.
+            continue
+        elif not results:
+            left.append(name)
+        elif not all(p.success for p in results):
+            left.append(f"{name} (failed)")
+    return left
 
 
 def incomplete_notice(orchestrator: Orchestrator, error: BaseException | None) -> list[str]:
@@ -111,24 +147,7 @@ def incomplete_notice(orchestrator: Orchestrator, error: BaseException | None) -
     if error is None and (session_error := orchestrator._session.last_query_error):
         reason += f"; last session error: {_one_line(session_error, 200)}"
 
-    pending = [name for name, done in orchestrator.systems_done.items() if not done]
-    left: list[str] = []
-    for name in _PHASE_ORDER:
-        results = [p for p in phases if p.phase_name == name]
-        if name == EXTRACTION.name and pending:
-            # Bounded on its own, so a many-host case cannot push the phases
-            # after it out of the line.
-            shown = ", ".join(_one_line(system, 40) for system in pending[:_MAX_SYSTEMS])
-            more = len(pending) - _MAX_SYSTEMS
-            left.append(
-                f"{name} ({len(pending)} of {len(orchestrator.systems_done)} systems: {shown}"
-                + (f", +{more} more)" if more > 0 else ")")
-            )
-        elif not results:
-            left.append(name)
-        elif not all(p.success for p in results):
-            left.append(f"{name} (failed)")
-
+    left = not_completed(orchestrator)
     return [
         f"Stopped in phase: {stopped}",
         f"Reason: {reason}",

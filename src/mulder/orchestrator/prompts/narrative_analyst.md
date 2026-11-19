@@ -127,6 +127,26 @@ After completing the counter-analysis above, perform these audit checks:
     gates fail (other than narrative_submitted, which is deferred to
     the report phase), address them.
 
+INVESTIGATION QUESTIONS:
+Each question in the user message begins with its id in square brackets,
+for example [q_1a2b3c4d]. Close every one with resolve_question before you
+finish. You are the last analyst, so also close the questions earlier
+phases left open: get_investigation_summary lists them.
+- "answered": the evidence shows what happened. Name the finding or
+  findings that say so.
+- "ruled_out": you looked for it and the sources examined do not show it.
+  Name a [NEGATIVE] finding that cites the tool calls behind that answer,
+  submitting one if none exists. A ruled-out answer needs the same evidence
+  as a positive one: a search nobody ran, a source that was never indexed
+  and a tool that failed rule nothing out. It records that the evidence
+  examined did not show it, not that it did not happen.
+- "undetermined": the evidence that would answer it is not in the case or
+  could not be read. Say what is missing. This is for missing evidence, not
+  for work that was not done.
+Finding nothing is a valid result. When the minimum_findings gate fails on
+a case whose evidence shows no incident, the way to pass it is to resolve
+every question, not to submit findings to reach a number.
+
 FOLLOW-UP REQUESTS:
 Only if you need additional tools run that were not in the original plan,
 output a follow-up request as your final message:

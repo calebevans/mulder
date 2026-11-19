@@ -44,6 +44,7 @@ from mulder.cut_short import (
 )
 from mulder.db import _CUT_SHORT_KEY, _MAX_CUT_SHORT, CaseDB
 from mulder.models import Finding
+from mulder.orchestrator.budget import TokenBudgetReached
 from mulder.orchestrator.display import _MAX_CUT_SHORT_ROWS, InvestigationDashboard
 from mulder.orchestrator.evidence import ServerBridge
 from mulder.orchestrator.gates import GateResult, validate_narrative
@@ -726,7 +727,8 @@ class TestQuestionScope:
         assert "submit_finding as soon as it is established" in prompt
         assert "Submit a finding only for what the evidence shows" in prompt
         assert f'track_progress once, with system_name set to exactly "{SYSTEM}"' in prompt
-        assert "4. Stop." in prompt
+        assert "3. Close it with resolve_question, as your instructions describe" in prompt
+        assert "5. Stop." in prompt
         assert "That is not the same as ruled out" in prompt
         assert "Do not output a follow-up request" in prompt
         # The turn-budget notice names the smaller allowance.
@@ -937,7 +939,7 @@ class TestQuestionScope:
     async def test_the_follow_up_cycle_runs_as_before(self, db_dir: Path) -> None:
         """Through ``_run_split_phase``: the consolidation's request re-plans."""
         orch = _orchestrator(db_dir, question_sessions=True)
-        plans = iter([PLAN, Plan("p2", TASK, ["One more?"], [], "plan", 1)])
+        plans = iter([copy.deepcopy(PLAN), Plan("p2", TASK, ["One more?"], [], "plan", 1)])
         contexts: list[str] = []
 
         async def planner(phase: Any, prompt_vars: Any, follow_up: str, log_prefix: str) -> Plan:
@@ -974,6 +976,88 @@ class TestQuestionScope:
         assert _orchestrator(db_dir, question_sessions=True)._roles._question_sessions is True
 
 
+class TestRecordedQuestions:
+    """Question sessions and the questions the orchestrator records for ``resolve_question``.
+
+    ``_run_split_phase`` stores the plan's questions and hands them on with
+    their ids, and the analyst's system prompt says the questions in its
+    user message are its own to close.
+    """
+
+    @staticmethod
+    async def _split_phase(orch: Orchestrator, execute: Callable[..., Any]) -> PhaseResult:
+        async def planner(*args: Any, **kwargs: Any) -> Plan:
+            return copy.deepcopy(PLAN)  # the runner replaces its questions
+
+        async def executor(phase: Any, plan: Plan, *a: Any, **kw: Any) -> ExecutionResults:
+            return ExecutionResults(plan.plan_id, [], 1, False, tool_calls=1)
+
+        with (
+            patch.object(orch._roles, "run_planner", side_effect=planner),
+            patch.object(orch._roles, "run_executor", side_effect=executor),
+            patch.object(orch._session, "execute", side_effect=execute),
+            patch.object(orch, "_validate_phase", return_value=GateResult(True, "extraction")),
+        ):
+            return await orch._run_split_phase(
+                EXTRACTION,
+                prompt_vars={"case_id": CASE, "system_name": SYSTEM, "case_briefing": ""},
+            )
+
+    @pytest.mark.asyncio()
+    async def test_each_session_is_told_which_questions_are_its_own(self, db_dir: Path) -> None:
+        orch = _orchestrator(db_dir, question_sessions=True, max_compactions=1, wrapup=False)
+        # The second question session and the consolidation each end at their
+        # turn limit once; under --no-wrapup the continuation is a new session
+        # with the fixed continuation prompt.
+        sessions = _Sessions(_done(), _exhausted(), _done(), _done(), _exhausted(), _done())
+        await self._split_phase(orch, sessions.execute)
+
+        with CaseDB.open(CASE, db_dir) as db:
+            recorded = db.get_questions()
+        assert [q.question for q in recorded] == QUESTIONS
+        labelled = [f"[{q.question_id}] {q.question}" for q in recorded]
+        first, second, second_again, third, consolidation, consolidation_again = sessions.prompts
+        # Its own question, with the id resolve_question takes, and no other.
+        assert [_questions_in(p) for p in (first, second, third)] == [[q] for q in labelled]
+        assert _questions_in(second_again) == [labelled[1]]
+        assert "These are yours. Close each one" in second_again
+        # The consolidation reads all of them and is told they are not its to close.
+        assert _questions_in(consolidation) == labelled
+        assert "The questions are not yours to close" in consolidation
+        assert "QUESTION SESSION" not in consolidation
+        assert "Investigation questions" not in consolidation_again
+        assert "resolve_question" not in consolidation_again
+
+    @pytest.mark.asyncio()
+    async def test_a_cut_short_record_names_the_question_without_its_id(
+        self, db_dir: Path
+    ) -> None:
+        orch = _orchestrator(db_dir, question_sessions=True, max_compactions=0, wrapup=False)
+        await self._split_phase(orch, _Sessions(_done(), _exhausted(), _done()).execute)
+
+        assert _rows(db_dir) == [("extraction", "analyst", SYSTEM, QUESTIONS[1])]
+
+    @pytest.mark.asyncio()
+    async def test_a_session_refused_at_the_token_budget_ends_the_phase(
+        self, db_dir: Path
+    ) -> None:
+        """``TokenBudgetReached`` reaches the pipeline: no question session swallows it."""
+        sessions = _Sessions()
+
+        async def execute(**kwargs: Any) -> PhaseResult:
+            if len(sessions.calls) == 1:  # the second question session is refused
+                raise TokenBudgetReached("9 of 10 tokens used")
+            return await sessions.execute(**kwargs)
+
+        orch = _orchestrator(db_dir, question_sessions=True)
+        with pytest.raises(TokenBudgetReached):
+            await self._split_phase(orch, execute)
+
+        assert len(sessions.calls) == 1  # no later question session, no consolidation
+        assert "QUESTION SESSION 1 OF 3" in sessions.prompts[0]
+        assert _rows(db_dir) == []
+
+
 class TestMandatesMatchTheAnalyst:
     """The two mandates name tools, parameters and rules that exist elsewhere."""
 
@@ -986,6 +1070,7 @@ class TestMandatesMatchTheAnalyst:
 
         assert named == {
             "submit_finding",
+            "resolve_question",
             "track_progress",
             "get_findings",
             "update_finding",
@@ -1013,6 +1098,10 @@ class TestMandatesMatchTheAnalyst:
         # instructions describe".
         assert "Submit at least one finding before finishing." in system_prompt
         assert "FOLLOW-UP REQUESTS:" in system_prompt
+        # "resolve_question, as your instructions describe" and "where your
+        # instructions tell you to close the questions in this message".
+        assert "Close every one with resolve_question before you" in system_prompt
+        assert "Only the questions in the user message are yours" in system_prompt
         assert '{"request": "additional_plan"' in system_prompt
 
 

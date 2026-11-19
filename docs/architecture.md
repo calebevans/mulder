@@ -74,6 +74,7 @@ flowchart LR
         getRawOutput["get_raw_output"]
         listSources["list_sources"]
         getSourceStats["get_source_stats"]
+        logTables["list_log_tables\nlog_top / log_histogram\nlog_rows"]
     end
 
     subgraph findingsTools [Findings and Reporting]
@@ -81,6 +82,7 @@ flowchart LR
         submitNarrative["submit_narrative"]
         finalizeReport["finalize_report"]
         checkReadiness["check_finalize_readiness"]
+        resolveQuestion["resolve_question"]
         auditCoverage["audit_evidence_coverage\naudit_tool_coverage"]
     end
 ```
@@ -223,7 +225,7 @@ The `progress` table has no role column and findings have no system column, so n
 
 When `RoleRunner.compaction_loop` ends with the session still unfinished (no continuation left, and the wrap-up, if one ran, is over), the session is recorded as cut short. That is the one place every continuable role session passes through: analysts, gate remediation, executors, and the single-mode catalog and report sessions. It holds under `--no-wrapup` and `--max-compactions 0` as well. A planner has its own continuations (`_request_plan_from_notes`: a resume to write the plan, then a new one-turn session), so `run_planner` records it itself, when its session ended at a turn or context limit and none of them produced a plan. Only extraction re-plans after that; cross-system and the alternative narrative go on without their executor step, and in a follow-up cycle the analyst's request is dropped. A planner that failed without reaching a limit (output that is not a plan) is not recorded.
 
-`RoleRunner._note_cut_short` writes `{phase, role, system, question}` through `ServerBridge.record_cut_short` to `CaseDB.record_cut_short`, which adds `recorded_at` and `n`, the row's number in the case. `role` is empty for a single-mode phase, `system` is empty when the phase has none, and `question` is set only for a per-question analyst session. The system name comes from evidence file names and the question from a model, so both are flattened to one printable line and cut (200 and 500 characters) before they are stored. The rows are one JSON list under the `kv_store` key `cut_short_sessions`, last 100 kept; the first row's `n` tells a reader how many earlier ones were dropped, and the summary item and both reports say so. The orchestrator is the only writer. A failure to record is logged and does not end the run.
+`RoleRunner._note_cut_short` writes `{phase, role, system, question}` through `ServerBridge.record_cut_short` to `CaseDB.record_cut_short`, which adds `recorded_at` and `n`, the row's number in the case. `role` is empty for a single-mode phase, `system` is empty when the phase has none, and `question` is set only for a per-question analyst session (the question as the planner wrote it, without the `[q_...]` id it was handed to the session with). The system name comes from evidence file names and the question from a model, so both are flattened to one printable line and cut (200 and 500 characters) before they are stored. The rows are one JSON list under the `kv_store` key `cut_short_sessions`, last 100 kept; the first row's `n` tells a reader how many earlier ones were dropped, and the summary item and both reports say so. The orchestrator is the only writer. A failure to record is logged and does not end the run.
 
 The record is read in three places, all through `mulder/cut_short.py` so they name a session the same way. `cut_short_label` quotes the system name and the question as JSON strings, so a comma or semicolon inside one cannot pass for the label's own:
 
@@ -235,8 +237,8 @@ The record is read in three places, all through `mulder/cut_short.py` so they na
 
 `--analyst-scope question` changes one step: the extraction analyst. `RoleRunner.run_analyst` then runs `_run_question_sessions` when the plan has at least two usable questions (strings, each flattened to one line of at most 500 characters, duplicates dropped); otherwise, and in every other phase, it runs the single session as before. `_run_split_phase` is unchanged and receives one `AnalystResult` either way.
 
-- **Question sessions.** One per question, in plan order, one after another. `_MAX_QUESTION_SESSIONS` (6) caps them: the last session takes every question that is left. Each gets the ordinary analyst prompt with only its own question, followed by `_QUESTION_MANDATE`: answer this, save findings as they are established, record one `track_progress` note under the pinned system label (the answer, what was examined, what could not be determined, and any tool that would settle it), then stop. It is told that an unanswered question is open, not ruled out, and not to emit a follow-up request. The turn limit is `_QUESTION_MAX_TURNS` (25).
-- **Consolidation session.** `_CONSOLIDATION_MAX_TURNS` (15) turns, the ordinary analyst prompt with all the questions, followed by `_CONSOLIDATION_MANDATE`: do not repeat the analysis; look across the saved findings for duplicates and contradictions (`update_finding`; `delete_finding` is not an extraction tool, and the narrative phase de-duplicates) and for open questions; end with the follow-up request if a tool that was not run would close one. It is given what the question sessions left, quoted and sanitised the way a handoff is: each session's last progress note under that session's number (a session that was resumed or wrapped up records several; one that recorded none is listed as such), the findings saved since the first of them started, and any follow-up request one of them emitted anyway.
+- **Question sessions.** One per question, in plan order, one after another. `_MAX_QUESTION_SESSIONS` (6) caps them: the last session takes every question that is left. Each gets the ordinary analyst prompt with only its own question, followed by `_QUESTION_MANDATE`: answer this, save findings as they are established, close the question with `resolve_question` (see [Investigation Questions and the No-Incident Outcome](#investigation-questions-and-the-no-incident-outcome)) unless a tool that was not run would settle it, record one `track_progress` note under the pinned system label (the answer, what was examined, what could not be determined, and any tool that would settle it), then stop. The question reaches the session the way the plan's questions reach any analyst: in its user message with its recorded id, so the system prompt's rule that only the questions in the user message are its own covers exactly that one, and a continuation session is given that question again and no other. It is told that an unanswered question is undetermined, or open when a tool that was not run would settle it, not ruled out, and not to emit a follow-up request. The turn limit is `_QUESTION_MAX_TURNS` (25).
+- **Consolidation session.** `_CONSOLIDATION_MAX_TURNS` (15) turns, the ordinary analyst prompt with all the questions, followed by `_CONSOLIDATION_MANDATE`: do not repeat the analysis; the questions are listed for reference and are not this session's to close with `resolve_question` (each belongs to the session that took it, and a continuation of the consolidation is not handed them as its own); look across the saved findings for duplicates and contradictions (`update_finding`; `delete_finding` is not an extraction tool, and the narrative phase de-duplicates) and for open questions; end with the follow-up request if a tool that was not run would close one. It is given what the question sessions left, quoted and sanitised the way a handoff is: each session's last progress note under that session's number (a session that was resumed or wrapped up records several; one that recorded none is listed as such), the findings saved since the first of them started, and any follow-up request one of them emitted anyway.
 - **Result.** Turns and `submit_finding` counts are summed, messages concatenated, and the follow-up request is the consolidation session's.
 
 Every one of these sessions goes through `_analyst_session`, with the same system prompt and tools as any extraction analyst, so resume, wrap-up, the new-session fallback and the cut-short record apply to each; a question session that is cut short is recorded with its question, and the remaining sessions still run.
@@ -250,6 +252,20 @@ Three errors bypass the retry system and end the run at once (`FATAL_ERRORS` in 
 Credit wording in a `ResultError` counts only when the SDK attributes the failure to the API (`api_error_status` is set, or `terminal_reason` is `"api_error"`). Otherwise the SDK builds that exception's message from the result frame's own text, which can be the model's last words. When a fatal error is raised inside the message loop, the SDK stream is closed in the task that was reading it before the error propagates; left open, asyncio closes it from another task at loop shutdown and logs a traceback.
 
 A fatal error propagates out of the phase loops with no retry and no continuation. In the extraction pool, the worker that hits one cancels the other workers, so a session waiting on a long tool call does not hold the run open. `mulder investigate` exits with status 2.
+
+### Token Budget
+
+`orchestrator/budget.py` holds the run's one token tally, `TokenBudget`. The orchestrator creates it and shares it with the `SessionExecutor`, which fills and obeys it, and with the dashboard, which displays it.
+
+**Tally.** Each session's final `ResultMessage` is added with `record()`. The source is `model_usage` (one entry per model, so it includes any auxiliary model the CLI called) or, when that is empty, `usage` filed under the session's own model. Four disjoint kinds are kept per model: uncached input, output, cache-write input and cache-read input. Per-message usage is never added: behind the LiteLLM proxy only the final message carries usage. The `model_usage` sidecar is written from the tally. Its `input_tokens` and `output_tokens` keep their meaning, and `cache_creation_input_tokens` and `cache_read_input_tokens` are listed beside them.
+
+**Budget.** `--max-tokens` sets `limit`, counted over all four kinds. It is in tokens because Claude Code prices its dollar figure from a table of Claude models, which is wrong behind the proxy. `check()` is the first statement of `SessionExecutor.execute` and `execute_utility`, the two places a session starts, and raises `TokenBudgetReached` when `limit - used` is at or below `reserve`. No caller checks anything, so every kind of session is covered: role sessions, continuations, remediation, the plan-from-notes and JSON-repair sessions, and the `wait_all` utility query. A session that is running is never interrupted, so the total can end above the limit by the sessions in flight.
+
+**Reserve.** `report_reserve()` holds back `REPORT_RESERVE_FRACTION` (15%) of the budget, at least `REPORT_RESERVE_FLOOR` (750,000 tokens) and at most half. `TokenBudgetReached` is not a fatal error. It unwinds the phase loops with no retry and no continuation; `_run_pipeline` catches it, records it on `InvestigationResult.budget_stop` and goes to `_run_report`. That sets the reserve to zero, so report sessions start until the budget is fully spent, and gives the report prompt a note naming the systems and phases that were not completed and how to write about them. The extraction pool cancels nobody: each worker finishes the session it is in, and its next one is refused. A stop during the catalog ends the run without a report phase, since nothing was analysed. So does a stop that leaves `check_finalize_readiness` failing its `minimum_findings` gate, the one gate the report role has no tool to fix: the reserve is left unspent and the partial report takes over.
+
+`InvestigationResult.success` is False whenever `budget_stop` is set, and `mulder investigate` exits with status 1. If a report session was refused because nothing was left, or the report phase failed its gate, `budget_stop` is passed to the partial report as its reason ("token budget reached"). A refusal in the report phase after the report was finalized (a continuation of a session that ran out of turns) is not a stop: the phase passes, and `budget_stop` keeps whatever the analysis phases left there.
+
+**Turns.** A phase the budget cuts short returns no `PhaseResult`, so its turns are not in the per-phase sums. `SessionExecutor.turns_run` counts the turns of every role session; after a budget stop `InvestigationResult.total_turns` is set from it, and the summary's phase table lists the difference as `(cut short)`. Without a budget stop the total is the per-phase sum, as before.
 
 ### Phase Gates
 
@@ -284,6 +300,34 @@ When a gate fails, the orchestrator retries the phase with:
 - Gap-specific instructions in single-mode retry prompts and in split-mode remediation sessions
 - Up to 2 retries per phase (configurable)
 - Consecutive failure tracking prevents indefinite silent auto-passes
+
+### Investigation Questions and the No-Incident Outcome
+
+The count-based gates assume something happened. A case where nothing did has a second, explicit way to pass, so it is not pushed to manufacture findings.
+
+Each planner's `investigation_questions` are stored in the `investigation_questions` table, with the phase and system, just before the analyst runs. The orchestrator writes them through `ServerBridge.record_questions` with no LLM call and hands them to the analyst prefixed with their ids (`[q_1a2b3c4d] ...`); an analyst session continued after a context or turn limit is given them again. Analysts and the report role close a question with `resolve_question`:
+
+| Resolution | Must name | Checked on the server |
+|------------|-----------|-----------------------|
+| `answered` | at least one finding of activity | it exists, is not `[NEGATIVE]` or `[COLLECT]`, every call it cites is a logged, successful call to something other than a findings tool (the check `submit_finding` makes, run again), and at least one of those calls is to a tool that extracts, searches or reads evidence |
+| `ruled_out` | at least one `[NEGATIVE]` finding | the same checks |
+| `undetermined` | a reason | the reason is not empty |
+
+A finding may cite any successful call, bookkeeping included. Resting a question on it takes more: a finding that cites only calls that examine no evidence (`open_case`, `list_sources`, `get_investigation_summary`, `get_ioc_summary`, `get_bookmarks`, the audits, job polling and the like: `NO_EVIDENCE_TOOLS` in `mulder/questions.py`) is refused for `answered` and `ruled_out` alike, because nothing looked. Finding ids named alongside one that qualifies are ignored, and the response lists them with the reason. A cited call that is missing from the server's audit index is looked up in the audit log file before it is refused: each session's server reads the log once, and another session's server may have logged the call since.
+
+A resolution holds only while one of the findings it names still exists and is still the right kind (`mulder/questions.py`). Deleting the finding, or re-titling a `[NEGATIVE]` one because the hypothesis turned out true, reopens the question. `deduplicate_findings` repoints questions from an absorbed finding to its survivor.
+
+The gates then accept either path:
+
+- `minimum_findings` passes on three non-negative findings, or when at least one question is recorded, none is open, and both coverage audits have been called. Its detail says which.
+- The cross-system gate's finding and MITRE checks also pass when at least one question is recorded, none is open, and no finding of activity is of medium severity or above. The audits are not required here: only the narrative and report roles can run them.
+- `timestamp_coverage`, `narrative_submitted`, `audit_tools_called` and `evidence_citation_coverage` are unchanged, so a clean case still has to cite at least three distinct sources across its findings, negative ones included.
+
+A case with no recorded questions gets the same gate results and the same `get_investigation_summary` output as before questions were recorded.
+
+The report lists every question with its resolution and the findings behind it. When the case passed on resolved questions (fewer than three findings of activity), none of its findings is medium or above, and at least one question was answered or ruled out, the executive summary states that no evidence of an incident was found in the evidence examined, then what was examined and what was not available. The "Examined" line counts sources the way the `evidence_citation_coverage` gate does (distinct evidence-bearing names, and how many of them a finding cites) and says how many of the tool calls went to tools that extract, search or read evidence. That figure includes failed calls, and the line says so: the audit summary counts calls by tool name, not by outcome. A case that passed on resolved questions but holds a medium or higher finding, or in which every question is undetermined, keeps the standard summary: the first has found something, and the second has not found that nothing happened.
+
+What the server cannot check is whether an `undetermined` reason is honest, or whether a `[NEGATIVE]` finding's searches were adequate: it checks that a call to an evidence tool is cited, not what that call looked for or returned. The report shows every question with what its answer rests on, and every undetermined question with its reason, for that purpose.
 
 ## Tool Access Control
 
@@ -420,10 +464,53 @@ erDiagram
         text updated_at
     }
 
+    logEvents {
+        int event_id PK
+        text log_table
+        int source_id FK
+        int line
+        text event_time
+        text actor
+        text src_ip
+        text action
+        text target
+        text status
+        text user_agent
+        text session_id
+        int bytes
+        text extra
+    }
+
+    logTables {
+        int source_id PK
+        text log_table PK
+        int complete
+        int nested
+        int row_count
+        int rows_no_time
+        int rows_unparsed
+        text first_time
+        text last_time
+        text field_counts
+    }
+
+    investigationQuestions {
+        text question_id PK
+        text phase
+        text system
+        text question
+        text resolution
+        text finding_ids
+        text reason
+        text recorded_at
+    }
+
     caseMetadata ||--o{ sources : "has"
     sources ||--o{ windows : "contains"
     windows ||--|| windowsFts : "indexed by"
     windows ||--o{ bookmarks : "flagged by"
+    sources ||--o{ logEvents : "also loaded as"
+    sources ||--o{ logTables : "ingest record"
 ```
 
 ### Key Tables
@@ -436,7 +523,10 @@ erDiagram
 - **evidence_registry**: SHA-256 chain-of-custody records for original evidence files
 - **bookmarks**: Agent-flagged windows of interest for later review
 - **progress**: Per-system records of tools executed and questions addressed
+- **log_events**: One normalised row per log event, for logs an extractor loads through `mulder.logtable.ingest` as well as indexing as text. `event_time` is fixed-width UTC (`YYYY-MM-DDTHH:MM:SSZ`), `source_id` and `line` point back at the indexed text, and `extra` is a JSON object of further fields. Indexed on `(log_table, event_time)`. Read only through `log_top`, `log_histogram` and `log_rows`, which bind every value and never take SQL
+- **log_tables**: One row per ingest (a source and the table it fed): how many rows were stored, how many had no usable time, how many records could not be parsed, the time range, which fields have values, whether the ingest completed, and whether it read its path recursively (`nested`: only such ingests cover or replace one another by path). `verify_evidence_integrity` does not cover `log_events`: it re-hashes the text windows, including each indexed `logtable.*` query result, but there is no hash of the rows a count is computed from
 - **kv_store**: General-purpose key-value persistence for cross-tool state sharing. Stores TSK partition offsets (`tsk_partition_offset:<image>`), EVTX extraction directory paths, and other data that must survive server restarts and context compaction. Also holds the role sessions that were cut short (`cut_short_sessions`, see [Cut-Short Sessions](#cut-short-sessions))
+- **investigation_questions**: The questions each planner asked, with phase and system, and how each was resolved (`answered`, `ruled_out`, `undetermined`, or NULL while open) with the finding ids or reason behind it. Written by the orchestrator, resolved by `resolve_question`
 
 ### Write Safety
 
@@ -469,7 +559,7 @@ The orchestrator displays a real-time terminal dashboard using Rich's Live displ
 ```
 
 The dashboard has two panels:
-- **Stats header**: Current phase, tool count, finding count, token usage (total and per-model), throughput, system resources, elapsed time
+- **Stats header**: Current phase, tool count, finding count, token usage (total and per-model), throughput, system resources, elapsed time, and with `--max-tokens` the tokens counted against the budget
 - **Scrolling log**: Assistant reasoning, tool calls, findings (color-coded by severity), gate results
 
 ## Evidence Classification and Extractor Framework
@@ -487,10 +577,14 @@ The `EvidenceClassifier` scans evidence directories and categorizes files by typ
 | Office document | `.doc`, `.docx`, `.xls`, `.ppt` | oletools |
 | PDF document | `.pdf` | Didier Stevens PDF tools |
 | Email archive | `.pst`, `.ost` | pst-utils / libpst |
+| Cloud audit log | `.json`, `.jsonl`, `.ndjson` with audit-log keys (GitHub, GCP, AWS, Microsoft 365, Entra ID); `.csv` with an `AuditData` column (Microsoft 365) | Zircolite (Sigma), log tables |
 | Phone dump (Android) | Android directory structures | MVT, ALEAPP |
 | Phone dump (iOS) | iOS directory structures | MVT, iLEAPP |
 | Linux logs | `/var/log/*`, journal files | Zircolite, native parsing |
+| Loose logs | `.log`, `.txt` and rotated `.log.N` files, Suricata and Zeek JSON, a directory named `log` or `logs` or under `var/log` | `run_loose_logs` (native parsers; Zircolite for the web server Sigma rules) |
+| ESXi support bundle | a directory with `commands/`, `etc/vmware` and `var/run/log` or `var/log` | `run_loose_logs` |
 | Archive | `.zip`, `.7z`, `.tar`, `.gz` | Internal extraction |
+| Triage collection | A directory laid out as KAPE target output, a Velociraptor offline collection or UAC output, or a Windows volume directory | The disk artifact tools on the directory, `index_triage_collection` |
 
 `.raw` and `.001` are written by disk imagers and memory acquisition tools
 alike, so their first bytes decide: a partition table, filesystem, BitLocker
@@ -523,6 +617,20 @@ For single-partition tools that need a sector offset, `_parse_partition_offset` 
 ### Partition Offset Persistence
 
 Resolved partition offsets are stored in the database `kv_store` table under the key prefix `tsk_partition_offset:<image_path>`. This allows tools invoked later in the pipeline (e.g., `extract_file_by_inode`, `index_evtx_file`) to retrieve the correct offset without re-running `mmls`. The kv_store pattern is also used for EVTX extraction directory paths that must survive server restarts and context compaction.
+
+### Directories as Evidence Roots
+
+A tool that reads a file out of a disk image finds it in the `fls` listing and reads its inode with `icat`. A directory can answer both, so the same tools accept one where they accept an image (`src/mulder/dirroot.py`):
+
+- `dir_root(path)` returns the directory's files as `(original path, stored path)` pairs and renders them as `fls -r -p` rows. The inode of a row is its position; `$MFT`, when present, is row 0, which is the record `run_mft_parser` asks for.
+- `icat(image_path, offset, inode)` is the one place a file is read: the `icat` binary for an image, the stored file for a directory. Callers copy the bytes to a temporary directory exactly as they do for an image, so no parser is ever pointed at the evidence itself.
+- `_collect_fls_chunks` returns the directory's listing for a directory and leaves directory listings out when the target is an image, because their inode column holds row numbers.
+
+The pairs are what make this general. For a plain directory the two paths are the same. For a triage collection the layout decides: KAPE stores `$UsnJrnl:$J` as `$Extend/$J`, Velociraptor percent-encodes names and splits one drive across accessor directories, UAC keeps the files under `[root]`. `detect_collection` recognises the layout, the host name the collection states, and its volumes; files of a second volume are listed under its label. Rows are ordered as `fls` orders them (by directory, names compared without case) with the system volume first, because several tools read the first file that matches: `Windows/...` must come before `Windows.old/...` and before a shadow copy.
+
+Evidence is hostile, so the walk never follows a symlink (a root that is one is refused), lists only regular files, is capped at 200,000 entries (breadth-first across the volumes, so a cut listing keeps the top of each), and prints control characters in names as `^` so that a file name cannot forge a listing row. A decoded name is a label only: the file that is opened is the one the walk found, with `O_NOFOLLOW`.
+
+A triage collection has no unallocated space and no deleted files. `mount_disk_image` refuses a directory, `run_mactime` works only on the body file a UAC collection carries, and `triage.summary` records which artifact kinds were and were not collected so that absence is reported as "not collected".
 
 ### Registry Hive Parsing
 
@@ -681,6 +789,7 @@ The `ReportRenderer` uses Jinja2 templates to produce Markdown and HTML reports:
 4. Convert finding descriptions from markdown to HTML
 5. Generate executive summary from severity distribution
 6. Render template with all case data, narrative, findings, audit metrics, and source listings
+7. List each recorded investigation question with its resolution and the findings behind it, and replace the executive summary with the no-incident statement when the case qualifies (see [Investigation Questions and the No-Incident Outcome](#investigation-questions-and-the-no-incident-outcome))
 
 ### Output Formats
 

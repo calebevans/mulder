@@ -7,7 +7,10 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
+
+if TYPE_CHECKING:
+    from mulder.models import SourceRow
 
 IP_RE: re.Pattern[str] = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 
@@ -96,6 +99,9 @@ def case_extract_dir(db_dir: str | Path, case_id: str | None) -> Path:
     return root / case_id
 
 
+EXTRACTION_MARKER: str = ".mulder-extraction-complete.json"
+"""Written by extract_archive at the top of a finished extraction; not evidence."""
+
 DEFAULT_WORKSPACE_DIR: str = "~/.mulder/workspace"
 """Default working directory for agent sessions on a native install.
 
@@ -156,6 +162,31 @@ def source_is_cited(source_name: str, finding_sources: set[str]) -> bool:
     if not source_name:
         return False
     return any(source_name in fs or fs in source_name for fs in finding_sources if fs.strip())
+
+
+# Sources that are bookkeeping or derived from the run itself rather than
+# evidence a finding would cite. Excluded from the citation denominator.
+_AUXILIARY_SOURCES = frozenset(
+    {"bulk.bulk_extractor", "bulk.duplicates", "composite.correlation", "enrichment.iocs"}
+)
+_AUXILIARY_PREFIXES = ("registry.query.",)
+_AUXILIARY_SUFFIXES = (".stats", ".manifest", ".manifest.json")
+
+
+def is_evidence_source(source: SourceRow) -> bool:
+    """Return True when *source* is evidence a finding could cite.
+
+    Empty sources, run bookkeeping (extractor reports, stats, manifests),
+    ad-hoc registry query caches, and outputs derived from the findings
+    themselves (IOC enrichment, correlation) are not.
+    """
+    name = source.source_name
+    return (
+        source.line_count > 0
+        and name not in _AUXILIARY_SOURCES
+        and not name.startswith(_AUXILIARY_PREFIXES)
+        and not name.endswith(_AUXILIARY_SUFFIXES)
+    )
 
 
 def classify_ip(ip: str) -> str:

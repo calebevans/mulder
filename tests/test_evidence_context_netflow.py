@@ -86,7 +86,9 @@ def test_catalog_evidence_rescues_mismatched_name(tree: tuple[Path, Path]) -> No
 def test_mismatched_name_without_netflow_evidence_falls_back(tree: tuple[Path, Path]) -> None:
     root, _ = tree
     ctx = EvidenceContext(str(root))
-    _catalog(ctx, "Primary router", ["log_file"])
+    # A type with nothing to list here. "log_file" would list host-b/auth.log, which
+    # run_loose_logs now reads.
+    _catalog(ctx, "Primary router", ["evtx"])
     text = ctx.build_evidence_context("Primary router")
 
     assert _FALLBACK in text
