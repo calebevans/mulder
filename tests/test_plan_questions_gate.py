@@ -23,7 +23,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 import mulder.server.app as server_app
-from mulder.db import _UNANALYSED_KEY, CaseDB
+from mulder.db import _REJECTED_PLANS_KEY, CaseDB
 from mulder.orchestrator import evidence
 from mulder.orchestrator.budget import TokenBudgetReached
 from mulder.orchestrator.fallback import incomplete_notice
@@ -433,7 +433,7 @@ class TestQuestionsGate:
         # ``mulder report`` and the partial report open the file like this.
         with CaseDB(path) as db:
             for value in ("not json", "[1]", "7", '{"host-a": "three"}'):
-                db.set_kv(_UNANALYSED_KEY, value)
+                db.set_kv(_REJECTED_PLANS_KEY, value)
                 assert db.get_unanalysed() == {}
         with sqlite3.connect(path) as conn:
             conn.execute("DROP TABLE kv_store")
@@ -606,9 +606,9 @@ class TestThroughThePhase:
         assert result.success
         assert script.kinds == ["planner", "resume", "ask", "planner", *["analyst"] * 3]
         executor.assert_awaited_once()
-        # One plan was rejected, but the system was then analysed: not listed.
+        # The rejected plan stays counted, but the system was then analysed: not listed.
         with CaseDB.open(CASE, db_dir) as db:
-            assert json.loads(db.get_kv(_UNANALYSED_KEY) or "{}") == {SYSTEM: 1}
+            assert json.loads(db.get_kv(_REJECTED_PLANS_KEY) or "{}") == {SYSTEM: 1}
             assert db.get_unanalysed() == {}
 
     @pytest.mark.asyncio()

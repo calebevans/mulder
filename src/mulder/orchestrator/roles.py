@@ -478,7 +478,7 @@ class RoleRunner:
             analyst answers them one session at a time); one that still has
             none after ``_request_questions`` is not accepted, and is
             counted for its system in the case database
-            (``ServerBridge.record_unanalysed``).
+            (``ServerBridge.record_rejected_plan``).
         """
         model = self._model_config.resolve(phase.name, "planner")
         effective_vars = dict(prompt_vars or {})
@@ -572,7 +572,7 @@ class RoleRunner:
                 # On record, so that a system no plan is ever accepted for
                 # is named in the report and not passed over as clean.
                 if self._server is not None:
-                    self._server.record_unanalysed(effective_vars.get("system_name", ""))
+                    self._server.record_rejected_plan(effective_vars.get("system_name", ""))
                 return None
             plan_json["investigation_questions"] = questions
 

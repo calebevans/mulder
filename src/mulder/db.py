@@ -423,7 +423,7 @@ _QueueItem = tuple[
 _CUT_SHORT_KEY = "cut_short_sessions"
 _CUT_SHORT_FIELDS = ("phase", "role", "system", "question", "recorded_at", "n")
 _MAX_CUT_SHORT = 100
-_UNANALYSED_KEY = "unanalysed_systems"
+_REJECTED_PLANS_KEY = "questions_gate_rejected_plans"
 
 
 class _WriteQueue:
@@ -1710,7 +1710,7 @@ class CaseDB:
             if isinstance(row, dict)
         ]
 
-    def record_unanalysed(self, system: str) -> None:
+    def record_rejected_plan(self, system: str) -> None:
         """Count a plan for *system* that was rejected at the questions gate.
 
         The planner wrote no investigation questions, in the plan or when
@@ -1718,9 +1718,22 @@ class CaseDB:
         """
         # ponytail: read-modify-write of one kv value, as record_cut_short;
         # the orchestrator is the only writer.
-        rejected = self.get_unanalysed()
+        rejected = self._rejected_plans()
         rejected[system] = rejected.get(system, 0) + 1
-        self.set_kv(_UNANALYSED_KEY, json.dumps(rejected))
+        self.set_kv(_REJECTED_PLANS_KEY, json.dumps(rejected))
+
+    def _rejected_plans(self) -> dict[str, int]:
+        """Plans rejected at the questions gate, counted by system.
+
+        Empty for a database with no ``kv_store`` (see ``get_cut_short``).
+        """
+        try:
+            rejected = json.loads(self.get_kv(_REJECTED_PLANS_KEY) or "{}")
+        except (OperationalError, ValueError):
+            return {}
+        if not isinstance(rejected, dict):
+            return {}
+        return {str(s): plans for s, plans in rejected.items() if isinstance(plans, int)}
 
     def get_unanalysed(self) -> dict[str, int]:
         """Return the systems never analysed for want of investigation questions.
@@ -1728,21 +1741,13 @@ class CaseDB:
         Each system with a plan rejected at the questions gate and no
         recorded question, and how many plans were rejected. An accepted
         plan's questions are recorded before its analyst runs, so a system
-        analysed on a retry or in a later run is no longer listed. Empty
-        for a database with no ``kv_store`` (see ``get_cut_short``).
+        analysed on a retry or in a later run is not listed.
         """
-        try:
-            rejected = json.loads(self.get_kv(_UNANALYSED_KEY) or "{}")
-        except (OperationalError, ValueError):
-            return {}
-        if not rejected or not isinstance(rejected, dict):
+        rejected = self._rejected_plans()
+        if not rejected:
             return {}
         analysed = {q.system for q in self.get_questions()}
-        return {
-            str(system): plans
-            for system, plans in rejected.items()
-            if isinstance(plans, int) and system not in analysed
-        }
+        return {system: plans for system, plans in rejected.items() if system not in analysed}
 
     def _get_case_id(self) -> str:
         """Read case_id from the case_metadata table (cached after first call)."""

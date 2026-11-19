@@ -786,7 +786,7 @@ def test_a_case_with_a_system_never_analysed_is_not_reported_as_no_incident(case
     case.clean_case()
     assert _tool("get_investigation_summary")["no_incident"] is True
     for _ in range(3):
-        case.bridge.record_unanalysed("WS02")
+        case.bridge.record_rejected_plan("WS02")
 
     summary = _tool("get_investigation_summary")
 
@@ -822,7 +822,7 @@ def test_a_case_with_a_system_never_analysed_is_not_reported_as_no_incident(case
 def test_mulder_report_and_the_partial_report_name_a_system_never_analysed(case: _Case) -> None:
     case.clean_case()
     hostile = "WS`02` <img src=x onerror=alert(1)>"  # a name comes from evidence file names
-    case.bridge.record_unanalysed(hostile)
+    case.bridge.record_rejected_plan(hostile)
     case.bridge.cleanup()
 
     result = CliRunner().invoke(cli, ["report", "clean", "--db-dir", str(case.db_dir)])
@@ -845,7 +845,7 @@ def test_mulder_report_and_the_partial_report_name_a_system_never_analysed(case:
 def test_a_system_analysed_later_is_no_longer_listed(case: _Case) -> None:
     """An accepted plan's questions are recorded before its analyst runs."""
     case.clean_case()
-    case.bridge.record_unanalysed("WS02")
+    case.bridge.record_rejected_plan("WS02")
     assert "systems_not_analysed" in _tool("get_investigation_summary")
 
     (question_id,) = [
