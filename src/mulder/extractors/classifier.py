@@ -12,6 +12,7 @@ from pathlib import Path
 
 from mulder.dirroot import MAX_ENTRIES, detect_collection, walk_files
 from mulder.extractors.optical import SECTOR, signature_from_vrs
+from mulder.linuxvol import volume_kind
 from mulder.patterns import DISK_IMAGE_EXTS
 
 logger = logging.getLogger(__name__)
@@ -177,10 +178,12 @@ def has_disk_signature(path: Path) -> bool:
     try:
         with path.open("rb") as fh:
             head = fh.read(_HEAD_BYTES)
+            beyond = fh.read(512)  # the btrfs magic sits just past the head
     except OSError:
         return False
     return (
-        b"EFI PART" in (head[512:520], head[4096:4104])  # GPT
+        volume_kind(head + beyond) is not None  # LVM, XFS, LUKS, btrfs on the whole disk
+        or b"EFI PART" in (head[512:520], head[4096:4104])  # GPT
         or head[3:11] in (b"NTFS    ", b"EXFAT   ", b"-FVE-FS-")  # NTFS, exFAT, BitLocker
         or (
             head[510:512] == b"\x55\xaa"
@@ -467,7 +470,13 @@ class EvidenceClassifier:
                 logger.debug("Auto-excluding directory: %s", item)
                 excluded_dirs.add(item)
                 continue
-            if item.is_dir() and not item.is_symlink() and detect_collection(item) is not None:
+            if (
+                item.is_dir()
+                and not item.is_symlink()
+                and detect_collection(item) is not None
+                # An ESXi bundle carries etc/ too: it is a bundle, here as at the root.
+                and not is_esxi_bundle(item)
+            ):
                 results.extend(self._collection_items(item))
                 excluded_dirs.add(item)
                 continue

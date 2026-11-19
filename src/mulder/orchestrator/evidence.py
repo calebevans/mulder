@@ -35,6 +35,7 @@ from mulder.extractors.classifier import (
     loose_log_targets,
 )
 from mulder.extractors.optical import probe_optical
+from mulder.linuxvol import EXPORT_MARKER, EXPORTS_DIR, export_dir, probe, route
 from mulder.models import Finding
 from mulder.orchestrator.types import PhaseResult, extract_catalog_result
 from mulder.patterns import (
@@ -256,10 +257,16 @@ class EvidenceContext:
         collections = self._collections(classified)
         claimed = self._claimed(sys_lower, collections)
         inside = tuple(f"{c.root}{os.sep}" for c in collections)
+        # Nor is anything export_linux_files wrote: a rotated log it copied out
+        # of a disk image is not an archive to unpack, and the listing it
+        # keeps beside them is not a memory dump however large it is.
+        exports = f"{extracted_dir / EXPORTS_DIR}{os.sep}"
 
         def collected(f: Path) -> bool:
             path = str(f)
-            return any(path.startswith(p) and os.sep in path[len(p) :] for p in inside)
+            return path.startswith(exports) or any(
+                path.startswith(p) and os.sep in path[len(p) :] for p in inside
+            )
 
         disk_images: list[str] = []
         if evidence_path.is_dir():
@@ -396,6 +403,7 @@ class EvidenceContext:
                     )
                 else:
                     lines.append(f"  {p}")
+                    lines.extend(self._linux_volume_lines(p))
         if memory_dumps:
             lines.append("Extracted memory dumps (ready for Volatility):")
             for p in sorted(memory_dumps):
@@ -449,6 +457,61 @@ class EvidenceContext:
         # A path is a name from the evidence: one with a line break in it (of any of
         # the kinds str.splitlines knows) must not start a line of its own in the prompt.
         return "\n".join(" ".join(line.splitlines()) for line in lines)
+
+    def _linux_volume_lines(self, image: str) -> list[str]:
+        """What to plan for a disk image whose volumes Sleuth Kit cannot read.
+
+        LVM and XFS are read through dfVFS instead: the files are exported to
+        a directory whose path is fixed by the image's, so the plan that
+        creates it can already name it.
+        """
+        how = route(image)
+        if not how or _unprintable(image):  # the export's path repeats the image's name
+            return []
+        held = "; ".join(map(str, probe(image)))
+        no_tool = (
+            "(an encrypted volume needs its key, a volume group on several disks needs every "
+            "disk, btrfs is not supported)"
+        )
+        if how == "none":
+            return [
+                f"    Sleuth Kit cannot read this image: it holds {held}.",
+                f"    No tool here reads it {no_tool}. Plan run_mmls and run_bulk_extractor "
+                "only; its files are not examined.",
+            ]
+        if how == "rest":
+            # Sleuth Kit reads another partition of the disk: that part is planned as usual.
+            return [
+                f"    This image also holds {held}, which no tool here reads {no_tool}. Plan "
+                "the usual disk tools for the rest of the image; the files of that volume are "
+                "not examined.",
+            ]
+        export = export_dir(self.extracted_dir, image)
+        done = "are" if (export.parent / EXPORT_MARKER).is_file() else "will be"
+        exported = [
+            f"    Its files {done} exported to {export}",
+            "    Plan run_linux_persistence(image_path=<that directory>) and "
+            "index_app_files(image_path=<that directory>, directory_pattern=<a directory "
+            'such as etc/ssh, root, home or var/www>), group "dependent".',
+        ]
+        if how == "also":
+            # A disk with NTFS beside the Linux volume keeps its usual plan.
+            return [
+                f"    This image also holds {held}, which Sleuth Kit cannot read. Plan the "
+                "usual disk tools for the rest of the image, and for that volume plan "
+                "export_linux_files(image_path=<this image>) and "
+                'run_plaso(evidence_path=<this image>, parsers="linux_logs"), group '
+                '"foundation".',
+                *exported,
+            ]
+        return [
+            f"    Sleuth Kit cannot read this image: it holds {held}.",
+            "    Plan export_linux_files(image_path=<this image>) and "
+            'run_plaso(evidence_path=<this image>, parsers="linux_logs"), group "foundation", '
+            "with run_mmls and run_bulk_extractor. Do NOT plan run_fls, run_mactime, "
+            "run_fsstat, detect_masquerading or the Windows artifact parsers on it.",
+            *exported,
+        ]
 
     @staticmethod
     def _collection_lines() -> list[str]:
@@ -642,6 +705,13 @@ class EvidenceContext:
             lines.append(
                 "  UAC: plan run_mactime(image_path=<directory>) for a timeline from the body "
                 "file the collector wrote."
+            )
+        if any(c.linux for c in mine):
+            lines.append(
+                "  Linux files: plan run_linux_persistence(image_path=<directory>), "
+                'run_plaso(evidence_path=<directory>, parsers="linux_logs") and '
+                "index_app_files(image_path=<directory>, directory_pattern=<a directory such "
+                "as etc/ssh, root, home or var/www>)."
             )
         lines.append(
             "  Do not plan run_mmls, run_bulk_extractor, carving tools or detect_masquerading "

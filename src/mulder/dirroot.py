@@ -22,6 +22,7 @@ import os
 import re
 import stat
 import subprocess
+import unicodedata
 from collections import deque
 from collections.abc import Sequence
 from pathlib import Path
@@ -48,6 +49,7 @@ LAYOUTS: dict[str, str] = {
     "velociraptor": "Velociraptor offline collection",
     "uac": "UAC collection",
     "windows": "Windows volume directory",
+    "linux": "Linux file tree",
 }
 
 _HEAD_BYTES = 65536
@@ -69,6 +71,9 @@ _UAC_NAME_RE = re.compile(
     r"uac-(.+)-(?:aix|android|esxi|freebsd|linux|macos|netbsd|netscaler|openbsd|solaris)-\d{14}"
 )
 _NOT_HOST_CHARS = re.compile(r"[^A-Za-z0-9._-]")
+# Unicode categories of what a listing never shows as itself: controls, format
+# characters, and the line and paragraph separators.
+_NOT_SHOWN = frozenset({"Cc", "Cf", "Zl", "Zp"})
 
 
 class Collection(NamedTuple):
@@ -92,7 +97,12 @@ class Collection(NamedTuple):
         """Whether the files came from Windows volumes (a Velociraptor drive has a label)."""
         if self.layout == "velociraptor":
             return any(label for label, _ in self.volumes)
-        return self.layout != "uac"
+        return self.layout in ("kape", "windows")
+
+    @property
+    def linux(self) -> bool:
+        """Whether it holds a Unix file tree: the Linux artifact tools apply."""
+        return bool(self.volumes) and not self.windows
 
 
 class DirRoot(NamedTuple):
@@ -190,6 +200,17 @@ def _has_windows_config(volume: Path) -> bool:
     return current is not None
 
 
+def _linux_host(etc: Path | None) -> str | None:
+    """What ``hostname`` in an ``etc`` directory says; None unless it holds ``passwd``."""
+    files = _entries(etc) if etc is not None else {}
+    if _file(files.get("passwd")) is None:
+        return None
+    name = _file(files.get("hostname"))
+    head = read_regular(name, 256) if name is not None else None
+    lines = head[0].decode("ascii", "replace").split() if head is not None else []
+    return _host(lines[0]) if lines else ""
+
+
 def _host(raw: object) -> str:
     """A host name reduced to host-name characters: it is shown to models."""
     return _NOT_HOST_CHARS.sub("", raw)[:64].strip("._-") if isinstance(raw, str) else ""
@@ -283,16 +304,23 @@ def detect_collection(path: Path) -> Collection | None:
 
     if _dir(entries.get("windows")) and _has_windows_config(path):
         return Collection(path, "windows", "", (("", path),))
+    linux_host = _linux_host(_dir(entries.get("etc")))
+    if linux_host is not None:
+        return Collection(path, "linux", linux_host, (("", path),))
     return None
 
 
 def listed_name(name: str) -> str:
     """A path as a listing shows it: control characters become ``^``, as in fls.
 
-    A name holding a newline or tab could otherwise forge a listing row.
+    A name holding a newline or tab could otherwise forge a listing row, and
+    so could U+0085, U+2028 or U+2029 for anything that splits lines as
+    ``str.splitlines`` does. Format characters, which can reverse the reading
+    order of a row, go the same way.
     """
-    shown = "".join("^" if ch < " " or ch == "\x7f" else ch for ch in name)
-    return shown.encode("utf-8", "replace").decode()
+    if not name.isprintable():  # nearly every name is, and needs no second look
+        name = "".join("^" if unicodedata.category(c) in _NOT_SHOWN else c for c in name)
+    return name.encode("utf-8", "replace").decode()
 
 
 def _decode(component: str) -> str:
@@ -392,6 +420,26 @@ def dir_root(path: str) -> DirRoot | None:
     return _build(path)
 
 
+def refresh() -> None:
+    """Forget the cached listings: mulder itself has written into a directory root."""
+    _build.cache_clear()
+
+
+def cut_listing(path: str) -> str:
+    """What a tool says when the listing it read of the directory at *path* was cut, else ``""``.
+
+    For a tool that looks for files by where they are: a place with nothing
+    found in a cut listing was not looked at.
+    """
+    root = dir_root(path)
+    if root is None or not root.truncated:
+        return ""
+    return (
+        f"The listing of this directory was cut at {len(root.files)} files, the shallowest "
+        "of them: the files deeper in the tree are not listed and were not examined."
+    )
+
+
 def not_collected(path: str) -> str | None:
     """What "not found" means when *path* is a directory root; None for an image.
 
@@ -415,12 +463,16 @@ def not_collected(path: str) -> str | None:
 
 
 def icat(
-    image_path: str, offset: int, inode: str, timeout: int = 30
+    image_path: str, offset: int, inode: str, timeout: int = 30, limit: int | None = None
 ) -> subprocess.CompletedProcess[bytes]:
     """Read the file at *inode* of a listing: ``icat`` on an image, the stored file of a directory.
 
     The result has the shape ``subprocess.run`` gave the callers that used to
     run ``icat`` themselves, so they treat both kinds of root alike.
+
+    With *limit*, no more than ``limit + 1`` bytes are read: a caller that
+    wants a file's first bytes, or only files up to a size, does not pay for
+    the whole of a large one. Output longer than *limit* means the file is.
     """
     root = dir_root(image_path)
     if root is None:
@@ -428,15 +480,34 @@ def icat(
         if offset > 0:
             cmd.extend(["-o", str(offset)])
         cmd.extend([image_path, inode])
-        return subprocess.run(cmd, capture_output=True, timeout=timeout, check=False)
+        if limit is None:
+            return subprocess.run(cmd, capture_output=True, timeout=timeout, check=False)
+        # head stops reading at the limit, and icat is stopped with it.
+        source = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        try:
+            head = subprocess.run(
+                ["head", "-c", str(limit + 1)],
+                stdin=source.stdout,
+                capture_output=True,
+                timeout=timeout,
+                check=False,
+            )
+            code = 0 if len(head.stdout) > limit else source.wait(timeout=timeout)
+        finally:
+            source.kill()
+            source.wait()
+            if source.stdout is not None:
+                source.stdout.close()
+        return subprocess.CompletedProcess(cmd, code, head.stdout, b"")
 
-    # ponytail: the whole file is held in memory, as icat's output is; copy in
-    # chunks if collections with multi-GiB $MFT or $J need it.
+    # ponytail: without a limit the whole file is held in memory, as icat's
+    # output is; copy in chunks if collections with multi-GiB $MFT or $J need it.
     stored = root.stored(inode)
-    got = read_regular(stored, MAX_FILE_BYTES, whole=True) if stored is not None else None
     args = ["icat", image_path, inode]
+    most = MAX_FILE_BYTES if limit is None else limit + 1
+    got = read_regular(stored, most, whole=limit is None) if stored is not None else None
     if got is None:
         return subprocess.CompletedProcess(args, 1, b"", b"no such file in the directory root")
-    if not got[1]:
+    if limit is None and not got[1]:
         return subprocess.CompletedProcess(args, 1, b"", b"file exceeds the read limit")
     return subprocess.CompletedProcess(args, 0, got[0], b"")

@@ -44,6 +44,7 @@ Try-it-out instructions for running Mulder, the forensic investigation platform.
   - [Loose Logs](#loose-logs)
   - [Counting Over Logs](#counting-over-logs)
   - [Triage Collections](#triage-collections)
+  - [Linux Disk Images and File Trees](#linux-disk-images-and-file-trees)
   - [CLI Reference](#cli-reference)
     - [`mulder investigate`](#mulder-investigate)
     - [`mulder setup`](#mulder-setup)
@@ -827,6 +828,8 @@ The logs that say how an intruder got in rarely come inside a disk image: a VPN 
 
 A directory named `log` or `logs`, a directory under `var/log`, and an ESXi bundle are each read as a whole. Loose `.log` and `.txt` files elsewhere (and rotated ones such as `access.log.1`) are read through the highest directory that holds no other evidence mulder recognises, so a tree with a log in every folder is one run; a log that sits beside, say, a disk image is read by itself. From such a directory only those files are read: a web root or source files beside the logs are left alone and counted as not read. Each directory becomes part of the system named after it, as for cloud evidence; a firewall export or a sensor is a system of its own. Gzip files in a log directory are read as they are; any other archive there (`.zip`, `.7z`, a tarball, a log rotated with `xz` or `zstd`) is unpacked first, like an archive anywhere else. A `Logs` folder that holds only Windows event logs (`.evtx`) is not read by this tool.
 
+A `var/log` that comes with the rest of its system is not planned for this tool. A directory that holds `etc/passwd` (an unpacked root file system), a UAC collection, and the files exported from a Linux disk image are each one [Linux file tree](#linux-disk-images-and-file-trees): nothing inside one is listed as a log directory, and `run_plaso` with `linux_logs` reads its login and system logs into `plaso.timeline`. That preset reads no web server access log and fills no log table. `run_loose_logs` reads the `var/log` of such a tree when it is run on it, which the analyst can ask for; the syslog lines are then in `plaso.timeline` and in `logs.syslog` both.
+
 What to know before relying on the result:
 
 - **Leads, not verdicts.** A Sigma match in `logs.web.detections` is a request that looked like an attack; its status code and what the same address did next say whether it worked. `logs.web.webshell` lists scripts that took a successful POST and that at most three addresses ever requested: a web shell looks like that, and so does an admin page. A shell that was only ever fetched with GET is not listed. `logs.esxi.highlights` matches known ESXi messages (SSH or the shell enabled, logins, shell commands, machines powered off, the execInstalledOnly setting, VIB installs): it says what a line is about, not that it was hostile.
@@ -898,6 +901,55 @@ Each collection is one system, named after the host the collection states (KAPE'
 - **The host name is the collector's own record** of it.
 
 A KAPE `.vhd` or `.vhdx` container is read as a disk image (Sleuth Kit opens both). Paths inside it start with the drive letter, and the container's own file system describes the copies, not the original system. CyLR output is not recognised by name; a tree that holds `C/Windows/System32/config` is treated as a Windows volume directory.
+
+## Linux Disk Images and File Trees
+
+The usual Linux server disk is LVM, often with XFS on top, and the Sleuth Kit packaged for Ubuntu 22.04 (4.11) reads neither: `fls` fails, or lists `/boot` and nothing else. Mulder reads such an image through dfVFS instead, by driving plaso's `log2timeline`, `psort` and `image_export`. Nothing needs installing and nothing needs mounting.
+
+When mulder scans the evidence it looks at the first sectors of each partition. An image that holds an LVM physical volume or an XFS file system is labelled with it (`[disk_image, LVM physical volume at sector 501760, volume group vg0]`), and the planner is told to plan:
+
+| Tool | On | What it gives |
+|------|----|---------------|
+| `export_linux_files` | the image | `linux.filelist`, a listing of every file on every volume that could be read, and an export directory under the case directory holding `/etc`, cron and systemd units, `/var/log`, `/root`, each user's dotfiles and `.ssh` (shell histories, shell profiles and `.ssh` from any directory, since a service account's home is rarely under `/home`), package manager state, web roots and `/tmp`, each within a size limit |
+| `run_plaso` with `parsers="linux_logs"` | the image | who logged in, from where and how: wtmp, btmp, auth.log or secure, the systemd journal, the audit log, apt and dpkg logs |
+| `run_linux_persistence` | the export directory | one row per file in the places Linux starts programs from or grants access through, and the accounts with uid 0 or a login shell |
+| `index_app_files` | the export directory | the text of a directory (`etc/ssh`, `root`, `home`, `var/www`), whatever the files are called |
+
+`run_mmls` and `run_bulk_extractor` run on the image as usual. The export directory holds ordinary files, so `yara_scan_files`, `run_clamav`, `read_evidence_file` and `triage_binary` can be pointed at it.
+
+What to keep in mind when reading the report:
+
+- **The listing is not the export.** `linux.filelist` shows that a file exists, with its owner, size and four timestamps (modified, changed, created, accessed), whether or not it was exported. To read a listed file that was not exported, the analyst asks for it and `export_linux_files` is run again with `paths`.
+- **Password hashes and private keys are not exported, by their well-known names**: `/etc/shadow`, `/etc/gshadow`, Debian's copies under `/var/backups`, SSH host and user private keys, TLS private keys. They are listed, and the report should say "not exported" rather than "absent". A copy under another name is exported like any file; a private key is still kept out of the index by its first line.
+- **No deleted files.** dfVFS lists allocated files only, and nothing here reads unallocated space except `run_bulk_extractor`.
+- **The export is one tree.** The volume that holds `etc/passwd` is the root. `/home`, `/var`, `/var/log` and `/boot` on a volume of their own are recognised from their top-level names and their files are put at that place in the tree, so `home/alice/.bash_history` is where the tools look for it; the result says that this is a guess, and it takes two such names to make one. Any other separately mounted volume is listed and read as if it were a root volume: the same paths are exported from it, under a directory named after the volume (`p5/lib/systemd/system/` for a `/usr` volume). A file the root volume holds under a mount point, at a path the mounted volume has too, was not what the running system showed: the mounted volume's file is exported and the other is named in `not_exported`, to be asked for by path.
+- **An export can be incomplete, and says so.** One file name that is not valid UTF-8 stops dfVFS from reading the rest of its directory. The result then has `status: incomplete`, names the directory under `listing_incomplete` and the files that could not be copied under `not_exported`, and `run_linux_persistence` repeats both. The rest of the volume is listed and exported; only that directory is not examined, and the report should say so.
+- **The persistence sweep is an inventory.** Nearly every row is the distribution's own file. It marks nothing as malicious and does not show that anything ran. Every `etc/passwd` in the tree is read, the system's own first; an account row names the file it is from, so a backup copy or a container layer is not taken for the system's accounts.
+- **Syslog lines have no year.** plaso takes it from the file's own times; the systemd journal, wtmp and dpkg.log carry full dates.
+
+What cannot be read is said, not skipped: an encrypted (LUKS) volume, btrfs, and a volume group spread over several disks of which the image is one. What is planned then depends on what else the disk holds:
+
+| The image holds | What is planned |
+|-----------------|-----------------|
+| LVM or XFS, with or without `/boot` or an EFI partition beside it | the four tools above; `run_fls` and the Windows parsers are not planned |
+| LVM or XFS beside NTFS or exFAT | the usual disk tools for the rest of the image, and the four tools above for the Linux volume |
+| a volume no tool reads, beside a file system Sleuth Kit reads (NTFS, FAT, exFAT, ext2/3/4) | the usual disk tools for the rest of the image; the volume is reported as not examined |
+| nothing but a volume no tool reads | `run_mmls` and `run_bulk_extractor` only |
+
+`export_linux_files` and `run_plaso` pass an encrypted partition by and read the others, naming it under `not_read`; when the encrypted volume is all there is, the call is an error that says so.
+
+A Linux image Sleuth Kit can read (ext2/3/4 on a plain partition) is handled as any disk image; `run_linux_persistence`, `index_app_files` and `run_plaso` with `linux_logs` take the image itself. Each image is read through its own file listing: with several images in a case, one never borrows another's.
+
+A directory that holds a Linux file tree is recognised by its `etc/passwd`: an unpacked root file system, the `[root]` of a UAC collection, a Velociraptor collection of a Unix host. It is one evidence item, labelled `Linux file tree` with the name from `etc/hostname`, and the three tools above take the directory. Its `var/log` is read with it, by `run_plaso`, and is not also a log directory for `run_loose_logs` (see [Loose Logs](#loose-logs)); an ESXi support bundle holds `etc/passwd` too and stays a bundle. No file in such a tree changes that: mulder's own exports are told apart by where they are (a hidden directory under the case's extraction directory), never by a file an intruder could have left on the system.
+
+```
+evidence/
+  web01.E01            LVM: exported to <cases>/extracted/<case>/.linux-exports/web01.E01-<digest>/files/
+  db02-rootfs/         a Linux file tree: etc/, var/, home/, ...
+  uac-app03-linux-20261112093000.tar.gz
+```
+
+Listing and exporting a disk of 85,000 files took about a minute and a half, and `run_plaso` with `linux_logs` about four minutes (a 1.2 GB E01, arm64 container). The listing needs temporary space, about 4 MiB per 1,000 files (345 MiB for that disk), in the directory `TMPDIR` names: `export_linux_files` does not start it with less than 1 GiB free, and says so.
 
 ## CLI Reference
 

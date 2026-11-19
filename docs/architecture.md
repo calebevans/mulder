@@ -597,14 +597,15 @@ The `EvidenceClassifier` scans evidence directories and categorizes files by typ
 | Phone dump (Android) | Android directory structures | MVT, ALEAPP |
 | Phone dump (iOS) | iOS directory structures | MVT, iLEAPP |
 | Linux logs | `/var/log/*`, journal files | Zircolite, native parsing |
-| Loose logs | `.log`, `.txt` and rotated `.log.N` files, Suricata and Zeek JSON, a directory named `log` or `logs` or under `var/log` | `run_loose_logs` (native parsers; Zircolite for the web server Sigma rules) |
+| Loose logs | `.log`, `.txt` and rotated `.log.N` files, Suricata and Zeek JSON, a directory named `log` or `logs` or under `var/log`, outside a triage collection | `run_loose_logs` (native parsers; Zircolite for the web server Sigma rules) |
 | ESXi support bundle | a directory with `commands/`, `etc/vmware` and `var/run/log` or `var/log` | `run_loose_logs` |
 | Archive | `.zip`, `.7z`, `.tar`, `.gz` | Internal extraction |
 | Triage collection | A directory laid out as KAPE target output, a Velociraptor offline collection or UAC output, or a Windows volume directory | The disk artifact tools on the directory, `index_triage_collection` |
+| Linux file tree (a triage collection) | A directory that holds `etc/passwd` and is not an ESXi support bundle | `run_linux_persistence`, `run_plaso` with `linux_logs` (its `var/log` included), `index_app_files` |
 
 `.raw` and `.001` are written by disk imagers and memory acquisition tools
-alike, so their first bytes decide: a partition table, filesystem, BitLocker
-or optical volume signature makes a disk image. A plain physical-memory
+alike, so their first bytes decide: a partition table, filesystem, BitLocker,
+LVM, LUKS or optical volume signature makes a disk image. A plain physical-memory
 dump has no header, so without such a signature they are memory dumps.
 
 Each extractor normalizes output into `WindowRow` objects (source_id, line_start, line_end, event_time, raw_text) for uniform database storage and FTS indexing.
@@ -647,6 +648,21 @@ The pairs are what make this general. For a plain directory the two paths are th
 Evidence is hostile, so the walk never follows a symlink (a root that is one is refused), lists only regular files, is capped at 200,000 entries (breadth-first across the volumes, so a cut listing keeps the top of each), and prints control characters in names as `^` so that a file name cannot forge a listing row. A decoded name is a label only: the file that is opened is the one the walk found, with `O_NOFOLLOW`.
 
 A triage collection has no unallocated space and no deleted files. `mount_disk_image` refuses a directory, `run_mactime` works only on the body file a UAC collection carries, and `triage.summary` records which artifact kinds were and were not collected so that absence is reported as "not collected".
+
+### Linux Volumes Sleuth Kit Cannot Read
+
+Sleuth Kit 4.11 has no LVM and no XFS support, so on the usual Linux server image `fls` fails or lists only `/boot`. dfVFS reads both, and plaso's command-line tools are built on it. Mulder drives those tools and never imports plaso: on SIFT it lives in its own virtualenv.
+
+- `linuxvol.scan(image)` reads the first sectors at offset 0 and at every `mmls` row through `img_cat` (which opens EWF and raw alike) and recognises an LVM2 label, XFS, LUKS and btrfs, and beside them the file systems Sleuth Kit reads by itself (NTFS, exFAT, FAT, ext). For LVM it reads the metadata text for the volume group's name and its number of physical volumes. `probe` gives the volumes and `route` what follows from the whole disk: `export` (the Linux export stands in for the Sleuth Kit tools), `also` (NTFS or exFAT beside the Linux volume: both are planned), `rest` (nothing reads the volume, Sleuth Kit reads the rest) or `none`. The classifier's manifest, the planner context, the coverage audit and `run_fls`'s error all use them, so an image is routed by what it holds and not by whether `fls` happened to fail.
+- `export_linux_files` runs `log2timeline --parsers filestat --hashers none --skip_compressed_streams`, which stats every file and reads none, then `psort -o json_line`: the one output that keeps names exact and carries the path specification saying which volume a file is on (`/p5` then `/lvm1`). A directory or link carries none and takes the volume of the nearest directory whose files are all on one volume. An event whose path specification is the image file itself means plaso found no volume and is not an entry. Both tools exit 0 on an image they read, so a non-zero exit is a failure whatever was written: `psort` out of temporary space leaves the older part of the events, and that is never indexed as a listing. The result is `linux.filelist`. It is not a `tsk.filelist`, because the image tools hand a `tsk.filelist` inode to `icat`.
+- plaso stops at a LUKS partition it has no key for. `linuxvol.unencrypted_partitions` names the other partitions as dfVFS numbers them (a DOS table by table and slot, any other in table order), and the run is repeated on those; `run_plaso` does the same.
+- A directory dfVFS cannot read to the end (one name that is not valid UTF-8) is a warning to `log2timeline`, which lists what it reached of it; `pinfo --sections warnings` names the directory and the result carries it as `listing_incomplete`. `image_export` stops for good at such a directory, so a failed run is repeated in halves until what is missing is the files of one directory.
+- The files to export are chosen from the listing, so sizes are known before anything is written and exclusions are exact. `image_export` merges the volumes it is given into one tree and skips the second file of a path, so it runs once per volume with a filter file of exact paths, each volume into its mount point under the export's root. Where the root volume and a volume mounted on it hold a file of the same path, the mounted volume's is exported and the other named, also when the mounted volume's is left out for its size. The copies get their names and modification times back afterwards, since `image_export` stores some characters as `_`, and whatever else a run wrote is removed: the tree holds the files the result names and nothing else.
+- The export is an ordinary Linux file tree, a [directory root](#directories-as-evidence-roots) of layout `linux`, at `export_dir(extraction directory, image)`: `<extraction directory>/.linux-exports/<image name>-<digest>/files`, a function of the image's resolved path, so the planner context names it in the plan that creates it. The listing and the record of the export sit beside `files/`, and files exported later through `paths` go to `requested/<digest of the request>/`, so the tree is never changed after its `tsk.filelist` is indexed. `.linux-exports` is hidden and the classifier enters no hidden directory, so an export is never reported as evidence and no code recognises one by a file inside it; the planner context leaves that directory out when it looks for archives and dumps.
+
+A directory with `etc/passwd` is layout `linux`, one triage collection. `Collection.linux` is what the planner context checks before naming the Linux tools for a collection.
+
+The image tools read a disk image through its own `tsk.filelist` sources (`_collect_fls_chunks` matches `source_path`), since every image of a case is indexed under the same source names; an image with no listing of its own is listed inline.
 
 ### Registry Hive Parsing
 

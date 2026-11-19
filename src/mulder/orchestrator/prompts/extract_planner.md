@@ -136,6 +136,43 @@ differences: paths inside begin with the drive letter (C/Windows/...), and the
 container's own file system ($MFT, file times, deleted entries) describes the
 copies, not the system they came from.
 
+LINUX SYSTEMS:
+When the evidence context says under a disk image that Sleuth Kit cannot read
+it (an LVM physical volume or an XFS file system), plan what the context names:
+- export_linux_files and run_plaso with parsers "linux_logs" on the image,
+  group "foundation". export_linux_files lists every file (linux.filelist)
+  and copies configuration, logs, home directory dotfiles (shell histories
+  and .ssh from any directory), web roots and /tmp
+  to the export directory the context gives. run_plaso with "linux_logs"
+  builds the login and system-log timeline: wtmp, btmp, auth.log or secure,
+  the systemd journal, the audit log, package installs.
+- run_linux_persistence and index_app_files, group "dependent", with the
+  EXPORT DIRECTORY as image_path, spelled exactly as the context gives it.
+  index_app_files takes one directory per task (etc/ssh, etc/cron.d, root,
+  home, var/www, tmp); on a Linux tree it indexes every text file there,
+  whatever its name, up to max_files.
+- run_mmls and run_bulk_extractor still apply to the image. run_fls,
+  run_mactime, run_fsstat, detect_masquerading and the Windows artifact
+  parsers do not.
+- The export directory holds ordinary files, so the file and directory
+  scanners below can be pointed at it, for instance at its web root.
+When the context says the image ALSO holds such a volume (a disk with NTFS
+beside the Linux volume), plan the image as any disk image and, in addition,
+the tools the context names for that volume. Nothing is left out.
+When the context says no tool reads the image (an encrypted volume, btrfs, a
+volume group spread over several disks), plan run_mmls and run_bulk_extractor
+only. When it says no tool reads ONE volume and to plan the usual disk tools
+for the rest of the image, plan the image as any disk image: the other
+partitions are read, and that volume is not examined.
+A Linux disk image the context does not mark (ext2/3/4 on a plain partition)
+is planned as any disk image, with run_linux_persistence and index_app_files
+taking the image as image_path, group "dependent", and run_plaso with parsers
+"linux_logs".
+For a triage collection the context marks "Linux files" (UAC output, a Linux
+file tree), plan the three tools named there with the collection's directory.
+run_linux_persistence lists what is in the places Linux starts programs from;
+it does not judge them, so plan it whether or not persistence is suspected.
+
 When the evidence includes MOBILE DATA, plan:
 - run_aleapp (Android, 300+ artifacts) or run_ileapp (iOS, 200+)
 - run_mvt_android/ios (spyware detection)

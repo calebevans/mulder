@@ -78,6 +78,11 @@ OUTPUT REQUIREMENTS:
   the platform the paths and names show, or Unknown. A memory_dump listed
   inside the collection's directory (a crash dump the collector copied)
   belongs to that same system.
+- A triage collection labelled "Linux file tree" is a directory that holds a
+  Linux system's files (it has etc/passwd): one system, "type" Linux, named
+  as any other collection. A disk image labelled with an LVM physical volume
+  or an XFS file system is the disk of a Linux system: "type" Linux, with
+  "disk_image" in "evidence" as for any other disk.
 
 FINAL OUTPUT (MANDATORY):
 Your FINAL message MUST be ONLY valid JSON. No text before or after it.

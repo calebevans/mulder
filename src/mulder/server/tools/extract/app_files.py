@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import fnmatch
 import logging
+import re
 import shutil
 import subprocess
 import time
 from typing import Any
 
-from mulder.dirroot import icat
+from mulder.dirroot import cut_listing, icat
+from mulder.linuxvol import PRIVATE_KEY, SECRET_FILES, in_exports
 from mulder.patterns import fls_file_entries
 from mulder.server.app import get_ctx, mcp
 from mulder.server.extract_helpers import extract_and_index
@@ -57,6 +59,10 @@ _DEFAULT_EXTENSIONS: frozenset[str] = frozenset(
 
 _ICAT_TIMEOUT = 30
 _MAX_TEXT_BYTES = 512 * 1024
+_COMPRESSED_MAGIC = (b"\x1f\x8b", b"BZh", b"\xfd7zXZ\x00", b"\x28\xb5\x2f\xfd")
+# On Linux a name says little about content: crontab, sshd_config, .bash_history,
+# access.log.1 and 50-cloud-init have no extension worth listing.
+_LINUX_TREE_RE = re.compile(r"\tetc/passwd$", re.MULTILINE)
 
 
 def _derive_source_name(directory_pattern: str) -> str:
@@ -117,11 +123,9 @@ def _find_matching_files(
             if not fnmatch.fnmatch(rel_lower, glob_pattern):
                 continue
 
+            # "*" takes any name: the content decides, not the extension.
             dot_pos = rel_lower.rfind(".")
-            if dot_pos < 0:
-                continue
-            ext = rel_lower[dot_pos:]
-            if ext not in extensions:
+            if "*" not in extensions and (dot_pos < 0 or rel_lower[dot_pos:] not in extensions):
                 continue
 
             dedup_key = f"{offset}:{inode_str}"
@@ -141,9 +145,11 @@ def _is_binary_content(data: bytes) -> bool:
         data: Raw file content to inspect.
 
     Returns:
-        True if null bytes are found in the first 1024 bytes.
+        True if null bytes are found in the first 1024 bytes, or the data
+        starts as gzip, bzip2, xz or zstd (a short rotated log may hold no
+        null byte at all).
     """
-    return b"\x00" in data[:1024]
+    return b"\x00" in data[:1024] or data.startswith(_COMPRESSED_MAGIC)
 
 
 def _extract_and_read_file(
@@ -151,11 +157,12 @@ def _extract_and_read_file(
     inode_str: str,
     offset: int,
     max_size_bytes: int | None = None,
+    why: list[str] | None = None,
 ) -> str | None:
     """Extract a file via icat and return its text content.
 
-    Returns None if icat fails, the file is binary, or the file
-    exceeds the text size limit.
+    Returns None if icat fails, the file is binary, the file exceeds the
+    text size limit, or it is a private key.
 
     Args:
         image_path: Path to the disk image.
@@ -164,7 +171,12 @@ def _extract_and_read_file(
         max_size_bytes: Skip the file when it is larger than this. The
             caller's ``max_file_size_kb`` used to be checked against a size
             field parsed out of the fls listing, but ``fls -r -p`` emits no
-            size column, so that check could never fire.
+            size column, so that check could never fire. No more than this
+            is read: on a Linux tree any file under the pattern is a
+            candidate, a database dump or a core file among them.
+        why: Given a list, ``"too_large"`` or ``"private_key"`` is appended
+            when that is why None is returned, and ``"cut"`` when the text
+            returned is the first ``_MAX_TEXT_BYTES`` of a longer file.
 
     Returns:
         Decoded text content or None if extraction fails or file
@@ -174,19 +186,28 @@ def _extract_and_read_file(
         return None
 
     try:
-        proc = icat(image_path, offset, inode_str, _ICAT_TIMEOUT)
+        proc = icat(image_path, offset, inode_str, _ICAT_TIMEOUT, limit=max_size_bytes)
     except (subprocess.TimeoutExpired, OSError):
         return None
 
     if proc.returncode != 0 or not proc.stdout:
         return None
 
+    skip = None
     if max_size_bytes is not None and len(proc.stdout) > max_size_bytes:
+        skip = "too_large"
+    elif PRIVATE_KEY.search(proc.stdout[:4096]):  # a key under a name SECRET_FILES lacks
+        skip = "private_key"
+    if skip is not None:
+        if why is not None:
+            why.append(skip)
         return None
 
     if _is_binary_content(proc.stdout):
         return None
 
+    if why is not None and len(proc.stdout) > _MAX_TEXT_BYTES:
+        why.append("cut")
     return proc.stdout[:_MAX_TEXT_BYTES].decode("utf-8", errors="replace")
 
 
@@ -223,7 +244,20 @@ def index_app_files(
         extensions: File extensions to include. Defaults to common text
             and config extensions: .ini, .cfg, .conf, .txt, .log, .xml,
             .json, .yaml, .yml, .properties, .csv, .bat, .cmd, .ps1,
-            .reg, .inf, .manifest.
+            .reg, .inf, .manifest. On a Linux file tree (the listing holds
+            etc/passwd, or the directory is one export_linux_files wrote)
+            the default is every file whatever its name, since crontab,
+            sshd_config, .bash_history and access.log.1 have no such
+            extension; ["*"] asks for that anywhere. Either way a file
+            that is binary or compressed is skipped (files_skipped_binary),
+            one over the size limit is skipped without being read past it
+            (files_skipped_too_large, the first ten named in too_large:
+            raise max_file_size_kb for those; no more than the first 512 KB
+            of a file is indexed, and one longer is named in
+            indexed_in_part), and password hash files and private keys are
+            withheld whatever the extensions (files_withheld, named in
+            withheld): etc/shadow and the like by name, a private key under
+            any name by its first line.
         max_file_size_kb: Skip files larger than this threshold to avoid
             extracting multi-megabyte logs. Defaults to 512 KB.
         max_files: Maximum number of files to extract per invocation to
@@ -250,7 +284,7 @@ def index_app_files(
     ext_set: frozenset[str]
     if extensions is not None:
         ext_set = frozenset(
-            e.lower() if e.startswith(".") else f".{e.lower()}" for e in extensions
+            e.lower() if e.startswith(".") or e == "*" else f".{e.lower()}" for e in extensions
         )
     else:
         ext_set = _DEFAULT_EXTENSIONS
@@ -265,10 +299,25 @@ def index_app_files(
             error_type="no_filelist",
         )
 
+    # A directory of files asked for by path (requested.root) holds no
+    # etc/passwd, and is as much a part of a Linux tree as the export beside it.
+    if extensions is None and (
+        in_exports(image_path)
+        or any(_LINUX_TREE_RE.search(chunk) for chunks, _ in chunk_groups for chunk in chunks)
+    ):
+        ext_set = frozenset({"*"})
+
     all_matches: list[tuple[str, str, int]] = []
     for chunks, offset in chunk_groups:
         matches = _find_matching_files(chunks, directory_pattern, ext_set, offset)
         all_matches.extend(matches)
+
+    # etc/shadow and private keys, whatever was asked for (every name, or a copy
+    # by its extension): their content is a credential and is not indexed.
+    withheld = [m[1] for m in all_matches if SECRET_FILES.search(m[1])]
+    all_matches = [m for m in all_matches if m[1] not in withheld]
+    # A directory listed in part: what the pattern did not find was not looked for.
+    cut = cut_listing(image_path)
 
     if not all_matches:
         elapsed = (time.monotonic() - t0) * 1000
@@ -280,9 +329,13 @@ def index_app_files(
                 "files_discovered": 0,
                 "files_extracted": 0,
                 "files_indexed": 0,
+                "files_withheld": len(withheld),
+                "withheld": withheld[:10],
                 "pattern": directory_pattern,
                 "message": f"No files matching pattern '{directory_pattern}' "
-                f"with extensions {sorted(ext_set)} were found in the file listing.",
+                f"with extensions {sorted(ext_set)} were found in the file listing."
+                + (f" {cut}" if cut else ""),
+                **({"listing_truncated": True} if cut else {}),
             },
             source=None,
             elapsed_ms=elapsed,
@@ -296,14 +349,26 @@ def index_app_files(
     total_windows = 0
     sample_files: list[str] = []
     skipped_binary = 0
+    too_large: list[str] = []
+    in_part: list[str] = []
 
     for inode_str, rel_path, offset in capped:
-        content = _extract_and_read_file(image_path, inode_str, offset, max_file_size_kb * 1024)
+        why: list[str] = []
+        content = _extract_and_read_file(
+            image_path, inode_str, offset, max_file_size_kb * 1024, why
+        )
         if content is None:
-            skipped_binary += 1
+            if why == ["too_large"]:
+                too_large.append(rel_path)
+            elif why == ["private_key"]:
+                withheld.append(rel_path)
+            else:
+                skipped_binary += 1
             continue
 
         files_extracted += 1
+        if why:  # a raised max_file_size_kb let it in: the text indexed is its start
+            in_part.append(rel_path)
         if not content.strip():
             continue
 
@@ -327,11 +392,18 @@ def index_app_files(
         "files_extracted": files_extracted,
         "files_indexed": files_indexed,
         "files_skipped_binary": skipped_binary,
+        "files_skipped_too_large": len(too_large),
+        "too_large": too_large[:10],
+        "files_indexed_in_part": len(in_part),
+        "indexed_in_part": in_part[:10],
+        "files_withheld": len(withheld),
+        "withheld": withheld[:10],
         "windows_indexed": total_windows,
         "source_prefix": source_name,
         "sample_files": sample_files,
         "pattern": directory_pattern,
         "extensions_used": sorted(ext_set),
+        **({"listing_truncated": True, "note": cut} if cut else {}),
     }
 
     return tool_response(

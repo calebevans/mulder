@@ -24,6 +24,7 @@ from mulder.extractors.classifier import (
     EvidenceClassifier,
     loose_log_targets,
 )
+from mulder.linuxvol import route
 from mulder.models import Finding, Question
 from mulder.patterns import (
     EMAIL_RE,
@@ -53,6 +54,7 @@ _EVIDENCE_TOOL_MAP: dict[str, list[str]] = {
     # the container, and reporting them as "not run" asked for exactly that.
     "disk_image": [
         "run_fls",
+        "export_linux_files",
         "run_bulk_extractor",
         "run_mmls",
         "run_plaso",
@@ -137,6 +139,7 @@ _EVIDENCE_INPUT_PARAMS: dict[str, tuple[str, ...]] = {
     "run_volatility": ("memory_path",),
     "run_volatility_batch": ("memory_path",),
     "run_fls": ("image_path",),
+    "export_linux_files": ("image_path",),
     "run_bulk_extractor": ("image_path",),
     "run_mmls": ("image_path",),
     "run_plaso": ("evidence_path",),
@@ -403,6 +406,14 @@ def audit_tool_coverage() -> dict[str, object]:
         applicable = _EVIDENCE_TOOL_MAP.get(ev.artifact_type, [])
         if not applicable:
             continue
+        if ev.artifact_type == "disk_image":
+            # A Linux disk Sleuth Kit cannot read is listed by export_linux_files
+            # and not by run_fls, which the planner is told not to plan on it; a
+            # disk that holds NTFS beside the Linux volume is listed by both.
+            unused = {"export": "run_fls", "also": ""}.get(
+                route(str(ev.path)), "export_linux_files"
+            )
+            applicable = [t for t in applicable if t != unused]
 
         item_path = str(ev.path)
         files: int | None = None

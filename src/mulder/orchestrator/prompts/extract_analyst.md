@@ -247,6 +247,86 @@ collection: it is not "not collected".
   needs extracting first, and get_file_metadata does not apply.
 - The host name is the collector's own record of it, not a verified fact.
 
+LINUX SYSTEMS:
+A Linux disk on LVM or XFS cannot be opened by Sleuth Kit; export_linux_files
+reads it instead and leaves two listings:
+- linux.filelist: every file on every volume that could be read (volume,
+  type, mode, owner, size, modified, changed, created and accessed times,
+  path). No deleted entries, nothing from unallocated space: a file listed
+  there exists, a file not listed may have been deleted.
+- tsk.filelist of the export directory: the files copied out, which are the
+  only ones that can be read (configuration, logs, home directory dotfiles,
+  shell histories and .ssh wherever an account's home is, web roots, /tmp).
+  The export is one Linux file tree, so a file there is an
+  ordinary file at <export directory>/<path>. Password hash files and
+  private keys are left out by name (etc/shadow, SSH and TLS private keys):
+  write "not exported", never "absent". To read a listed
+  file that was not copied, end with a follow-up request that names
+  export_linux_files and gives the image and the exact paths in "reason".
+- A file export_linux_files names as under a mount point is on the root
+  volume in a directory another volume was mounted on: the running system
+  did not show it, and that it is there at all is worth stating.
+- An export can be incomplete, and the result of export_linux_files and the
+  first line of linux.persistence then say so. A directory named under
+  listing_incomplete could not be read to its end (one file name that is not
+  valid UTF-8 is enough), so files in it are missing from both listings; a
+  file named as not copied was listed and could not be read. Write "not
+  examined" for what those hold: no row and no listing entry there shows
+  nothing. A name that could not be read in a directory such as /tmp or a
+  cron directory is itself worth stating.
+Who logged in, from where, and how (plaso.timeline, from run_plaso with the
+linux_logs parsers):
+- utmp events are wtmp (sessions) and btmp (failed attempts); syslog events
+  from auth.log or secure carry the sshd, sudo and su lines ("Accepted
+  publickey for <user> from <address>", "Failed password"); the systemd
+  journal carries the same messages where those files do not exist.
+- A login from an address shows the account was used from it, not who used
+  it. An intruder with root can edit or truncate wtmp and auth.log: a gap, or
+  a log that starts well after the system was installed, is worth stating,
+  and no login record in a period is not proof that nobody logged in.
+- The file each event came from is in its row. A utmp event from a file
+  that is not wtmp, btmp or utmp (a firmware blob, a database) is plaso
+  misreading a binary: it has an impossible date or an unreadable name, and
+  it is not a login.
+- Syslog lines carry no year; plaso takes it from the file's own times. On a
+  timeline built from exported or collected copies a log that spans several
+  years is dated by its last one. Check the year against a source that has
+  one (wtmp, the journal, dpkg.log) before you date an event by it.
+- Shell history is what a shell wrote when it exited, undated unless
+  HISTTIMEFORMAT was set. It shows a command line was typed in some session
+  of that account: not when, and not that it worked. Undated history is not
+  in plaso.timeline; it is in the appfiles.* source of the home directory
+  when index_app_files was planned on it.
+What persists (linux.persistence, from run_linux_persistence):
+- One row per file in the places Linux starts programs from or grants access
+  through (cron, at, systemd units, init scripts, ld.so.preload,
+  authorized_keys, shell profiles, sudoers, kernel module, udev and PAM
+  configuration, login hooks) and one per account with uid 0 or a login
+  shell. It is an inventory, and nearly every row is the distribution's own.
+- A row shows that the file exists and what its first lines say: not that it
+  is malicious, not that a unit is enabled, not that anything ran. Tie a row
+  to the incident with something else: a time inside the incident window
+  (linux.filelist also gives changed and created times, which touch cannot
+  set), a path or address seen elsewhere, a log line that shows it running.
+- An account marked "not in etc/passwd-" was added by the last change to
+  etc/passwd, and one marked "changed since etc/passwd-" had its uid, gid,
+  home or shell changed by it (a service account given a login shell). A
+  second uid 0 account or an unexplained key in authorized_keys is a lead to
+  confirm in the logs.
+- Each account row names the etc/passwd it was read from. Only the one at
+  the top of the tree is this system's: a row from backup/etc/passwd or from
+  a container layer describes that copy, not who can log in here.
+- The first line of linux.persistence says what the sweep could not see: a
+  directory whose listing was cut (deeper files have no row) or an
+  etc/passwd longer than was read (later accounts have no row). Write "not
+  examined" for those, never "none". A path that starts with
+  partition@<sector>: is on that partition of an image with several.
+What the web root holds: files under var/www in the export are the site as
+it was imaged. A script that executes request input can serve as a web
+shell; that it was used takes a request for it in the access log.
+Running is not doing: a service, cron entry or listening program shows what
+could happen. Report what the logs show did happen.
+
 EVIDENCE OUTSIDE THE CASE:
 Evidence often shows that more evidence exists somewhere this investigation
 cannot reach: a host that used a cloud or source-hosting account (CLI
