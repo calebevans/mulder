@@ -612,6 +612,28 @@ class TestThroughThePhase:
             assert db.get_unanalysed() == {}
 
     @pytest.mark.asyncio()
+    async def test_a_system_whose_later_plans_ran_nothing_is_still_listed(
+        self, db_dir: Path
+    ) -> None:
+        """One plan rejected at the gate, then accepted plans the executor ran nothing of."""
+        orch = _orchestrator(db_dir)
+        script = _Script([NO_QUESTIONS, _plan(QUESTIONS)])
+
+        async def idle(phase: Any, plan: Plan, *a: Any, **kw: Any) -> ExecutionResults:
+            return ExecutionResults(plan.plan_id, [], 1, False, tool_calls=0)
+
+        with (
+            patch.object(orch._roles, "run_executor", AsyncMock(side_effect=idle)),
+            patch.object(orch._session, "execute", side_effect=script.execute),
+        ):
+            result = await orch._run_split_phase(EXTRACTION, prompt_vars=VARS)
+
+        assert not result.success
+        assert script.kinds == ["planner", "resume", "ask", "planner", "planner"]
+        # No plan for it reached an analyst, which is what the report says of it.
+        assert _unanalysed(db_dir) == {SYSTEM: 1}
+
+    @pytest.mark.asyncio()
     async def test_a_follow_up_plan_without_questions_ends_the_follow_up(
         self, db_dir: Path
     ) -> None:

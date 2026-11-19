@@ -163,9 +163,10 @@ def no_incident(
     It passes when every question is undetermined too, and a case where
     nothing could be examined has not found that nothing happened.
 
-    Never while a system is *unanalysed* (``CaseDB.get_unanalysed``): its
-    plans were rejected for having no questions, so it has none on record
-    to be left open, and what was not analysed has not been found clean.
+    Never while a system is *unanalysed* (``CaseDB.get_unanalysed``): a
+    plan for it was rejected for having no questions and none reached an
+    analyst, so it has no question on record to be left open, and what was
+    not analysed has not been found clean.
     """
     positive = [f for f in findings if is_positive(f)]
     return (

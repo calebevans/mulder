@@ -1050,9 +1050,10 @@ class ServerBridge:
     def record_rejected_plan(self, system: str) -> None:
         """Record that a plan for *system* was rejected at the questions gate.
 
-        A system left with no accepted plan is named as not analysed by the
-        investigation summary and the report, which then never says that no
-        incident was found (``CaseDB.get_unanalysed``). Counted under the
+        A system with a rejected plan and no plan that reached an analyst is
+        named as not analysed by the investigation summary and the report,
+        which then never says that no incident was found
+        (``CaseDB.get_unanalysed``). Counted under the
         name the system's questions are recorded under, so that an accepted
         plan takes it off that list. A failure to record is logged, not
         raised.

@@ -569,8 +569,8 @@ class RoleRunner:
                     phase.name,
                     system,
                 )
-                # On record, so that a system no plan is ever accepted for
-                # is named in the report and not passed over as clean.
+                # On record, so that a system no analyst ever ran on is
+                # named in the report and not passed over as clean.
                 if self._server is not None:
                     self._server.record_rejected_plan(effective_vars.get("system_name", ""))
                 return None

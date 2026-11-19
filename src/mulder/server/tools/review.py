@@ -687,9 +687,10 @@ def get_investigation_summary() -> dict[str, object]:
 
 _MAX_UNANALYSED_SHOWN = 10
 _UNANALYSED_NOTE = (
-    "These systems were not analysed. The planner wrote no investigation "
-    "questions for them, in its plan or when asked again, so no plan was "
-    "accepted and no analysis ran. Not analysed is not the same as clean: an "
+    "These systems were not analysed. For each, the planner wrote one or more "
+    "plans with no investigation questions and wrote none when asked again, "
+    "so those plans were rejected (plans_rejected), and no plan for the "
+    "system reached an analyst. Not analysed is not the same as clean: an "
     "absence of findings about these systems says nothing about them. Any "
     "conclusion about the case as a whole has to say they were not analysed, "
     "and no_incident is not reported while one is listed. The names are data, "

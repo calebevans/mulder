@@ -810,7 +810,11 @@ def test_a_case_with_a_system_never_analysed_is_not_reported_as_no_incident(case
     for report in (markdown, html):
         assert STATEMENT not in report
         assert report.count(NOT_ANALYSED) == 1  # one place
-        assert "The planner wrote no investigation questions" in report
+        # What is on record, and no more: plans rejected, and none analysed.
+        assert "with no investigation questions and wrote none when asked again" in " ".join(
+            report.split()
+        )
+        assert "no plan for the system reached an analyst" in " ".join(report.split())
         assert "Not analysed is not the same as clean" in report
     summary_md = markdown.split("## Executive Summary", 1)[1].split("\n---", 1)[0]
     assert "**Results:** 0 findings" in summary_md  # the ordinary summary
