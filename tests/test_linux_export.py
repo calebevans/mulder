@@ -505,8 +505,8 @@ def test_a_file_under_a_mount_point_gives_way_to_the_mounted_volumes(
     assert (root / "home/alice/.bash_logout").read_bytes() == b"only on the root volume\n"
     (reason,) = [r for r in result["not_exported"] if r.startswith("under a mount point")]
     assert result["not_exported"][reason] == [
-        "p5/lvm1:/var/log/auth.log",
         "p5/lvm1:/home/alice/.bashrc",
+        "p5/lvm1:/var/log/auth.log",
     ]
     assert result["status"] == "exported" and "p5/lvm1 (EXT, 4 files, 2 exported" in str(result)
     assert not any("another file's too" in r for r in result["not_exported"])
@@ -514,6 +514,32 @@ def test_a_file_under_a_mount_point_gives_way_to_the_mounted_volumes(
     # A file hidden under a mount point is worth reading: by its own path it is alone.
     asked = _run(monkeypatch, fake, image, paths=["/var/log/auth.log"])["results"]["requested"]
     assert Path(asked["exported"][0]).read_bytes() == b"under the mount point\n"
+
+
+def test_a_file_under_a_mount_point_does_not_stand_in_for_a_mounted_one_left_out(
+    case: CaseDB, image: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A syslog past the size limit, and the early-boot copy on the root volume beneath it:
+    exported at the same path, the stale one would be read as the system's log."""
+    files = {
+        ROOT: {"/etc/passwd": b"x\n", "/var/log/syslog": b"written before the mount\n"},
+        "p5/lvm3": {"/syslog": b"stands for 100 MiB", "/wtmp": b"\x00", "/auth.log": b"a\n"},
+    }
+    fake = FakePlaso(files)
+    for event in fake.events:
+        if event["filename"] == "/syslog":
+            event["file_size"] = 100 * 1024 * 1024
+
+    result = _run(monkeypatch, fake, image)["results"]
+
+    root = Path(result["export_root"])
+    assert _held(root) == ["etc/passwd", "var/log/auth.log", "var/log/wtmp"]
+    (reason,) = [r for r in result["not_exported"] if r.startswith("under a mount point")]
+    assert result["not_exported"][reason] == ["p5/lvm1:/var/log/syslog"]
+    assert result["not_exported"]["larger than 64 MiB"] == ["p5/lvm3:/syslog"]
+    # By its own path it is still to be had.
+    asked = _run(monkeypatch, fake, image, paths=["/var/log/syslog"])["results"]["requested"]
+    assert Path(asked["exported"][0]).read_bytes() == b"written before the mount\n"
 
 
 def test_password_hashes_on_a_volume_mounted_at_var_are_not_exported_on_request(

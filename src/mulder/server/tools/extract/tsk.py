@@ -280,13 +280,16 @@ def _collect_fls_chunks(image_path: str) -> list[tuple[list[str], int]]:
             if not chunks:
                 continue
 
-            stored = ctx.db.get_kv(f"{_KV_SOURCE_OFFSET_PREFIX}{src.source_name}:{image_path}")
+            # Under the path the listing was indexed with, which the caller may spell otherwise.
+            stored = ctx.db.get_kv(
+                f"{_KV_SOURCE_OFFSET_PREFIX}{src.source_name}:{src.source_path}"
+            )
             if stored is not None:
                 with contextlib.suppress(ValueError):
                     offset = int(stored)
                     result.append((chunks, offset))
                     continue
-            result.append((chunks, _resolve_partition_offset(image_path)))
+            result.append((chunks, _resolve_partition_offset(src.source_path)))
         return result
 
     inline_output = _run_fls_inline(image_path)

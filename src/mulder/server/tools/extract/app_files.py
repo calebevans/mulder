@@ -16,7 +16,7 @@ import subprocess
 import time
 from typing import Any
 
-from mulder.dirroot import icat
+from mulder.dirroot import cut_listing, icat
 from mulder.linuxvol import PRIVATE_KEY, SECRET_FILES, in_exports
 from mulder.patterns import fls_file_entries
 from mulder.server.app import get_ctx, mcp
@@ -175,7 +175,8 @@ def _extract_and_read_file(
             is read: on a Linux tree any file under the pattern is a
             candidate, a database dump or a core file among them.
         why: Given a list, ``"too_large"`` or ``"private_key"`` is appended
-            when that is why None is returned.
+            when that is why None is returned, and ``"cut"`` when the text
+            returned is the first ``_MAX_TEXT_BYTES`` of a longer file.
 
     Returns:
         Decoded text content or None if extraction fails or file
@@ -205,6 +206,8 @@ def _extract_and_read_file(
     if _is_binary_content(proc.stdout):
         return None
 
+    if why is not None and len(proc.stdout) > _MAX_TEXT_BYTES:
+        why.append("cut")
     return proc.stdout[:_MAX_TEXT_BYTES].decode("utf-8", errors="replace")
 
 
@@ -249,10 +252,12 @@ def index_app_files(
             that is binary or compressed is skipped (files_skipped_binary),
             one over the size limit is skipped without being read past it
             (files_skipped_too_large, the first ten named in too_large:
-            raise max_file_size_kb for those), and password hash files and
-            private keys are withheld (files_withheld, named in withheld):
-            etc/shadow and the like by name, a private key under any name
-            by its first line.
+            raise max_file_size_kb for those; no more than the first 512 KB
+            of a file is indexed, and one longer is named in
+            indexed_in_part), and password hash files and private keys are
+            withheld whatever the extensions (files_withheld, named in
+            withheld): etc/shadow and the like by name, a private key under
+            any name by its first line.
         max_file_size_kb: Skip files larger than this threshold to avoid
             extracting multi-megabyte logs. Defaults to 512 KB.
         max_files: Maximum number of files to extract per invocation to
@@ -307,10 +312,12 @@ def index_app_files(
         matches = _find_matching_files(chunks, directory_pattern, ext_set, offset)
         all_matches.extend(matches)
 
-    # Every name includes etc/shadow and private keys, which the extension list
-    # kept out: their content is a credential and is not indexed.
-    withheld = [m[1] for m in all_matches if "*" in ext_set and SECRET_FILES.search(m[1])]
+    # etc/shadow and private keys, whatever was asked for (every name, or a copy
+    # by its extension): their content is a credential and is not indexed.
+    withheld = [m[1] for m in all_matches if SECRET_FILES.search(m[1])]
     all_matches = [m for m in all_matches if m[1] not in withheld]
+    # A directory listed in part: what the pattern did not find was not looked for.
+    cut = cut_listing(image_path)
 
     if not all_matches:
         elapsed = (time.monotonic() - t0) * 1000
@@ -323,9 +330,12 @@ def index_app_files(
                 "files_extracted": 0,
                 "files_indexed": 0,
                 "files_withheld": len(withheld),
+                "withheld": withheld[:10],
                 "pattern": directory_pattern,
                 "message": f"No files matching pattern '{directory_pattern}' "
-                f"with extensions {sorted(ext_set)} were found in the file listing.",
+                f"with extensions {sorted(ext_set)} were found in the file listing."
+                + (f" {cut}" if cut else ""),
+                **({"listing_truncated": True} if cut else {}),
             },
             source=None,
             elapsed_ms=elapsed,
@@ -340,6 +350,7 @@ def index_app_files(
     sample_files: list[str] = []
     skipped_binary = 0
     too_large: list[str] = []
+    in_part: list[str] = []
 
     for inode_str, rel_path, offset in capped:
         why: list[str] = []
@@ -356,6 +367,8 @@ def index_app_files(
             continue
 
         files_extracted += 1
+        if why:  # a raised max_file_size_kb let it in: the text indexed is its start
+            in_part.append(rel_path)
         if not content.strip():
             continue
 
@@ -381,6 +394,8 @@ def index_app_files(
         "files_skipped_binary": skipped_binary,
         "files_skipped_too_large": len(too_large),
         "too_large": too_large[:10],
+        "files_indexed_in_part": len(in_part),
+        "indexed_in_part": in_part[:10],
         "files_withheld": len(withheld),
         "withheld": withheld[:10],
         "windows_indexed": total_windows,
@@ -388,6 +403,7 @@ def index_app_files(
         "sample_files": sample_files,
         "pattern": directory_pattern,
         "extensions_used": sorted(ext_set),
+        **({"listing_truncated": True, "note": cut} if cut else {}),
     }
 
     return tool_response(

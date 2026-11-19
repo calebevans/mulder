@@ -425,6 +425,21 @@ def refresh() -> None:
     _build.cache_clear()
 
 
+def cut_listing(path: str) -> str:
+    """What a tool says when the listing it read of the directory at *path* was cut, else ``""``.
+
+    For a tool that looks for files by where they are: a place with nothing
+    found in a cut listing was not looked at.
+    """
+    root = dir_root(path)
+    if root is None or not root.truncated:
+        return ""
+    return (
+        f"The listing of this directory was cut at {len(root.files)} files, the shallowest "
+        "of them: the files deeper in the tree are not listed and were not examined."
+    )
+
+
 def not_collected(path: str) -> str | None:
     """What "not found" means when *path* is a directory root; None for an image.
 

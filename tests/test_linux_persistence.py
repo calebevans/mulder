@@ -21,6 +21,7 @@ from mulder.server.app import _tool_dispatch_sync
 from mulder.server.extract_helpers import extract_and_index
 from mulder.server.helpers import TOOL_SOURCE_PREFIXES, tool_already_indexed
 from mulder.server.tools import linux
+from mulder.server.tools.extract import tsk
 from tests.triage_trees import kape, uac, write
 
 KEY = "ssh-rsa " + "AAAAB3NzaC1yc2EAAAADAQABAAABAQC7" * 8 + " intruder@kali"
@@ -93,6 +94,12 @@ def _sweep(path: Path | str, **kwargs: object) -> dict[str, Any]:
 def _rows(db: CaseDB) -> list[list[str]]:
     text = "".join(w.raw_text for w in db.get_windows_by_source("linux.persistence"))
     return [line.split("\t") for line in text.splitlines()[1:]]
+
+
+def _header(db: CaseDB) -> str:
+    """The first line of linux.persistence: what the sweep says about itself."""
+    text = "".join(w.raw_text for w in db.get_windows_by_source("linux.persistence"))
+    return text.split("\n")[0]
 
 
 def test_one_row_per_file_with_its_path_time_size_and_first_lines(
@@ -222,6 +229,52 @@ def test_a_record_of_etc_passwd_ends_at_a_newline_and_nowhere_else(
     other = [row[4] for row in rows if row[1] == "srv/etc/passwd"]
     assert other == ["name=root uid=0 gid=0 home=/root shell=/bin/sh (uid 0, has a login shell)"]
     assert result["by_kind"] == {"account": 10} and result["accounts_not_shown"] == 0
+
+
+def test_an_account_file_longer_than_is_read_is_cut_at_a_record_and_said(
+    case: CaseDB, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Padded past what is read (glibc skips comment lines), a uid 0 account has no row:
+    the sweep says where it stopped, and makes no account of the record the cut fell in."""
+    monkeypatch.setattr(linux, "_ACCOUNT_BYTES", 4096)
+    first = "root:x:0:0::/root:/bin/bash\n"
+    split = "cut:x:3000:3000::/nonexistent:/u"  # what is read ends here: /u is no login shell
+    pad = "#" * (4096 - len(first) - len(split) - 1) + "\n"
+    passwd = first + pad + split + "sr/sbin/nologin\nlate:x:0:0::/tmp:/bin/bash\n"
+    root = _tree(
+        tmp_path / "root",
+        {
+            "etc/passwd": passwd,
+            "srv/etc/passwd": first + "www:x:33:33::/var/www:/usr/sbin/nologin\n",
+            "srv/etc/passwd-": "#" * 5000 + "\n" + first + "www:x:33:33::/var/www:/bin/false\n",
+        },
+    )
+
+    result = _sweep(root)["results"]
+
+    rows = [(row[1], row[4]) for row in _rows(case)]
+    assert rows == [
+        (
+            "etc/passwd",
+            "name=root uid=0 gid=0 home=/root shell=/bin/bash (uid 0, has a login shell)",
+        ),
+        # Not compared with a passwd- that was not read whole: every account would be new.
+        (
+            "srv/etc/passwd",
+            "name=root uid=0 gid=0 home=/root shell=/bin/bash (uid 0, has a login shell)",
+        ),
+    ]
+    assert result["account_files_cut"] == ["etc/passwd", "srv/etc/passwd-"]
+    assert result["truncated"] is True
+    for said in (result["note"], _header(case)):
+        assert "etc/passwd, srv/etc/passwd- are longer than the 4096 bytes read" in said
+        assert "an account past that point has no row" in said
+
+    # With nothing else to show, that is still not "the system has none".
+    only = _tree(tmp_path / "only", {"etc/passwd": "#" * 5000 + "\n" + first})
+    nothing = _sweep(only)
+    assert nothing["error_type"] == "not_applicable"
+    assert "etc/passwd is longer than the 4096 bytes read" in nothing["suggestion"]
 
 
 def test_every_etc_passwd_is_read_with_its_own_backup_the_systems_first(
@@ -465,6 +518,47 @@ def test_an_incomplete_export_is_not_swept_as_if_it_were_whole(
     assert "export_incomplete" not in _sweep(planted)["results"]
 
 
+def test_a_directory_listed_in_part_is_not_swept_as_if_it_were_whole(
+    case: CaseDB, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The walk is breadth-first: a cut listing lacks the deep part, user crontabs first."""
+    monkeypatch.setattr(dirroot, "MAX_ENTRIES", 40)
+    files: dict[str, bytes | str] = {
+        "etc/passwd": "root:x:0:0::/root:/bin/sh\n",
+        "etc/crontab": "@reboot /x\n",
+        "var/spool/cron/crontabs/root": "@reboot /deep\n",
+        **{f"usr/share/doc/f{n:02d}": "x\n" for n in range(40)},
+    }
+    root = _tree(tmp_path / "root", files)
+
+    result = _sweep(root)["results"]
+
+    assert [row[1] for row in _rows(case)] == ["etc/crontab", "etc/passwd"]
+    assert result["listing_truncated"] is True and result["truncated"] is True
+    for said in (result["note"], _header(case)):
+        assert "listing of this directory was cut at 33 files" in said
+        assert "were not examined" in said
+    # The text indexer reads the same listing, and finds nothing where the crontab is.
+    indexed = _index(root, "var/spool/cron/crontabs")
+    assert indexed["files_discovered"] == 0 and indexed["listing_truncated"] is True
+    assert "cut at 33 files" in indexed["message"]
+    found = _index(root, "etc")
+    assert found["files_indexed"] == 2 and "cut at 33 files" in found["note"]
+
+    # Nothing found in the part that was listed is not "none" either.
+    other = _tree(tmp_path / "other", {k: v for k, v in files.items() if not k.startswith("etc/")})
+    nothing = _sweep(other)
+    assert nothing["error_type"] == "not_applicable"
+    assert "listing of this directory was cut" in nothing["suggestion"]
+
+    # A directory listed whole says none of it.
+    monkeypatch.setattr(dirroot, "MAX_ENTRIES", 200_000)
+    dirroot.refresh()
+    whole = _sweep(root, force=True)["results"]
+    assert whole["listing_truncated"] is False and whole["truncated"] is False
+    assert "listing_truncated" not in _index(root, "etc", max_files=1)
+
+
 def test_a_disk_image_sleuth_kit_reads_is_swept_through_its_listing(
     case: CaseDB, tmp_path: Path
 ) -> None:
@@ -602,6 +696,62 @@ def test_two_images_in_one_case_are_each_swept_through_their_own_listing(
     assert both.count("etc/crontab") == 1 and both.count("etc/cron.d/dbjob") == 1
 
 
+def test_an_image_named_by_another_spelling_keeps_each_partitions_offset(
+    case: CaseDB, tmp_path: Path
+) -> None:
+    """The listings are found by the image's resolved path; so must their offsets be, or a
+    second partition's inodes are read from the first."""
+    (tmp_path / "ev").mkdir()
+    image = str(tmp_path / "ev" / "disk.raw")
+    Path(image).write_bytes(b"\x00" * 4096)
+    extract_and_index("r/r 12:\tetc/crontab\n", "tsk.filelist", image, "sleuthkit")
+    extract_and_index("r/r 12:\thome/alice/.bashrc\n", "tsk.filelist.p1", image, "sleuthkit")
+    case.set_kv(f"{tsk._KV_OFFSET_PREFIX}{image}", "2048")
+    case.set_kv(f"{tsk._KV_SOURCE_OFFSET_PREFIX}tsk.filelist:{image}", "2048")
+    case.set_kv(f"{tsk._KV_SOURCE_OFFSET_PREFIX}tsk.filelist.p1:{image}", "999424")
+
+    other = str(tmp_path / "ev" / ".." / "ev" / "disk.raw")
+    with patch.object(tsk, "_partition_table_text", return_value=""):
+        assert [offset for _, offset in tsk._collect_fls_chunks(image)] == [2048, 999424]
+        assert [offset for _, offset in tsk._collect_fls_chunks(other)] == [2048, 999424]
+
+
+def test_two_partitions_of_one_image_each_have_their_accounts_and_say_which(
+    case: CaseDB, tmp_path: Path
+) -> None:
+    """Both list etc/passwd under the same path: the second is another system's, not a repeat."""
+    image = str(tmp_path / "ab.dd")
+    Path(image).write_bytes(b"\x00" * 2048)
+    first = "r/r 12:\tetc/crontab\nr/r 14:\tetc/passwd-\nr/r 15:\tetc/passwd\n"
+    second = "r/r 12:\tetc/crontab\nr/r 15:\tetc/passwd\n"
+    root = b"root:x:0:0::/root:/bin/bash\n"
+
+    def fake_icat(image: str, offset: int, inode: str, **_: object) -> Any:
+        held = {"12": b"@daily /job-%d\n" % offset, "14": root, "15": root}
+        if (offset, inode) == (999424, "15"):
+            held["15"] = root + b"second:x:0:0::/:/bin/sh\n"
+        return subprocess.CompletedProcess(["icat"], 0, held[inode], b"")
+
+    listings = [([first], 2048), ([second], 999424)]
+    with (
+        patch.object(linux, "_collect_fls_chunks", return_value=listings),
+        patch.object(linux, "icat", side_effect=fake_icat),
+    ):
+        result = _sweep(image)["results"]
+
+    assert [(row[1], row[4].split(" (")[0]) for row in _rows(case)] == [
+        ("partition@2048:etc/crontab", "@daily /job-2048"),
+        ("partition@999424:etc/crontab", "@daily /job-999424"),
+        ("partition@2048:etc/passwd", "name=root uid=0 gid=0 home=/root shell=/bin/bash"),
+        ("partition@999424:etc/passwd", "name=root uid=0 gid=0 home=/root shell=/bin/bash"),
+        ("partition@999424:etc/passwd", "name=second uid=0 gid=0 home=/ shell=/bin/sh"),
+    ]
+    # Compared with the passwd- of its own partition, or with none: never the other's.
+    assert "passwd-" not in _rows(case)[-1][4]
+    assert result["by_kind"] == {"cron": 2, "account": 3} and result["truncated"] is False
+    assert "partition@<its start sector>:" in result["note"]
+
+
 def test_nothing_found_is_not_reported_as_a_clean_system(case: CaseDB, tmp_path: Path) -> None:
     result = _sweep(kape(tmp_path / "k"))
     assert result["error_type"] == "not_applicable"
@@ -710,6 +860,28 @@ def test_a_file_over_the_size_limit_is_not_read_past_it(
     assert asked and max(asked) == 512 * 1024 + 1
 
 
+def test_a_file_let_in_by_a_raised_size_limit_is_indexed_in_part_and_named(
+    case: CaseDB, tmp_path: Path
+) -> None:
+    """too_large says to raise max_file_size_kb: what is then indexed is the file's start."""
+    root = _tree(
+        tmp_path / "root",
+        {
+            "etc/passwd": "root:x:0:0::/root:/bin/bash\n",
+            "var/log/access.log": "GET /early\n" + "x" * (600 * 1024) + "\nGET /late\n",
+            "var/log/auth.log": "Accepted password for root\n",
+        },
+    )
+    assert _index(root, "var/log")["too_large"] == ["var/log/access.log"]
+
+    result = _index(root, "var/log", max_file_size_kb=2048)
+
+    assert result["files_indexed"] == 2 and result["files_indexed_in_part"] == 1
+    assert result["indexed_in_part"] == ["var/log/access.log"]
+    text = "".join(w.raw_text for w in case.get_windows_by_source("appfiles.var.log.access.log"))
+    assert "GET /early" in text and "GET /late" not in text
+
+
 def test_a_private_key_under_any_name_is_withheld_by_its_first_line(
     case: CaseDB, tmp_path: Path
 ) -> None:
@@ -811,6 +983,34 @@ def test_taking_every_name_does_not_take_password_hashes_or_private_keys(
     assert "$6$salt$hash" not in indexed and "PRIVATE KEY" not in indexed
     only = _index(root, "etc/ssh", extensions=["*"], max_files=1)
     assert only["files_withheld"] == 1 and only["files_discovered"] == 2
+
+
+def test_an_extension_list_does_not_let_a_password_hash_file_through(
+    case: CaseDB, tmp_path: Path
+) -> None:
+    """Asked for by extension, Debian's and an administrator's copies are still withheld."""
+    root = _tree(
+        tmp_path / "root",
+        {
+            "etc/passwd": "root:x:0:0::/root:/bin/bash\n",
+            "etc/shadow.bak": "root:$6$salt$hash:19000:0:99999:7:::\n",
+            "etc/fstab.bak": "/dev/sda1 / ext4 defaults 0 1\n",
+            "var/backups/shadow.bak": "root:$6$salt$hash:19000:0:99999:7:::\n",
+        },
+    )
+
+    result = _index(root, "etc", extensions=["bak"])
+
+    assert result["sample_files"] == ["etc/fstab.bak"]
+    assert result["files_withheld"] == 1 and result["withheld"] == ["etc/shadow.bak"]
+    # With nothing left to index, the file that was withheld is still named.
+    assert _index(root, "var/backups", extensions=[".bak"])["withheld"] == [
+        "var/backups/shadow.bak"
+    ]
+    indexed = "".join(
+        w.raw_text for s in case.get_sources() for w in case.get_windows_by_source(s.source_name)
+    )
+    assert "$6$salt$hash" not in indexed
 
 
 def test_a_windows_tree_keeps_the_extension_list_unless_asked(

@@ -33,7 +33,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import NamedTuple
 
-from mulder.dirroot import dir_root, icat, listed_name, read_regular, refresh, walk_files
+from mulder.dirroot import (
+    cut_listing,
+    dir_root,
+    icat,
+    listed_name,
+    read_regular,
+    refresh,
+    walk_files,
+)
 from mulder.linuxvol import (
     EXPORT_MARKER,
     EXPORTS_DIR,
@@ -150,7 +158,8 @@ _SHARED = (
 )
 _UNDER_MOUNT = (
     "under a mount point, where the running system showed the mounted volume's file of the "
-    "same path, which is the one exported: ask for this one alone with paths"
+    "same path (the one exported, unless it is named here under another reason): ask for "
+    "this one alone with paths"
 )
 _NOT_COPIED = "image_export did not copy it"
 
@@ -430,11 +439,14 @@ def _some(names: list[str], limit: int = 10) -> list[str]:
 
 
 def _select(
-    entries: Sequence[_Entry], mounts: dict[str, tuple[str | None, str]]
+    entries: Sequence[_Entry], mounts: dict[str, tuple[str | None, str]], places: dict[str, str]
 ) -> tuple[list[_Entry], dict[str, int], dict[str, list[str]]]:
     """The targeted set: the files to export, how many of each kind, and what was left out."""
     found: dict[str, list[_Entry]] = {kind: [] for kind, _, _ in _TARGETS}
     left: dict[str, list[str]] = {}
+    matched: list[tuple[_Entry, str, str, str]] = []
+    # How deep the deepest volume that lists a path of the export is placed.
+    deepest: dict[str, int] = {}
     for entry in entries:
         mount = mounts.get(entry.volume) if entry.volume is not None else None
         if entry.kind != "file" or mount is None:
@@ -442,6 +454,17 @@ def _select(
         rel = (mount[0] or "") + entry.path[1:]
         kind = next((k for k, _, pattern in _TARGETS if pattern.match(rel)), None)
         if kind is None:
+            continue
+        place = places[entry.volume or ""]
+        final = place + entry.path[1:]
+        matched.append((entry, rel, kind, final))
+        deepest[final] = max(deepest.get(final, 0), len(place))
+    for entry, rel, kind, final in matched:
+        if len(places[entry.volume or ""]) < deepest[final]:
+            # A file in a directory another volume is mounted on. It is left out
+            # whatever becomes of the mounted volume's file (too large, over a
+            # limit): at that path it would be read as the one the system showed.
+            left.setdefault(_UNDER_MOUNT, []).append(_shown(entry))
             continue
         reason = _refusal(entry, rel)
         if reason:
@@ -888,7 +911,7 @@ def _export_first(
             by_volume.setdefault(entry.volume or "", set()).add(entry.path[1:])
     mounts = {volume: _mount(found) for volume, found in by_volume.items()}
     places = _places(mounts)
-    picks, counts, left = _select(entries, mounts)
+    picks, counts, left = _select(entries, mounts, places)
     # What the image holds that is not among the volumes just listed.
     volumes = probe(image_path)
     not_read = [str(v) for v in volumes if not v.readable]
@@ -1215,7 +1238,9 @@ def run_linux_persistence(image_path: str, force: bool = False) -> dict[str, obj
     modification time, size and first lines. It is an inventory: it marks
     nothing as malicious and does not show that anything ran. On an export
     that export_linux_files reported as incomplete, export_incomplete
-    repeats what could not be listed or copied.
+    repeats what could not be listed or copied. listing_truncated (a
+    directory whose listing was cut) and account_files_cut (an etc/passwd
+    longer than is read) say what else was not examined: note has the detail.
 
     Args:
         image_path: The directory, or the disk image.
@@ -1263,10 +1288,13 @@ def run_linux_persistence(image_path: str, force: bool = False) -> dict[str, obj
         return got[0], str(info.st_size), info.st_mtime, got[1]
 
     rows: list[tuple[int, float, str]] = []
-    # Where the account files of each tree are, by the directory that holds its
-    # etc/: a copy under backup/ or in a container layer is not the system's own.
-    trees: dict[str, dict[str, tuple[int, str, str]]] = {}
+    # Where the account files of each tree are, by partition and by the directory
+    # that holds its etc/: a second partition's, a copy under backup/ or a
+    # container layer's are not the system's own.
+    trees: dict[tuple[int, str], dict[str, tuple[int, str, str]]] = {}
     seen: set[tuple[int, str, str]] = set()
+    # Two partitions of one image list the same paths: each row says which it is from.
+    partitions = len({offset for _, offset in groups}) > 1
     unread = 0
     for chunks, offset in groups:
         for chunk in chunks:
@@ -1286,8 +1314,10 @@ def run_linux_persistence(image_path: str, force: bool = False) -> dict[str, obj
                     continue
                 seen.add(listed)
                 shown = listed_name(entry.path)
+                if partitions:
+                    shown = f"partition@{offset}:{shown}"
                 if account is not None:
-                    tree = trees.setdefault(account.group(1), {})
+                    tree = trees.setdefault((offset, account.group(1)), {})
                     tree.setdefault(account.group(2), (offset, entry.base_inode, shown))
                     continue
                 got = head(offset, entry.base_inode, _HEAD_BYTES)
@@ -1312,18 +1342,26 @@ def run_linux_persistence(image_path: str, force: bool = False) -> dict[str, obj
     # Each etc/passwd with the passwd- and group beside it, the tree at the top
     # first and then the shallowest: the system's own before any copy of one.
     with_passwd = sorted(
-        (t for t in trees if "passwd" in trees[t]), key=lambda t: (t.count("/"), t)
+        (t for t in trees if "passwd" in trees[t]), key=lambda t: (t[1].count("/"), t[1], t[0])
     )
     hidden = 0
+    cut: list[str] = []
     for top in with_passwd[:_MAX_TREES]:
         held: dict[str, tuple[bytes, float | None, str]] = {}
         for which, (offset, inode, shown) in trees[top].items():
-            # New accounts are appended, so the account files are read to the end.
+            # New accounts are appended, so far more of an account file is read
+            # than of any other. One longer still is cut, and said to be.
             got = head(offset, inode, _ACCOUNT_BYTES)
             if got is None:
                 unread += 1
-            else:
+            elif got[3]:
                 held[which] = (got[0], got[2], shown)
+            else:
+                cut.append(shown)
+                # Less the record the cut fell in, which is not one. Part of a
+                # passwd- is not used: against it every later account would be new.
+                if which != "passwd-":
+                    held[which] = (got[0][: got[0].rfind(b"\n") + 1], got[2], shown)
         if "passwd" not in held:
             continue
         data, mtime, shown = held["passwd"]
@@ -1338,6 +1376,20 @@ def run_linux_persistence(image_path: str, force: bool = False) -> dict[str, obj
         counts["account"] = counts.get("account", 0) + len(found)
     passed_by = len(with_passwd) - len(with_passwd[:_MAX_TREES])
     gaps = _export_gaps(image_path) if root is not None else {}
+    # What was not examined, wherever the caller reads of this sweep.
+    missed = [cut_listing(image_path)] if root is not None and root.truncated else []
+    if cut:
+        missed.append(
+            f"{_clean(', '.join(cut[:10]), 600)} {'is' if len(cut) == 1 else 'are'} longer "
+            f"than the {_ACCOUNT_BYTES} bytes read of an account file: an account past that "
+            "point has no row, and none is compared with a passwd- that was not read whole."
+        )
+    note = " ".join([_PERSISTENCE_NOTE, *missed])
+    if partitions:
+        note += (
+            " This image has more than one partition listed: each path starts with "
+            "partition@<its start sector>:."
+        )
     if not lines:
         hint = _export_hint(image_path) if root is None else ""
         if not groups:
@@ -1366,9 +1418,12 @@ def run_linux_persistence(image_path: str, force: bool = False) -> dict[str, obj
             params,
             f"None of the Linux persistence locations is among the files listed for {image_path}.",
             error_type="not_applicable",
-            suggestion=hint
-            or "That does not show the system has none: on an export or a triage collection "
-            "the files may not have been copied."
+            suggestion=(
+                hint
+                or "That does not show the system has none: on an export or a triage "
+                "collection the files may not have been copied."
+            )
+            + "".join(f" {sentence}" for sentence in missed)
             + (f" This export is incomplete: {json.dumps(gaps)[:1500]}" if gaps else ""),
         )
 
@@ -1379,12 +1434,14 @@ def run_linux_persistence(image_path: str, force: bool = False) -> dict[str, obj
         "by_kind": counts,
         "most_recently_modified": [" ".join(line.split("\t")[:3]) for _, _, line in recent],
         "files_not_readable": unread,
-        "truncated": len(rows) >= _MAX_ROWS or hidden > 0 or passed_by > 0,
+        "truncated": len(rows) >= _MAX_ROWS or hidden > 0 or passed_by > 0 or bool(missed),
+        "listing_truncated": root is not None and root.truncated,
         "accounts_not_shown": hidden,
         "passwd_files_not_read": passed_by,
-        "note": _PERSISTENCE_NOTE,
+        "account_files_cut": _some(cut),
+        "note": note,
     }
-    header = f"Linux persistence locations in {listed_name(image_path)}. {_PERSISTENCE_NOTE}"
+    header = f"Linux persistence locations in {listed_name(image_path)}. {note}"
     if gaps:
         summary["export_incomplete"] = gaps
         header += f" INCOMPLETE EXPORT: {gaps['note']} {json.dumps(gaps)[:1500]}"
