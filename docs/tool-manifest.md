@@ -2764,6 +2764,10 @@ Return a compact progress dashboard for the current investigation.
 
 **Returns:** `sources_indexed`, `findings_submitted`, `findings_by_severity{}`, `remaining_work[]`, `ready_to_finalize`. When investigation questions were recorded, also `questions{}` (recorded, open, answered, ruled_out, undetermined), `open_questions[]` (question_id, phase, system, question; the 15 oldest across every phase and system, each cut to 200 characters, with `open_questions_note` when there are more), `significant_findings` (findings of activity at medium severity or above) and `no_incident: true` when every question is resolved and at least one is answered or ruled out, both audits have run, there are fewer than three findings of activity and none is medium or above.
 
+When a role session was cut short (it ended at a turn or context limit with no continuation left), `remaining_work` has one item starting `Analysis cut short` that names up to ten such sessions by phase, role, system and question. It means those sessions did not finish, so conclusions about them may be incomplete; it does not mean nothing was found. What they had not reached may not have been examined, unless a later retry or follow-up covered it.
+
+When a system was never analysed (a plan for it was rejected at the questions gate and no plan for it reached an analyst, so it has no recorded question), the result has `systems_not_analysed{}`: `count`, `systems[]` (system, plans_rejected; at most ten) and a `note` saying that not analysed is not the same as clean. `no_incident` is not reported while a system is listed.
+
 **Roles:** `EXTRACT_ANALYST` `CROSS_PLANNER` `CROSS_ANALYST` `NARRATIVE_PLANNER` `NARRATIVE_ANALYST` `REPORT`
 
 ### check_finalize_readiness

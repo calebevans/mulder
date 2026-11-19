@@ -57,7 +57,7 @@ from mulder.orchestrator.roles import (
 )
 from mulder.orchestrator.runner import Orchestrator
 from mulder.orchestrator.session import _MAX_NUDGES, _NUDGE_PROMPT, SessionExecutor
-from mulder.orchestrator.types import ExecutionResults, PhaseResult, Plan
+from mulder.orchestrator.types import PhaseResult, Plan
 from mulder.server.app import _tool_dispatch_sync
 from mulder.server.tool_access import Role, get_tools_for_role
 
@@ -579,18 +579,29 @@ def _orchestrator(db_dir: Path, **kwargs: Any) -> Orchestrator:
 
 
 PLAN = Plan("p", [{"tool": "run_mmls", "args": {}, "purpose": "x"}], ["q1"], [], "plan", 1)
-VARS = {"case_id": CASE, "system_name": SYSTEM}
+
+
+async def _analyst_session(orch: Orchestrator, system: str = SYSTEM) -> Any:
+    """One extraction analyst session.
+
+    ``run_analyst`` runs several for a plan (one per question, then a
+    consolidation); each of them, and a remediation session, is this. It is
+    handed its question the way a question session is.
+    """
+    prompt = EXTRACTION.analyst_prompt_template.format(
+        case_id=CASE,
+        system_name=system,
+        case_briefing="",
+        execution_results="[]",
+        investigation_questions='["q1"]',
+    )
+    model = orch.model_config.resolve(EXTRACTION.name, "analyst")
+    return await orch._roles._analyst_session(EXTRACTION, prompt, model, "", system, ["q1"])
 
 
 async def _analyst(orch: Orchestrator, sessions: _Sessions, system: str = SYSTEM) -> Any:
     with patch.object(orch._session, "execute", side_effect=sessions.execute):
-        return await orch._roles.run_analyst(
-            EXTRACTION,
-            PLAN,
-            ExecutionResults("p", [], 1, False),
-            {"case_id": CASE, "system_name": system},
-            task_system=system,
-        )
+        return await _analyst_session(orch, system)
 
 
 async def _executor(orch: Orchestrator, sessions: _Sessions) -> Any:
@@ -789,9 +800,7 @@ class TestNewSessionFallback:
             return _overflowed()
 
         with patch.object(orch._session, "execute", side_effect=execute):
-            await orch._roles.run_analyst(
-                EXTRACTION, PLAN, ExecutionResults("p", [], 1, False), VARS, task_system=SYSTEM
-            )
+            await _analyst_session(orch)
         first, continuation = prompts
 
         assert f"HANDOFF NOTES:\n> {NOTE}\n" in continuation

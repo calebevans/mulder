@@ -113,7 +113,7 @@ Cheap control and query tools are exempt from both the gate and the `CapacityLim
 
 The orchestrator (`mulder investigate`) runs five investigation phases sequentially. Most phases use a plan-and-execute pipeline (planner/executor/analyst) while catalog and report use single-agent sessions. The orchestrator uses the [Claude Agent SDK](https://platform.claude.com/docs/en/agents-and-tools/claude-code-sdk) (`claude-agent-sdk`) for managing agent sessions.
 
-If a `MULDER.md` file exists in the evidence directory, its contents are loaded at startup and injected as an "INVESTIGATOR BRIEFING" preamble into the planner, analyst, and report prompts across all phases. This allows investigators to provide case background, known facts, and specific questions that guide the investigation without modifying any code.
+If a `MULDER.md` file exists in the evidence directory, its contents are loaded at startup and injected as an "INVESTIGATOR BRIEFING" preamble into the planner, analyst, and report prompts across all phases. This allows investigators to provide case background, known facts, and specific questions that guide the investigation without modifying any code. The investigation questions themselves are the extraction planner's: for each system it writes them from the evidence and the briefing, covering the briefing's questions and leads that the system's evidence could answer, and the analyst answers them one session at a time (see [Per-Question Analyst Sessions](#per-question-analyst-sessions)).
 
 ```mermaid
 flowchart TD
@@ -127,9 +127,9 @@ flowchart TD
     identifySystems --> extraction
 
     subgraph extraction [Phase 2: Extraction - per system]
-        ep["Planner\n(decides tools)"]
+        ep["Planner\n(decides tools,\nwrites the questions)"]
         ee["Executor\n(calls tools)"]
-        ea["Analyst\n(submits findings)"]
+        ea["Analyst\n(one session per question,\nthen a consolidation session)"]
         ep --> ee --> ea
         ea -->|"follow-up"| ep
     end
@@ -191,6 +191,9 @@ invalid, the phase fails cleanly. A rejected plan does not trigger the separate
 phase-gate retry loop. Dashboard rendering tolerates malformed task entries so
 they can reach validation without interrupting the session.
 
+An extraction plan must also carry at least one usable investigation question;
+see the questions gate under [Phase Gates](#phase-gates).
+
 ### Deferred Retry System
 
 When a quality gate fails after a phase completes, the orchestrator retries with the same turn limits:
@@ -220,6 +223,30 @@ The `progress` table has no role column and findings have no system column, so n
 **Token usage of a resumed session.** On a resumed query the CLI's `ResultMessage.usage` is that query's own, but `model_usage` is the session's running total. The per-model totals are the ones the dashboard, `model_usage.json` and the report show, so `SessionExecutor` keeps the last `model_usage` reported for each session id and adds only the increase (`_new_model_usage`). A resume that never reached the model adds nothing; a request the CLI makes on its own account, such as its compaction attempt after a "too long" rejection, is in the increase and is counted.
 
 **Failed resumes and the switch.** A resumed session that ends on an error before its first tool call is treated as a resume that failed: its text is not kept, and it is not recorded as the run's last query error, which the partial report quotes. The reason is logged and the fallback above applies; a silent ending is left as it was. A resumed session that had started working is an ordinary session, and an error in it is recorded like any other. Fatal errors still end the run. `--no-wrapup` (`MULDER_WRAPUP=0`) turns off the resume, the wrap-up, the seeded prompt, the turn-budget notice and the nudge together, which is the behaviour before any of this existed, so the two can be compared on one image.
+
+### Cut-Short Sessions
+
+When `RoleRunner.compaction_loop` ends with the session still unfinished (no continuation left, and the wrap-up, if one ran, is over), the session is recorded as cut short. That is the one place every continuable role session passes through: analysts, gate remediation, executors, and the single-mode catalog and report sessions. It holds under `--no-wrapup` and `--max-compactions 0` as well. A planner has its own continuations (`_request_plan_from_notes`: a resume to write the plan, then a new one-turn session), so `run_planner` records it itself, when its session ended at a turn or context limit and none of them produced a plan. Only extraction re-plans after that; cross-system and the alternative narrative go on without their executor step, and in a follow-up cycle the analyst's request is dropped. A planner that failed without reaching a limit (output that is not a plan) is not recorded.
+
+`RoleRunner._note_cut_short` writes `{phase, role, system, question}` through `ServerBridge.record_cut_short` to `CaseDB.record_cut_short`, which adds `recorded_at` and `n`, the row's number in the case. `role` is empty for a single-mode phase, `system` is empty when the phase has none, and `question` is set only for a per-question analyst session (the question as the planner wrote it, without the `[q_...]` id it was handed to the session with). The system name comes from evidence file names and the question from a model, so both are flattened to one printable line and cut (200 and 500 characters) before they are stored. The rows are one JSON list under the `kv_store` key `cut_short_sessions`, last 100 kept; the first row's `n` tells a reader how many earlier ones were dropped, and the summary item and both reports say so. The orchestrator is the only writer. A failure to record is logged and does not end the run.
+
+The record is read in three places, all through `mulder/cut_short.py` so they name a session the same way. `cut_short_label` quotes the system name and the question as JSON strings, so a comma or semicolon inside one cannot pass for the label's own:
+
+- `get_investigation_summary` adds one `remaining_work` item starting `Analysis cut short`: the most recent ten distinct sessions, each cut to 200 characters, and a count of the rest. A session recorded more than once is listed once, at its latest place. It says what the record establishes (the session ended at a limit) and what it does not (that the system is clean, that anything was ruled out, or that a later retry or follow-up did not cover the ground). The narrative gate copies `remaining_work` into its gap list, which a remediation analyst is told to fix exactly; this item cannot be fixed, so `validate_narrative` skips it by its prefix.
+- `InvestigationDashboard.log_cut_short` logs the line and keeps it for the **Sessions Cut Short** table in the run summary.
+- `ReportRenderer.build_context` takes the rows as `cut_short`, and both templates render an **Analysis Cut Short** section, each entry with the time it was recorded. The Markdown template prints the label in a code span, so HTML or a link in a name taken from evidence stays text; the HTML template escapes it. `finalize_report`, `mulder report` and the partial report all pass them.
+
+### Per-Question Analyst Sessions
+
+The extraction analyst step is one session per investigation question and then a consolidation session. That is the only way it runs: there is no option, and no session that answers every question for a system. For the extraction phase `RoleRunner.run_analyst` runs `_run_per_question` on the plan's usable questions (strings, each flattened to one line of at most 500 characters, duplicates dropped); the [questions gate](#phase-gates) guarantees there is at least one, and `run_analyst` raises rather than run a session without one. Every other phase's analyst is one session, as is a gate remediation session (`run_remediation`, which has the gap list and no plan). `_run_split_phase` receives one `AnalystResult` in every case, so follow-up rounds and the re-plan after a failed remediation reach the same step and are analysed per question too.
+
+- **Question sessions.** One per question, in plan order, one after another. `_MAX_QUESTION_SESSIONS` (6) caps them: the last session takes every question that is left, up to `MAX_QUESTIONS_PER_PLAN` (20, the number recorded for a plan) in all. Questions past that are not asked, which the dashboard and the log say with their number, so what the last session and the consolidation are given is bounded. The planner prompt states both numbers and asks for the most important questions first. It also says that a session is given only its own question, so evidence the planner is told to name in `investigation_questions` as not examined (a cloud audit export listed under NOT READ) has to be named inside every question it bears on: an entry of its own reaches only its own session and the consolidation. Each gets the ordinary analyst prompt with only its own question, followed by `_QUESTION_MANDATE`: answer this, save findings as they are established, close the question with `resolve_question` (see [Investigation Questions and the No-Incident Outcome](#investigation-questions-and-the-no-incident-outcome)) unless a tool that was not run would settle it, record one `track_progress` note under the pinned system label (the answer, what was examined, what could not be determined, and any tool that would settle it), then stop. The question reaches the session the way the plan's questions reach any analyst: in its user message with its recorded id, so the system prompt's rule that only the questions in the user message are its own covers exactly that one, and a continuation session is given that question again and no other. It is told that an unanswered question is undetermined, or open when a tool that was not run would settle it, not ruled out, and not to emit a follow-up request. The turn limit is `_QUESTION_MAX_TURNS` (25).
+- **Consolidation session.** `_CONSOLIDATION_MAX_TURNS` (15) turns, the ordinary analyst prompt with all the questions, followed by `_CONSOLIDATION_MANDATE`: do not repeat the analysis; the questions are listed for reference and are not this session's to close with `resolve_question` (each belongs to the session that took it, and a continuation of the consolidation is not handed them as its own); look across the saved findings for duplicates and contradictions (`update_finding`; `delete_finding` is not an extraction tool, and the narrative phase de-duplicates) and for open questions; end with the follow-up request if a tool that was not run would close one. It is given what the question sessions left, quoted and sanitised the way a handoff is: each session's last progress note under that session's number (a session that was resumed or wrapped up records several; one that recorded none is listed as such), the findings saved since the first of them started, and any follow-up request one of them emitted anyway.
+- **Result.** Turns and `submit_finding` counts are summed, messages concatenated, and the follow-up request is the consolidation session's.
+
+Every one of these sessions goes through `_analyst_session`, with the same system prompt and tools as any extraction analyst, so resume, wrap-up, the new-session fallback and the cut-short record apply to each; a question session that is cut short is recorded with its question, and the remaining sessions still run.
+
+One analyst step is at most 7 sessions and 6 x 25 + 15 = 165 turns before any continuation. With every continuation and wrap-up at the default `--max-compactions 3` it is 6 x (4 x 25 + 8) + (4 x 15 + 8) = 716, and 881 when each session also uses its one nudge resume (`_MAX_NUDGES`, a further full allowance: 133 per question session, 83 for the consolidation). A remediation session keeps `EXTRACTION.analyst_max_turns` (60; 248, or 308 with its nudge). A follow-up plan is another analyst step, so its planner is told to ask only what its tasks could newly settle (`extract_planner.md`, INVESTIGATION QUESTIONS).
 
 ### Fatal Errors
 
@@ -253,11 +280,14 @@ coverage. If there are fewer systems than images, it re-prompts once, then passe
 with an advisory: several disks or image formats can belong to one host.
 Ambiguous `.img` memory dumps are excluded from this count. The report gate checks
 the recorded tool names. Gate validation does not require an LLM utility query.
+The questions gate is the one gate on a plan rather than on a finished phase; it
+is described under the diagram.
 
 ```mermaid
 flowchart LR
     subgraph gates [Quality Gates]
         catalogGate["Catalog Gate"]
+        questionsGate["Questions Gate"]
         extractionGate["Extraction Gate"]
         crossSystemGate["Cross-System Gate"]
         narrativeGate["Narrative Gate"]
@@ -265,6 +295,7 @@ flowchart LR
     end
 
     catalogGate --- catalogChecks["Structured JSON output\nwith case_id, evidence_root, systems[]"]
+    questionsGate --- questionsChecks["Extraction plan with tasks has\nat least one usable investigation question"]
     extractionGate --- extractionChecks["Sources indexed > 0\n(consecutive failure tracking)"]
     crossSystemGate --- crossChecks["Findings submitted > 0\nMITRE mappings present"]
     narrativeGate --- narrativeChecks["All finalize_report gates pass\n(except narrative, deferred to report)"]
@@ -272,6 +303,13 @@ flowchart LR
 ```
 
 The narrative gate mirrors `check_finalize_readiness`: `minimum_findings`, `timestamp_coverage`, and `audit_tools_called` block; `narrative_submitted` is deferred to the report phase. `evidence_citation_coverage` is measured over *distinct evidence-bearing source names* (rows repeat per device and per registry query, and bookkeeping sources such as `*.stats`, `*.manifest`, `registry.query.*`, `bulk.bulk_extractor`, `bulk.duplicates`, `composite.correlation`, and `enrichment.iocs` are excluded). It blocks only when fewer than 3 distinct sources are cited; below 25% it passes with `advisory: true` and the figure in its detail, which the orchestrator logs as a warning. An advisory result never refuses `finalize_report`, never triggers a retry, and never sets the exit code (issue #221).
+
+**The questions gate** is checked in `RoleRunner.run_planner`, where every extraction plan comes from (the first cycle, follow-up rounds, the re-plan after a failed remediation), before anything in the plan is executed. Every extraction analyst session answers one of the plan's `investigation_questions`, so a plan with tasks and no usable question (a plain string that is not blank) cannot be analysed and is not accepted. There is no fallback question and no fallback session.
+
+- **Sent back, twice at most.** `_request_questions` tells the planner why the plan was not accepted (`_PLANNER_NO_QUESTIONS`) and asks for the questions alone, the way a planner that ran out of turns is asked for its plan: the planner session is resumed for one turn with its tools off; if that cannot be done or yields none, and after a context overflow (a conversation rejected as too long would be rejected again), under `--no-wrapup`, or when the plan itself was written by the new session of `_request_plan_from_notes` (the planner's conversation then holds no plan), one tool-less, single-turn new session gets the planner prompt (the briefing included), the same reason and the planner's own output. The plan's tasks are kept; only the questions are taken from the answer, cleaned like any question, and the reason's own `<question>` placeholder echoed back is not one.
+- **Exhausted.** The dashboard and the log get `Questions gate failed for <system>` and `run_planner` returns no plan, which the phase handles as it handles any planner failure. On a system's first cycle it plans again with a new planner session, `1 + max_retries` (3) in all, and then reports `extraction FAILED after 3 attempts`: the executor and the analyst never ran for that system, its `PhaseResult` is unsuccessful, and it stays unfinished in `Orchestrator.systems_done`, which the partial report lists under "Not completed". The run continues with the other systems and the later phases and `mulder investigate` exits with status 1. In a follow-up round the follow-up ends without running its tasks, and what the earlier cycle saved goes to the extraction gate.
+- **On record.** Each rejected plan is counted for its system in the case database: `ServerBridge.record_rejected_plan` to `CaseDB.record_rejected_plan`, one JSON object under the `kv_store` key `questions_gate_rejected_plans`, keyed by the name the system's questions are recorded under. The count is kept as it is; whether a system was left unanalysed is worked out when it is read. `CaseDB.get_unanalysed` returns the systems that have a rejected plan and no recorded question. An accepted plan's questions are recorded before its analyst runs, so a system that was analysed on a later attempt, or in a later run of the case, is no longer listed, and a follow-up plan that was rejected never lists its system. Three readers use it. Both report templates name the systems under **Systems Not Analysed**, directly below the executive summary, in the finalized report, `mulder report` and the partial report. `get_investigation_summary` returns them as `systems_not_analysed` (a key of its own, because the narrative gate turns `remaining_work` items into gaps for a remediation analyst). `mulder.questions.no_incident` is false while one is listed, so neither the summary tool nor a report says that no incident was found. The case can still pass `minimum_findings` on its resolved questions and be finalized.
+- **Not gated.** An empty follow-up plan (`{"tasks": []}`, nothing more to run) reaches no analyst. Cross-system and narrative plans are not gated: their analyst is one session, which also runs when the planner produced no plan at all (#217).
 
 When a gate fails, the orchestrator retries the phase with:
 - The same turn limits as the original attempt
@@ -503,7 +541,7 @@ erDiagram
 - **progress**: Per-system records of tools executed and questions addressed
 - **log_events**: One normalised row per log event, for logs an extractor loads through `mulder.logtable.ingest` as well as indexing as text. `event_time` is fixed-width UTC (`YYYY-MM-DDTHH:MM:SSZ`), `source_id` and `line` point back at the indexed text, and `extra` is a JSON object of further fields. Indexed on `(log_table, event_time)`. Read only through `log_top`, `log_histogram` and `log_rows`, which bind every value and never take SQL
 - **log_tables**: One row per ingest (a source and the table it fed): how many rows were stored, how many had no usable time, how many records could not be parsed, the time range, which fields have values, whether the ingest completed, and whether it read its path recursively (`nested`: only such ingests cover or replace one another by path). `verify_evidence_integrity` does not cover `log_events`: it re-hashes the text windows, including each indexed `logtable.*` query result, but there is no hash of the rows a count is computed from
-- **kv_store**: General-purpose key-value persistence for cross-tool state sharing. Stores TSK partition offsets (`tsk_partition_offset:<image>`), EVTX extraction directory paths, and other data that must survive server restarts and context compaction
+- **kv_store**: General-purpose key-value persistence for cross-tool state sharing. Stores TSK partition offsets (`tsk_partition_offset:<image>`), EVTX extraction directory paths, and other data that must survive server restarts and context compaction. Also holds the role sessions that were cut short (`cut_short_sessions`, see [Cut-Short Sessions](#cut-short-sessions)) and the plans rejected at the questions gate, counted by system (`questions_gate_rejected_plans`)
 - **investigation_questions**: The questions each planner asked, with phase and system, and how each was resolved (`answered`, `ruled_out`, `undetermined`, or NULL while open) with the finding ids or reason behind it. Written by the orchestrator, resolved by `resolve_question`
 
 ### Write Safety

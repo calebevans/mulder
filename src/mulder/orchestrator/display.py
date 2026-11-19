@@ -75,6 +75,9 @@ _SPINNER_FRAMES: str = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 _HEADER_SIZE: int = 8
 
+_MAX_CUT_SHORT_ROWS: int = 20
+"""Cut-short sessions the summary lists; the rest are counted."""
+
 
 @dataclass
 class TaskItem:
@@ -188,6 +191,10 @@ class InvestigationDashboard:
 
         self._system_color_map: dict[str, str] = {}
         self._next_color_idx: int = 0
+
+        # Role sessions left unfinished with no continuation left, for the
+        # summary (``log_cut_short``).
+        self.cut_short: list[str] = []
 
     def _get_system_color(self, system: str) -> str:
         """Return a consistent color for a system name.
@@ -401,6 +408,15 @@ class InvestigationDashboard:
             message: Failure description.
         """
         self._log_and_display(f"  ✗ {message}", style="bold red")
+
+    def log_cut_short(self, label: str) -> None:
+        """Log a role session left unfinished, and keep it for the summary.
+
+        Args:
+            label: Phase, role, system and question of the session.
+        """
+        self.cut_short.append(label)
+        self._log_and_display(f"  ✗ Cut short, no continuation left: {label}", style="bold red")
 
     def log_info(self, text: str) -> None:
         """Log an informational message (retries, limits, etc.).
@@ -1015,3 +1031,19 @@ class InvestigationDashboard:
             phases_table.add_row("(cut short)", "", str(cut))
 
         self._console.print(phases_table)
+
+        if self.cut_short:
+            cut_table = Table(
+                title="Sessions Cut Short",
+                caption="Ended at a turn or context limit with no continuation left; "
+                "conclusions about these may be incomplete.",
+                border_style="red",
+                show_header=False,
+            )
+            # Text, not str: a label holds evidence-derived names and model
+            # text, which must not be read as Rich markup.
+            for label in self.cut_short[:_MAX_CUT_SHORT_ROWS]:
+                cut_table.add_row(Text(_neutralize_controls(label)))
+            if len(self.cut_short) > _MAX_CUT_SHORT_ROWS:
+                cut_table.add_row(f"(+{len(self.cut_short) - _MAX_CUT_SHORT_ROWS} more)")
+            self._console.print(cut_table)

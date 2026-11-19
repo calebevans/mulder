@@ -26,6 +26,18 @@
 
 {{ executive_summary_md }}
 
+{% if unanalysed -%}
+### Systems Not Analysed
+
+These systems were not analysed. For each, the planner wrote one or more plans
+with no investigation questions and wrote none when asked again, so those
+plans were rejected (the number is given below), and no plan for the system
+reached an analyst. Not analysed is not the same as clean: an absence of
+findings about these systems says nothing about them.
+{% for system, plans in unanalysed.items() %}{# a code span: a name taken from evidence stays text #}
+- `{{ system | replace("`", "'") }}` (plans rejected: {{ plans }})
+{% endfor %}
+{% endif -%}
 {% if critical_findings %}
 ### Critical Findings
 
@@ -73,6 +85,25 @@ tracking via append-only JSONL audit log.
 | Severity | {{ critical_count }} critical, {{ high_count }} high, {{ medium_count }} medium, {{ low_count }} low, {{ info_count }} info |
 | Sources | {{ sources | length }} evidence sources across {{ total_tool_calls }} tool calls |
 {% if negative_count %}| Ruled Out | {{ negative_count }} hypotheses tested and rejected |
+{% endif %}
+{% if cut_short %}
+---
+
+## Analysis Cut Short
+
+These sessions ended at a turn or context limit and had no continuation left.
+What each one saved or indexed is in the case. What it had not reached may not
+have been examined: a later retry or follow-up may have covered it (see the
+time of each entry). Not examined is not the same as absent, so conclusions
+about these parts of the investigation may be incomplete.
+{%- if cut_short_dropped %}
+
+Earlier records dropped: {{ cut_short_dropped }}. Only the {{ cut_short | length }} most recent are kept.
+{%- endif %}
+
+{% for c in cut_short %}{# a code span: HTML and links in a name taken from evidence stay inert #}
+- `{{ c.label | replace("`", "'") }}` (recorded {{ c.recorded_at }})
+{% endfor %}
 {% endif %}
 {% if evidence_integrity %}
 ---

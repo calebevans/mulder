@@ -637,6 +637,34 @@ table.data-table code { font-family: var(--mono); font-size: 0.78em; color: var(
     <p>{{ executive_summary | safe }}</p>
   </div>
 
+  {% if unanalysed %}
+  <div class="card mb-1">
+    <div class="card-header">&#9888; Systems Not Analysed</div>
+    <div class="card-body" style="font-size:0.88rem;line-height:1.7;">
+      <p style="margin-bottom:0.75em;">These systems were not analysed. For each, the planner wrote one or more plans with no investigation questions and wrote none when asked again, so those plans were rejected (the number is given below), and no plan for the system reached an analyst. Not analysed is not the same as clean: an absence of findings about these systems says nothing about them.</p>
+      <ul style="margin-left:1.25rem;">
+        {% for system, plans in unanalysed.items() %}
+        <li><span class="mono">{{ system }}</span> (plans rejected: {{ plans }})</li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if cut_short %}
+  <div class="card mb-1">
+    <div class="card-header">&#9888; Analysis Cut Short</div>
+    <div class="card-body" style="font-size:0.88rem;line-height:1.7;">
+      <p style="color:var(--text-muted);margin-bottom:0.75em;">These sessions ended at a turn or context limit and had no continuation left. What each one saved or indexed is in the case. What it had not reached may not have been examined: a later retry or follow-up may have covered it (see the time of each entry). Not examined is not the same as absent, so conclusions about these parts of the investigation may be incomplete.{% if cut_short_dropped %} Earlier records dropped: {{ cut_short_dropped }}. Only the {{ cut_short | length }} most recent are kept.{% endif %}</p>
+      <ul style="margin-left:1.25rem;">
+        {% for c in cut_short %}
+        <li>{{ c.label }} <span style="opacity:0.6;">(recorded {{ c.recorded_at }})</span></li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+  {% endif %}
+
   <div class="stats-grid stagger-in">
     <div class="stat"><div class="stat-value" data-count="{{ finding_count }}">0</div><div class="stat-label">Total Findings</div></div>
     <div class="stat critical"><div class="stat-value" data-count="{{ critical_count }}">0</div><div class="stat-label">Critical</div></div>
