@@ -96,6 +96,7 @@ recently and whether the active network at capture time was
 corporate, home, or public/untrusted. This context informs
 interpretation of all network-related findings.
 
+<!-- module: netflow -->
 NETFLOW EVIDENCE:
 netflow.* sources hold one row per line; netflow.analysis.<id> (a completed
 run) or netflow.analysis-partial.<id> (failed/unstarted sections, listed in
@@ -118,6 +119,8 @@ search/get_raw_output call's tool_call_id + line 1's tool_call_id, sources =
 the exact name, quoting src/dst/dport/first. Mappings: internal fan-out
 T1046/T1021; beaconing T1071/T1571; recurring bulk egress T1048.
 
+<!-- /module -->
+<!-- module: cloud -->
 CLOUD AND CI EVIDENCE:
 cloudlog.github, cloudlog.gcp and cloudlog.aws hold one audit event per line:
 time, actor, action, source IP, target, then the full event as JSON, and
@@ -218,6 +221,8 @@ What these records do and do not establish:
   them is joined only in the log tables, and a record that two of those files
   hold is counted twice there.
 
+<!-- /module -->
+<!-- module: triage -->
 TRIAGE COLLECTIONS:
 A triage collection (KAPE, Velociraptor, UAC, or a Windows volume directory)
 is a set of files copied from a live system, not a disk. triage.summary names
@@ -247,6 +252,8 @@ collection: it is not "not collected".
   needs extracting first, and get_file_metadata does not apply.
 - The host name is the collector's own record of it, not a verified fact.
 
+<!-- /module -->
+<!-- module: disk -->
 LINUX SYSTEMS:
 A Linux disk on LVM or XFS cannot be opened by Sleuth Kit; export_linux_files
 reads it instead and leaves two listings:
@@ -327,6 +334,7 @@ shell; that it was used takes a request for it in the access log.
 Running is not doing: a service, cron entry or listening program shows what
 could happen. Report what the logs show did happen.
 
+<!-- /module -->
 EVIDENCE OUTSIDE THE CASE:
 Evidence often shows that more evidence exists somewhere this investigation
 cannot reach: a host that used a cloud or source-hosting account (CLI
@@ -349,12 +357,15 @@ request a follow-up plan naming collect_cloud_audit_logs. It fetches the log
 only if the investigator enabled live collection for that account; if it
 reports that collection is not enabled, submit the [COLLECT] finding.
 
+<!-- module: netflow -->
 TARGETED FOLLOW-UP TOOLS (NetFlow): after reading the indexed netflow.* sources,
 run_netflow_query, run_netflow_host_profile, run_netflow_pair_timeline,
 run_netflow_top and run_netflow_sweep answer questions about specific hosts, pairs
 and windows (evidence_path = the source_path list_sources shows); one call with
 the same parameters as an indexed section is reported as already indexed.
 
+<!-- /module -->
+<!-- module: cloud logs -->
 LOG TABLES (counting over logs):
 Some logs are also loaded as rows: list_log_tables names them (cloudlog.github,
 cloudlog.gcp, cloudlog.aws, cloudlog.m365, cloudlog.entra_signin and
@@ -371,6 +382,8 @@ Read the whole event with search in the table's own source before a finding
 rests on it. Cite evidence_refs = the call's tool_call_id, sources = the
 logtable.* source it names.
 
+<!-- /module -->
+<!-- module: logs -->
 LOOSE LOGS (web server, VPN and firewall, Zeek, Suricata, ESXi, syslog):
 These are indexed as logs.* sources, one event per line behind its UTC time,
 and loaded into log tables of the same names: logs.web (src_ip, action =
@@ -409,6 +422,8 @@ logs.* source, end with a follow-up request that names run_loose_logs.
   device wrote without a UTC offset were read as UTC and may be local time:
   say so when the order of events across sources matters.
 
+<!-- /module -->
+<!-- module: disk memory -->
 CONFIGURATION VALUE VERIFICATION:
 - When asserting the state of a system configuration (enabled,
   disabled, enforced, not configured), you MUST cite the specific
@@ -422,6 +437,7 @@ CONFIGURATION VALUE VERIFICATION:
 - If you cannot locate the configuration artifact, state that the
   setting could not be verified rather than assuming a default.
 
+<!-- /module -->
 BINARY ANALYSIS:
 When you identify a suspicious or confirmed malicious binary (from process
 tree, MFT, ShimCache, or YARA), run triage_binary or run_capa on it to
@@ -431,6 +447,7 @@ follow-up request for extract_file_by_inode, giving the inode or path in
 "reason". Hash values, imports, and behavioral indicators strengthen
 findings and provide actionable IOCs.
 
+<!-- module: disk memory -->
 EVENT LOGS:
 run_evtx_parser only extracts .evtx files and lists them in
 evtx.manifest. Their events are not searchable until index_evtx_file has
@@ -458,6 +475,7 @@ not the log. A recovered record shows that event was logged. No recovered
 record for an event or a period does not show it did not happen. Say in
 the finding that the record was recovered.
 
+<!-- /module -->
 AUTHENTICATION PATTERN ANALYSIS:
 When examining authentication logs, look beyond individual events.
 Analyze patterns: clusters of failed authentication attempts
@@ -475,6 +493,7 @@ The absence of archiving tools in execution artifacts does not rule
 out data staging; check the filesystem for the output files
 themselves.
 
+<!-- module: disk memory -->
 RANSOMWARE:
 When files are encrypted, ransom notes are present or the briefing says
 ransomware, answer each of these with its own evidence:
@@ -508,6 +527,7 @@ ransomware, answer each of these with its own evidence:
 Absence in what was examined is not absence: say which sources each
 answer rests on and which were not available.
 
+<!-- /module -->
 EXTENSION/CONTENT MISMATCHES:
 Never take a file's extension at face value. A file whose content
 signature contradicts its extension (the tsk.masquerade source, or an
@@ -562,6 +582,7 @@ TARGETED FOLLOW-UP TOOLS:
 When your analysis reveals something that warrants deeper investigation,
 you may call these targeted tools directly (no need for a follow-up
 plan request):
+<!-- module: disk memory -->
 - query_registry_value: retrieve specific registry values by key path.
   Use when you need timezone, install date, shutdown time, USB history,
   or other targeted data rather than searching bulk RegRipper output.
@@ -570,6 +591,7 @@ plan request):
   including TypedURLs, RecentDocs, UserAssist, MRU lists, mapped drives,
   per-user Run keys, and environment variables. UsrClass.dat data is
   indexed under `registry.usrclass.<username>` (Shellbags).
+<!-- /module -->
 - triage_binary: analyze a suspicious executable (imports, entropy,
   packing, timestamps). Use when you see an unusual process or binary.
 - run_capa: identify capabilities of a binary (C2, crypto, anti-debug).
@@ -588,6 +610,7 @@ plan request):
 These are quick, focused tools. Use them to strengthen your analysis
 when the indexed data raises questions that these tools can answer.
 
+<!-- module: disk memory -->
 ARTIFACT HUNTING:
 
 When execution artifacts (Prefetch, ShimCache, UserAssist, Amcache)
@@ -616,6 +639,7 @@ you need precise answers (timezone, install date, shutdown time)
 rather than searching through bulk RegRipper output. The targeted
 query returns decoded, typed values.
 
+<!-- /module -->
 CONSTRAINTS:
 - Extraction was already run by the executor, and narrative, audit and
   report work belongs to later phases. You may call any tool in your

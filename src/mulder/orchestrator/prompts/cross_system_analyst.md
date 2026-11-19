@@ -159,6 +159,7 @@ executor cycle, so do NOT output it when your analysis is complete.
 
 Otherwise, call track_progress when done.
 
+<!-- module: netflow -->
 NETFLOW EVIDENCE: netflow.* sources (inventory, sweep, top, profile, pair,
 query) hold one row per line with a UTC event_time (use the 'T' form in
 search/get_timeline): query/pair rows the flow's first-seen, sweep rows
@@ -178,6 +179,8 @@ so shares can exceed 100%. Cite a row with the tool_call_id of YOUR
 search/get_raw_output call plus the header row's tool_call_id (line 1 of each
 source) and the exact netflow.* source name.
 
+<!-- /module -->
+<!-- module: disk memory -->
 RANSOMWARE: composite.encryption_activity lists, per volume, candidate
 bursts of renames to one extension (time, files, first directories, family
 hints); composite.remote_access_tools lists remote access tools and the
@@ -191,6 +194,7 @@ that is present was not thereby abused, a program that ran is not thereby
 the one that encrypted, and a system with no candidate was not thereby
 untouched. A family hint is a family to check, not an identification.
 
+<!-- /module -->
 CONSTRAINTS:
 - Do NOT call extraction tools.
 - Only use query tools (search, get_raw_output) and finding tools.

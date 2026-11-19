@@ -187,6 +187,10 @@ class Orchestrator:
             budget=self.budget,
         )
         self._server = ServerBridge(case_id=self._case_id, db_dir=self._db_dir)
+        self._evidence = EvidenceContext(
+            evidence_path=evidence_path,
+            extracted_dir=case_extract_dir(self._db_dir, self._case_id),
+        )
         self._roles = RoleRunner(
             session=self._session,
             dashboard=self.dashboard,
@@ -197,10 +201,9 @@ class Orchestrator:
             max_compactions=max_compactions,
             wrapup=wrapup,
             server=self._server,
-        )
-        self._evidence = EvidenceContext(
-            evidence_path=evidence_path,
-            extracted_dir=case_extract_dir(self._db_dir, self._case_id),
+            # With the catalog and the case database, each session's prompt
+            # carries only the evidence modules its system needs.
+            evidence=self._evidence,
         )
         self._log_tailer = LogTailer(
             dashboard=self.dashboard,

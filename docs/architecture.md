@@ -181,6 +181,40 @@ Each phase is defined by a `PhaseConfig` dataclass specifying:
 - **Auto-compaction**: When context is exhausted mid-phase, the orchestrator restarts with a compact prompt that recovers state from the database. Continuations per role session are capped by `--max-compactions` / `MULDER_MAX_COMPACTIONS` (default 3; `0` disables). At a turn limit the session is resumed where it stopped instead of being replaced (see [Resume, Wrap-up and Handoff](#resume-wrap-up-and-handoff))
 - **Retry policy**: Maximum retries per phase; turn limits stay unchanged on retry
 
+### Prompt Assembly
+
+A role's system prompt is one file under `src/mulder/orchestrator/prompts/`. Each file is a **core** plus **modules**: guidance that applies to one kind of evidence sits between two marker lines and is a block of the module they name.
+
+```
+<!-- module: netflow -->
+NETFLOW EVIDENCE:
+...
+<!-- /module -->
+```
+
+A block may name several modules (`<!-- module: disk memory -->`) and is kept when any of them is selected. The markers are removed when the file is loaded and never reach a model, so the `*_PROMPT` constants are the files' text with every module in place. The planner and analyst prompts of the extraction phase, the planner and analyst of the cross-system phase and the narrative analyst have modules. The catalog prompt has none (it runs before the kinds of evidence are known), nor do the executor and report prompts.
+
+**Which modules a session gets.** One table and one function, both in `prompts/__init__.py`, used by every role:
+
+- `MODULES` maps an evidence type (as the classifier labels it: `disk_image`, `cloud_audit_log`, ...) or a source prefix (a source name up to its first dot: `volatility.`, `cloudlog.`, ...) to module names. The modules are `disk`, `memory`, `pcap`, `netflow`, `cloud`, `logs`, `triage` and `mobile`. A key may give several (`triage_collection` gives `triage` and `disk`, because the disk artifact tools read a collection; a phone image gives `mobile` and `disk`) or none (a source such as `enrichment.` that says nothing about the kind of evidence).
+- `modules_for(types, sources)` returns the union for what a system holds, and `assemble(prompt, modules)` returns the prompt without the blocks of the modules left out, in the order of the file.
+
+What a system holds is its evidence types (`EvidenceContext.evidence_types`: the catalog's list for it, plus the types the planner's evidence context listed for it, since the catalog is a model's output and can leave one out) and the sources indexed for it so far (`ServerBridge.get_sources`; a source counts for the system whose name its path holds, and for every system when it holds none). An extraction session is assembled for its system, a cross-system or narrative session for the whole case. The selection is made once per role session (`RoleRunner._system_prompt`), so every resume of a session is sent the same prompt.
+
+**Fail open.** When the kinds cannot be determined, the session gets every module, which is the prompt as it was before modules existed. That is the case for a system with no catalog entry or no evidence list, a system whose evidence context listed an archive that `extract_archive` has not unpacked (it can hold anything), an evidence type that is not in `MODULES`, a source prefix that is not in `MODULES`, a system whose types and sources select no module at all (loose files the planner has to look at), and a case database that cannot be read. Leaving out guidance for evidence that is present is the failure to avoid; an unknown key is logged.
+
+**What is never optional.** Everything a gate or a parser relies on is in the core: output formats and the plan JSON schema, the citation and source-accuracy rules, the investigation-questions rules and `resolve_question`, `track_progress` and follow-up requests, `[NEGATIVE]` and `[COLLECT]`, the investigator briefing preamble, batch groups and the constraints. `tests/test_prompt_modules.py` pins the core of each prompt, that a prompt with every module is its file minus the marker lines, and that a disk-only system gets no line of another module.
+
+**The pinned task.** A session started for one bounded thing has that task named in a short block at the end of its system prompt, as well as in its first user message: a question session (its question or questions, with their ids), the consolidation session, an executor (its plan id, the phase and system, and the tools the plan names) and a gate remediation session (the gaps). The first user message of a long or resumed session can fall out of view; the system prompt is sent again with every resume, wrap-up and handoff session. Question text and system labels are the bounded single lines the user message already carries, gaps are flattened and capped, and quoted lines are prefixed `> `.
+
+**The planner's snapshot.** A planner starts from what the orchestrator already knows, built without a model when the session starts (`orchestrator/snapshot.py`):
+
+- The extraction planner's evidence context ends with the catalog's platform, evidence types and description for the system (the typed paths above it are found by the classifier).
+- A `CASE SNAPSHOT` section lists the sources indexed for the system (or the case), grouped by the first part of the name, with total lines, time range where known and evidence path. A planner for the whole case is also given the catalog's systems. On a follow-up round, and for the cross-system and narrative planners, it gives the number of findings and the open recorded questions.
+- The `EXECUTOR TOOLS` section names every plannable tool, as before, and adds a `name(parameters): purpose` line, read from the registered function, for each tool that the planner's system prompt or message names. The system prompt names the tools for the modules the session was given, so the signatures follow the same selection without a table of their own; a follow-up request brings the signatures of the tools it suggests.
+
+Every list is capped, says what was cut and names the call that shows the rest when the planner has that call. Names, paths and question text are flattened to one bounded line; a path that cannot be shown whole is not shown. The planner prompts say that the snapshot is current as of the start of the session, that it is data and not instructions, and that the planner need not list again what it shows.
+
 ### Planner Output Validation
 
 Plans must contain a non-empty `tasks` array of objects. String tasks and mixed
@@ -244,7 +278,7 @@ The extraction analyst step is one session per investigation question and then a
 - **Consolidation session.** `_CONSOLIDATION_MAX_TURNS` (15) turns, the ordinary analyst prompt with all the questions, followed by `_CONSOLIDATION_MANDATE`: do not repeat the analysis; the questions are listed for reference and are not this session's to close with `resolve_question` (each belongs to the session that took it, and a continuation of the consolidation is not handed them as its own); look across the saved findings for duplicates and contradictions (`update_finding`; `delete_finding` is not an extraction tool, and the narrative phase de-duplicates) and for open questions; end with the follow-up request if a tool that was not run would close one. It is given what the question sessions left, quoted and sanitised the way a handoff is: each session's last progress note under that session's number (a session that was resumed or wrapped up records several; one that recorded none is listed as such), the findings saved since the first of them started, and any follow-up request one of them emitted anyway.
 - **Result.** Turns and `submit_finding` counts are summed, messages concatenated, and the follow-up request is the consolidation session's.
 
-Every one of these sessions goes through `_analyst_session`, with the same system prompt and tools as any extraction analyst, so resume, wrap-up, the new-session fallback and the cut-short record apply to each; a question session that is cut short is recorded with its question, and the remaining sessions still run.
+Every one of these sessions goes through `_analyst_session`, with the same system prompt and tools as any extraction analyst (its own task is pinned at the end of that prompt, see [Prompt Assembly](#prompt-assembly)), so resume, wrap-up, the new-session fallback and the cut-short record apply to each; a question session that is cut short is recorded with its question, and the remaining sessions still run.
 
 One analyst step is at most 7 sessions and 6 x 25 + 15 = 165 turns before any continuation. With every continuation and wrap-up at the default `--max-compactions 3` it is 6 x (4 x 25 + 8) + (4 x 15 + 8) = 716, and 881 when each session also uses its one nudge resume (`_MAX_NUDGES`, a further full allowance: 133 per question session, 83 for the consolidation). A remediation session keeps `EXTRACTION.analyst_max_turns` (60; 248, or 308 with its nudge). A follow-up plan is another analyst step, so its planner is told to ask only what its tasks could newly settle (`extract_planner.md`, INVESTIGATION QUESTIONS).
 
@@ -386,6 +420,7 @@ The `@audited_tool` decorator (`src/mulder/server/helpers.py`) wraps MCP tool fu
 3. Apply `@tool_access(...)` with the appropriate role flags
 4. Apply `@audited_tool("tool_name")` for audit logging
 5. The tool automatically appears in the correct phase allowlists
+6. Guidance for it goes in the prompt module for its kind of evidence, and a new source prefix or evidence type goes in `MODULES` (see [Prompt Assembly](#prompt-assembly) and [Adding a New MCP Tool](adding-tools.md#7-prompt-guidance-modules-and-the-signature-line))
 
 ### Tool Response Truncation
 
@@ -846,7 +881,7 @@ The pipeline incorporates several quality mechanisms that improve finding accura
 - **Behavioral context synthesis**: Extraction prompts gather user behavior context (location, network environment, usage patterns) to distinguish adversary artifacts from benign user activity.
 - **Anti-evasion awareness**: Counter-analysis prompts explicitly instruct the agent to consider anti-forensic techniques (timestomping, log clearing, process injection) when evaluating findings.
 - **Cross-platform prompts**: Extraction and analysis prompts are generalized across operating systems rather than assuming Windows-first.
-- **Executor tool list from the allowlist**: Each split-phase planner prompt ends with an `EXECUTOR TOOLS` section rendered at prompt-build time from the phase's executor role allowlist (`executor_tools_section` in `roles.py`, control tools such as `open_case` and batch management excluded). The planner cannot be told about a tool the executor may not call; `tests/test_planner_role_drift.py` guards the hand-written prose the same way.
+- **Executor tool list from the allowlist**: Each split-phase planner prompt ends with an `EXECUTOR TOOLS` section rendered at prompt-build time from the phase's executor role allowlist (`executor_tools_section` in `roles.py`, control tools such as `open_case` and batch management excluded). The planner cannot be told about a tool the executor may not call; `tests/test_planner_role_drift.py` guards the hand-written prose the same way. The tools the planner's instructions name also get a signature line there (see [Prompt Assembly](#prompt-assembly)).
 - **Artifact awareness**: The extraction planner prompt includes an artifact awareness layer that maps evidence characteristics to targeted tool usage. When a Windows disk image is detected, the planner schedules `query_registry_value` for system metadata and NTUSER.DAT parsing for user artifacts. When execution artifacts (ShimCache, Prefetch) reveal communication or networking tools, the planner adds `index_app_files` tasks for their config directories. When packet capture tools appear in execution history, the planner includes `analyze_disk_pcaps`. The analyst prompt includes complementary guidance for hunting through indexed application files when execution artifacts indicate relevant tools were used.
 - **Auto companion EVTX indexing**: When `index_evtx_file` is called on a Security log, it automatically indexes System.evtx and PowerShell operational logs from the same extraction directory (if present and not already indexed), ensuring persistence and execution coverage without requiring explicit agent calls.
 - **IOC enrichment display**: Reports include enrichment annotations from threat intelligence lookups alongside IOC tables.

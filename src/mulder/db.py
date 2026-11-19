@@ -1796,12 +1796,16 @@ class CaseDB:
         return result
 
     def get_source_stats(self) -> list[dict[str, object]]:
-        """Return per-source window counts and time ranges via a single query."""
+        """Return per-source window counts and time ranges via a single query.
+
+        Each row also carries the source's ``source_path`` and ``line_count``.
+        """
         stmt = text(
             "SELECT s.source_name, s.extractor, "
             "       COUNT(w.window_id) AS window_count, "
             "       MIN(w.event_time) AS earliest, "
-            "       MAX(w.event_time) AS latest "
+            "       MAX(w.event_time) AS latest, "
+            "       s.source_path, s.line_count "
             "FROM sources s "
             "LEFT JOIN windows w ON s.source_id = w.source_id "
             "GROUP BY s.source_id "
@@ -1816,6 +1820,8 @@ class CaseDB:
                 "window_count": row[2],
                 "earliest": row[3],
                 "latest": row[4],
+                "source_path": row[5],
+                "line_count": row[6],
             }
             for row in rows
         ]

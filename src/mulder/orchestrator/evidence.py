@@ -36,7 +36,7 @@ from mulder.extractors.classifier import (
 )
 from mulder.extractors.optical import probe_optical
 from mulder.linuxvol import EXPORT_MARKER, EXPORTS_DIR, export_dir, probe, route
-from mulder.models import Finding
+from mulder.models import Finding, Question
 from mulder.orchestrator.types import PhaseResult, extract_catalog_result
 from mulder.patterns import (
     DISK_IMAGE_EXTS,
@@ -50,6 +50,7 @@ from mulder.questions import (
     MAX_QUESTIONS_PER_PLAN,
     MAX_SYSTEM_CHARS,
     clean,
+    open_questions,
 )
 
 logger = logging.getLogger(__name__)
@@ -197,6 +198,10 @@ class EvidenceContext:
         """
         self.evidence_path = evidence_path
         self._catalog_systems: dict[str, dict[str, Any]] = {}
+        # system -> the evidence types build_evidence_context listed for it
+        self._listed_types: dict[str, set[str]] = {}
+        # systems it listed an archive for that had not been unpacked
+        self._holds_packed: set[str] = set()
         self.extracted_dir = (
             Path(extracted_dir)
             if extracted_dir is not None
@@ -391,6 +396,25 @@ class EvidenceContext:
         ci_cloud = self._ci_cloud_lines(sys_lower, classified)
         triage = self._triage_lines(claimed)
 
+        # What is listed below, for evidence_types(): the catalog can leave a type out.
+        self._listed_types[sys_lower] = {
+            artifact_type
+            for artifact_type, listed in (
+                ("disk_image", disk_images),
+                ("memory_dump", memory_dumps),
+                ("netflow_capture", shown),
+                ("triage_collection", triage),
+            )
+            if listed
+        } | {
+            t for t, (label, _) in _CI_CLOUD_TYPES.items() if f'{label} (type "{t}"):' in ci_cloud
+        }
+        # An archive that is still packed can hold any kind of evidence.
+        if any(self._packed(Path(archive)) for archive in nested_archives):
+            self._holds_packed.add(sys_lower)
+        else:
+            self._holds_packed.discard(sys_lower)
+
         lines: list[str] = [f"System: {system_name}"]
         if disk_images:
             lines.append("Disk images:")
@@ -454,6 +478,9 @@ class EvidenceContext:
             )
 
         lines.extend(collection)
+        # Last, so the listing above stays as it was: the rest of what the
+        # catalog recorded for this system.
+        lines.extend(self._catalog_line(sys_lower))
         # A path is a name from the evidence: one with a line break in it (of any of
         # the kinds str.splitlines knows) must not start a line of its own in the prompt.
         return "\n".join(" ".join(line.splitlines()) for line in lines)
@@ -512,6 +539,101 @@ class EvidenceContext:
             "run_fsstat, detect_masquerading or the Windows artifact parsers on it.",
             *exported,
         ]
+
+    def _catalog_line(self, sys_lower: str) -> list[str]:
+        """What the catalog recorded for a system besides its name, as one planner line.
+
+        The platform, the evidence types and the description are a model's
+        reading of evidence names, so each is flattened and capped.
+        """
+        entry = self._catalog_systems.get(sys_lower)
+        if entry is None:
+            return []
+        evidence = entry.get("evidence")
+        types = (
+            [clean(str(e), 40) for e in evidence[:_MAX_LISTED]]
+            if isinstance(evidence, list)
+            else []
+        )
+        return [
+            f"Catalog entry: platform {clean(str(entry.get('type', '')), 40) or 'not given'}; "
+            f"evidence types {', '.join(types) or 'not given'}; "
+            f"description: {clean(str(entry.get('description', '')), 200) or 'none'}"
+        ]
+
+    def catalog_lines(self) -> list[str]:
+        """The catalog's systems, one line each, for a planner that works on the whole case.
+
+        Empty before the catalog has run. At most ``_MAX_LISTED`` systems;
+        a last line says how many were left out.
+        """
+        names = list(self._catalog_systems)
+        lines = [
+            f"  {clean(str(self._catalog_systems[name].get('name', '')), MAX_SYSTEM_CHARS)}: "
+            + self._catalog_line(name)[0].removeprefix("Catalog entry: ")
+            for name in names[:_MAX_LISTED]
+        ]
+        if len(names) > _MAX_LISTED:
+            lines.append(f"  ({len(names) - _MAX_LISTED} more systems are not listed)")
+        return lines
+
+    def evidence_types(self, system_name: str = "") -> set[str] | None:
+        """The evidence types a system holds, for choosing its prompt modules.
+
+        What the catalog recorded for it, plus what ``build_evidence_context``
+        listed for it: the catalog is a model's output and can leave a type
+        out.
+
+        Args:
+            system_name: A system, a group of them ("a, b"), or empty for
+                every system of the case.
+
+        Returns:
+            The types as the catalog spelled them, or None when they are not
+            known: a system with no catalog entry or no evidence list, or one
+            that was listed an archive nothing had unpacked.
+        """
+        if not system_name:
+            names = list(self._catalog_systems)
+        elif system_name.lower() in self._catalog_systems:
+            names = [system_name.lower()]
+        else:
+            names = [name.strip().lower() for name in system_name.split(",")]
+        types: set[str] = set()
+        for name in names:
+            evidence = self._catalog_systems.get(name, {}).get("evidence")
+            if not isinstance(evidence, list) or not evidence or name in self._holds_packed:
+                return None
+            types.update(str(e) for e in evidence)
+            types |= self._listed_types.get(name, set())
+        return types or None
+
+    def _packed(self, archive: Path) -> bool:
+        """Whether *archive* has not been unpacked into this case's extraction directory.
+
+        ``extract_archive`` unpacks into a directory named after the archive
+        and leaves a marker there when it finishes. One unpacked anywhere
+        else counts as packed: what it holds was not looked for there.
+        """
+        from mulder.server.tools.case import _archive_slot, _extraction_is_complete
+
+        archive = archive.expanduser().resolve()
+        return not _extraction_is_complete(self.extracted_dir / _archive_slot(archive), archive)
+
+    def owns(self, system_name: str, source_path: str) -> bool:
+        """Whether an indexed source counts for a system (or a group "a, b").
+
+        It does when its path, below the evidence or extraction directory,
+        holds the system's name, which is how the system's evidence paths are
+        found. It also does when the path holds no catalog system's name: a
+        source nobody can be shown to own is counted for every system.
+        """
+        below = source_path.removeprefix(self.evidence_path)
+        below = below.removeprefix(str(self.extracted_dir)).lower()
+        mine = {name.strip().lower() for name in system_name.split(",")} - {""}
+        if any(name in below for name in mine):
+            return True
+        return not any(name and name in below for name in self._catalog_systems)
 
     @staticmethod
     def _collection_lines() -> list[str]:
@@ -1023,6 +1145,55 @@ class ServerBridge:
             "consolidated and for contradictions that need resolution."
         )
         return "\n".join(report_lines)
+
+    def get_sources(self, with_stats: bool = False) -> list[dict[str, Any]] | None:
+        """Return every indexed source with its name and evidence path.
+
+        Read straight from the case database: no LLM call. Used to choose a
+        session's prompt modules and to tell a planner what is indexed.
+
+        Args:
+            with_stats: Also give each source's ``line_count`` and its
+                ``earliest`` and ``latest`` event time. That query reads the
+                whole index, so only a planner's snapshot asks for it.
+
+        Returns:
+            One dict per source (``source_name``, ``source_path``), oldest
+            first, or None when the database could not be read. None is not
+            "no sources": the caller then treats what is indexed as unknown.
+        """
+        try:
+            self.ensure_context()
+            from mulder.server.app import get_ctx
+
+            db = get_ctx().db
+            if with_stats:
+                return db.get_source_stats()
+            return [
+                {"source_name": s.source_name, "source_path": s.source_path}
+                for s in db.get_sources()
+            ]
+        except Exception:
+            logger.warning("get_sources failed", exc_info=True)
+            return None
+
+    def get_open_questions(self) -> tuple[int, list[Question]] | None:
+        """Return how many findings are saved and which questions are open.
+
+        Returns:
+            ``(findings, open questions)`` for the whole case, the questions
+            oldest first, or None when the database could not be read.
+        """
+        try:
+            self.ensure_context()
+            from mulder.server.app import get_ctx
+
+            db = get_ctx().db
+            findings = db.get_findings()
+            return len(findings), open_questions(db.get_questions(), findings)
+        except Exception:
+            logger.warning("get_open_questions failed", exc_info=True)
+            return None
 
     def get_progress_notes(self, system_name: str, since: datetime) -> list[str]:
         """Return the ``track_progress`` notes recorded for a system since a time.

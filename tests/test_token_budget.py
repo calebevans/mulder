@@ -479,7 +479,8 @@ class _Run:
         self.prompts: dict[str, str] = {}
 
     async def query(self, *, prompt: str, options: Any) -> AsyncIterator[object]:
-        role = _ROLES[options.system_prompt]
+        # A session's task is pinned after its role's prompt.
+        role = next(r for p, r in _ROLES.items() if options.system_prompt.startswith(p))
         if role == "extraction.analyst" and "\n\nCONSOLIDATION:" in prompt:
             role = _CONSOLIDATION
         self.sessions.append(role)

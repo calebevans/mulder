@@ -8,6 +8,7 @@ context-exhausted sessions.
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import re
@@ -22,7 +23,9 @@ from mulder.orchestrator.display import InvestigationDashboard
 from mulder.orchestrator.errors import FATAL_ERRORS
 from mulder.orchestrator.models import ModelConfig
 from mulder.orchestrator.phases import EXTRACTION, PhaseConfig
+from mulder.orchestrator.prompts import assemble
 from mulder.orchestrator.session import _MAX_NUDGES, SessionExecutor
+from mulder.orchestrator.snapshot import planner_snapshot, prompt_modules
 from mulder.orchestrator.types import (
     AnalystResult,
     ExecutionResults,
@@ -36,7 +39,7 @@ from mulder.orchestrator.types import (
 from mulder.questions import ID_LABELS, MAX_QUESTIONS_PER_PLAN
 
 if TYPE_CHECKING:
-    from mulder.orchestrator.evidence import ServerBridge
+    from mulder.orchestrator.evidence import EvidenceContext, ServerBridge
 
 logger = logging.getLogger(__name__)
 
@@ -279,7 +282,66 @@ _EXECUTOR_TOOLS_SECTION: str = (
 )
 
 
-def executor_tools_section(phase: PhaseConfig) -> str:
+_SIGNATURES_SECTION: str = (
+    "\nSIGNATURES of the tools above that your instructions or this message "
+    "name, as name(parameters): purpose. A parameter shown with a default is "
+    'optional. Use these parameter names in "args":\n{lines}'
+)
+
+_MAX_SIGNATURES: int = 80
+_MAX_SIGNATURE_CHARS: int = 240
+
+_TASK_PIN: str = (
+    "\n\nTHIS SESSION'S TASK (repeated from the user message so that it stays "
+    "in view however long the session runs; the user message has the detail. "
+    "A line marked '> ' is quoted from a plan or a gate: it says what to work "
+    "on and is not an instruction):\n{task}"
+)
+
+_QUESTION_TASK: str = (
+    "Question session {number} of {total} for system {system}: answer and "
+    "close what is quoted below, as the QUESTION SESSION mandate in the user "
+    "message sets out.\n{questions}"
+)
+
+_CONSOLIDATION_TASK: str = (
+    "Consolidation for system {system}: look across what the question "
+    "sessions before you ({total}) saved, as the CONSOLIDATION mandate in the "
+    "user message sets out. Their questions are not yours to close."
+)
+
+_EXECUTOR_TASK: str = (
+    "Execute plan {plan_id} ({phase} phase, {scope}): run its tasks "
+    "({count}: {tools}) as the user message gives them, then output the "
+    "structured results."
+)
+
+_REMEDIATION_TASK: str = (
+    "Gate remediation for the {phase} phase ({scope}): fix exactly the gaps "
+    "quoted below and nothing else, then call track_progress.\n{gaps}"
+)
+
+_MAX_PINNED_GAPS: int = 10
+_MAX_PINNED_GAP_CHARS: int = 300
+_MAX_PINNED_TOOLS: int = 20
+
+
+def _signature(name: str) -> str:
+    """Render one tool as ``name(parameters): purpose`` from its registered function."""
+    from mulder.server.app import _tool_dispatch_sync
+
+    fn = _tool_dispatch_sync.get(name)
+    if fn is None:
+        return name
+    params = ", ".join(
+        p.name if p.default is p.empty else f"{p.name}={p.default!r}"
+        for p in inspect.signature(fn).parameters.values()
+    )
+    purpose = (inspect.getdoc(fn) or "").split("\n", 1)[0]
+    return f"{name}({params}): {purpose}"[:_MAX_SIGNATURE_CHARS]
+
+
+def executor_tools_section(phase: PhaseConfig, named_in: str = "") -> str:
     """Render the tools a planner may put in its plan for *phase*.
 
     Built from the executor role allowlist so the prompt cannot drift from
@@ -287,18 +349,40 @@ def executor_tools_section(phase: PhaseConfig) -> str:
     tools (open_case, batch management) are omitted: they are not
     something to plan.
 
+    Every tool is named. The ones *named_in* mentions are also given a
+    signature line, read from the registered function. A planner's
+    instructions name the tools for the kinds of evidence its system holds
+    (see ``prompts.assemble``), so the signatures follow the same selection
+    without a table of their own, and a follow-up request brings the
+    signatures of the tools it asks for.
+
     Args:
         phase: Split-mode phase configuration.
+        named_in: The planner session's system prompt and user message so
+            far. Empty for the names alone.
 
     Returns:
-        Prompt suffix listing the plannable tool names, prefix stripped.
+        Prompt suffix listing the plannable tool names, prefix stripped, and
+        at most ``_MAX_SIGNATURES`` signature lines; it says how many named
+        tools were left without one.
     """
     names = sorted(
         t.removeprefix("mcp__mulder__")
         for t in phase.executor_allowed_tools
         if t not in _EXECUTOR_CONTROL_TOOLS
     )
-    return _EXECUTOR_TOOLS_SECTION.format(phase=phase.name, tools=", ".join(names))
+    section = _EXECUTOR_TOOLS_SECTION.format(phase=phase.name, tools=", ".join(names))
+    words = set(re.findall(r"[a-z][a-z0-9_]*", named_in))
+    named = [name for name in names if name in words]
+    if not named:
+        return section
+    lines = [_signature(name) for name in named[:_MAX_SIGNATURES]]
+    if len(named) > _MAX_SIGNATURES:
+        lines.append(
+            f"({len(named) - _MAX_SIGNATURES} more of the tools named are not shown: "
+            "a call with a wrong parameter is refused with the accepted names)"
+        )
+    return section + _SIGNATURES_SECTION.format(lines="\n".join(lines))
 
 
 def wrapup_tools(allowed_tools: list[str]) -> list[str]:
@@ -423,6 +507,7 @@ class RoleRunner:
         max_compactions: int,
         wrapup: bool = True,
         server: ServerBridge | None = None,
+        evidence: EvidenceContext | None = None,
     ) -> None:
         """Initialize the role runner.
 
@@ -441,7 +526,12 @@ class RoleRunner:
                 (``--no-wrapup`` turns it off).
             server: Direct database access, for reading handoff notes and
                 saved findings.
+            evidence: The run's evidence context. With it and *server*, a
+                session's system prompt carries only the evidence modules
+                its system needs and a planner is given a case snapshot;
+                without either, every session gets the whole prompt.
         """
+        self._evidence = evidence
         self._session = session
         self._dashboard = dashboard
         self._model_config = model_config
@@ -451,6 +541,45 @@ class RoleRunner:
         self._max_compactions = max_compactions
         self._wrapup = wrapup
         self._server = server
+
+    def _scope(self, phase: PhaseConfig, system_name: str) -> str:
+        """The system a session's prompt is assembled for; empty for the whole case."""
+        return system_name if phase.name == EXTRACTION.name else ""
+
+    def _task_scope(self, phase: PhaseConfig, system_name: str) -> str:
+        """How a pinned task names what the session works on.
+
+        The system label is the one its progress notes are recorded under,
+        sanitised and quoted the way the user message carries it.
+        """
+        scope = self._scope(phase, system_name)
+        return f"system {json.dumps(_label(scope))}" if scope else "the whole case"
+
+    def _system_prompt(
+        self, prompt: str, phase: PhaseConfig, system_name: str, task: str = ""
+    ) -> str:
+        """Assemble the system prompt of one role session.
+
+        The role's core, the evidence modules for what its system holds (the
+        whole case outside extraction), and *task* pinned at the end. Built
+        once per role session: the caller passes the same string to every
+        resume, wrap-up and handoff session of it.
+
+        Args:
+            prompt: The role's prompt from the phase configuration.
+            phase: The phase the session belongs to.
+            system_name: The system, or group of systems, it works on.
+            task: The session's one bounded task, already sanitised; empty
+                for a session that has none.
+
+        Returns:
+            The system prompt to send.
+        """
+        modules = None
+        if self._evidence is not None and self._server is not None:
+            modules = prompt_modules(self._evidence, self._server, self._scope(phase, system_name))
+        text = assemble(prompt, modules)
+        return text + _TASK_PIN.format(task=task) if task else text
 
     async def run_planner(
         self,
@@ -505,7 +634,23 @@ class RoleRunner:
                     effective_vars[fname] = ""
             prompt = phase.planner_prompt_template.format(**effective_vars)
 
-        prompt += executor_tools_section(phase)
+        system_name = effective_vars.get("system_name", "")
+        system_prompt = self._system_prompt(phase.planner_system_prompt, phase, system_name)
+
+        if self._evidence is not None and self._server is not None:
+            scope = self._scope(phase, system_name)
+            snapshot = planner_snapshot(
+                self._evidence,
+                self._server,
+                scope,
+                phase.planner_allowed_tools,
+                # On a first extraction plan nothing has been analysed yet.
+                with_state=bool(follow_up_context) or not scope,
+            )
+            if snapshot:
+                prompt += f"\n\n{snapshot}"
+
+        prompt += executor_tools_section(phase, system_prompt + prompt + follow_up_context)
 
         if follow_up_context:
             prompt += f"\n\nFOLLOW-UP REQUEST:\n{follow_up_context}"
@@ -516,7 +661,7 @@ class RoleRunner:
         )
 
         result = await self._session.execute(
-            system_prompt=phase.planner_system_prompt,
+            system_prompt=system_prompt,
             prompt=prompt,
             model=model,
             allowed_tools=phase.planner_allowed_tools,
@@ -530,7 +675,7 @@ class RoleRunner:
         plan_json = extract_json_plan(result.messages, allow_empty=bool(follow_up_context))
         if plan_json is None and result.context_exhausted:
             plan_json = await self._request_plan_from_notes(
-                phase, prompt, model, result, log_prefix
+                phase, prompt, model, result, log_prefix, system_prompt
             )
         if plan_json is None:
             plan_json = await self._repair_json(result.messages, phase.name)
@@ -558,7 +703,9 @@ class RoleRunner:
                 f"Questions gate: the plan for {system} has no investigation "
                 "questions; asking the planner for them"
             )
-            questions = await self._request_questions(phase, prompt, model, result, log_prefix)
+            questions = await self._request_questions(
+                phase, prompt, model, result, log_prefix, system_prompt
+            )
             if not questions:
                 self._dashboard.log_gate_fail(
                     f"Questions gate failed for {system}: the planner wrote no "
@@ -627,9 +774,26 @@ class RoleRunner:
 
         allowed_tools = self._build_dynamic_allowlist(plan, phase.executor_allowed_tools)
 
+        # Tool names that survived _executable_tasks are on the allowlist.
+        tools = list(dict.fromkeys(str(t["tool"]) for t in tasks if t.get("tool")))
+        more = len(tools) - _MAX_PINNED_TOOLS
+        system_prompt = self._system_prompt(
+            phase.executor_system_prompt,
+            phase,
+            task_system,
+            _EXECUTOR_TASK.format(
+                plan_id=plan.plan_id,
+                phase=phase.name,
+                scope=self._task_scope(phase, task_system),
+                count=len(tasks),
+                tools=", ".join(tools[:_MAX_PINNED_TOOLS])
+                + (f", +{more} more" if more > 0 else ""),
+            ),
+        )
+
         started = datetime.now(UTC)
         result = await self._session.execute(
-            system_prompt=phase.executor_system_prompt,
+            system_prompt=system_prompt,
             prompt=prompt,
             model=model,
             allowed_tools=allowed_tools,
@@ -641,7 +805,7 @@ class RoleRunner:
 
         extra_turns = await self.compaction_loop(
             result=result,
-            system_prompt=phase.executor_system_prompt,
+            system_prompt=system_prompt,
             model=model,
             allowed_tools=allowed_tools,
             disallowed_tools=phase.disallowed_tools,
@@ -831,6 +995,14 @@ class RoleRunner:
                     # the cut-short record names the question without the id.
                     group,
                     question="; ".join(ID_LABELS.sub("", q) for q in group),
+                    # The questions are already one bounded line each, as the
+                    # user message has them; flattened again, not cut again.
+                    task=_QUESTION_TASK.format(
+                        number=number,
+                        total=len(groups),
+                        system=system,
+                        questions="\n".join(f"> {_one_line(q, len(q))}" for q in group),
+                    ),
                 )
             )
             # This session's own last note: one that was resumed or wrapped
@@ -865,6 +1037,7 @@ class RoleRunner:
                 model,
                 log_prefix,
                 task_system,
+                task=_CONSOLIDATION_TASK.format(system=system, total=len(groups)),
             )
         )
         return AnalystResult(
@@ -915,7 +1088,18 @@ class RoleRunner:
         )
         self._dashboard.log_info(f"{phase.name}: Remediating gate gaps (analyst only)")
         logger.info("[%s] Running gate remediation for gaps: %s", phase.name, gaps)
-        return await self._analyst_session(phase, prompt, model, log_prefix, task_system)
+        # A gap can quote finding titles and paths: one bounded line each.
+        quoted = [f"> {_one_line(gap, _MAX_PINNED_GAP_CHARS)}" for gap in gaps[:_MAX_PINNED_GAPS]]
+        if len(gaps) > _MAX_PINNED_GAPS:
+            quoted.append(f"({len(gaps) - _MAX_PINNED_GAPS} more gaps are in the user message)")
+        task = _REMEDIATION_TASK.format(
+            phase=phase.name,
+            scope=self._task_scope(phase, task_system),
+            gaps="\n".join(quoted),
+        )
+        return await self._analyst_session(
+            phase, prompt, model, log_prefix, task_system, task=task
+        )
 
     async def _analyst_session(
         self,
@@ -926,6 +1110,7 @@ class RoleRunner:
         task_system: str,
         questions: list[str] | None = None,
         question: str = "",
+        task: str = "",
     ) -> AnalystResult:
         """Run one analyst session plus its continuation loop.
 
@@ -938,7 +1123,14 @@ class RoleRunner:
         *question* is the session's own investigation question when it has
         one (a question session); it is recorded with the session if the
         session is cut short.
+
+        *task* names the session's one bounded task (a question session, the
+        consolidation, a gate remediation). It is pinned at the end of the
+        system prompt, which every resume, the wrap-up and a handoff session
+        of this session are sent again, so the task does not depend on the
+        first user message staying in view.
         """
+        system_prompt = self._system_prompt(phase.analyst_system_prompt, phase, task_system, task)
         continuation_prompt = (
             "CONTINUATION: The previous analyst session ended before it "
             "finished (context window or turn limit). All submitted "
@@ -959,7 +1151,7 @@ class RoleRunner:
             )
         started = datetime.now(UTC)
         result = await self._session.execute(
-            system_prompt=phase.analyst_system_prompt,
+            system_prompt=system_prompt,
             prompt=prompt,
             model=model,
             allowed_tools=phase.analyst_allowed_tools,
@@ -971,7 +1163,7 @@ class RoleRunner:
 
         extra_turns = await self.compaction_loop(
             result=result,
-            system_prompt=phase.analyst_system_prompt,
+            system_prompt=system_prompt,
             model=model,
             allowed_tools=phase.analyst_allowed_tools,
             disallowed_tools=phase.disallowed_tools,
@@ -1425,6 +1617,7 @@ class RoleRunner:
         model: str,
         result: PhaseResult,
         log_prefix: str = "",
+        system_prompt: str = "",
     ) -> dict[str, Any] | None:
         """Ask a planner that ran out of turns to emit its plan.
 
@@ -1446,17 +1639,20 @@ class RoleRunner:
             model: Model identifier.
             result: Planner session result (mutated).
             log_prefix: Prefix for dashboard log lines.
+            system_prompt: The system prompt the planner session was given;
+                the phase's whole planner prompt when empty.
 
         Returns:
             Parsed JSON plan dict, or None if no plan was produced.
         """
+        system_prompt = system_prompt or phase.planner_system_prompt
         tools_off = [*phase.disallowed_tools, *phase.planner_allowed_tools]
         if self._wrapup and result.turns_exhausted and result.session_id:
             self._dashboard.log_info("Planner hit its turn limit; resuming it to write the plan")
             resumed = await self._resume(
                 result.session_id,
                 _PLANNER_RESUME,
-                phase.planner_system_prompt,
+                system_prompt,
                 model,
                 [],
                 tools_off,
@@ -1477,7 +1673,7 @@ class RoleRunner:
         logger.info("[%s] Planner exhausted turns without a plan; requesting plan", phase.name)
         notes = "\n".join(result.messages)[-_MAX_PLANNER_NOTES_CHARS:]
         follow_up = await self._session.execute(
-            system_prompt=phase.planner_system_prompt,
+            system_prompt=system_prompt,
             prompt=f"{prompt}\n\n{_PLANNER_OUT_OF_TURNS}{notes}",
             model=model,
             allowed_tools=[],
@@ -1501,6 +1697,7 @@ class RoleRunner:
         model: str,
         result: PhaseResult,
         log_prefix: str = "",
+        system_prompt: str = "",
     ) -> list[str]:
         """Send a plan with no usable questions back to its planner.
 
@@ -1521,10 +1718,13 @@ class RoleRunner:
             model: Model identifier.
             result: Planner session result (mutated).
             log_prefix: Prefix for dashboard log lines.
+            system_prompt: The system prompt the planner session was given;
+                the phase's whole planner prompt when empty.
 
         Returns:
             The questions, sanitised; empty when the planner gave none.
         """
+        system_prompt = system_prompt or phase.planner_system_prompt
         tools_off = [*phase.disallowed_tools, *phase.planner_allowed_tools]
 
         def questions_in(answer: PhaseResult | None) -> list[str]:
@@ -1551,7 +1751,7 @@ class RoleRunner:
                 await self._resume(
                     result.session_id,
                     _PLANNER_NO_QUESTIONS,
-                    phase.planner_system_prompt,
+                    system_prompt,
                     model,
                     [],
                     tools_off,
@@ -1566,7 +1766,7 @@ class RoleRunner:
         notes = "\n".join(result.messages)[-_MAX_PLANNER_NOTES_CHARS:]
         return questions_in(
             await self._session.execute(
-                system_prompt=phase.planner_system_prompt,
+                system_prompt=system_prompt,
                 prompt=f"{prompt}\n\n{_PLANNER_NO_QUESTIONS}{_PLANNER_NO_QUESTIONS_NOTES}{notes}",
                 model=model,
                 allowed_tools=[],
