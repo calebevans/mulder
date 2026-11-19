@@ -81,17 +81,40 @@ context>") once per exporter directory, group "foundation", and no other run_net
 tool (they are follow-ups for the analyst); plan it only for the system whose directory
 holds the files, never from another system's plan.
 
-When the evidence context lists CLOUD AUDIT LOGS, REPOSITORY CHECKOUTS or CI
-RUN LOGS, plan the tools named under each heading, with the paths spelled
-exactly as listed, group "foundation":
+When the evidence context lists CLOUD AUDIT LOGS, REPOSITORY CHECKOUTS, CI
+RUN LOGS or MAILBOX FILES, plan the tools named under each heading, with the
+paths spelled exactly as listed, group "foundation":
 - run_cloud_audit_logs indexes exported audit log events (type
-  "cloud_audit_log") and applies detection rules to them.
+  "cloud_audit_log") and applies detection rules to them. Microsoft 365 and
+  Entra ID exports (JSON, or the unified audit log's CSV) are read by the same
+  call: plan it once per listed path, not per file or per log. It also writes
+  the summaries and log tables the analyst works from, so plan nothing else
+  for those logs. A directory too large for one call is listed file by file.
+  Do not plan a path listed under NOT READ: the call would be refused. Name
+  it in investigation_questions as evidence that was not examined.
+- parse_pst lists the messages in an Outlook mailbox file (type "mailbox").
 - run_workflow_audit finds CI workflows an outsider could drive and lists the
   secrets each refers to (type "repository").
 - run_secret_scan finds credentials printed in run logs or left in artifacts
   and source trees (types "ci_run_logs" and "repository").
 If the briefing or a directory listing shows such evidence that the context
 did not list, plan the same tools on it.
+
+When the evidence context lists LOG DIRECTORIES, LOOSE LOG FILES or ESXI
+SUPPORT BUNDLES, plan run_loose_logs(evidence_path=<path as listed>) once
+per listed path, group "foundation". It recognises web server, VPN and
+firewall, Zeek, Suricata, ESXi and syslog files by their content, indexes
+them and loads them into log tables. One call reads a whole directory: do
+not plan it again for a file or directory inside a listed path. Add to
+investigation_questions what these logs can answer: for a VPN or firewall
+log, which account logged in, from which address and when; for a web
+server log, which requests reached a script that few clients use; for an
+ESXi bundle, when SSH or the shell was enabled, who logged in from where,
+which commands ran, when virtual machines were powered off and whether the
+execution policy was changed. If the briefing describes an intrusion
+through a VPN, a web application or a hypervisor and no such logs are
+listed, ask in investigation_questions which logs would show the way in
+and whether they are in the evidence.
 
 When the evidence context lists TRIAGE COLLECTIONS (type "triage_collection":
 KAPE target output, a Velociraptor offline collection, UAC output or a Windows
@@ -178,6 +201,25 @@ When the investigator briefing mentions specific concerns:
   them), run_hayabusa_logon_summary, and run_vshadow_info (which shadow
   copies survive). A volume with no change journal or no shadow copies
   was not thereby wiped: journaling and shadow copies can simply be off.
+
+EVENT LOG RECOVERY:
+run_evtx_recovery brings back event records that survived a log clearing.
+Plan it only when there is a reason: the briefing or the analyst's
+follow-up request says a log was cleared (Security event 1102, System
+event 104), or a log's first event is much later than the system was in
+use.
+- Loose .evtx files or a directory of them: evidence_path is that file or
+  directory, group "dependent".
+- A disk image: evidence_path is the image. It reads the whole image once,
+  and extracts the image's own event logs to tell a recovered record from
+  one that is still in them. It finds those logs in the file listing, so
+  plan it after run_fls has listed the image: group "dependent", or a
+  follow-up plan.
+- A memory dump or a file of unallocated space: evidence_path is that file.
+  Nothing is compared there, so what it brings back includes records that
+  are still in the logs.
+What it recovers is partial. Recovering nothing does not show that nothing
+was logged.
 
 BATCH DEPENDENCIES:
 Tools must be grouped into ordered batches to respect data dependencies.

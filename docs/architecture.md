@@ -74,6 +74,7 @@ flowchart LR
         getRawOutput["get_raw_output"]
         listSources["list_sources"]
         getSourceStats["get_source_stats"]
+        logTables["list_log_tables\nlog_top / log_histogram\nlog_rows"]
     end
 
     subgraph findingsTools [Findings and Reporting]
@@ -441,6 +442,36 @@ erDiagram
         text updated_at
     }
 
+    logEvents {
+        int event_id PK
+        text log_table
+        int source_id FK
+        int line
+        text event_time
+        text actor
+        text src_ip
+        text action
+        text target
+        text status
+        text user_agent
+        text session_id
+        int bytes
+        text extra
+    }
+
+    logTables {
+        int source_id PK
+        text log_table PK
+        int complete
+        int nested
+        int row_count
+        int rows_no_time
+        int rows_unparsed
+        text first_time
+        text last_time
+        text field_counts
+    }
+
     investigationQuestions {
         text question_id PK
         text phase
@@ -456,6 +487,8 @@ erDiagram
     sources ||--o{ windows : "contains"
     windows ||--|| windowsFts : "indexed by"
     windows ||--o{ bookmarks : "flagged by"
+    sources ||--o{ logEvents : "also loaded as"
+    sources ||--o{ logTables : "ingest record"
 ```
 
 ### Key Tables
@@ -468,6 +501,8 @@ erDiagram
 - **evidence_registry**: SHA-256 chain-of-custody records for original evidence files
 - **bookmarks**: Agent-flagged windows of interest for later review
 - **progress**: Per-system records of tools executed and questions addressed
+- **log_events**: One normalised row per log event, for logs an extractor loads through `mulder.logtable.ingest` as well as indexing as text. `event_time` is fixed-width UTC (`YYYY-MM-DDTHH:MM:SSZ`), `source_id` and `line` point back at the indexed text, and `extra` is a JSON object of further fields. Indexed on `(log_table, event_time)`. Read only through `log_top`, `log_histogram` and `log_rows`, which bind every value and never take SQL
+- **log_tables**: One row per ingest (a source and the table it fed): how many rows were stored, how many had no usable time, how many records could not be parsed, the time range, which fields have values, whether the ingest completed, and whether it read its path recursively (`nested`: only such ingests cover or replace one another by path). `verify_evidence_integrity` does not cover `log_events`: it re-hashes the text windows, including each indexed `logtable.*` query result, but there is no hash of the rows a count is computed from
 - **kv_store**: General-purpose key-value persistence for cross-tool state sharing. Stores TSK partition offsets (`tsk_partition_offset:<image>`), EVTX extraction directory paths, and other data that must survive server restarts and context compaction
 - **investigation_questions**: The questions each planner asked, with phase and system, and how each was resolved (`answered`, `ruled_out`, `undetermined`, or NULL while open) with the finding ids or reason behind it. Written by the orchestrator, resolved by `resolve_question`
 
@@ -520,9 +555,12 @@ The `EvidenceClassifier` scans evidence directories and categorizes files by typ
 | Office document | `.doc`, `.docx`, `.xls`, `.ppt` | oletools |
 | PDF document | `.pdf` | Didier Stevens PDF tools |
 | Email archive | `.pst`, `.ost` | pst-utils / libpst |
+| Cloud audit log | `.json`, `.jsonl`, `.ndjson` with audit-log keys (GitHub, GCP, AWS, Microsoft 365, Entra ID); `.csv` with an `AuditData` column (Microsoft 365) | Zircolite (Sigma), log tables |
 | Phone dump (Android) | Android directory structures | MVT, ALEAPP |
 | Phone dump (iOS) | iOS directory structures | MVT, iLEAPP |
 | Linux logs | `/var/log/*`, journal files | Zircolite, native parsing |
+| Loose logs | `.log`, `.txt` and rotated `.log.N` files, Suricata and Zeek JSON, a directory named `log` or `logs` or under `var/log` | `run_loose_logs` (native parsers; Zircolite for the web server Sigma rules) |
+| ESXi support bundle | a directory with `commands/`, `etc/vmware` and `var/run/log` or `var/log` | `run_loose_logs` |
 | Archive | `.zip`, `.7z`, `.tar`, `.gz` | Internal extraction |
 | Triage collection | A directory laid out as KAPE target output, a Velociraptor offline collection or UAC output, or a Windows volume directory | The disk artifact tools on the directory, `index_triage_collection` |
 

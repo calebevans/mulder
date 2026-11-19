@@ -15,6 +15,7 @@ import os
 import plistlib
 import shlex
 import socket
+import sqlite3
 import struct
 import subprocess
 import tempfile
@@ -137,6 +138,132 @@ def netflow_smoke(work: Path) -> None:
     print("PASS NetFlow collection and nfdump csv layouts", flush=True)
 
 
+def logtable_smoke(work: Path) -> None:
+    """Load a few log rows and run every log table query on the image's own SQLite
+    (3.37 on Ubuntu 22.04), so SQL that needs a newer SQLite fails the build and not an
+    investigation."""
+    from mulder import logtable
+    from mulder.db import CaseDB
+
+    rows: list[dict[str, object] | None] = [
+        {"event_time": 1700000000, "actor": "a", "bytes": 5, "extra": {"region": "x"}},
+        {"event_time": "2023-11-14T23:13:20+01:00", "actor": "b", "extra": {"region": "x"}},
+        None,
+    ]
+    with CaseDB.create("logtable-smoke", str(work), work / "logtable-db") as db:
+        source_id = db.register_source("smoke.log", str(work), "blake2b:smoke", "smoke", 3)
+        loaded = logtable.ingest(db, "smoke.log", source_id, rows)
+        assert loaded == {"rows": 2, "rows_no_time": 0, "rows_unparsed": 1}, loaded
+        only_a = [{"field": "actor", "op": "prefix", "value": "A"}]
+        top = logtable.top(db, "smoke.log", ["region", "actor"], filters=only_a)
+        when = "2023-11-14T22:13:20Z"
+        assert top["rows"] == [
+            {
+                "region": "x",
+                "actor": "a",
+                "count": 1,
+                "first_seen": when,
+                "last_seen": when,
+                "bytes": 5,
+            }
+        ], top
+        hist = logtable.histogram(db, "smoke.log", "hour", split_by="region")
+        assert hist["rows"] == [
+            {"bucket": "2023-11-14T22", "count": 2, "by": [{"value": "x", "count": 2}], "other": 0}
+        ], hist
+        page = logtable.rows(db, "smoke.log", newest_first=True, limit=1)
+        assert page["rows_matched"] == 2 and page["truncated"], page
+    print("PASS log table queries on SQLite", sqlite3.sqlite_version, flush=True)
+
+
+def loose_logs_smoke(work: Path) -> None:
+    """Run run_loose_logs on an access log with the image's own Zircolite, pySigma and
+    SigmaHQ tree. Most generic web rules are keyword lists that the tool rewrites so
+    Zircolite can convert them: a pySigma or Sigma update that breaks that fails here.
+    Most exploit rules look for a path in cs-uri-query: one that has no query string
+    must match as well."""
+    from unittest.mock import MagicMock
+
+    from mulder.audit import AuditLog
+    from mulder.db import CaseDB
+    from mulder.server import app
+    from mulder.server.tools.looselogs import run_loose_logs
+
+    logs = work / "weblogs"
+    logs.mkdir()
+    request = '203.0.113.9 - - [10/Oct/2023:13:55:36 +0000] "GET {} HTTP/1.1" 200 12 "-" "Mozilla"'
+    uris = ("/", "/item.php?id=1%20UNION%20SELECT%201", "/cgi-bin/.%2e/%2e%2e/%2e%2e/bin/sh")
+    (logs / "access.log").write_text("\n".join(request.format(uri) for uri in uris))
+    db_dir = work / "looselogs-db"
+    with CaseDB.create("looselogs-smoke", str(logs), db_dir) as db:
+        app._cfg = app.ServerConfig(db_dir=db_dir)
+        app._ctx = app.ServerContext(
+            case_id="looselogs-smoke",
+            db=db,
+            correlator=MagicMock(),
+            audit=AuditLog(db_dir / "looselogs-smoke.audit.jsonl"),
+        )
+        try:
+            result = run_loose_logs.__wrapped__(str(logs))  # type: ignore[attr-defined]
+        finally:
+            app._ctx = app._cfg = None
+    web = result["results"]["web"]
+    assert web["sigma"].startswith("ok"), web
+    assert web["rules_matched"].get("SQL Injection Strings In URI") == 1, web
+    assert web["rules_matched"].get("CVE-2021-41773 Exploitation Attempt") == 1, web
+    print("PASS SigmaHQ web server rules over an access log:", web["sigma"], flush=True)
+
+
+def m365_smoke(work: Path) -> None:
+    """Run mulder's Microsoft 365 rules through the bundled Zircolite and pySigma, one
+    unified audit record per rule plus two that must not match. Zircolite drops a rule
+    it cannot run without a word, which would read as a clean scan in an investigation."""
+    from mulder import m365
+    from mulder.server.tools import cloudlogs
+
+    def record(operation: str, user: str = "alice@example.com", **parameters: str) -> m365.Record:
+        found = m365.recognise(
+            {
+                "CreationTime": "2026-10-05T12:00:00",
+                "Id": operation,
+                "Operation": operation,
+                "Workload": "Exchange",
+                "UserId": user,
+                "Parameters": [{"Name": n, "Value": v} for n, v in parameters.items()],
+            }
+        )
+        assert found is not None, operation
+        return found
+
+    expected = {
+        "Inbox Rule Created Or Changed": record("New-InboxRule", Name="x"),
+        "Mailbox Forwarding Set": record(
+            "Set-Mailbox", ForwardingSmtpAddress="smtp:x@example.org"
+        ),
+        "Mailbox Permission Granted": record("Add-MailboxPermission", AccessRights="FullAccess"),
+        "Application Consent Granted": record("Consent to application."),
+        "Credentials Added To An Application Or Service Principal": record(
+            "Add service principal credentials."
+        ),
+        "Authentication Method Registered": record("User registered security info"),
+        "Audit Logging Bypassed Or Disabled": record(
+            "Set-MailboxAuditBypassAssociation", AuditBypassEnabled="True"
+        ),
+        "Transport Rule Created Or Changed": record(
+            "New-TransportRule", BlindCopyTo="x@example.org"
+        ),
+    }
+    system = "NT AUTHORITY\\SYSTEM (Microsoft.Exchange.ServiceHost)"
+    quiet = [record("Add-MailboxPermission", user=system), record("Set-Mailbox", Identity="x")]
+    status, parsed = cloudlogs._sigma_scan(
+        "m365", [*expected.values(), *quiet], str(work), None, "low"
+    )
+    assert status == "ok" and parsed is not None, status
+    matched = sorted(d["rule_title"] for d in parsed["detections"])
+    assert matched == sorted(f"Microsoft 365 {title}" for title in expected), matched
+    print("PASS Microsoft 365 Sigma rules through Zircolite", flush=True)
+
+
 def main() -> None:
     assert os.getuid() != 0, "Run through the image entrypoint as mulder"
     assert Path.home() == Path("/home/mulder"), "Unexpected HOME"
@@ -198,6 +325,8 @@ def main() -> None:
         ("fuse2fs", "-V"),
         ("clamscan", "--version"),
         ("nfdump", "-V"),
+        # By path: "evtx_dump" on PATH is python-evtx's script, another program.
+        ("/opt/evtx-dump/evtx_dump", "--version"),
     ):
         run(*command)
     # The unprivileged mulder user can only mount NTFS through the source-built
@@ -304,6 +433,9 @@ def main() -> None:
         assert any(event.get("alert", {}).get("signature_id") == 1000001 for event in events)
 
         netflow_smoke(work)
+        logtable_smoke(work)
+        loose_logs_smoke(work)
+        m365_smoke(work)
 
         evidence = work / "email.raw"
         original = (b"Contact smoke@example.org for the smoke test.\n" * 100).ljust(8192, b"\0")

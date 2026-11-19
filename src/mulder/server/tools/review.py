@@ -16,7 +16,13 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from mulder.db import CaseDB
-from mulder.extractors.classifier import ClassifierConfig, EvidenceClassifier
+from mulder.extractors.classifier import (
+    LOOSE_LOG_TYPES,
+    ClassifiedEvidence,
+    ClassifierConfig,
+    EvidenceClassifier,
+    loose_log_targets,
+)
 from mulder.models import Finding, Question
 from mulder.patterns import (
     EMAIL_RE,
@@ -67,6 +73,18 @@ _EVIDENCE_TOOL_MAP: dict[str, list[str]] = {
     "ci_run_logs": [
         "run_secret_scan",
     ],
+    "log_file": [
+        "run_loose_logs",
+    ],
+    "log_directory": [
+        "run_loose_logs",
+    ],
+    "esxi_bundle": [
+        "run_loose_logs",
+    ],
+    "mailbox": [
+        "parse_pst",
+    ],
     "evtx": [
         "run_evtx_parser",
         "run_hayabusa",
@@ -101,7 +119,7 @@ _EVIDENCE_TOOL_MAP: dict[str, list[str]] = {
 # the evidence root. Disk and memory images found there are handled by their
 # own planner listings and stay out, as before.
 _UNPACKED_EVIDENCE_TYPES = frozenset(
-    {"cloud_audit_log", "repository", "ci_run_logs", "triage_collection"}
+    {"cloud_audit_log", "repository", "ci_run_logs", "mailbox", "triage_collection"}
 )
 
 # Parameters that name the evidence a mapped tool reads. Output locations
@@ -112,6 +130,8 @@ _EVIDENCE_INPUT_PARAMS: dict[str, tuple[str, ...]] = {
     "run_cloud_audit_logs": ("evidence_path",),
     "run_secret_scan": ("evidence_path",),
     "run_workflow_audit": ("evidence_path",),
+    "run_loose_logs": ("evidence_path",),
+    "parse_pst": ("file_path",),
     "index_triage_collection": ("evidence_path",),
     "run_volatility": ("memory_path",),
     "run_volatility_batch": ("memory_path",),
@@ -271,7 +291,8 @@ def audit_tool_coverage() -> dict[str, object]:
     skipped. Re-classifies the evidence directory and compares applicable
     tools against the audit log. A call counts for an evidence item only
     when one of the tool's evidence-input parameters names that item or a
-    directory holding it; a path that matches no item counts for none.
+    directory holding it; a path that matches no item counts for none, and
+    so does a run_cloud_audit_logs call that returned an error.
     Tools that can pick their input themselves count by name only while
     none of their calls names an input path or a source image.
 
@@ -303,6 +324,7 @@ def audit_tool_coverage() -> dict[str, object]:
 
     classifier = EvidenceClassifier(ClassifierConfig())
     classified = classifier.classify(evidence_root)
+    loose = loose_log_targets(classified, evidence_root)
     # Evidence delivered inside an archive is audited where it was unpacked.
     # Only the types that arrive that way and are run on the unpacked copy.
     try:
@@ -310,11 +332,15 @@ def audit_tool_coverage() -> dict[str, object]:
     except RuntimeError:  # no server config: nothing was extracted through it
         extracted = None
     if extracted is not None and extracted.is_dir():
-        classified += [
-            ev
-            for ev in classifier.classify(extracted)
-            if ev.artifact_type in _UNPACKED_EVIDENCE_TYPES
-        ]
+        unpacked = classifier.classify(extracted)
+        loose.update(loose_log_targets(unpacked, extracted))
+        classified += [ev for ev in unpacked if ev.artifact_type in _UNPACKED_EVIDENCE_TYPES]
+    # Loose logs are audited as run_loose_logs is pointed at them: a directory of log
+    # files is one item, not one per file.
+    classified = [ev for ev in classified if ev.artifact_type not in LOOSE_LOG_TYPES]
+    classified += [
+        ClassifiedEvidence(path=p, artifact_type=kind) for p, (kind, _) in loose.items()
+    ]
 
     evidence = [
         form
@@ -327,6 +353,10 @@ def audit_tool_coverage() -> dict[str, object]:
     for entry in ctx.audit.tool_call_entries():
         params = entry.get("params")
         tool_name = str(entry.get("tool_name"))
+        # A run_cloud_audit_logs call that failed indexed nothing: a path over the size
+        # one call reads is refused whole. It is no coverage of the files under that path.
+        if tool_name == "run_cloud_audit_logs" and entry.get("status") == "error":
+            continue
         hits = targets[tool_name]
         if not isinstance(params, dict):
             continue
@@ -386,6 +416,8 @@ def audit_tool_coverage() -> dict[str, object]:
             )
             run = list(applicable) if covered else []
         else:
+            if loose.get(ev.path, ("", 1))[1] > 1:
+                files = loose[ev.path][1]
             forms = _path_forms(ev.path)
             run = [
                 t

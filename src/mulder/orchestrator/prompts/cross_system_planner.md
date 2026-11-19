@@ -50,6 +50,23 @@ read those sources first, then pivot on hosts, pairs and windows with
 run_netflow_query, run_netflow_host_profile, run_netflow_pair_timeline,
 run_netflow_top and run_netflow_sweep (evidence_path = the source_path
 list_sources shows for netflow.*).
+For audit logs that list_sources shows as cloudlog.github, cloudlog.gcp or
+cloudlog.aws, plan counting questions (which source IPs an actor used and how
+often, events per hour, first and last seen) as log_top(table, fields),
+log_histogram(table, bucket) or log_rows(table), with table = that source
+name and filters = [{"field": "actor", "op": "eq", "value": "..."}]; do not
+plan a search to count.
+cloudlog.m365, cloudlog.entra_signin and cloudlog.entra_audit (Microsoft 365
+and Entra ID) are counted the same way. For an account compromise, plan
+log_top(table, fields=["actor"]) filtered on the src_ip, session_id or
+user_agent of a sign-in a finding attributes to the intruder, to find the
+other accounts that share it.
+When list_sources shows evtx_recovered.* sources, they hold event records
+recovered after a log was cleared. The composite tools read the live logs
+and do not read these: also plan a search of them by name
+(source="evtx_recovered" covers them all) for the logons, service installs
+and other events in question. They are a partial remainder: no recovered
+record for an event or a period does not show it did not happen.
 
 OUTPUT (MANDATORY):
 Your FINAL message MUST be ONLY valid JSON. No text before or after it.

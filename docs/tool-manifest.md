@@ -484,6 +484,112 @@ When indexing a Security log, automatically indexes System.evtx and PowerShell o
 
 **Roles:** `EXTRACT_EXECUTOR`
 
+### run_evtx_recovery
+
+Recover Windows event log records left behind after a log was cleared, using evtx_dump.
+
+What it does depends on what `evidence_path` is:
+
+- **A `.evtx` file, or a directory of them** (searched at any depth; symlinks
+  are not followed; at most 2,000 files): reads the stale records still inside
+  each log, in chunks whose header was reset and in the slack after a chunk's
+  last record (`evtx_dump --recover-records`).
+- **Any other file** (a raw or E01 disk image, a memory dump, a file of
+  unallocated space, a log whose file header is gone): carves event log chunks
+  out of the raw bytes and reads every record in them, slack included. The file
+  is read once and never copied; an E01 is read through xmount's flat view,
+  which needs FUSE. Exact copies of a chunk are skipped, and the scan stops
+  after one million chunks (64 GiB of event log). A file that starts like an
+  EnCase segment that is not the first, a VMDK, qcow2 or VHDX image, or a zip
+  or gzip file is still scanned as it is, and the response carries a `warning`
+  that what it stores compressed was not read.
+
+A recovered record is dropped when a live record has the same channel, record
+ID and time. On a disk image the live records are those of the image's own
+allocated event logs, which the tool extracts with `icat`, one at a time for
+the length of the call, through the file listing `run_fls` indexed for that
+image, so run `run_fls` first. Another image's listing in the same case is not
+read. A deleted log is not live: where its chunks are still in the image its
+records come out as `[carved]`, also when a new log was created under its
+name. It does not need `run_evtx_parser` or the directory that tool extracted
+to. `compared_with_live_logs` is true only when every allocated log the image
+lists was read. When one could not be extracted or read, `warning` gives the
+count and `not_parsed.files` names it. When there is none to extract (a memory
+dump, a file of unallocated space, an image `run_fls` did not list) nothing is
+compared. Either way `[carved]` records include any that are still in a live
+log that was not read.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| evidence_path | str | yes | A .evtx file, a directory of .evtx files, or a raw file to carve |
+| channels | list[str] \| None | no | Channel name patterns, case-insensitive, `*` allowed. Default: `Security`, `System`, `Microsoft-Windows-PowerShell/Operational`, `Microsoft-Windows-TaskScheduler/Operational`, `Microsoft-Windows-TerminalServices-*`. `["*"]` keeps every channel, and the records recovered without a channel name |
+| t_start | str \| None | no | Keep records at or after this UTC time (`2024-03-01` or `2024-03-01T14:30:00`) |
+| t_end | str \| None | no | Keep records at or before this UTC time; a date covers its whole day |
+| max_records | int | no | Most records kept per channel (default 10000, limit 100000) |
+| force | bool | no | Re-run even if this path was already recovered, for example with other channels or another time window. The earlier run's sources stay in the index |
+
+**Returns:** `evidence_path`, `mode`, `scope{}` (the channel patterns, time window and `max_records` applied), `recovered_records`, `earliest_recovered`, `latest_recovered`, `channels{}` (per channel: `source`, `recovered`, `earliest`, `latest`, `event_ids{}` (ten most frequent), `live_records`, `live_earliest`, `live_latest`, `not_indexed_over_max_records`; the twenty with most records), `channels_not_listed`, `live_log_cleared`, `log_clearing_events[]` (the first twenty), `duplicates_of_live_dropped`, `truncated{}`, `not_parsed{}`, `summary_source`, `interpretation`; `records_without_channel{}` when the channel patterns left such records out; when carving also `compared_with_live_logs`, `duplicate_chunks_skipped`; `warning` when carved records were not compared with every live log or the file looks like a container. A call that is skipped because the path was already recovered returns `scope_of_prior_run{}`, so the caller can see whether that run covered what it now asks for.
+
+`truncated{}` counts what was left out: `records_over_max_records`,
+`records_in_channels_over_limit` (more than 40 channels), `evtx_files_not_read`,
+`log_clearing_events_not_listed`, `carving_stopped_at_chunk_limit`.
+`not_parsed{}` counts what could not be read: `records` (lines of evtx_dump's
+output that are not JSON, records it reported it could not dump, and records
+without a usable time, event ID or record ID), `files` (logs evtx_dump failed
+on, and logs of a disk image `icat` could not extract) and
+`files_ending_in_a_partial_chunk` (evtx_dump reads whole 64 KiB chunks only, so
+the tail of such a log was not read).
+
+Records are indexed per channel as `evtx_recovered.<channel>` (`evtx_recovered.security`,
+`evtx_recovered.powershell-operational`), in time order, one per line:
+
+```
+2024-03-01T14:30:00.1234567Z | 4624 | security | [recovered record 51234] {"System":{...},"EventData":{...}}
+```
+
+These are the fields a live log's lines carry when it is indexed without EZ
+Tools (`time | EventID | channel | event`), with the event as JSON. `[recovered]`
+means stale space inside a log; `[carved]` means a chunk found in raw data. The
+channel is the record's own, not the file's name: stale space in one log can
+hold another log's records. `evtx_recovered.summary` is written on every run,
+including one that recovered nothing, and lists per channel what was recovered
+beside what is live, the scope applied, the clearing events, and what was cut
+or not parsed.
+
+evtx_dump recovers some records with their time, event ID, record ID and
+computer but without provider, channel or event data. `["*"]` indexes them as
+`evtx_recovered.no-channel` (less those whose record ID and time match a live
+record). With any other patterns they are not indexed, and
+`records_without_channel{}` gives their count, time range and most frequent
+event IDs; that count is not compared with live records. An event ID without
+its provider does not say which log or program wrote the record.
+
+`log_clearing_events` lists Security 1102 and System 104 records written by
+Microsoft-Windows-Eventlog, with the log that was cleared and the account;
+`live_log_cleared` is true when one of them is in a live log (and `null` when
+no live log was read).
+
+**What a result does and does not mean.** Recovered records are what happened
+to survive in cleared or reused space. A recovered record shows that event was
+logged. No recovered record for an event or a period does not show it did not
+happen, and recovering nothing does not show the log was never cleared. Carving
+takes any 64 KiB that starts with a chunk signature and has a record where the
+first record belongs; nothing ties such a chunk to the system under
+investigation, so corroborate what a carved record says.
+
+Past its time limit (ten minutes, plus two for each GiB of evidence over 4)
+the tool returns a timeout and indexes nothing. A search scoped to
+`evtx.<channel>` does not read `evtx_recovered.*`, and neither does a composite
+tool while the live source it queries exists: search the recovered sources by
+name (`source="evtx_recovered"` covers them all).
+
+The binary is the one `mulder setup` and the image install under the asset
+directory (`evtx-dump/evtx_dump`). It is never looked up on `PATH`: python-evtx,
+a mulder dependency, installs a console script of the same name there, and it
+is a different program.
+
+**Roles:** `EXTRACT_EXECUTOR`
+
 ### run_hayabusa
 
 Detect threats in EVTX files using 3,700+ Sigma rules via Hayabusa.
@@ -693,18 +799,21 @@ Index exported cloud audit logs and apply Sigma detection rules to them.
 
 Reads JSON arrays, JSON lines and CloudTrail `{"Records": [...]}` files, and
 recognises GitHub audit logs, GCP Cloud Audit Logs and AWS CloudTrail per
-event. Any other JSON is indexed as `cloudlog.generic` and scanned only when
+event. It also reads the Microsoft 365 unified audit log (JSON, or the CSV it is
+usually exported to), Entra ID sign-in logs and Entra ID audit logs: see
+"Microsoft 365 and Entra ID" below. Any other JSON is indexed as
+`cloudlog.generic` and scanned only when
 `ruleset_path` is given. Nothing is fetched: export the logs first (see the
 [usage guide](usage-guide.md#cloud-audit-logs)).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| evidence_path | str | yes | JSON log file, or a directory searched for .json/.jsonl/.ndjson |
+| evidence_path | str | yes | Log file, or a directory searched for .json/.jsonl/.ndjson and unified audit log .csv exports |
 | ruleset_path | str \| None | no | Sigma rules to use instead of the defaults |
 | sigma_level_filter | Literal['informational', 'low', 'medium', 'high', 'critical'] \| None | no | Minimum Sigma level (default "low") |
 | force | bool | no | Re-run even if these logs were already indexed |
 
-**Returns:** `files_read`, `files_with_problems{}`, `log_types{<type>: events, source, sigma, detections, level_counts{}, rules_matched{}, mitre_coverage{}}`
+**Returns:** `files_read`, `files_with_problems{}`, `log_types{<type>: events, duplicates_skipped, source, log_table, log_table_note, summary_source, summary{}, export_warnings[], sigma, detections, level_counts{}, rules_matched{}, mitre_coverage{}}`
 
 Events are indexed one per line in `cloudlog.<type>` (time, actor, action,
 source IP, target, raw event) and Sigma matches in `cloudlog.<type>.detections`.
@@ -714,14 +823,129 @@ plus mulder's own GCP rules for service account key creation, federated token
 exchange, service account impersonation, IAM policy changes and Secret Manager
 reads.
 
-A file that was damaged or truncated, or that held no events, is named in
-`files_with_problems`; complete events before the damage are kept. Events are
+Every type but `generic` is also loaded as rows into a [log table](#log-tables)
+named after the source (`log_table` in the result), so `log_top`, `log_histogram`
+and `log_rows` can count them. Each row has the time, actor, action, source IP and
+target of the text line (for AWS the target is the region), plus:
+
+| Log | Further fields |
+|-----|----------------|
+| AWS | `status` (the `errorCode`; `Failure` when there is only an `errorMessage`; otherwise `Success`), `user_agent`, `session_id` (the access key id), `bytes` (`bytesTransferredOut`), `event_id`, `identity_type`, `account`, `read_only` |
+| GCP | `status` (the `google.rpc` status code, `OK` when there is none), `user_agent`, `event_id` (`insertId`) |
+| GitHub | `user_agent`, `session_id` (`hashed_token`), `event_id` (`_document_id`), `country` |
+| Microsoft 365 (`m365`) | `status` (`ResultStatus`), `user_agent`, `session_id`, `event_id` (`Id`), `workload`, `app_id`, `error` (`ErrorNumber` or `ErrorCode`, when not 0), `mailbox` (`MailboxOwnerUPN`), `access_type` (`Sync` or `Bind`, for MailItemsAccessed) |
+| Entra sign-ins (`entra_signin`) | `status` (`Success`, or the error code), `user_agent`, `session_id`, `event_id`, `app_id`, `client_app`, `interactive`, `auth_requirement`, `conditional_access`, `risk`, `country`, `asn`, `token_id` |
+| Entra audit (`entra_audit`) | `status` (`result`), `user_agent`, `event_id`, `category`, `service`, `target_type`, `correlation_id` |
+
+`cloudlog.generic` gets no table: such an event has a time and nothing to count on.
+A forced re-run replaces the rows it loaded before. Because a directory is read
+recursively, evidence paths can overlap, and the table holds each path's events once:
+a path inside one already loaded adds no rows (`log_table_note` names the path that
+contains it), and a directory replaces the rows of paths inside it. A file without
+a `.json`, `.jsonl` or `.ndjson` suffix (other than a unified audit log `.csv`) is
+read only when it is named itself, so it is
+neither covered nor replaced by a directory. The text index is not deduplicated: both
+runs are indexed as `cloudlog.<type>` sources.
+
+What could not be read is counted as the table's `rows_not_parsed`: each damaged
+stretch of a file, a file that could not be read, and each JSON value that is not
+an object in a file that holds events. A damaged or unreadable file whose log type
+cannot be told (nothing in it was readable) counts against every table the run
+loaded. It is a lower bound on the events lost. Valid JSON that holds no event at
+all (a list of strings, a number) counts against no table.
+
+A file that was damaged or truncated, that held no events, or that held JSON values
+that are not objects is named in `files_with_problems` with which of these it was;
+complete events before the damage are kept. Events are
 indexed in time order, and the index keeps one time per window of lines (a few
 events), so a time-range query finds a window by its earliest event. Sigma
 matches on full field paths (`userIdentity.type`), so a nested key cannot
 stand in for a top-level field. If the events hold more than about 2,000
 distinct field paths, the least-used deep ones are left out of the scan and
-`sigma` says how many. Symlinks under a directory are not followed.
+`sigma` says how many. Symlinks under a directory are not followed, and a path
+that is itself a symlinked file is refused. An event nested about as deep as the
+JSON decoder allows cannot be written back as a line: it is counted in
+`files_with_problems` ("events nested too deeply to index") and as not parsed.
+
+One call reads at most 512 MiB of files. Every event of a call is held in memory,
+at eight to nine times the size of the files (a 533 MB export peaked at 4.4 GB),
+so past that limit the tool reads nothing and returns an error that names the
+largest files: run it once per file or subdirectory. A single file over the limit
+has to be exported again over shorter date ranges, or split. An investigation
+does not plan the call that would be refused: the planner's evidence context
+lists a directory over the limit file by file (the 50 largest that fit), and
+lists apart, as not read, a file over the limit and the files beyond those 50.
+`audit_tool_coverage` does not count a call that returned an error, so what was
+not read is reported there as a gap.
+
+**Microsoft 365 and Entra ID.** Three log types, told apart per record:
+
+| Type | Recognised shapes |
+|------|-------------------|
+| `m365`, the unified audit log | A CSV with an `AuditData` column (the Purview portal's export; `Search-UnifiedAuditLog \| Export-Csv`, with or without the `#TYPE` line; UTF-16 or UTF-8). JSON or JSON lines of Management Activity API records (`CreationTime`, `Operation`, ...). `Search-UnifiedAuditLog \| ConvertTo-Json`, where `AuditData` is an object or a JSON string. Microsoft Graph audit query records (`auditData`). |
+| `entra_signin` | Microsoft Graph `signIn` objects (v1.0 or beta) and Log Analytics `SigninLogs` rows. |
+| `entra_audit` | Microsoft Graph `directoryAudit` objects and Log Analytics `AuditLogs` rows. |
+
+A Graph response page (`{"@odata.context": ..., "value": [...]}`) and an Azure
+Monitor diagnostic-settings stream (`{"records": [...]}`, each record's event in
+`properties`) are unwrapped. Key case is ignored for the two Entra logs. What is
+indexed is the record itself, without its wrapper. A `.csv` in a directory is
+read only when its header has an `AuditData` column; it may be separated by
+commas, semicolons or tabs (`Export-Csv -UseCulture`). A date that Windows
+PowerShell 5.1 wrote as `\/Date(<milliseconds>)\/` is read as the time it is.
+
+A record that the files of one call hold more than once, with the same `Id` and
+the same content, is kept once: `Search-UnifiedAuditLog` returns records on more
+than one page, and exports overlap. `duplicates_skipped` counts the repeats, and
+the summary's first line says how many there were. A record without an `Id`, or
+one that differs in any value, is never taken for a repeat. Repeats are found
+within one call only: a record that two files hold is counted twice when the
+files are read by separate calls.
+
+The fields come from wherever the workload puts them: the source IP from
+`ClientIP`, `ClientIPAddress` or `ActorIpAddress`, without a port or brackets
+and with an IPv4-mapped address unmapped; the user agent from `UserAgent`, from
+`ExtendedProperties` (also inside its `additionalDetails`) or from
+`ClientInfoString`; the session from `SessionId`, `AppAccessContext.AADSessionId`
+or `DeviceProperties`. An actor or mailbox that is a user principal name is stored
+in lower case, because the workloads write one user in different case. For a
+sign-in, the action is the application signed in to
+and the target the resource. `country` is the sign-in record's own; nothing looks
+an address up.
+
+`cloudlog.<type>.summary` (`summary_source`) is computed from the events, with
+no model involved, one tab-separated fact per line:
+
+| Line | Content |
+|------|---------|
+| `user` | per user, each source IP, user agent and session: first seen, events, last seen |
+| `session` | a session seen from more than one source IP, with each address's events and times (loopback addresses, which Exchange records for its own work, are not counted) |
+| `persistence` | an operation that leaves access behind or hides it, with its parameters folded into one object: inbox rules, mailbox forwarding, mailbox permissions, application consent, application credentials, a registered sign-in method, audit logging changes, transport rules. Operations by Exchange's own service account are counted, not listed |
+| `mailbox` | MailItemsAccessed per mailbox, `Sync` and `Bind` apart: events, messages listed, throttled records, folders, who, source IPs, sessions (`m365` only) |
+| `WARNING` | a file whose unified audit record count is exactly 100, 5,000, 10,000, 50,000 or 1,000,000, the sizes at which `Search-UnifiedAuditLog` (100 when no `ResultSize` is given) and the Purview export stop: it is probably incomplete. The rows of a CSV count whether or not they could be read. Also returned as `export_warnings` |
+
+Sign-in summaries have `user` and `session` lines, audit summaries `user` and
+`persistence` lines. Each section is capped and says when it was, with the
+`log_top` or `log_rows` call that covers the rest: 50 users (first those named in
+a listed persistence line, then those named in a listed session line, then those
+with the most source IPs), the
+10 least frequent values per user and field, 200 sessions, 200 mailboxes, and
+the newest 40 operations of each kind, so that many of one kind cannot push
+another off the list; the section's first line counts every kind. A line is at
+most 4,000 characters, which fits one window of the index: a value in a list is
+cut at 120 characters and a longer line ends in `…`. `summary` in the result
+gives the section counts.
+
+Default Sigma rules for `m365` are SigmaHQ's `rules/cloud/m365/audit` (the two
+that match raw audit records) and eight of mulder's own: inbox rule created or
+changed, mailbox forwarding set, mailbox permission granted, application consent
+granted, credentials added to an application or service principal,
+authentication method registered, audit logging bypassed or disabled, and
+transport rule created or changed. The rules that match Exchange cmdlets leave
+out Exchange's own service account (`NT AUTHORITY\SYSTEM ...`). The two Entra
+types have no default rules (`sigma` says so); their `persistence` lines list
+the same operations. A Sigma scan sees `Parameters` and the other name/value
+arrays as one JSON text per record.
 
 **Roles:** `EXTRACT_EXECUTOR`
 
@@ -747,6 +971,95 @@ and cannot be chosen by the caller.
 Exports are written under the case directory, never the evidence directory,
 each with a manifest. Events are indexed exactly as `run_cloud_audit_logs`
 does. A window already collected is not fetched again.
+
+**Roles:** `EXTRACT_EXECUTOR`
+
+### run_loose_logs
+
+Index loose log files and load their events into log tables.
+
+For evidence of type `log_file`, `log_directory` and `esxi_bundle`: the logs that
+say how an intruder got in and what was done on a hypervisor. The format of each
+file is recognised from its first lines, never from its name alone. Plain and
+gzip files are read; nothing is written to the evidence.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| evidence_path | str | yes | A log file, or a directory read recursively: every file of a log directory (named `log` or `logs`, or under `var/log`), and elsewhere only the files named as logs (`.log`, `.txt`, rotated `.log.N`, Suricata or Zeek JSON), so that a web root or a source tree beside a log is not indexed. For an ESXi support bundle, the bundle directory: its `var/run/log` and `var/log` are read |
+| force | bool | no | Re-run even if this path was already indexed |
+
+**Returns:** `files_read`, `files_not_read{<reason>: files, examples[]}`, `sources{<source>: files, lines, log_table, rows, rows_not_parsed, rows_without_time, sources, log_table_note, examples[]}`, `notes[]`, `web{sigma, sigma_events_scanned, sigma_events_not_scanned, detections, rules_matched{}, detections_source, webshell_candidates, webshell_source}`, `esxi{highlights, by_category{}, highlights_source}`, `esxi_bundle`
+
+| Format | Recognised by | Source and [log table](#log-tables) | Fields beside the time |
+|--------|---------------|-------------------------------------|------------------------|
+| Apache and nginx access logs (common, combined, with or without a leading virtual host) | the line shape | `logs.web` | `src_ip`, `actor` (the authenticated user), `action` (method), `target` (path), `status`, `bytes`, `user_agent`, `query`, `referer`, `host` |
+| IIS W3C extended | a `#Fields:` directive naming `c-ip` and a method or URI column | `logs.web` | the same, from whichever columns the directive names |
+| Zeek, tab-separated (`#fields`) or JSON | the header, or JSON with `ts` and a Zeek key | `logs.zeek.conn`, `.http`, `.dns`, `.ssl`, `.files`, `.notice`; any other log in `logs.zeek.other` | `src_ip` (originator), `target`, `session_id` (uid) and per log: connection state and bytes; method, path, status, host; query, type, answers; server name and certificate; file name, hashes; notice type |
+| Suricata `eve.json` | JSON with `event_type` and `timestamp` | `logs.suricata.alert`, `.http`, `.dns`, `.tls`, `.flow`; any other event type in `logs.suricata.other` | `src_ip`, `target`, `session_id` (flow id) and per type: signature and whether it was blocked; method, path, status; name, type, answers (both DNS record shapes); SNI and certificate; state and bytes |
+| FortiGate key=value | `date=` `time=` with `logid`, `devid` or `devname` | `logs.firewall` | `actor` (`user`), `src_ip` (`remip`, `srcip`, or the address in `ui`), `action`, `target` (`dstip`), `status`, `bytes`, `tunnel_type`, `assigned_ip`, `reason`, `log_type`, `message_id`, `device`, `message` |
+| SonicWall key=value | `id=firewall sn=` | `logs.firewall` | `actor` (`usr`), `src_ip`, `action` (the message), `target`, `tunnel_type` (`sess`), `message_id`, `device` |
+| Cisco ASA | `%ASA-n-nnnnnn:` | `logs.firewall` | For the VPN session messages 113039, 113019, 113038, 722051 and 722055: `actor`, `src_ip`, `action`, `tunnel_type`, `group`, `assigned_ip`, `bytes`, `reason`, `user_agent` (the client). Every other message: `message_id`, `level`, `device`, `message` |
+| ESXi (`hostd`, `vobd`, `shell`, `auth`, `vmkernel`, `vmkwarning`, `syslog`, `esxupdate`, `rhttpproxy`, `vpxa`), as a host writes them or as a syslog server received them | lines that open with a UTC `...Z` time and name an ESXi program, or a file of one of those names, or any such file in a bundle | `logs.esxi` | `program`, `message`, and on highlighted lines `highlight`, `actor`, `src_ip`, `action` (a shell command), `status` (of a login) |
+| Syslog | time, host, `program[pid]:` | `logs.syslog` | `host`, `program`, `message` |
+| Anything else that is text | | `logs.text` | none: indexed for `search`, nothing parsed, no table |
+
+Every line is indexed, one per line, as the event's UTC time (or `-`), a tab, then the
+original line; a `# file:` line names each file. A row's `line` is its line in that
+source, and its `file` field the file it came from. A source holds at most 100,000
+lines (fewer when the lines are long: about 64 MB of text), so a large log becomes
+`logs.web`, `logs.web.2` and so on, all feeding the one table. A row's `source` names
+its part and its `line` counts within it. Search that exact source: the name
+`logs.web` alone also matches its parts and the sources derived from it. `logs.text`
+names the first files it holds in `examples`.
+
+Three sources are derived, and each says in its first line what it is not:
+
+- `logs.web.detections`: matches of the SigmaHQ web server rules (the
+  `rules/web/webserver_generic` set and every `category: webserver` rule under
+  `rules-emerging-threats`) over the web requests, through Zircolite. The rules'
+  `cs-uri-query` is given the whole request target (path and query string), because
+  most of them look for a path in it, and `cs-uri-stem` the path. A match is a
+  request that looked like an attack, not one that worked. `sigma` is `ok`, or says
+  why the scan was skipped, stopped or failed; requests are loaded either way.
+- `logs.web.webshell`: paths ending in a script extension (`.php`, `.asp`, `.aspx`,
+  `.jsp` and the like) that answered at least one POST with a 2xx status and that at
+  most three client addresses requested in all. A lead: an admin page looks the
+  same, and a shell only ever fetched with GET is not listed.
+- `logs.esxi.highlights`: the ESXi lines about SSH or the shell being enabled or
+  disabled (`ssh_shell_access`), logins and their source (`login`), every shell
+  command with its user (`shell_command`), virtual machines powered off or killed
+  (`vm_power`), the execInstalledOnly setting (`exec_policy`) and VIB or image
+  profile installs (`vib_install`), in time order. The same category is the
+  `highlight` field of `logs.esxi`. These are pattern matches on known messages: a
+  category says what a line is about (reading a setting matches too), and a line
+  that is not listed may still be in the log.
+
+Times: an offset in the log is applied. W3C, Zeek and ESXi times are UTC. A time
+with no offset (syslog, ASA, FortiGate without `tz` or `eventtime`, SonicWall without
+`UTC`) is read as UTC and `notes` names the tables that applies to. Syslog lines
+carry no year: it is taken from the file's modification time (the latest year that
+puts the line no more than a day after it), and `notes` says so; a file with no
+usable modification time gives such lines no time. Where a relay put its own
+year-less header in front of a line that has an ISO time, the ISO time is used.
+
+Limits, each reported when it bites: 64 KiB parsed and 4,000 characters indexed
+per line (`notes` counts the lines past either), 1 GiB of text per file (gzip is
+read through, and a gzip bomb stops there), 5,000 files and 4 GiB of text per call
+(every file past the limit is counted), 30 minutes of Sigma scanning.
+What was cut off counts once in the table's `rows_not_parsed`. A line ends at a line
+feed, a carriage return or both. Only regular files are opened: symbolic links,
+FIFOs and devices are listed in `files_not_read`, as are binary and empty files,
+files that are not logs by their name outside a log directory, and directories that
+could not be listed. The path must lie inside the evidence directory or the
+case directory. Overlapping paths are counted once, as for `run_cloud_audit_logs`;
+the text index is not deduplicated.
+
+Not parsed: Palo Alto CSV (it has no header to recognise), Citrix NetScaler and
+Ivanti Connect Secure logs (Ivanti's binary `.vc0` files are a job for
+`run_plaso(parsers="ivanti_vc0")`), FortiGate CEF or CSV exports, Windows firewall
+logs, journald's binary journal, and JSON application logs. Text among these lands in
+`logs.text`. In a file that mixes formats, the lines of the minority format are
+counted as not parsed.
 
 **Roles:** `EXTRACT_EXECUTOR`
 
@@ -1228,6 +1541,10 @@ RFC 2047 encoded headers are decoded, quoted recipient names are preserved,
 HTML-only messages get a searchable text body, and named inline MIME parts count
 as attachments.
 
+A `.pst` or `.ost` file in the evidence directory, or unpacked from an archive,
+is classified as `mailbox`: the planner is given its path with this tool, and
+`audit_tool_coverage` reports a mailbox it was not run on.
+
 **Roles:** `EXTRACT_EXECUTOR`
 
 ---
@@ -1531,6 +1848,127 @@ Retrieve IOC data carved by bulk_extractor from the case database.
 **Returns:** summary mode: `results[]` (source_name, feature, window_count); detail mode: windowed response
 
 **Roles:** `CROSS_EXECUTOR`
+
+### Log tables
+
+`search` finds text in a log; it cannot count. Logs that an extractor also loads as rows
+(today `run_cloud_audit_logs`: `cloudlog.github`, `cloudlog.gcp`, `cloudlog.aws`,
+`cloudlog.m365`, `cloudlog.entra_signin`, `cloudlog.entra_audit`; and
+`run_loose_logs`: `logs.web`, `logs.firewall`, `logs.zeek.*`, `logs.suricata.*`,
+`logs.esxi`, `logs.syslog`) can be counted with the four tools below. A row has a UTC time, the fields `actor`, `src_ip`,
+`action`, `target`, `status`, `user_agent`, `session_id` and `bytes` where the log has
+them, and a few log-specific fields (`list_log_tables` names them per table).
+
+`filters` is a list of conditions that must all hold, each
+`{"field": "actor", "op": "eq", "value": "alice"}`:
+
+| op | Meaning |
+|----|---------|
+| `eq`, `ne` | exact, case-sensitive; `ne` also keeps rows that have no value |
+| `in` | `value` is a list of 1 to 50 exact values |
+| `contains`, `prefix` | substring / leading text, ignoring ASCII case; `%` and `_` are ordinary characters |
+| `exists`, `missing` | the row has / does not have the field (no `value`) |
+| `gt`, `ge`, `lt`, `le` | `bytes` only |
+
+`t_start` and `t_end` are inclusive UTC times (`2026-01-31T13:00:00Z`; an offset is
+converted). The model supplies field names and values, never SQL: names are checked
+against the table's own fields and every value is a bound parameter. A field the table
+has no values for is refused with the list of fields it does have.
+
+Every result states `filter_applied` (as understood), `rows_matched`, `rows_in_table`,
+`rows_not_parsed` (records or damaged stretches the extractor could not read: they are
+in no count, and the number is a lower bound), `rows_without_time` (no time, or one
+outside 1990..2100), `truncated`, and `notes[]` saying in words what was left out. The
+rows are indexed as source `logtable.<kind>.<id>`, whose first line is a header with the
+`tool_call_id`, the filter and the counts; cite the call's `tool_call_id` and that source.
+At most about 12,000 characters of rows are returned inline; the rest are in the source.
+An identical query over an unchanged table is not indexed twice: it returns
+`status: "skipped"` with the existing source and the same rows. `force=True` indexes it
+again as `<name>-r<k>`. Stored values are one line of at most 512 characters; a longer
+one ends in `…`. A count is of the records in the table: it says nothing about periods
+or systems the log does not cover. A failure in the case database is returned, and
+audited, as an error like any other.
+
+### list_log_tables
+
+List the log tables of this case: logs loaded as rows that can be counted.
+
+*No parameters.*
+
+**Returns:** `tables[]` (table, rows, rows_without_time, rows_not_parsed, first_time, last_time, fields{name: rows with a value}, loaded_from[] (source_path, rows; the 20 largest, with loaded_from_note, when there are more), ingest_incomplete when loading was cut short)
+
+**Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR`
+
+### log_top
+
+Count log events by the values of one to three fields, with first and last seen.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| table | str | yes | A table name from `list_log_tables` |
+| fields | str \| list[str] | yes | One to three fields to group by |
+| filters | list[dict] \| None | no | Conditions, see above |
+| t_start | str \| None | no | Only events at or after this UTC time |
+| t_end | str \| None | no | Only events at or before this UTC time |
+| n | int | no | Groups to return (default 20, 1..200) |
+| order | str | no | `count` (default), `rare` (least frequent first), `bytes`, `first_seen` (earliest first), `last_seen` (latest first) |
+| force | bool | no | Index the result again (default False) |
+
+**Returns:** `rows[]` (the field values, count, first_seen, last_seen, bytes where the table has byte counts), `groups_total`, `row_count`, and the common fields above (source logtable.top.&lt;id&gt;)
+
+Rows without a value form their own group (`null`), so the counts add up to `rows_matched`.
+A byte sum above 2^53 (8 PiB) is approximate.
+
+**Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR`
+
+### log_histogram
+
+Count log events per minute, hour or day, optionally split by one field.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| table | str | yes | A table name from `list_log_tables` |
+| bucket | str | no | `minute`, `hour` (default) or `day` |
+| split_by | str \| None | no | A field to break each bucket down by |
+| filters | list[dict] \| None | no | Conditions, see above |
+| t_start | str \| None | no | Only events at or after this UTC time |
+| t_end | str \| None | no | Only events at or before this UTC time |
+| n | int | no | Buckets to return (default 100, 1..200) |
+| order | str | no | `time` (default, earliest bucket first) or `count` (busiest first) |
+| force | bool | no | Index the result again (default False) |
+
+**Returns:** `rows[]` (bucket, count; with `split_by` also by[] (value, count) and other), `buckets_total`, `matched_without_time`, `row_count`, and the common fields above (source logtable.histogram.&lt;id&gt;)
+
+A bucket is named by its UTC start: `2026-01-31T13` is the hour from 13:00. Buckets with
+no events are not listed, and events without a time are in no bucket. `split_by` lists the
+field's five most frequent values over the whole match and sums the rest as `other`.
+
+**Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR`
+
+### log_rows
+
+Read log events that match a filter, one page at a time, in time order.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| table | str | yes | A table name from `list_log_tables` |
+| filters | list[dict] \| None | no | Conditions, see above |
+| t_start | str \| None | no | Only events at or after this UTC time |
+| t_end | str \| None | no | Only events at or before this UTC time |
+| limit | int | no | Rows to return (default 25, 1..200) |
+| offset | int | no | Rows to skip, for the next page (default 0, 0..100000; a larger one is read as 100000) |
+| newest_first | bool | no | Latest events first (default False) |
+| force | bool | no | Index the result again (default False) |
+
+**Returns:** `rows[]` (time, the fields that have a value, source, source_path, line), `offset`, `row_count`, and the common fields above (source logtable.rows.&lt;id&gt;)
+
+`source` and `line` say where the whole event is in the indexed text; `source_path` is
+added when the table was loaded from several evidence paths, whose sources share a name.
+Events without a time come last. When `truncated`, `notes` gives the next page's offset
+(`offset + row_count`), or says that the offset cap was reached and the filter or time
+window must be narrowed to read further.
+
+**Roles:** `EXTRACT_ANALYST` `CROSS_EXECUTOR`
 
 ---
 

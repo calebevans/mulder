@@ -20,6 +20,8 @@ from mulder.server.tools import (  # noqa: F401  # noqa: F401
     hayabusa,
     hindsight,
     jobs,
+    logtables,
+    looselogs,
     mvt,
     netflow,
     phone,
